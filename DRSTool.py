@@ -2,6 +2,7 @@
 """
 DXVK NVAPI DRS Settings Configurator
 Complete settings with detailed descriptions
+Updated based on NvApiDriverSettings.h (latest)
 """
 
 import sys
@@ -86,14 +87,14 @@ GPU_ARCHS = [
 
 
 # ============================================================================
-# Complete Settings
+# Complete Settings (Updated from NvApiDriverSettings.h)
 # ============================================================================
 
 def create_all_settings() -> List[Setting]:
-    """Create all settings from NvApiDriverSettings.h"""
+    """Create all settings from NvApiDriverSettings.h (latest)"""
     settings = []
 
-    # OpenGL Settings
+    # ===== OpenGL Settings =====
     settings.extend([
         Setting("0x2089BF6C", "OGL AA Line Gamma", "OpenGL", "enum", "0x10",
                 "Antialiasing - Line gamma",
@@ -180,9 +181,74 @@ def create_all_settings() -> List[Setting]:
                     SettingValue("Disabled", "0x0"),
                     SettingValue("Enabled", "0x1"),
                 ]),
+        # ---- New OpenGL settings from header ----
+        Setting("0x209DF23E", "OGL Event Log Severity", "OpenGL", "enum", "0x4",
+                "Event Log Severity Threshold",
+                "Sets the minimum severity level for OpenGL event log messages.",
+                values=[
+                    SettingValue("Disable", "0x0"),
+                    SettingValue("Critical", "0x1"),
+                    SettingValue("Warning", "0x2"),
+                    SettingValue("Information", "0x3"),
+                    SettingValue("All", "0x4"),
+                ]),
+        Setting("0x209AE66F", "OGL Overlay Pixel Type", "OpenGL", "enum", "0x1",
+                "Exported Overlay pixel types",
+                "Specifies which pixel types are supported for overlay.",
+                values=[
+                    SettingValue("None", "0x0"),
+                    SettingValue("CI", "0x1"),
+                    SettingValue("RGBA", "0x2"),
+                    SettingValue("CI and RGBA", "0x3"),
+                ]),
+        Setting("0x206C28C4", "OGL Overlay Support", "OpenGL", "enum", "0x0",
+                "Enable overlay",
+                "Controls overlay support in OpenGL.",
+                values=[
+                    SettingValue("Off", "0x0"),
+                    SettingValue("On", "0x1"),
+                    SettingValue("Force SW", "0x2"),
+                ]),
+        Setting("0x20797D6C", "OGL Quality Enhancements", "OpenGL", "enum", "0x0",
+                "OpenGL quality enhancements",
+                "High level control of rendering quality in OpenGL.",
+                values=[
+                    SettingValue("High Quality", "0xfffffff6"),
+                    SettingValue("Quality", "0x0"),
+                    SettingValue("Performance", "0xa"),
+                    SettingValue("High Performance", "0x14"),
+                ]),
+        Setting("0x20A29055", "OGL Single Backdepth", "OpenGL", "enum", "0x0",
+                "Unified back/depth buffer",
+                "Controls unified back/depth buffer usage.",
+                values=[
+                    SettingValue("Disable", "0x0"),
+                    SettingValue("Enable", "0x1"),
+                    SettingValue("Use HW Default", "0xffffffff"),
+                ]),
+        Setting("0x2092D3BE", "OGL SLI Multicast", "OpenGL", "enum", "0x0",
+                "Enable NV_gpu_multicast",
+                "Enables the NV_gpu_multicast extension for OpenGL.",
+                values=[
+                    SettingValue("Disable", "0x0"),
+                    SettingValue("Enable", "0x1"),
+                    SettingValue("Force Disable", "0x2"),
+                    SettingValue("Allow Mosaic", "0x4"),
+                ]),
+        Setting("0x202888C1", "OGL TMON Level", "OpenGL", "enum", "0x4",
+                "Event Log Tmon Severity",
+                "Sets the severity level for TMON events in OpenGL.",
+                values=[
+                    SettingValue("Disable", "0x0"),
+                    SettingValue("Critical", "0x1"),
+                    SettingValue("Warning", "0x2"),
+                    SettingValue("Information", "0x3"),
+                    SettingValue("Most", "0x4"),
+                    SettingValue("Verbose", "0x5"),
+                ]),
     ])
 
-    # Anti-Aliasing Settings
+    # ===== Anti-Aliasing Settings =====
     settings.extend([
         Setting("0x10ECDB82", "AA Behavior Flags", "Anti-Aliasing", "bitfield", "0x0",
                 "AA behavior flags",
@@ -215,23 +281,58 @@ def create_all_settings() -> List[Setting]:
                     SettingValue("On if FOS", "0x1"),
                     SettingValue("On always", "0x2"),
                 ]),
+        # AA Method - updated with all values from header
         Setting("0x10D773D2", "AA Method", "Anti-Aliasing", "enum", "0x0",
                 "AA - Setting",
                 "Selects anti-aliasing sample method.",
                 values=[
                     SettingValue("None", "0x0"),
-                    SettingValue("2x SS H", "0x1"),
-                    SettingValue("2x SS V", "0x2"),
-                    SettingValue("4x SS", "0x5"),
-                    SettingValue("8x MS", "0x25"),
-                    SettingValue("2x MS Diag", "0xe"),
-                    SettingValue("2x MS Quin", "0xf"),
-                    SettingValue("4x MS", "0x10"),
-                    SettingValue("16x MS", "0x1c"),
-                    SettingValue("4x Mix", "0x13"),
-                    SettingValue("8x Mix", "0x18"),
-                    SettingValue("16x Mix", "0x1a"),
-                    SettingValue("32x Mix", "0x29"),
+                    SettingValue("Supersample 2x H", "0x1"),
+                    SettingValue("Supersample 2x V", "0x2"),
+                    SettingValue("Supersample 1.5x1.5", "0x2"),
+                    SettingValue("Free 0x03", "0x3"),
+                    SettingValue("Free 0x04", "0x4"),
+                    SettingValue("Supersample 4x", "0x5"),
+                    SettingValue("Supersample 4x Bias", "0x6"),
+                    SettingValue("Supersample 4x Gaussian", "0x7"),
+                    SettingValue("Free 0x08", "0x8"),
+                    SettingValue("Free 0x09", "0x9"),
+                    SettingValue("Supersample 9x", "0xa"),
+                    SettingValue("Supersample 9x Bias", "0xb"),
+                    SettingValue("Supersample 16x", "0xc"),
+                    SettingValue("Supersample 16x Bias", "0xd"),
+                    SettingValue("Multisample 2x Diagonal", "0xe"),
+                    SettingValue("Multisample 2x Quincunx", "0xf"),
+                    SettingValue("Multisample 4x", "0x10"),
+                    SettingValue("Free 0x11", "0x11"),
+                    SettingValue("Multisample 4x Gaussian", "0x12"),
+                    SettingValue("Mixedsample 4x Skewed", "0x13"),
+                    SettingValue("Free 0x14", "0x14"),
+                    SettingValue("Free 0x15", "0x15"),
+                    SettingValue("Mixedsample 6x", "0x16"),
+                    SettingValue("Mixedsample 6x Skewed", "0x17"),
+                    SettingValue("Mixedsample 8x", "0x18"),
+                    SettingValue("Mixedsample 8x Skewed", "0x19"),
+                    SettingValue("Mixedsample 16x", "0x1a"),
+                    SettingValue("Multisample 4x Gamma", "0x1b"),
+                    SettingValue("Multisample 16x", "0x1c"),
+                    SettingValue("VCAA 32x (8v24)", "0x1d"),
+                    SettingValue("Corruption Check", "0x1e"),
+                    SettingValue("6x CT", "0x1f"),
+                    SettingValue("Multisample 2x Diag Gamma", "0x20"),
+                    SettingValue("Supersample 4x Gamma", "0x21"),
+                    SettingValue("Multisample 4x FOSGamma", "0x22"),
+                    SettingValue("Multisample 2x Diag FOSGamma", "0x23"),
+                    SettingValue("Supersample 4x FOSGamma", "0x24"),
+                    SettingValue("Multisample 8x", "0x25"),
+                    SettingValue("VCAA 8x (4v4)", "0x26"),
+                    SettingValue("VCAA 16x (4v12)", "0x27"),
+                    SettingValue("VCAA 16x (8v8)", "0x28"),
+                    SettingValue("Mixedsample 32x", "0x29"),
+                    SettingValue("SuperVCAA 64x (4v12)", "0x2a"),
+                    SettingValue("SuperVCAA 64x (8v8)", "0x2b"),
+                    SettingValue("Mixedsample 64x", "0x2c"),
+                    SettingValue("Mixedsample 128x", "0x2d"),
                 ]),
         Setting("0x10D48A85", "AA Transp. SS", "Anti-Aliasing", "enum", "0x0",
                 "AA - Transparency Supersampling",
@@ -260,7 +361,7 @@ def create_all_settings() -> List[Setting]:
                 ]),
     ])
 
-    # Texture Filtering
+    # ===== Texture Filtering =====
     settings.extend([
         Setting("0x101E61A9", "Aniso Level", "Texture Filtering", "enum", "0x1",
                 "Anisotropic filtering level",
@@ -337,7 +438,7 @@ def create_all_settings() -> List[Setting]:
                 ]),
     ])
 
-    # DLSS / NGX Settings
+    # ===== DLSS / NGX Settings =====
     settings.extend([
         Setting("0x10E41E01", "DLSS-SR Override", "DLSS / NGX", "enum", "0x0",
                 "DLSS-SR override",
@@ -466,7 +567,8 @@ def create_all_settings() -> List[Setting]:
                 min=0, max=16777215),
         Setting("0x10CF4125", "DLSSG Target FPS", "DLSS / NGX", "numeric", "0x0",
                 "DLSSG Target FPS",
-                "Sets target FPS for DLSS Frame Generation. 60=0x3C, 120=0x78, auto=0x1000000"),
+                "Sets target FPS for DLSS Frame Generation. 60=0x3C, 120=0x78, auto=0x1000000",
+                min=1, max=16777215),   # Düzeltildi: header'dan min=1, max=0x00FFFFFF
         Setting("0x10AFB76C", "DLSS Ultra-Perf", "DLSS / NGX", "enum", "0x0",
                 "DLSS Ultra-Performance",
                 "Forces DLSS into Ultra Performance mode.",
@@ -481,9 +583,32 @@ def create_all_settings() -> List[Setting]:
                     SettingValue("Off", "0x0"),
                     SettingValue("On", "0x1"),
                 ]),
+        # ---- New DLSS NR settings ----
+        Setting("0x10E41E04", "DLSS-NR Override", "DLSS / NGX", "enum", "0x0",
+                "DLSS-NR override",
+                "Enables override for DLSS Noise Reduction.",
+                values=[SettingValue("Off", "0x0"), SettingValue("On", "0x1")]),
+        Setting("0x10E41DF8", "DLSS-NR Preset", "DLSS / NGX", "enum", "0x0",
+                "DLSS-NR Preset",
+                "Forces specific DLSS Noise Reduction preset.",
+                values=[
+                    SettingValue("Off", "0x0"), SettingValue("A", "0x1"),
+                    SettingValue("B", "0x2"), SettingValue("C", "0x3"),
+                    SettingValue("D", "0x4"), SettingValue("E", "0x5"),
+                    SettingValue("F", "0x6"), SettingValue("G", "0x7"),
+                    SettingValue("H", "0x8"), SettingValue("I", "0x9"),
+                    SettingValue("J", "0xa"), SettingValue("K", "0xb"),
+                    SettingValue("L", "0xc"), SettingValue("M", "0xd"),
+                    SettingValue("N", "0xe"), SettingValue("O", "0xf"),
+                    SettingValue("Latest", "0xffffff"),
+                ]),
+        Setting("0x10E41E05", "DLSS-NR SL Override", "DLSS / NGX", "enum", "0x0",
+                "DLSS-NR SL override",
+                "Enables override for DLSS Noise Reduction Super Lens.",
+                values=[SettingValue("Off", "0x0"), SettingValue("On", "0x1")]),
     ])
 
-    # Power / Performance
+    # ===== Power / Performance =====
     settings.extend([
         Setting("0x1057EB71", "GPU Power Mode", "Power", "enum", "0x5",
                 "GPU Power Mode",
@@ -508,7 +633,7 @@ def create_all_settings() -> List[Setting]:
                 ]),
     ])
 
-    # Frame Rate / Latency
+    # ===== Frame Rate / Latency =====
     settings.extend([
         Setting("0x007BA09E", "Pre-Render Limit", "Frame Rate", "numeric", "0",
                 "Pre-Rendered Frames",
@@ -516,10 +641,12 @@ def create_all_settings() -> List[Setting]:
                 min=0, max=255),
         Setting("0x10835002", "FPS Limiter", "Frame Rate", "numeric", "0x0",
                 "FPS Limiter",
-                "Hard frame rate cap. 60=0x3C, 120=0x78, 144=0x90"),
+                "Hard frame rate cap. 60=0x3C, 120=0x78, 144=0x90",
+                min=0, max=1023),  # Düzeltildi: header'dan FRL_FPS_MIN/MAX
         Setting("0x10835016", "Idle FPS Limit", "Frame Rate", "numeric", "0x14",
                 "Idle FPS Limit",
-                "FPS cap when app loses focus. 20=0x14, 30=0x1E, 60=0x3C"),
+                "FPS cap when app loses focus. 20=0x14, 30=0x1E, 60=0x3C",
+                min=0, max=1023),  # Düzeltildi: header'daki FRL_FPS ile aynı
         Setting("0x10835017", "Idle Threshold", "Frame Rate", "numeric", "3",
                 "Idle Threshold",
                 "Seconds before idle FPS limit applies.",
@@ -537,7 +664,7 @@ def create_all_settings() -> List[Setting]:
                 ]),
     ])
 
-    # VRR / G-Sync
+    # ===== VRR / G-Sync =====
     settings.extend([
         Setting("0x1194F158", "G-Sync/VRR Mode", "VRR / G-Sync", "enum", "0x1",
                 "G-Sync/VRR Mode",
@@ -611,7 +738,7 @@ def create_all_settings() -> List[Setting]:
                 ]),
     ])
 
-    # VSync / Flip
+    # ===== VSync / Flip =====
     settings.extend([
         Setting("0x005A375C", "Tear Control", "VSync / Flip", "hex-preset", "0x96861077",
                 "Tear Control",
@@ -636,7 +763,7 @@ def create_all_settings() -> List[Setting]:
                 ]),
     ])
 
-    # Shader Cache
+    # ===== Shader Cache =====
     settings.extend([
         Setting("0x00198FFF", "Shader Cache", "Shader", "enum", "0x1",
                 "Shader Cache",
@@ -664,7 +791,7 @@ def create_all_settings() -> List[Setting]:
                 ]),
     ])
 
-    # Ambient Occlusion
+    # ===== Ambient Occlusion =====
     settings.extend([
         Setting("0x00667329", "AO Mode", "AO", "enum", "0x0",
                 "AO Mode",
@@ -684,7 +811,7 @@ def create_all_settings() -> List[Setting]:
                 ]),
     ])
 
-    # FXAA
+    # ===== FXAA =====
     settings.extend([
         Setting("0x1034CB89", "FXAA Allow", "FXAA", "enum", "0x1",
                 "FXAA Allow",
@@ -709,7 +836,7 @@ def create_all_settings() -> List[Setting]:
                 ]),
     ])
 
-    # Ansel
+    # ===== Ansel =====
     settings.extend([
         Setting("0x1035DB89", "Ansel Allow", "Ansel", "enum", "0x1",
                 "Ansel Allow",
@@ -734,7 +861,7 @@ def create_all_settings() -> List[Setting]:
                 ]),
     ])
 
-    # Stereo / 3D
+    # ===== Stereo / 3D =====
     settings.extend([
         Setting("0x11AE435C", "Stereo Eyes Exchange", "Stereo", "enum", "0x0",
                 "Stereo - Eyes Exchange",
@@ -799,7 +926,7 @@ def create_all_settings() -> List[Setting]:
                 ]),
     ])
 
-    # Misc Settings
+    # ===== Misc Settings =====
     settings.extend([
         Setting("0x108F0841", "Export Perf Counters", "Misc", "enum", "0x0",
                 "Export Performance Counters",
@@ -903,7 +1030,7 @@ def create_all_settings() -> List[Setting]:
                 ]),
     ])
 
-    # SLI Settings
+    # ===== SLI Settings =====
     settings.extend([
         Setting("0x1033DCD1", "SLI GPU Count", "SLI", "enum", "0x0",
                 "SLI GPU Count",
@@ -970,7 +1097,7 @@ def create_all_settings() -> List[Setting]:
                 ]),
     ])
 
-    # Optimus Settings
+    # ===== Optimus Settings =====
     settings.extend([
         Setting("0x10F9DC80", "Shim MCCompat", "Optimus", "enum", "0x10",
                 "Shim MCCompat",
@@ -1058,7 +1185,6 @@ class SettingsManager(QObject):
             self.settings_changed.emit()
 
     def clear_all(self):
-        """Tum ayarlari temizle ve UI'yi guncelle"""
         self._settings.clear()
         self.settings_changed.emit()
 
@@ -1154,7 +1280,6 @@ class OutputBarWidget(QWidget):
         layout.setContentsMargins(10, 4, 10, 4)
         layout.setSpacing(8)
 
-        # GPU Arch - white text
         arch_label = QLabel("DXVK_NVAPI_GPU_ARCH=")
         arch_label.setStyleSheet("font-family: monospace; font-size: 10px; color: #76b900;")
         arch_label.setToolTip("GPU Architecture environment variable")
@@ -1172,7 +1297,6 @@ class OutputBarWidget(QWidget):
         sep.setMaximumWidth(2)
         layout.addWidget(sep)
 
-        # DRS Settings - white text
         settings_label = QLabel("DXVK_NVAPI_DRS_SETTINGS=")
         settings_label.setStyleSheet("font-family: monospace; font-size: 10px; color: #76b900;")
         settings_label.setToolTip("DRS Settings environment variable")
@@ -1195,7 +1319,6 @@ QLabel{
         self._settings_value.setToolTip("DRS Settings value")
         layout.addWidget(self._settings_value, 1)
 
-        # Copy Settings - Modern
         copy_btn = QPushButton("Copy")
         copy_btn.setToolTip("Copy Settings")
         copy_btn.setFixedSize(88, 26)
@@ -1218,7 +1341,6 @@ QPushButton:pressed{
         copy_btn.clicked.connect(self._copy_settings)
         layout.addWidget(copy_btn)
 
-        # Save to Profile - Modern Blue
         self._save_profile_btn = QPushButton("Save")
         self._save_profile_btn.setToolTip("Save current settings to profile")
         self._save_profile_btn.setFixedSize(88, 26)
@@ -1247,7 +1369,6 @@ QPushButton:disabled{
         self._save_profile_btn.setEnabled(False)
         layout.addWidget(self._save_profile_btn)
 
-        # Copy All - Modern Green
         copy_all_btn = QPushButton("Copy All")
         copy_all_btn.setToolTip("Copy All")
         copy_all_btn.setFixedSize(88, 26)
@@ -1270,7 +1391,6 @@ QPushButton:pressed{
         copy_all_btn.clicked.connect(self._copy_all)
         layout.addWidget(copy_all_btn)
 
-        # Reset - Modern Red
         reset_btn = QPushButton("Reset")
         reset_btn.setToolTip("Reset all settings to default")
         reset_btn.setFixedSize(88, 26)
@@ -1315,7 +1435,6 @@ QPushButton:pressed{
             self._settings_value.setText("none")
             self._settings_value.setToolTip("DRS Settings: none")
 
-        # Enable/disable save button
         current = self.settings_manager.get_current_profile()
         self._save_profile_btn.setEnabled(current is not None)
         if current:
@@ -1354,11 +1473,8 @@ QPushButton:pressed{
             QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            # Reset settings
             self.settings_manager.clear_all()
-            # Reset architecture
             self.settings_manager.set_arch(None)
-            # Force UI update - BURASI ONEMLI
             if self.window() and hasattr(self.window(), '_populate_settings'):
                 self.window()._populate_settings()
             self._show_feedback("All settings reset!")
@@ -1998,7 +2114,6 @@ QScrollBar::sub-page:vertical{
             categories[s.cat].append(s)
 
         for cat, items in categories.items():
-            # KATEGORI BASLIGI - KIRMIZI (her zaman kirmizi)
             item = QListWidgetItem(f"─── {cat} ───")
             item.setFlags(Qt.NoItemFlags)
             font = item.font()
@@ -2006,23 +2121,20 @@ QScrollBar::sub-page:vertical{
             font.setPointSize(8)
             font.setFamily("Segoe UI")
             item.setFont(font)
-            item.setForeground(QColor(185, 59, 59))  # KIRMIZI
+            item.setForeground(QColor(185, 59, 59))
             self.addItem(item)
 
             for s in items:
-                # AYARLAR - Aktifse YESIL, degilse BEYAZ
                 item = QListWidgetItem(f"  {s.name}")
                 item.setData(Qt.UserRole, s.id)
 
                 if s.id in current_state:
-                    # AYARLANMIS -> YESIL + BOLD
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
-                    item.setForeground(QColor(118, 185, 0))  # YESIL
+                    item.setForeground(QColor(118, 185, 0))
                 else:
-                    # AYARLANMAMIS -> BEYAZ
-                    item.setForeground(QColor(200, 205, 216))  # BEYAZ
+                    item.setForeground(QColor(200, 205, 216))
 
                 self.addItem(item)
 
@@ -2481,8 +2593,21 @@ class MainWindow(QMainWindow):
         self._search.setVisible(idx == 0)
     
     def _populate_settings(self, filter_text: str = ""):
+        # Mevcut seçili öğeyi al
+        current_item = self._settings_list.currentItem()
+        current_id = current_item.data(Qt.UserRole) if current_item else None
+        
         state = self.settings_manager.get_settings_list()
         self._settings_list.populate(self.all_settings, state, filter_text)
+        
+        # Eğer bir ID seçiliydi, onu tekrar seç
+        if current_id:
+            for i in range(self._settings_list.count()):
+                item = self._settings_list.item(i)
+                if item.data(Qt.UserRole) == current_id:
+                    self._settings_list.setCurrentItem(item)
+                    self._settings_list.scrollToItem(item)
+                    break
     
     def _filter(self, text):
         self._populate_settings(text)
