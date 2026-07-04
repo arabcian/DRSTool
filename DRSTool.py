@@ -623,7 +623,8 @@ def create_all_settings() -> List[Setting]:
                 ]),
         Setting("0x10D1EF29", "GPU Max Power", "Power", "numeric", "0x0",
                 "GPU Max Power",
-                "Maximum GPU power limit in watts."),
+                "Maximum GPU power limit in watts.",
+                min=0, max=175),
         Setting("0x00AE785C", "Power Throttle", "Power", "enum", "0x0",
                 "Power Throttle",
                 "PCIe slot power compliance throttling.",
@@ -1489,20 +1490,20 @@ QPushButton:pressed{
 
 class SettingEditorWidget(QWidget):
     setting_changed = Signal()
-    
+
     def __init__(self, settings_manager: SettingsManager):
         super().__init__()
         self.settings_manager = settings_manager
         self._current_setting: Optional[Setting] = None
         self._current_value: Optional[str] = None
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        
+
         header = QHBoxLayout()
         header.setSpacing(10)
-        
+
         self._name_label = QLabel()
         self._name_label.setStyleSheet("""
 QLabel{
@@ -1513,7 +1514,7 @@ QLabel{
 """)
         self._name_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         header.addWidget(self._name_label, 1)
-        
+
         self._id_label = QLabel()
         self._id_label.setStyleSheet("""
 QLabel{
@@ -1528,7 +1529,7 @@ QLabel{
 """)
         self._id_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         header.addWidget(self._id_label)
-        
+
         self._value_label = QLabel()
         self._value_label.setStyleSheet("""
 QLabel{
@@ -1545,9 +1546,9 @@ QLabel{
         self._value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         header.addWidget(self._value_label)
         self._value_label.hide()
-        
+
         layout.addLayout(header)
-        
+
         self._desc_label = QLabel()
         self._desc_label.setStyleSheet("""
 QLabel{
@@ -1559,13 +1560,13 @@ QLabel{
         self._desc_label.setWordWrap(True)
         self._desc_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self._desc_label)
-        
+
         self._control_widget = QWidget()
         self._control_layout = QVBoxLayout(self._control_widget)
         self._control_layout.setContentsMargins(0, 6, 0, 0)
         self._control_layout.setSpacing(6)
         layout.addWidget(self._control_widget)
-        
+
         remove_layout = QHBoxLayout()
         remove_layout.addStretch()
         self._remove_btn = QPushButton("Remove Setting")
@@ -1590,25 +1591,25 @@ QPushButton:pressed{
         remove_layout.addWidget(self._remove_btn)
         layout.addLayout(remove_layout)
         self._remove_btn.hide()
-        
+
         layout.addStretch()
         self.hide()
-        
+
         self.settings_manager.settings_changed.connect(self._update_display)
-    
+
     def set_setting(self, setting: Setting):
         self._current_setting = setting
         self._current_value = self.settings_manager.get_setting(setting.id)
         self._build_editor()
         self.show()
-    
+
     def _build_editor(self):
         if not self._current_setting:
             return
-        
+
         s = self._current_setting
         cur = self._current_value
-        
+
         self._name_label.setText(s.name)
         self._id_label.setText(s.id)
         if cur is not None:
@@ -1616,13 +1617,13 @@ QPushButton:pressed{
             self._value_label.show()
         else:
             self._value_label.hide()
-        
+
         desc_text = s.detailed_desc if s.detailed_desc else s.desc
         self._desc_label.setText(desc_text)
-        
+
         self._clear_layout(self._control_layout)
         self._remove_btn.hide()
-        
+
         if s.type == "enum":
             self._build_enum_control(s, cur)
         elif s.type == "hex-preset":
@@ -1635,10 +1636,10 @@ QPushButton:pressed{
             self._build_bitfield_control(s, cur)
         else:
             self._build_hex_control(s, cur)
-        
+
         if cur is not None:
             self._remove_btn.show()
-    
+
     def _clear_layout(self, layout):
         while layout.count():
             child = layout.takeAt(0)
@@ -1646,7 +1647,7 @@ QPushButton:pressed{
                 child.widget().deleteLater()
             elif child.layout():
                 self._clear_layout(child.layout())
-    
+
     def _build_enum_control(self, s: Setting, cur: Optional[str]):
         num_options = len(s.values)
         if num_options <= 2:
@@ -1655,10 +1656,10 @@ QPushButton:pressed{
             cols = 4
         else:
             cols = 5
-        
+
         grid = QGridLayout()
         grid.setSpacing(4)
-        
+
         row, col = 0, 0
         for val in s.values:
             btn = QPushButton(val.name)
@@ -1668,7 +1669,7 @@ QPushButton:pressed{
                 btn.setChecked(True)
             if val.val == s.default:
                 btn.setText(f"* {val.name}")
-            
+
             btn.setStyleSheet("""
 QPushButton{
     background:#1a1f28;
@@ -1689,26 +1690,26 @@ QPushButton:checked{
     color:#76b900;
 }
 """)
-            
+
             btn.clicked.connect(lambda checked, bid=s.id, bval=val.val: self._set_value(bid, bval))
             grid.addWidget(btn, row, col)
-            
+
             col += 1
             if col >= cols:
                 col = 0
                 row += 1
-        
+
         self._control_layout.addLayout(grid)
-    
+
     def _build_preset_control(self, s: Setting, cur: Optional[str]):
         grid = QGridLayout()
         grid.setSpacing(4)
-        
+
         row, col = 0, 0
         for preset in s.presets:
             btn = QPushButton(preset.name)
             btn.clicked.connect(lambda checked, bid=s.id, bval=preset.val: self._set_value(bid, bval))
-            
+
             if preset.val == cur:
                 btn.setStyleSheet("""
 QPushButton{
@@ -1742,18 +1743,18 @@ QPushButton:hover{
 }
 """)
             grid.addWidget(btn, row, col)
-            
+
             col += 1
             if col >= 5:
                 col = 0
                 row += 1
-        
+
         self._control_layout.addLayout(grid)
-    
+
     def _build_numeric_control(self, s: Setting, cur: Optional[str]):
         hbox = QHBoxLayout()
         hbox.setSpacing(8)
-        
+
         spin = QSpinBox()
         spin.setRange(s.min, s.max)
         if cur is not None:
@@ -1777,24 +1778,24 @@ QSpinBox:hover{
     background:#252c37;
 }
 """)
-        spin.valueChanged.connect(lambda val: self._set_numeric(s.id, val))
+        spin.editingFinished.connect(lambda: self._set_numeric(s.id, spin.value()))
         hbox.addWidget(spin)
-        
+
         range_label = QLabel(f"Range: {s.min}–{s.max}")
         range_label.setStyleSheet("font-family: monospace; font-size: 9px; color: #5a6070;")
         hbox.addWidget(range_label)
-        
+
         hbox.addStretch()
         self._control_layout.addLayout(hbox)
-    
+
     def _build_dec_hex_control(self, s: Setting, cur: Optional[str]):
         grid = QGridLayout()
         grid.setSpacing(6)
-        
+
         dec_label = QLabel("Decimal:")
         dec_label.setStyleSheet("font-size: 9px; color: #5a6070;")
         grid.addWidget(dec_label, 0, 0)
-        
+
         dec_spin = QSpinBox()
         dec_spin.setRange(0, 0xFFFFFFFF)
         if cur is not None:
@@ -1816,13 +1817,13 @@ QSpinBox:hover{
     background:#252c37;
 }
 """)
-        dec_spin.valueChanged.connect(lambda val: self._set_dec_hex(s.id, val))
+        dec_spin.editingFinished.connect(lambda: self._set_dec_hex(s.id, dec_spin.value()))
         grid.addWidget(dec_spin, 0, 1)
-        
+
         hex_label = QLabel("Hex: 0x")
         hex_label.setStyleSheet("font-size: 9px; color: #5a6070;")
         grid.addWidget(hex_label, 0, 2)
-        
+
         hex_edit = QLineEdit()
         if cur is not None:
             hex_edit.setText(cur.replace("0x", "").upper())
@@ -1846,32 +1847,32 @@ QLineEdit:hover{
     background:#252c37;
 }
 """)
-        hex_edit.textChanged.connect(lambda val: self._set_hex_from_edit(s.id, val))
+        hex_edit.editingFinished.connect(lambda: self._set_hex_from_edit(s.id, hex_edit.text()))
         grid.addWidget(hex_edit, 0, 3)
-        
+
         self._control_layout.addLayout(grid)
-    
+
     def _build_bitfield_control(self, s: Setting, cur: Optional[str]):
         cur_val = int(cur, 16) if cur else 0
-        
+
         grid = QGridLayout()
         grid.setSpacing(3)
-        
+
         row, col = 0, 0
-        
+
         for bit in s.bits:
             is_mask = (bit.val & (bit.val - 1)) != 0 and bit.val > 1
             if is_mask:
                 active = (cur_val & bit.val) == bit.val
             else:
                 active = bool(cur_val & bit.val)
-            
+
             btn = QPushButton(f"{bit.name}\n0x{bit.val:08X}")
             btn.setCheckable(True)
             btn.setChecked(active)
             btn.setProperty("bit_value", bit.val)
             btn.clicked.connect(lambda checked, bid=s.id, bval=bit.val: self._toggle_bitfield(bid, bval))
-            
+
             if active:
                 btn.setStyleSheet("""
 QPushButton{
@@ -1906,39 +1907,39 @@ QPushButton:hover{
     border:1px solid #76b900;
 }
 """)
-            
+
             grid.addWidget(btn, row, col)
-            
+
             col += 1
             if col >= 3:
                 col = 0
                 row += 1
-        
+
         self._control_layout.addLayout(grid)
-        
+
         val_layout = QHBoxLayout()
         val_layout.setSpacing(8)
-        
+
         calc_label = QLabel("Combined Value:")
         calc_label.setStyleSheet("font-size: 9px; color: #5a6070; font-family: monospace;")
         val_layout.addWidget(calc_label)
-        
+
         calc_value = QLabel(f"0x{cur_val:08X}" if cur_val else "0x0")
         calc_value.setStyleSheet("font-size: 10px; color: #9be238; font-family: monospace;")
         calc_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
         val_layout.addWidget(calc_value)
-        
+
         val_layout.addStretch()
         self._control_layout.addLayout(val_layout)
-    
+
     def _build_hex_control(self, s: Setting, cur: Optional[str]):
         hbox = QHBoxLayout()
         hbox.setSpacing(8)
-        
+
         hex_label = QLabel("0x")
         hex_label.setStyleSheet("font-size: 9px; color: #5a6070;")
         hbox.addWidget(hex_label)
-        
+
         hex_edit = QLineEdit()
         if cur is not None:
             hex_edit.setText(cur.replace("0x", "").upper())
@@ -1962,31 +1963,32 @@ QLineEdit:hover{
     background:#252c37;
 }
 """)
-        hex_edit.textChanged.connect(lambda val: self._set_hex_from_edit(s.id, val))
+        hex_edit.editingFinished.connect(lambda: self._set_hex_from_edit(s.id, hex_edit.text()))
         hbox.addWidget(hex_edit)
-        
+
         hbox.addStretch()
         self._control_layout.addLayout(hbox)
-    
+
     def _set_value(self, setting_id: str, value: str):
         self.settings_manager.set_setting(setting_id, value)
         self._current_value = value
         self.setting_changed.emit()
         self._build_editor()
-    
+
     def _set_numeric(self, setting_id: str, value: int):
         hex_val = f"0x{value:X}"
         self.settings_manager.set_setting(setting_id, hex_val)
         self._current_value = hex_val
         self.setting_changed.emit()
-    
+        self._build_editor()
+
     def _set_dec_hex(self, setting_id: str, value: int):
         hex_val = f"0x{value:X}"
         self.settings_manager.set_setting(setting_id, hex_val)
         self._current_value = hex_val
         self.setting_changed.emit()
         self._build_editor()
-    
+
     def _set_hex_from_edit(self, setting_id: str, value: str):
         clean = re.sub(r'[^0-9a-fA-F]', '', value)
         if clean:
@@ -1994,13 +1996,14 @@ QLineEdit:hover{
             self.settings_manager.set_setting(setting_id, hex_val)
             self._current_value = hex_val
             self.setting_changed.emit()
-    
+            self._build_editor()
+
     def _toggle_bitfield(self, setting_id: str, bit_val: int):
         cur = self.settings_manager.get_setting(setting_id)
         cur_val = int(cur, 16) if cur else 0
-        
+
         is_mask = (bit_val & (bit_val - 1)) != 0 and bit_val > 1
-        
+
         if is_mask:
             if (cur_val & bit_val) == bit_val:
                 new_val = cur_val & ~bit_val
@@ -2008,19 +2011,19 @@ QLineEdit:hover{
                 new_val = (cur_val & ~bit_val) | bit_val
         else:
             new_val = cur_val ^ bit_val
-        
+
         hex_val = f"0x{new_val:08X}"
         self.settings_manager.set_setting(setting_id, hex_val)
         self._current_value = hex_val
         self.setting_changed.emit()
         self._build_editor()
-    
+
     def _remove_setting(self):
         if self._current_setting:
             self.settings_manager.remove_setting(self._current_setting.id)
             self.setting_changed.emit()
             self.hide()
-    
+
     def _update_display(self):
         if self._current_setting:
             self._current_value = self.settings_manager.get_setting(self._current_setting.id)
@@ -2565,9 +2568,10 @@ class MainWindow(QMainWindow):
         splitter.addWidget(editor)
         main_layout.addWidget(splitter)
         
-        self.statusBar = QStatusBar()
-        self.setStatusBar(self.statusBar)
-        self.statusBar.setStyleSheet("""
+        # Durum çubuğunu oluştur ve ata - self.statusBar niteliğini KULLANMA!
+        status_bar = QStatusBar()
+        self.setStatusBar(status_bar)
+        status_bar.setStyleSheet("""
             QStatusBar {
                 background: #0d0f12;
                 color: #5a6070;
@@ -2576,11 +2580,12 @@ class MainWindow(QMainWindow):
                 min-height: 20px;
             }
         """)
-        self.statusBar.showMessage("Ready")
-        
+        status_bar.showMessage("Ready")
+        self.settings_manager.settings_changed.connect(self._on_setting_changed)
+
+        # EKSİK BAĞLANTIYI EKLE:
         self.settings_manager.profile_loaded.connect(self._update_window_title)
-        self.settings_manager.settings_changed.connect(self._populate_settings)
-        
+
         self._populate_settings()
     
     def _update_window_title(self, profile_name):
@@ -2593,20 +2598,17 @@ class MainWindow(QMainWindow):
         self._search.setVisible(idx == 0)
     
     def _populate_settings(self, filter_text: str = ""):
-        # Mevcut seçili öğeyi al
         current_item = self._settings_list.currentItem()
         current_id = current_item.data(Qt.UserRole) if current_item else None
-        
+
         state = self.settings_manager.get_settings_list()
         self._settings_list.populate(self.all_settings, state, filter_text)
-        
-        # Eğer bir ID seçiliydi, onu tekrar seç
+
         if current_id:
             for i in range(self._settings_list.count()):
                 item = self._settings_list.item(i)
                 if item.data(Qt.UserRole) == current_id:
                     self._settings_list.setCurrentItem(item)
-                    self._settings_list.scrollToItem(item)
                     break
     
     def _filter(self, text):
@@ -2620,15 +2622,14 @@ class MainWindow(QMainWindow):
             self._setting_editor.show()
     
     def _on_setting_changed(self):
-        self._populate_settings(self._search.text())
         count = len(self.settings_manager.get_settings_list())
         arch = self.settings_manager.get_arch()
         arch_str = f" [Arch: {arch.code}]" if arch else ""
-        self.statusBar.showMessage(f"{count} setting{'s' if count != 1 else ''} configured{arch_str}")
+        self.statusBar().showMessage(f"{count} setting{'s' if count != 1 else ''} configured{arch_str}")
     
     def _on_profile_loaded(self, name):
         self._populate_settings(self._search.text())
-        self.statusBar.showMessage(f"Loaded profile: {name}")
+        self.statusBar().showMessage(f"Loaded profile: {name}")
 
 
 def main():
