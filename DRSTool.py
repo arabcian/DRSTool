@@ -17,7 +17,7 @@ from PySide6.QtGui import QColor, QPalette, QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QListWidget, QListWidgetItem, QStackedWidget,
-    QLabel, QLineEdit, QPushButton, QSpinBox, QCheckBox,
+    QLabel, QLineEdit, QPushButton, QSpinBox, QCheckBox, QComboBox,
     QGroupBox, QScrollArea, QFrame, QMessageBox,
     QStatusBar, QButtonGroup, QGridLayout, QSizePolicy,
     QTextEdit, QTextBrowser, QToolTip
@@ -70,6 +70,18 @@ class Setting:
     presets: List[Preset] = field(default_factory=list)
     min: int = 0
     max: int = 0
+
+
+@dataclass
+class EnvVarDef:
+    """Definition of an environment variable with its metadata."""
+    name: str
+    cat: str          # "DXVK" or "VKD3D-Proton"
+    vtype: str        # "string", "enum", "bool", "int", "flags"
+    default: str
+    desc: str
+    options: List[str] = field(default_factory=list)  # for enum/flags types
+    placeholder: str = ""
 
 
 # ============================================================================
@@ -1216,10 +1228,11 @@ class SettingsManager(QObject):
     def get_current_profile(self) -> Optional[str]:
         return self._current_profile
 
-    def save_profile(self, name: str):
+    def save_profile(self, name: str, env_vars: Optional[Dict] = None):
         self._profiles[name] = {
             "settings": self._settings.copy(),
-            "arch": self._arch.code if self._arch else None
+            "arch": self._arch.code if self._arch else None,
+            "env_vars": env_vars.copy() if env_vars else {},
         }
         self._current_profile = name
         self._save_profiles()
@@ -1236,9 +1249,14 @@ class SettingsManager(QObject):
         else:
             self._arch = None
         self._current_profile = name
+        self._loaded_env_vars = profile.get("env_vars", {}).copy()
         self.profile_loaded.emit(name)
         self.settings_changed.emit()
         self.arch_changed.emit()
+
+    def get_loaded_env_vars(self) -> Dict:
+        """Returns env vars from the last loaded profile. Consumed once."""
+        return getattr(self, '_loaded_env_vars', {})
 
     def delete_profile(self, name: str):
         if name in self._profiles:
@@ -1274,145 +1292,118 @@ class OutputBarWidget(QWidget):
     def __init__(self, settings_manager: SettingsManager, parent=None):
         super().__init__(parent)
         self.settings_manager = settings_manager
-        self.setFixedHeight(38)
+        self._env_widget: Optional['EnvVarsWidget'] = None  # set after construction
+
+        # Three rows: row1 NVAPI vars, row2 DXVK|VKD3D vars, row3 buttons
+        self.setFixedHeight(92)
         self.setStyleSheet("background: #141720; border-bottom: 1px solid #1e2535;")
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 4, 10, 4)
-        layout.setSpacing(8)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 5, 10, 5)
+        root.setSpacing(3)
 
-        arch_label = QLabel("DXVK_NVAPI_GPU_ARCH=")
-        arch_label.setStyleSheet("font-family: monospace; font-size: 10px; color: #76b900;")
-        arch_label.setToolTip("GPU Architecture environment variable")
-        layout.addWidget(arch_label)
+        # ── Shared label style ────────────────────────────────────────────────
+        lbl_ss  = "font-family: monospace; font-size: 10px; color: #76b900; font-weight: 600;"
+        val_ss  = "font-family: monospace; font-size: 10px; color: #e8eaf0;"
+        box_ss  = ("QLabel{ background:#0d1016; border:1px solid #2b3444; border-radius:4px;"
+                   " padding:2px 8px; color:#f0f0f0; font-family:monospace; font-size:10px; }")
+
+        # ── Row 1: DXVK_NVAPI_GPU_ARCH  |  DXVK_NVAPI_DRS_SETTINGS ──────────
+        row1 = QHBoxLayout()
+        row1.setSpacing(6)
+        row1.setContentsMargins(0, 0, 0, 0)
+
+        lbl_arch = QLabel("DXVK_NVAPI_GPU_ARCH=")
+        lbl_arch.setStyleSheet(lbl_ss)
+        row1.addWidget(lbl_arch)
 
         self._arch_value = QLabel("not set")
-        self._arch_value.setStyleSheet("font-family: monospace; font-size: 10px; color: #e8eaf0;")
+        self._arch_value.setStyleSheet(val_ss)
         self._arch_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self._arch_value.setToolTip("GPU Architecture value")
-        layout.addWidget(self._arch_value)
+        row1.addWidget(self._arch_value)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet("border: 1px solid #1e2535;")
-        sep.setMaximumWidth(2)
-        layout.addWidget(sep)
+        sep1 = QFrame(); sep1.setFrameShape(QFrame.VLine)
+        sep1.setStyleSheet("border: none; border-left: 1px solid #1e2535;")
+        sep1.setMaximumWidth(1)
+        row1.addWidget(sep1)
 
-        settings_label = QLabel("DXVK_NVAPI_DRS_SETTINGS=")
-        settings_label.setStyleSheet("font-family: monospace; font-size: 10px; color: #76b900;")
-        settings_label.setToolTip("DRS Settings environment variable")
-        layout.addWidget(settings_label)
+        lbl_drs = QLabel("DXVK_NVAPI_DRS_SETTINGS=")
+        lbl_drs.setStyleSheet(lbl_ss)
+        row1.addWidget(lbl_drs)
 
         self._settings_value = QLabel("none")
-        self._settings_value.setStyleSheet("""
-QLabel{
-    background:#0d1016;
-    border:1px solid #2b3444;
-    border-radius:5px;
-    padding:4px 10px;
-    color:#f0f0f0;
-    font-family:monospace;
-    font-size:10px;
-}
-""")
+        self._settings_value.setStyleSheet(box_ss)
         self._settings_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._settings_value.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._settings_value.setToolTip("DRS Settings value")
-        layout.addWidget(self._settings_value, 1)
+        row1.addWidget(self._settings_value, 1)
 
-        copy_btn = QPushButton("Copy")
-        copy_btn.setToolTip("Copy Settings")
-        copy_btn.setFixedSize(88, 26)
-        copy_btn.setStyleSheet("""
-QPushButton{
-    background:#2b8a3e;
-    border:1px solid #49b95b;
-    border-radius:5px;
-    color:white;
-    font-weight:600;
-    font-size:10px;
-}
-QPushButton:hover{
-    background:#34a148;
-}
-QPushButton:pressed{
-    background:#287b37;
-}
-""")
-        copy_btn.clicked.connect(self._copy_settings)
-        layout.addWidget(copy_btn)
+        root.addLayout(row1)
 
-        self._save_profile_btn = QPushButton("Save")
-        self._save_profile_btn.setToolTip("Save current settings to profile")
-        self._save_profile_btn.setFixedSize(88, 26)
-        self._save_profile_btn.setStyleSheet("""
-QPushButton{
-    background:#2d6cdf;
-    border:1px solid #4f87ea;
-    border-radius:5px;
-    color:white;
-    font-weight:600;
-    font-size:10px;
-}
-QPushButton:hover{
-    background:#3d7cf0;
-}
-QPushButton:pressed{
-    background:#235cc2;
-}
-QPushButton:disabled{
-    background:#222831;
-    border:1px solid #333b46;
-    color:#666;
-}
-""")
-        self._save_profile_btn.clicked.connect(self._save_to_profile)
-        self._save_profile_btn.setEnabled(False)
-        layout.addWidget(self._save_profile_btn)
+        # ── Row 2: DXVK | VKD3D-PROTON= <combined env value> ─────────────────
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+        row2.setContentsMargins(0, 0, 0, 0)
+
+        lbl_env = QLabel("DXVK | VKD3D-PROTON=")
+        lbl_env.setStyleSheet(lbl_ss)
+        row2.addWidget(lbl_env)
+
+        self._env_value = QLabel("none")
+        self._env_value.setStyleSheet(box_ss)
+        self._env_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._env_value.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        row2.addWidget(self._env_value, 1)
+
+        root.addLayout(row2)
+
+        # ── Row 3: stretch + Copy All | Save | Reset ──────────────────────────
+        row3 = QHBoxLayout()
+        row3.setSpacing(6)
+        row3.setContentsMargins(0, 0, 0, 0)
+        row3.addStretch(1)
+
+        btn_ss_green = """
+QPushButton{background:#379f47;border:1px solid #56bf69;border-radius:5px;
+    color:white;font-weight:600;font-size:10px;}
+QPushButton:hover{background:#43b755;}
+QPushButton:pressed{background:#2f8c3f;}"""
+
+        btn_ss_blue = """
+QPushButton{background:#2d6cdf;border:1px solid #4f87ea;border-radius:5px;
+    color:white;font-weight:600;font-size:10px;}
+QPushButton:hover{background:#3d7cf0;}
+QPushButton:pressed{background:#235cc2;}
+QPushButton:disabled{background:#222831;border:1px solid #333b46;color:#666;}"""
+
+        btn_ss_red = """
+QPushButton{background:#b93b3b;border:1px solid #e05b5b;border-radius:5px;
+    color:white;font-weight:600;font-size:10px;}
+QPushButton:hover{background:#cd4949;}
+QPushButton:pressed{background:#a13232;}"""
 
         copy_all_btn = QPushButton("Copy All")
-        copy_all_btn.setToolTip("Copy All")
-        copy_all_btn.setFixedSize(88, 26)
-        copy_all_btn.setStyleSheet("""
-QPushButton{
-    background:#379f47;
-    border:1px solid #56bf69;
-    border-radius:5px;
-    color:white;
-    font-weight:600;
-    font-size:10px;
-}
-QPushButton:hover{
-    background:#43b755;
-}
-QPushButton:pressed{
-    background:#2f8c3f;
-}
-""")
+        copy_all_btn.setFixedSize(80, 22)
+        copy_all_btn.setStyleSheet(btn_ss_green)
+        copy_all_btn.setToolTip("Copy full launch string to clipboard")
         copy_all_btn.clicked.connect(self._copy_all)
-        layout.addWidget(copy_all_btn)
+        row3.addWidget(copy_all_btn)
+
+        self._save_profile_btn = QPushButton("Save")
+        self._save_profile_btn.setFixedSize(70, 22)
+        self._save_profile_btn.setStyleSheet(btn_ss_blue)
+        self._save_profile_btn.setToolTip("Save current settings to profile")
+        self._save_profile_btn.setEnabled(False)
+        self._save_profile_btn.clicked.connect(self._save_to_profile)
+        row3.addWidget(self._save_profile_btn)
 
         reset_btn = QPushButton("Reset")
+        reset_btn.setFixedSize(70, 22)
+        reset_btn.setStyleSheet(btn_ss_red)
         reset_btn.setToolTip("Reset all settings to default")
-        reset_btn.setFixedSize(88, 26)
-        reset_btn.setStyleSheet("""
-QPushButton{
-    background:#b93b3b;
-    border:1px solid #e05b5b;
-    border-radius:5px;
-    color:white;
-    font-weight:600;
-    font-size:10px;
-}
-QPushButton:hover{
-    background:#cd4949;
-}
-QPushButton:pressed{
-    background:#a13232;
-}
-""")
         reset_btn.clicked.connect(self._reset_all)
-        layout.addWidget(reset_btn)
+        row3.addWidget(reset_btn)
+
+        root.addLayout(row3)
 
         self.settings_manager.settings_changed.connect(self._update)
         self.settings_manager.arch_changed.connect(self._update)
@@ -1436,6 +1427,14 @@ QPushButton:pressed{
             self._settings_value.setText("none")
             self._settings_value.setToolTip("DRS Settings: none")
 
+        # Row 2: env vars string
+        if self._env_widget is not None:
+            env_str = self._env_widget.get_env_string()
+        else:
+            env_str = ""
+        self._env_value.setText(env_str if env_str else "none")
+        self._env_value.setToolTip(env_str if env_str else "No DXVK/VKD3D-Proton env vars set")
+
         current = self.settings_manager.get_current_profile()
         self._save_profile_btn.setEnabled(current is not None)
         if current:
@@ -1446,14 +1445,11 @@ QPushButton:pressed{
     def _on_profile_loaded(self, name):
         self._update()
 
-    def _copy_settings(self):
-        text = self.settings_manager.get_settings_string()
-        if text:
-            QApplication.clipboard().setText(text)
-            self._show_feedback("Settings copied!")
-
     def _copy_all(self):
-        text = self.settings_manager.get_full_env_string()
+        if self._env_widget is not None:
+            text = self._env_widget.get_full_combined_string()
+        else:
+            text = self.settings_manager.get_full_env_string()
         if text:
             QApplication.clipboard().setText(text)
             self._show_feedback("All copied!")
@@ -1461,7 +1457,8 @@ QPushButton:pressed{
     def _save_to_profile(self):
         current = self.settings_manager.get_current_profile()
         if current:
-            self.settings_manager.save_profile(current)
+            env_vars = self._env_widget.get_env_dict() if self._env_widget else {}
+            self.settings_manager.save_profile(current, env_vars)
             self._show_feedback(f"Saved to: {current}")
 
     def _reset_all(self):
@@ -1469,15 +1466,31 @@ QPushButton:pressed{
             self,
             "Reset All Settings",
             "Do you want to reset all settings to default?\n\n"
-            "This will remove all configured settings and clear GPU architecture selection.",
+            "This will remove all configured settings, clear GPU architecture "
+            "selection, and clear all DXVK/VKD3D-Proton env vars.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
         if reply == QMessageBox.Yes:
             self.settings_manager.clear_all()
             self.settings_manager.set_arch(None)
-            if self.window() and hasattr(self.window(), '_populate_settings'):
-                self.window()._populate_settings()
+            self.settings_manager._current_profile = None
+            win = self.window()
+            if win:
+                # Clear env widget
+                if hasattr(win, '_env_widget'):
+                    win._env_widget.reset_all_values()
+                # Clear env editor right panel
+                if hasattr(win, '_env_editor'):
+                    win._env_editor.hide()
+                # Reset window title
+                win.setWindowTitle("DXVK NVAPI DRS Settings Configurator")
+                # Reset right panel to placeholder
+                win._right_stack.setCurrentIndex(0)
+                if hasattr(win, '_populate_settings'):
+                    win._populate_settings()
+                if hasattr(win, '_populate_arch_list'):
+                    win._populate_arch_list()
             self._show_feedback("All settings reset!")
 
     def _show_feedback(self, msg):
@@ -2034,6 +2047,885 @@ QLineEdit:hover{
 
 
 # ============================================================================
+# Arch List - Same style as Settings List
+# ============================================================================
+
+class ArchListWidget(QListWidget):
+    """List of GPU architectures styled exactly like the Settings list."""
+    arch_selected = Signal(object)  # emits GPUArch
+
+    def __init__(self):
+        super().__init__()
+        self.setSelectionMode(QListWidget.SingleSelection)
+        self.setAlternatingRowColors(True)
+        self.itemClicked.connect(self._on_item_clicked)
+        self.setFont(QFont("Segoe UI", 9))
+
+        self.setStyleSheet("""
+QListWidget{
+    background:#0d0f12;
+    border:none;
+    outline:none;
+}
+
+QListWidget::item{
+    background:transparent;
+    border-radius:0px;
+    padding:4px 12px;
+    margin:0px;
+    font-size:10px;
+    font-weight:400;
+    border-left:2px solid transparent;
+}
+
+QListWidget::item:hover{
+    background:#141720;
+    color:#e8eaf0;
+}
+
+QListWidget::item:selected{
+    background:rgba(118, 185, 0, 0.07);
+    color:#e8eaf0;
+    border-left:2px solid #76b900;
+}
+
+QScrollBar:vertical{
+    background:#0d0f12;
+    width:5px;
+}
+
+QScrollBar::handle:vertical{
+    background:#1e2535;
+    border-radius:3px;
+}
+
+QScrollBar::handle:vertical:hover{
+    background:#5a6070;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical{
+    height:0px;
+}
+
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical{
+    background:none;
+}
+""")
+
+    def populate(self, archs: List[GPUArch], selected_arch: Optional[GPUArch]):
+        """Fill the list with architecture items, highlighting the selected one."""
+        self.clear()
+        # Add a category header (non-selectable)
+        cat_item = QListWidgetItem("─── GPU Architectures ───")
+        cat_item.setFlags(Qt.NoItemFlags)
+        font = cat_item.font()
+        font.setBold(True)
+        font.setPointSize(8)
+        font.setFamily("Segoe UI")
+        cat_item.setFont(font)
+        cat_item.setForeground(QColor(185, 59, 59))
+        self.addItem(cat_item)
+
+        for arch in archs:
+            item = QListWidgetItem(arch.name)
+            item.setData(Qt.UserRole, arch)
+            if selected_arch and arch.code == selected_arch.code:
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
+                item.setForeground(QColor(118, 185, 0))
+            else:
+                item.setForeground(QColor(200, 205, 216))
+            self.addItem(item)
+
+    def _on_item_clicked(self, item):
+        arch = item.data(Qt.UserRole)
+        if arch:
+            self.arch_selected.emit(arch)
+
+
+# ============================================================================
+# Arch Detail - Shows info and a Clear button (similar to SettingEditor)
+# ============================================================================
+
+class ArchDetailWidget(QWidget):
+    """Detail view for a selected architecture, with a Clear button."""
+    clear_requested = Signal()
+
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Name (large, bold)
+        self._name_label = QLabel()
+        self._name_label.setStyleSheet("""
+QLabel{
+    color:#f2f2f2;
+    font-size:16px;
+    font-weight:700;
+}
+""")
+        self._name_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self._name_label)
+
+        # Architecture field
+        self._arch_label = QLabel()
+        self._arch_label.setStyleSheet("color: #a7afbc; font-size: 11px;")
+        self._arch_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self._arch_label)
+
+        # Code and example
+        self._code_label = QLabel()
+        self._code_label.setStyleSheet("font-family: monospace; font-size: 10px; color: #8ea0ba;")
+        self._code_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self._code_label)
+
+        self._example_label = QLabel()
+        self._example_label.setStyleSheet("color: #a7afbc; font-size: 11px;")
+        self._example_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self._example_label)
+
+        # Short description
+        self._desc_label = QLabel(
+            "Select this architecture to enable GPU‑specific optimizations "
+            "in DXVK‑NVAPI."
+        )
+        self._desc_label.setWordWrap(True)
+        self._desc_label.setStyleSheet("color: #a7afbc; font-size: 11px;")
+        layout.addWidget(self._desc_label)
+
+        layout.addStretch()
+
+        # Clear button (styled like the "Remove Setting" button)
+        self._clear_btn = QPushButton("Clear Architecture")
+        self._clear_btn.clicked.connect(self.clear_requested)
+        self._clear_btn.setStyleSheet("""
+QPushButton{
+    background:#b93b3b;
+    border:1px solid #e45d5d;
+    border-radius:5px;
+    color:white;
+    padding:4px 16px;
+    font-weight:600;
+    font-size:10px;
+}
+QPushButton:hover{
+    background:#ca4545;
+}
+QPushButton:pressed{
+    background:#a73434;
+}
+""")
+        layout.addWidget(self._clear_btn)
+
+        self.hide()
+
+    def set_arch(self, arch: Optional[GPUArch]):
+        """Update the detail view with the given architecture (or hide)."""
+        if arch:
+            self._name_label.setText(arch.name)
+            self._arch_label.setText(f"Architecture: {arch.arch}")
+            self._code_label.setText(f"Code: {arch.code}  ·  Example: {arch.example}")
+            self._example_label.setText(f"Example GPU: {arch.example}")
+            self._clear_btn.show()
+            self.show()
+        else:
+            self.hide()
+
+
+# ============================================================================
+# Environment Variable Definitions (DXVK + VKD3D-Proton)
+# ============================================================================
+
+DXVK_ENV_VARS: List[EnvVarDef] = [
+    # ── HUD ──────────────────────────────────────────────────────────────────
+    EnvVarDef("DXVK_HUD", "DXVK", "flags", "",
+              "In-game HUD overlay. Comma-separated list of elements to display.",
+              options=["devinfo", "fps", "frametimes", "submissions", "drawcalls",
+                       "pipelines", "memory", "gpuload", "version", "api", "compiler",
+                       "samplers", "descriptors", "scale=N", "1", "full"],
+              placeholder="e.g. devinfo,fps,memory"),
+    # ── Frame Rate ───────────────────────────────────────────────────────────
+    EnvVarDef("DXVK_FRAME_RATE", "DXVK", "int", "0",
+              "Frame rate limiter. 0 = uncapped. Positive value limits to N FPS.",
+              placeholder="e.g. 60"),
+    # ── Logging ──────────────────────────────────────────────────────────────
+    EnvVarDef("DXVK_LOG_LEVEL", "DXVK", "enum", "",
+              "Controls message logging verbosity.",
+              options=["none", "error", "warn", "info", "debug"]),
+    EnvVarDef("DXVK_LOG_PATH", "DXVK", "string", "",
+              "Directory path for DXVK log files (app_d3d11.log, app_dxgi.log etc.).",
+              placeholder="/path/to/dir"),
+    # ── Shader Cache ─────────────────────────────────────────────────────────
+    EnvVarDef("DXVK_SHADER_DUMP_PATH", "DXVK", "string", "",
+              "Dump compiled shader bytecode to this directory for debugging.",
+              placeholder="/tmp/shaders"),
+    EnvVarDef("DXVK_SHADER_CACHE_PATH", "DXVK", "string", "",
+              "Override the shader pipeline state cache directory.",
+              placeholder="/path/to/cache"),
+    EnvVarDef("DXVK_STATE_CACHE", "DXVK", "enum", "",
+              "Pipeline state cache control. Set to 0 to disable.",
+              options=["0", "1"]),
+    EnvVarDef("DXVK_STATE_CACHE_PATH", "DXVK", "string", "",
+              "Directory for pipeline state cache files.",
+              placeholder="/path/to/cache"),
+    # ── Device Selection ─────────────────────────────────────────────────────
+    EnvVarDef("DXVK_FILTER_DEVICE_NAME", "DXVK", "string", "",
+              "Select GPU by substring match on Vulkan device name.",
+              placeholder="e.g. RTX 4080"),
+    EnvVarDef("DXVK_FILTER_DEVICE_UUID", "DXVK", "string", "",
+              "Select GPU by 32-char hex Vulkan device UUID (no dashes).",
+              placeholder="00000000000000000000000000000001"),
+    # ── HDR ──────────────────────────────────────────────────────────────────
+    EnvVarDef("DXVK_HDR", "DXVK", "enum", "",
+              "Enable HDR10 color space exposure (DXGI_COLOR_SPACE_RGB_FULL_G2084). "
+              "Needed by some HDR-capable games.",
+              options=["0", "1"]),
+    # ── Debug ────────────────────────────────────────────────────────────────
+    EnvVarDef("DXVK_DEBUG", "DXVK", "enum", "",
+              "Enables DXVK debug utilities (e.g. D3D annotation markers for RenderDoc).",
+              options=["markers"]),
+    EnvVarDef("DXVK_ASYNC", "DXVK", "enum", "",
+              "Async shader compilation (unofficial/patched builds). 1 = enable.",
+              options=["0", "1"]),
+    # ── Vulkan Layers ────────────────────────────────────────────────────────
+    EnvVarDef("VK_INSTANCE_LAYERS", "DXVK", "string", "",
+              "Enable Vulkan instance layers. Use VK_LAYER_KHRONOS_validation for debug.",
+              placeholder="VK_LAYER_KHRONOS_validation"),
+    # ── NVAPI ────────────────────────────────────────────────────────────────
+    EnvVarDef("DXVK_ENABLE_NVAPI", "DXVK", "enum", "",
+              "Enable NVAPI support. Required for DLSS, Reflex, and MFG.",
+              options=["0", "1"]),
+]
+
+# Per-flag descriptions for VKD3D_CONFIG checkbox UI
+VKD3D_CONFIG_DESCS: Dict[str, str] = {
+    "vk_debug":                    "Enable Vulkan debug extensions and loads validation layer.",
+    "skip_application_workarounds": "Skip all application-specific workarounds. For debugging only.",
+    "nodxr":                       "Disable DXR (raytracing) support entirely.",
+    "dxr":                         "Force-enable DXR even when considered unsafe (auto-enabled normally).",
+    "dxr12":                       "Experimental DXR 1.2 support (requires VK_EXT_opacity_micromap).",
+    "force_static_cbv":            "Speed hack on NVIDIA — may give performance uplift or cause issues.",
+    "single_queue":                "Disable async compute/transfer queues, use a single queue.",
+    "no_upload_hvv":               "Block host-visible VRAM (resizable BAR) for the UPLOAD heap. Frees VRAM at cost of GPU perf.",
+    "force_host_cached":           "Force all host-visible allocations to CACHED. Speeds up GPU captures.",
+    "no_invariant_position":       "Disable the invariant-position workaround (enabled by default).",
+}
+
+VKD3D_ENV_VARS: List[EnvVarDef] = [
+    # ── Config Flags ─────────────────────────────────────────────────────────
+    EnvVarDef("VKD3D_CONFIG", "VKD3D-Proton", "vkd3d_config", "",
+              "Comma/semicolon-separated list of behavior flags for vkd3d-proton.",
+              options=[
+                  "vk_debug",
+                  "skip_application_workarounds",
+                  "nodxr",
+                  "dxr",
+                  "dxr12",
+                  "force_static_cbv",
+                  "single_queue",
+                  "no_upload_hvv",
+                  "force_host_cached",
+                  "no_invariant_position",
+              ],
+              placeholder="e.g. dxr,force_static_cbv"),
+    # ── Frame Rate ───────────────────────────────────────────────────────────
+    EnvVarDef("VKD3D_FRAME_RATE", "VKD3D-Proton", "int", "0",
+              "Frame rate limiter. 0 = uncapped. Positive value = limit to N FPS.",
+              placeholder="e.g. 120"),
+    # ── Logging ──────────────────────────────────────────────────────────────
+    EnvVarDef("VKD3D_DEBUG", "VKD3D-Proton", "enum", "",
+              "Debug log verbosity for vkd3d-proton runtime.",
+              options=["none", "err", "info", "fixme", "warn", "trace"]),
+    EnvVarDef("VKD3D_SHADER_DEBUG", "VKD3D-Proton", "enum", "",
+              "Debug log verbosity for shader compilers.",
+              options=["none", "err", "info", "fixme", "warn", "trace"]),
+    EnvVarDef("VKD3D_LOG_FILE", "VKD3D-Proton", "string", "",
+              "Redirect VKD3D_DEBUG log output to this file.",
+              placeholder="/tmp/vkd3d.log"),
+    # ── Device Selection ─────────────────────────────────────────────────────
+    EnvVarDef("VKD3D_VULKAN_DEVICE", "VKD3D-Proton", "int", "",
+              "Zero-based Vulkan device index to force device selection.",
+              placeholder="0"),
+    EnvVarDef("VKD3D_FILTER_DEVICE_NAME", "VKD3D-Proton", "string", "",
+              "Skip Vulkan devices that don't contain this substring.",
+              placeholder="e.g. RTX 4080"),
+    EnvVarDef("VKD3D_DISABLE_EXTENSIONS", "VKD3D-Proton", "string", "",
+              "Comma-separated list of Vulkan extensions to disable.",
+              placeholder="VK_EXT_foo,VK_KHR_bar"),
+    # ── Shader Cache ─────────────────────────────────────────────────────────
+    EnvVarDef("VKD3D_SHADER_CACHE_PATH", "VKD3D-Proton", "string", "",
+              "Override directory for vkd3d-proton.cache. Set to '0' to disable.",
+              placeholder="/path/to/cache or 0"),
+    EnvVarDef("VKD3D_SHADER_DUMP_PATH", "VKD3D-Proton", "string", "",
+              "Dump shader bytecode (SPIR-V/DXBC/DXIL) to this directory.",
+              placeholder="/tmp/vkd3d-shaders"),
+    EnvVarDef("VKD3D_SHADER_OVERRIDE", "VKD3D-Proton", "string", "",
+              "Directory containing override SPIR-V shaders by hash.",
+              placeholder="/path/to/overrides"),
+    # ── Swapchain ────────────────────────────────────────────────────────────
+    EnvVarDef("VKD3D_SWAPCHAIN_PRESENT_MODE", "VKD3D-Proton", "enum", "",
+              "Force a specific Vulkan present mode for the swapchain.",
+              options=["IMMEDIATE", "MAILBOX", "FIFO", "FIFO_RELAXED", "FIFO_LATEST_READY"]),
+    # ── Descriptor Debug ─────────────────────────────────────────────────────
+    EnvVarDef("VKD3D_DESCRIPTOR_QA_LOG", "VKD3D-Proton", "string", "",
+              "Path to log descriptor heap operations. Requires descriptor_qa build.",
+              placeholder="/tmp/desc_qa.log"),
+    # ── Debug Ring ───────────────────────────────────────────────────────────
+    EnvVarDef("VKD3D_SHADER_DEBUG_RING_SIZE_LOG2", "VKD3D-Proton", "int", "",
+              "Log2 size in bytes of the shader printf debug ring buffer (e.g. 28 = 256 MiB).",
+              placeholder="28"),
+]
+
+ALL_ENV_VARS = DXVK_ENV_VARS + VKD3D_ENV_VARS
+
+
+# ============================================================================
+# Env Vars Tab Widget
+# ============================================================================
+
+# ============================================================================
+# Env Var List Widget  (left sidebar — same pattern as SettingsListWidget)
+# ============================================================================
+
+class EnvVarsWidget(QListWidget):
+    """
+    Left-sidebar list of DXVK / VKD3D-Proton env vars.
+    Styled identically to SettingsListWidget: red category headers,
+    green highlight for set vars.
+    """
+    env_var_selected = Signal(str)   # emits var name
+    env_changed = Signal()           # emits when a value changes (forwarded from editor)
+
+    def __init__(self, settings_manager: SettingsManager, parent=None):
+        super().__init__(parent)
+        self.settings_manager = settings_manager
+        # { var_name: current_value_str }  — single source of truth
+        self._values: Dict[str, str] = {}
+
+        self.setSelectionMode(QListWidget.SingleSelection)
+        self.setAlternatingRowColors(True)
+        self.itemClicked.connect(self._on_item_clicked)
+        self.setFont(QFont("Segoe UI", 9))
+        self.setStyleSheet("""
+QListWidget{
+    background:#0d0f12;
+    border:none;
+    outline:none;
+}
+QListWidget::item{
+    background:transparent;
+    border-radius:0px;
+    padding:4px 12px;
+    margin:0px;
+    font-size:10px;
+    font-weight:400;
+    border-left:2px solid transparent;
+}
+QListWidget::item:hover{
+    background:#141720;
+    color:#e8eaf0;
+}
+QListWidget::item:selected{
+    background:rgba(118, 185, 0, 0.07);
+    color:#e8eaf0;
+    border-left:2px solid #76b900;
+}
+QScrollBar:vertical{
+    background:#0d0f12;
+    width:5px;
+}
+QScrollBar::handle:vertical{
+    background:#1e2535;
+    border-radius:3px;
+}
+QScrollBar::handle:vertical:hover{
+    background:#5a6070;
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical{
+    height:0px;
+}
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical{
+    background:none;
+}
+""")
+        self._populate()
+
+    def _populate(self):
+        self.clear()
+        for cat_label, env_list in [("DXVK", DXVK_ENV_VARS),
+                                     ("VKD3D-Proton", VKD3D_ENV_VARS)]:
+            hdr = QListWidgetItem(f"─── {cat_label} ───")
+            hdr.setFlags(Qt.NoItemFlags)
+            font = hdr.font()
+            font.setBold(True)
+            font.setPointSize(8)
+            font.setFamily("Segoe UI")
+            hdr.setFont(font)
+            hdr.setForeground(QColor(185, 59, 59))
+            self.addItem(hdr)
+            for ev in env_list:
+                item = QListWidgetItem(f"  {ev.name}")
+                item.setData(Qt.UserRole, ev.name)
+                if ev.name in self._values:
+                    f = item.font()
+                    f.setBold(True)
+                    item.setFont(f)
+                    item.setForeground(QColor(118, 185, 0))
+                else:
+                    item.setForeground(QColor(200, 205, 216))
+                self.addItem(item)
+
+    def refresh_colors(self):
+        """Re-color items to reflect current set/unset state."""
+        for i in range(self.count()):
+            item = self.item(i)
+            name = item.data(Qt.UserRole)
+            if not name:
+                continue
+            if name in self._values:
+                f = item.font()
+                f.setBold(True)
+                item.setFont(f)
+                item.setForeground(QColor(118, 185, 0))
+            else:
+                f = item.font()
+                f.setBold(False)
+                item.setFont(f)
+                item.setForeground(QColor(200, 205, 216))
+
+    def _on_item_clicked(self, item):
+        name = item.data(Qt.UserRole)
+        if name:
+            self.env_var_selected.emit(name)
+
+    # ── Value store (read/written by EnvVarEditorWidget via MainWindow) ───────
+
+    def set_value(self, name: str, value: str):
+        if value:
+            self._values[name] = value
+        else:
+            self._values.pop(name, None)
+        self.refresh_colors()
+        self.env_changed.emit()
+
+    def clear_value(self, name: str):
+        self._values.pop(name, None)
+        self.refresh_colors()
+        self.env_changed.emit()
+
+    def get_value(self, name: str) -> str:
+        return self._values.get(name, "")
+
+    def get_env_dict(self) -> Dict[str, str]:
+        return self._values.copy()
+
+    def get_env_string(self) -> str:
+        return " ".join(f"{k}={v}" for k, v in self._values.items())
+
+    def reset_all_values(self):
+        """Clear all env var values and refresh list colors."""
+        self._values.clear()
+        self.refresh_colors()
+        self.env_changed.emit()
+
+    def load_values(self, values: Dict[str, str]):
+        """Replace all values with the given dict and refresh."""
+        self._values = values.copy()
+        self.refresh_colors()
+        self.env_changed.emit()
+
+    def get_full_combined_string(self) -> str:
+        parts = []
+        nvapi_str = self.settings_manager.get_full_env_string()
+        if nvapi_str:
+            parts.append(nvapi_str)
+        env_str = self.get_env_string()
+        if env_str:
+            parts.append(env_str)
+        return " ".join(parts)
+
+
+# ============================================================================
+# Env Var Editor Widget  (right panel — same pattern as SettingEditorWidget)
+# ============================================================================
+
+class EnvVarEditorWidget(QWidget):
+    """
+    Right-panel editor for a single env var.
+    Header: large name + category badge + current-value badge.
+    Body: description + input control + Clear button.
+    Matches SettingEditorWidget layout exactly.
+    """
+    value_changed = Signal(str, str)   # (name, new_value)  empty = cleared
+
+    _EDIT_SS = """
+QLineEdit{
+    background:#1a1f28;
+    border:1px solid #323c4b;
+    border-radius:6px;
+    color:#d8d8d8;
+    font-family:monospace;
+    font-size:10px;
+    padding:5px 10px;
+}
+QLineEdit:focus{ border:1px solid #76b900; }
+QLineEdit:hover{ background:#252c37; }
+"""
+    _COMBO_SS = """
+QComboBox{
+    background:#1a1f28;
+    border:1px solid #323c4b;
+    border-radius:6px;
+    color:#d8d8d8;
+    font-size:10px;
+    padding:4px 10px;
+}
+QComboBox:focus{ border:1px solid #76b900; }
+QComboBox::drop-down{ border:none; width:20px; }
+QComboBox QAbstractItemView{
+    background:#141720;
+    border:1px solid #2b3444;
+    color:#e8eaf0;
+    selection-background-color:rgba(118,185,0,0.15);
+}
+"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._current_ev: Optional[EnvVarDef] = None
+        self._current_name: str = ""
+        self._list_widget: Optional[EnvVarsWidget] = None   # back-ref set by MainWindow
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        # ── Header ────────────────────────────────────────────────────────────
+        header = QHBoxLayout()
+        header.setSpacing(10)
+
+        self._name_label = QLabel()
+        self._name_label.setStyleSheet("""
+QLabel{
+    color:#f2f2f2;
+    font-size:16px;
+    font-weight:700;
+}
+""")
+        self._name_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        header.addWidget(self._name_label, 1)
+
+        self._cat_label = QLabel()
+        self._cat_label.setStyleSheet("""
+QLabel{
+    background:#10141c;
+    border:1px solid #313a48;
+    border-radius:6px;
+    padding:4px 10px;
+    color:#8ea0ba;
+    font-family:monospace;
+    font-size:9px;
+}
+""")
+        self._cat_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        header.addWidget(self._cat_label)
+
+        self._value_label = QLabel()
+        self._value_label.setStyleSheet("""
+QLabel{
+    background:#152013;
+    border:1px solid #76b900;
+    border-radius:6px;
+    padding:4px 10px;
+    color:#9be238;
+    font-family:monospace;
+    font-size:9px;
+    font-weight:600;
+}
+""")
+        self._value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        header.addWidget(self._value_label)
+        self._value_label.hide()
+
+        layout.addLayout(header)
+
+        # ── Description ───────────────────────────────────────────────────────
+        self._desc_label = QLabel()
+        self._desc_label.setStyleSheet("""
+QLabel{
+    color:#a7afbc;
+    font-size:11px;
+    line-height:140%;
+}
+""")
+        self._desc_label.setWordWrap(True)
+        self._desc_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self._desc_label)
+
+        # ── Control area ──────────────────────────────────────────────────────
+        self._control_widget = QWidget()
+        self._control_layout = QVBoxLayout(self._control_widget)
+        self._control_layout.setContentsMargins(0, 6, 0, 0)
+        self._control_layout.setSpacing(6)
+        layout.addWidget(self._control_widget)
+
+        # ── Clear button (mirrors "Remove Setting") ───────────────────────────
+        remove_layout = QHBoxLayout()
+        remove_layout.addStretch()
+        self._clear_btn = QPushButton("Clear Variable")
+        self._clear_btn.clicked.connect(self._on_clear)
+        self._clear_btn.setStyleSheet("""
+QPushButton{
+    background:#b93b3b;
+    border:1px solid #e45d5d;
+    border-radius:5px;
+    color:white;
+    padding:4px 16px;
+    font-weight:600;
+    font-size:10px;
+}
+QPushButton:hover{ background:#ca4545; }
+QPushButton:pressed{ background:#a73434; }
+""")
+        remove_layout.addWidget(self._clear_btn)
+        layout.addLayout(remove_layout)
+        self._clear_btn.hide()
+
+        layout.addStretch()
+        self.hide()
+
+    # ── Public ────────────────────────────────────────────────────────────────
+
+    def set_list_widget(self, lw: EnvVarsWidget):
+        self._list_widget = lw
+
+    def set_var(self, ev: EnvVarDef):
+        self._current_ev = ev
+        self._current_name = ev.name
+        self._build()
+        self.show()
+
+    # ── Builder ───────────────────────────────────────────────────────────────
+
+    def _build(self):
+        ev = self._current_ev
+        if not ev:
+            return
+
+        cur = self._list_widget.get_value(ev.name) if self._list_widget else ""
+
+        self._name_label.setText(ev.name)
+        self._cat_label.setText(ev.cat)
+
+        if cur:
+            self._value_label.setText(f"= {cur}")
+            self._value_label.show()
+            self._clear_btn.show()
+        else:
+            self._value_label.hide()
+            self._clear_btn.hide()
+
+        self._desc_label.setText(ev.desc)
+        self._clear_layout(self._control_layout)
+
+        if ev.vtype == "enum" and ev.options:
+            self._build_enum(ev, cur)
+        elif ev.vtype == "vkd3d_config":
+            self._build_vkd3d_config(ev, cur)
+        elif ev.vtype == "flags" and ev.options:
+            self._build_flags(ev, cur)
+        else:
+            self._build_text(ev, cur)
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            child = layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+            elif child.layout():
+                self._clear_layout(child.layout())
+
+    def _build_enum(self, ev: EnvVarDef, cur: str):
+        """Enum: same button-grid style as _build_enum_control."""
+        cols = min(len(ev.options), 5)
+        grid = QGridLayout()
+        grid.setSpacing(4)
+        row, col = 0, 0
+        for opt in ev.options:
+            btn = QPushButton(opt)
+            btn.setCheckable(True)
+            if opt == cur:
+                btn.setChecked(True)
+            btn.setStyleSheet("""
+QPushButton{
+    background:#1a1f28;
+    border:1px solid #323c4b;
+    border-radius:6px;
+    color:#d8d8d8;
+    padding:5px;
+    font-size:9px;
+    font-weight:600;
+}
+QPushButton:hover{
+    background:#252c37;
+    border:1px solid #76b900;
+}
+QPushButton:checked{
+    background:rgba(118, 185, 0, 0.12);
+    border:1px solid #76b900;
+    color:#76b900;
+}
+""")
+            btn.clicked.connect(lambda checked, o=opt: self._set_value(o))
+            grid.addWidget(btn, row, col)
+            col += 1
+            if col >= cols:
+                col = 0
+                row += 1
+        self._control_layout.addLayout(grid)
+
+    def _build_vkd3d_config(self, ev: EnvVarDef, cur: str):
+        """
+        VKD3D_CONFIG: checkable button grid, one button per flag.
+        Active flags are parsed from the comma/semicolon-separated cur value.
+        Toggling any button rebuilds the value string and emits it.
+        """
+        active = set(f.strip() for f in cur.replace(";", ",").split(",") if f.strip()) if cur else set()
+
+        # We keep a local dict so toggle logic can read state without re-querying widgets
+        self._vkd3d_btns: Dict[str, QPushButton] = {}
+
+        grid = QGridLayout()
+        grid.setSpacing(6)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 2)
+
+        # Column headers
+        hdr_flag = QLabel("Flag")
+        hdr_flag.setStyleSheet("color:#5a6070; font-size:8px; font-weight:600;")
+        hdr_desc = QLabel("Description")
+        hdr_desc.setStyleSheet("color:#5a6070; font-size:8px; font-weight:600;")
+        grid.addWidget(hdr_flag, 0, 0)
+        grid.addWidget(hdr_desc, 0, 1)
+
+        # Separator line
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("border: none; border-top: 1px solid #1e2535;")
+        sep.setFixedHeight(1)
+        grid.addWidget(sep, 1, 0, 1, 2)
+
+        for r_idx, flag in enumerate(ev.options):
+            btn = QPushButton(flag)
+            btn.setCheckable(True)
+            btn.setChecked(flag in active)
+            btn.setFixedHeight(26)
+            self._apply_flag_btn_style(btn)
+            btn.toggled.connect(lambda checked, f=flag: self._on_vkd3d_flag_toggled())
+            self._vkd3d_btns[flag] = btn
+
+            desc_text = VKD3D_CONFIG_DESCS.get(flag, "")
+            desc_lbl = QLabel(desc_text)
+            desc_lbl.setWordWrap(True)
+            desc_lbl.setStyleSheet("color:#a7afbc; font-size:9px;")
+
+            grid.addWidget(btn,      r_idx + 2, 0)
+            grid.addWidget(desc_lbl, r_idx + 2, 1)
+
+        self._control_layout.addLayout(grid)
+
+    def _apply_flag_btn_style(self, btn: QPushButton):
+        btn.setStyleSheet("""
+QPushButton{
+    background:#1a1f28;
+    border:1px solid #323c4b;
+    border-radius:6px;
+    color:#d8d8d8;
+    padding:4px 10px;
+    font-size:9px;
+    font-weight:600;
+    text-align:left;
+}
+QPushButton:hover{
+    background:#252c37;
+    border:1px solid #76b900;
+}
+QPushButton:checked{
+    background:rgba(118, 185, 0, 0.12);
+    border:1px solid #76b900;
+    color:#76b900;
+}
+""")
+
+    def _on_vkd3d_flag_toggled(self):
+        """Rebuild VKD3D_CONFIG value from current checkbox states."""
+        if not hasattr(self, '_vkd3d_btns'):
+            return
+        active = [f for f, btn in self._vkd3d_btns.items() if btn.isChecked()]
+        self._set_value(",".join(active))
+
+    def _build_flags(self, ev: EnvVarDef, cur: str):
+        """Generic flags: free-text edit + hint."""
+        edit = QLineEdit(cur)
+        edit.setStyleSheet(self._EDIT_SS)
+        edit.setPlaceholderText(ev.placeholder or "comma-separated flags")
+        edit.setFixedHeight(28)
+        edit.setToolTip("Available: " + ", ".join(ev.options))
+        edit.textChanged.connect(lambda v: self._set_value(v))
+
+        hint = QLabel("Available: " + "  ·  ".join(ev.options))
+        hint.setStyleSheet("color:#3a4a5a; font-size:8px; font-family:monospace;")
+        hint.setWordWrap(True)
+
+        self._control_layout.addWidget(edit)
+        self._control_layout.addWidget(hint)
+
+    def _build_text(self, ev: EnvVarDef, cur: str):
+        """String / int: plain line edit."""
+        edit = QLineEdit(cur)
+        edit.setStyleSheet(self._EDIT_SS)
+        edit.setPlaceholderText(ev.placeholder or ev.default or "")
+        edit.setFixedHeight(28)
+        edit.textChanged.connect(lambda v: self._set_value(v))
+        self._control_layout.addWidget(edit)
+
+    # ── Setters ───────────────────────────────────────────────────────────────
+
+    def _set_value(self, value: str):
+        if not self._current_name:
+            return
+        if self._list_widget:
+            self._list_widget.set_value(self._current_name, value.strip())
+        self.value_changed.emit(self._current_name, value.strip())
+        # Refresh header badge without full rebuild
+        cur = value.strip()
+        if cur:
+            self._value_label.setText(f"= {cur}")
+            self._value_label.show()
+            self._clear_btn.show()
+        else:
+            self._value_label.hide()
+            self._clear_btn.hide()
+
+    def _on_clear(self):
+        if not self._current_name:
+            return
+        if self._list_widget:
+            self._list_widget.clear_value(self._current_name)
+        self.value_changed.emit(self._current_name, "")
+        self._value_label.hide()
+        self._clear_btn.hide()
+        self._build()   # rebuild control to reset input widget state
+
+
+# ============================================================================
 # Settings List - RED Categories, GREEN Active Settings
 # ============================================================================
 
@@ -2153,18 +3045,18 @@ QScrollBar::sub-page:vertical{
 
 class ProfileManagerWidget(QWidget):
     profile_loaded = Signal(str)
-    
+
     def __init__(self, settings_manager: SettingsManager):
         super().__init__()
         self.settings_manager = settings_manager
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
-        
+
         create_layout = QHBoxLayout()
         create_layout.setSpacing(4)
-        
+
         self._profile_name = QLineEdit()
         self._profile_name.setPlaceholderText("Profile name")
         self._profile_name.setStyleSheet("""
@@ -2183,7 +3075,7 @@ class ProfileManagerWidget(QWidget):
         """)
         self._profile_name.returnPressed.connect(self._create_profile)
         create_layout.addWidget(self._profile_name)
-        
+
         save_btn = QPushButton("Save Profile")
         save_btn.clicked.connect(self._create_profile)
         save_btn.setStyleSheet("""
@@ -2203,7 +3095,7 @@ class ProfileManagerWidget(QWidget):
         """)
         create_layout.addWidget(save_btn)
         layout.addLayout(create_layout)
-        
+
         self._profile_list = QListWidget()
         self._profile_list.setStyleSheet("""
             QListWidget {
@@ -2227,10 +3119,10 @@ class ProfileManagerWidget(QWidget):
         """)
         self._profile_list.itemDoubleClicked.connect(self._load_selected)
         layout.addWidget(self._profile_list)
-        
+
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(4)
-        
+
         load_btn = QPushButton("Load")
         load_btn.clicked.connect(self._load_selected)
         load_btn.setStyleSheet("""
@@ -2248,7 +3140,7 @@ class ProfileManagerWidget(QWidget):
             }
         """)
         btn_layout.addWidget(load_btn)
-        
+
         del_btn = QPushButton("Delete")
         del_btn.clicked.connect(self._delete_selected)
         del_btn.setStyleSheet("""
@@ -2266,20 +3158,25 @@ class ProfileManagerWidget(QWidget):
             }
         """)
         btn_layout.addWidget(del_btn)
-        
+
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
-        
+
         self.settings_manager.settings_changed.connect(self._refresh)
         self._refresh()
-    
+
     def _create_profile(self):
         name = self._profile_name.text().strip()
         if name:
-            self.settings_manager.save_profile(name)
+            # Collect env vars from MainWindow's env_widget if available
+            env_vars = {}
+            win = self.window()
+            if win and hasattr(win, '_env_widget'):
+                env_vars = win._env_widget.get_env_dict()
+            self.settings_manager.save_profile(name, env_vars)
             self._profile_name.clear()
             self._refresh()
-    
+
     def _load_selected(self):
         item = self._profile_list.currentItem()
         if item:
@@ -2287,7 +3184,7 @@ class ProfileManagerWidget(QWidget):
             self.settings_manager.load_profile(name)
             self.profile_loaded.emit(name)
             self._refresh()
-    
+
     def _delete_selected(self):
         item = self._profile_list.currentItem()
         if item:
@@ -2296,12 +3193,12 @@ class ProfileManagerWidget(QWidget):
             if reply == QMessageBox.Yes:
                 self.settings_manager.delete_profile(item.text())
                 self._refresh()
-    
+
     def _refresh(self):
         self._profile_list.clear()
         profiles = self.settings_manager.get_profiles()
         current = self.settings_manager.get_current_profile()
-        
+
         for name in profiles:
             item = QListWidgetItem(name)
             if name == current:
@@ -2313,125 +3210,6 @@ class ProfileManagerWidget(QWidget):
 
 
 # ============================================================================
-# GPU Architecture Selector
-# ============================================================================
-
-class ArchSelectorWidget(QWidget):
-    def __init__(self, settings_manager: SettingsManager):
-        super().__init__()
-        self.settings_manager = settings_manager
-        self._selected = None
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
-        
-        title = QLabel("GPU Architecture")
-        title.setStyleSheet("font-size: 11px; font-weight: 600; color: #e8eaf0;")
-        layout.addWidget(title)
-        
-        grid = QGridLayout()
-        grid.setSpacing(3)
-        
-        row, col = 0, 0
-        for arch in GPU_ARCHS:
-            btn = QPushButton(f"{arch.name}")
-            btn.setToolTip(f"{arch.arch} · {arch.example} · {arch.code}")
-            btn.setCheckable(True)
-            btn.setProperty("arch", arch.code)
-            btn.clicked.connect(lambda checked, a=arch: self._select(a))
-            btn.setStyleSheet("""
-                QPushButton {
-                    border: 1px solid #1e2535;
-                    border-radius: 3px;
-                    padding: 2px 6px;
-                    background: #141720;
-                    color: #76b900;
-                    font-size: 9px;
-                    min-height: 20px;
-                }
-                QPushButton:checked {
-                    border-color: #76b900;
-                    background: rgba(118, 185, 0, 0.10);
-                    color: #76b900;
-                }
-                QPushButton:hover {
-                    border-color: #4a7300;
-                    background: rgba(118, 185, 0, 0.05);
-                }
-            """)
-            grid.addWidget(btn, row, col)
-            
-            col += 1
-            if col >= 4:
-                col = 0
-                row += 1
-        
-        layout.addLayout(grid)
-        
-        clear_btn = QPushButton("Clear Selection")
-        clear_btn.clicked.connect(self._clear)
-        clear_btn.setStyleSheet("""
-            QPushButton {
-                border: 1px solid #1e2535;
-                border-radius: 3px;
-                padding: 2px 10px;
-                background: #141720;
-                color: #5a6070;
-                font-size: 9px;
-                max-width: 100px;
-                min-height: 18px;
-            }
-            QPushButton:hover {
-                border-color: #e84545;
-                color: #e84545;
-            }
-        """)
-        layout.addWidget(clear_btn, 0, Qt.AlignRight)
-        
-        self._output_label = QLabel("Selected: none")
-        self._output_label.setStyleSheet("""
-            font-family: monospace;
-            font-size: 10px;
-            padding: 3px 8px;
-            background: #0d0f12;
-            border: 1px solid #1e2535;
-            border-radius: 3px;
-            color: #e8eaf0;
-        """)
-        self._output_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout.addWidget(self._output_label)
-        
-        layout.addStretch()
-        
-        self.settings_manager.arch_changed.connect(self._update)
-        self._update()
-    
-    def _select(self, arch):
-        self._selected = arch
-        self.settings_manager.set_arch(arch)
-        self._update()
-    
-    def _clear(self):
-        self._selected = None
-        self.settings_manager.set_arch(None)
-        self._update()
-    
-    def _update(self):
-        arch = self.settings_manager.get_arch()
-        self._selected = arch
-        
-        for btn in self.findChildren(QPushButton):
-            if btn.property("arch"):
-                btn.setChecked(btn.property("arch") == (arch.code if arch else ""))
-        
-        if arch:
-            self._output_label.setText(f"Selected: {arch.name} ({arch.code})")
-        else:
-            self._output_label.setText("Selected: none")
-
-
-# ============================================================================
 # Main Window
 # ============================================================================
 
@@ -2440,32 +3218,33 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.settings_manager = SettingsManager()
         self.all_settings = create_all_settings()
-        
+
         self.setWindowTitle("DXVK NVAPI DRS Settings Configurator")
         self.setMinimumSize(900, 600)
         self.setStyleSheet("""
             QMainWindow { background: #0d0f12; }
             QSplitter::handle { background: #1e2535; }
         """)
-        
+
         central = QWidget()
         self.setCentralWidget(central)
-        
+
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        
+
         self._output_bar = OutputBarWidget(self.settings_manager, self)
         main_layout.addWidget(self._output_bar)
-        
+
         splitter = QSplitter(Qt.Horizontal)
-        
+
+        # ===== Sidebar =====
         sidebar = QWidget()
         sidebar.setStyleSheet("background: #0d0f12; border-right: 1px solid #1e2535;")
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(6, 6, 6, 6)
         sidebar_layout.setSpacing(4)
-        
+
         self._search = QLineEdit()
         self._search.setPlaceholderText("🔍 Filter settings...")
         self._search.setStyleSheet("""
@@ -2484,26 +3263,33 @@ class MainWindow(QMainWindow):
         """)
         self._search.textChanged.connect(self._filter)
         sidebar_layout.addWidget(self._search)
-        
+
+        # Tab buttons  (Settings | GPU Arch | Env Vars | Profiles)
         tab_layout = QHBoxLayout()
         tab_layout.setSpacing(2)
-        
-        self._settings_tab = QPushButton("Settings")
+
+        self._settings_tab = QPushButton("DRS Settings")
         self._settings_tab.setCheckable(True)
         self._settings_tab.setChecked(True)
         self._settings_tab.clicked.connect(lambda: self._switch_tab(0))
+
         self._arch_tab = QPushButton("GPU Arch")
         self._arch_tab.setCheckable(True)
         self._arch_tab.clicked.connect(lambda: self._switch_tab(1))
+
+        self._env_tab = QPushButton("DXVK / VKD3D-PROTON")
+        self._env_tab.setCheckable(True)
+        self._env_tab.clicked.connect(lambda: self._switch_tab(2))
+
         self._profiles_tab = QPushButton("Profiles")
         self._profiles_tab.setCheckable(True)
-        self._profiles_tab.clicked.connect(lambda: self._switch_tab(2))
-        
+        self._profiles_tab.clicked.connect(lambda: self._switch_tab(3))
+
         tab_style = """
             QPushButton {
                 border: 1px solid #1e2535;
                 border-radius: 3px;
-                padding: 3px 8px;
+                padding: 3px 5px;
                 background: transparent;
                 color: #5a6070;
                 font-size: 9px;
@@ -2518,57 +3304,83 @@ class MainWindow(QMainWindow):
                 border-color: #4a7300;
             }
         """
-        for btn in [self._settings_tab, self._arch_tab, self._profiles_tab]:
+        for btn in [self._settings_tab, self._arch_tab, self._env_tab, self._profiles_tab]:
             btn.setStyleSheet(tab_style)
             tab_layout.addWidget(btn)
-        
+
         sidebar_layout.addLayout(tab_layout)
-        
-        self._stack = QStackedWidget()
-        sidebar_layout.addWidget(self._stack)
-        
+
+        # Stacked widget for sidebar pages
+        self._sidebar_stack = QStackedWidget()
+        sidebar_layout.addWidget(self._sidebar_stack)
+
+        # Page 0: Settings list
         self._settings_list = SettingsListWidget()
         self._settings_list.setting_selected.connect(self._open_setting)
-        self._stack.addWidget(self._settings_list)
-        
-        self._arch_widget = ArchSelectorWidget(self.settings_manager)
-        arch_scroll = QScrollArea()
-        arch_scroll.setWidgetResizable(True)
-        arch_scroll.setWidget(self._arch_widget)
-        arch_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        self._stack.addWidget(arch_scroll)
-        
+        self._sidebar_stack.addWidget(self._settings_list)
+
+        # Page 1: Architecture list
+        self._arch_list = ArchListWidget()
+        self._arch_list.arch_selected.connect(self._select_architecture)
+        self._sidebar_stack.addWidget(self._arch_list)
+
+        # Page 2: Env Vars list (DXVK / VKD3D-Proton)
+        self._env_widget = EnvVarsWidget(self.settings_manager)
+        self._env_widget.env_var_selected.connect(self._open_env_var)
+        self._env_widget.env_changed.connect(self._on_env_changed)
+        self._sidebar_stack.addWidget(self._env_widget)
+
+        # Page 3: Profile manager
         self._profiles_widget = ProfileManagerWidget(self.settings_manager)
         self._profiles_widget.profile_loaded.connect(self._on_profile_loaded)
         profiles_scroll = QScrollArea()
         profiles_scroll.setWidgetResizable(True)
         profiles_scroll.setWidget(self._profiles_widget)
         profiles_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        self._stack.addWidget(profiles_scroll)
-        
+        self._sidebar_stack.addWidget(profiles_scroll)
+
         splitter.addWidget(sidebar)
         splitter.setSizes([220, 680])
-        
+
+        # ===== Right side (editor area) =====
         editor = QWidget()
         editor.setStyleSheet("background: #0d0f12;")
         editor_layout = QVBoxLayout(editor)
         editor_layout.setContentsMargins(16, 16, 16, 16)
         editor_layout.setSpacing(0)
-        
-        self._placeholder = QLabel("Select a setting from the sidebar")
+
+        # Stack for placeholder / setting editor / arch detail
+        self._right_stack = QStackedWidget()
+        editor_layout.addWidget(self._right_stack)
+
+        # Page 0: Placeholder
+        self._placeholder = QLabel("Select a setting or an architecture from the sidebar")
         self._placeholder.setAlignment(Qt.AlignCenter)
         self._placeholder.setStyleSheet("color: #5a6070; font-size: 12px;")
-        editor_layout.addWidget(self._placeholder)
-        
+        self._right_stack.addWidget(self._placeholder)
+
+        # Page 1: Setting editor
         self._setting_editor = SettingEditorWidget(self.settings_manager)
         self._setting_editor.setting_changed.connect(self._on_setting_changed)
-        self._setting_editor.hide()
-        editor_layout.addWidget(self._setting_editor)
-        
+        self._right_stack.addWidget(self._setting_editor)
+
+        # Page 2: Architecture detail
+        self._arch_detail = ArchDetailWidget()
+        self._arch_detail.clear_requested.connect(self._clear_architecture)
+        self._right_stack.addWidget(self._arch_detail)
+
+        # Page 3: Env var editor
+        self._env_editor = EnvVarEditorWidget()
+        self._env_editor.set_list_widget(self._env_widget)
+        self._right_stack.addWidget(self._env_editor)
+
+        # Show placeholder initially
+        self._right_stack.setCurrentIndex(0)
+
         splitter.addWidget(editor)
         main_layout.addWidget(splitter)
-        
-        # Durum çubuğunu oluştur ve ata - self.statusBar niteliğini KULLANMA!
+
+        # Status bar
         status_bar = QStatusBar()
         self.setStatusBar(status_bar)
         status_bar.setStyleSheet("""
@@ -2581,22 +3393,52 @@ class MainWindow(QMainWindow):
             }
         """)
         status_bar.showMessage("Ready")
-        self.settings_manager.settings_changed.connect(self._on_setting_changed)
 
-        # EKSİK BAĞLANTIYI EKLE:
+        # Signals
+        self.settings_manager.settings_changed.connect(self._on_setting_changed)
+        self.settings_manager.arch_changed.connect(self._update_arch_ui)
         self.settings_manager.profile_loaded.connect(self._update_window_title)
 
+        # Initial population
         self._populate_settings()
-    
-    def _update_window_title(self, profile_name):
-        self.setWindowTitle(f"DXVK NVAPI DRS Settings Configurator — {profile_name}")
-    
+        self._populate_arch_list()
+
+        # Wire env_widget into output_bar so Copy All includes env vars
+        self._output_bar._env_widget = self._env_widget
+        # Per-tab right-panel memory
+        self._tab_right_memory: Dict[int, int] = {}
+
+    # ===== Tab switching =====
     def _switch_tab(self, idx):
-        self._stack.setCurrentIndex(idx)
-        for i, btn in enumerate([self._settings_tab, self._arch_tab, self._profiles_tab]):
+        # Save current right-panel index for the tab we're leaving
+        prev = self._sidebar_stack.currentIndex()
+        if not hasattr(self, '_tab_right_memory'):
+            self._tab_right_memory = {}
+        self._tab_right_memory[prev] = self._right_stack.currentIndex()
+
+        self._sidebar_stack.setCurrentIndex(idx)
+        for i, btn in enumerate([self._settings_tab, self._arch_tab, self._env_tab, self._profiles_tab]):
             btn.setChecked(i == idx)
-        self._search.setVisible(idx == 0)
-    
+
+        if idx == 3:
+            # Profiles tab — always blank right panel
+            self._right_stack.setCurrentIndex(0)
+        elif idx in self._tab_right_memory:
+            # Restore remembered right panel for this tab
+            self._right_stack.setCurrentIndex(self._tab_right_memory[idx])
+        else:
+            # First visit defaults
+            if idx == 1:
+                arch = self.settings_manager.get_arch()
+                if arch:
+                    self._arch_detail.set_arch(arch)
+                    self._right_stack.setCurrentIndex(2)
+                else:
+                    self._right_stack.setCurrentIndex(0)
+            else:
+                self._right_stack.setCurrentIndex(0)
+
+    # ===== Settings =====
     def _populate_settings(self, filter_text: str = ""):
         current_item = self._settings_list.currentItem()
         current_id = current_item.data(Qt.UserRole) if current_item else None
@@ -2610,32 +3452,115 @@ class MainWindow(QMainWindow):
                 if item.data(Qt.UserRole) == current_id:
                     self._settings_list.setCurrentItem(item)
                     break
-    
+
     def _filter(self, text):
         self._populate_settings(text)
-    
+
     def _open_setting(self, setting_id):
         setting = next((s for s in self.all_settings if s.id == setting_id), None)
         if setting:
-            self._placeholder.hide()
+            self._right_stack.setCurrentIndex(1)
             self._setting_editor.set_setting(setting)
-            self._setting_editor.show()
-    
+
+    def _open_env_var(self, var_name: str):
+        ev = next((e for e in ALL_ENV_VARS if e.name == var_name), None)
+        if ev:
+            self._right_stack.setCurrentIndex(3)
+            self._env_editor.set_var(ev)
+
+    # ===== Architecture =====
+    def _populate_arch_list(self):
+        self._arch_list.populate(GPU_ARCHS, self.settings_manager.get_arch())
+
+    def _select_architecture(self, arch: GPUArch):
+        self.settings_manager.set_arch(arch)
+        # The arch_changed signal will update the UI, but we update immediately too
+        self._arch_detail.set_arch(arch)
+        self._right_stack.setCurrentIndex(2)
+        self._populate_arch_list()
+        self.statusBar().showMessage(f"Selected architecture: {arch.name} ({arch.code})")
+
+    def _clear_architecture(self):
+        self.settings_manager.set_arch(None)
+        # The arch_changed signal will update the UI
+        self._right_stack.setCurrentIndex(0)
+        self._populate_arch_list()
+        self.statusBar().showMessage("Architecture cleared")
+
+    def _update_arch_ui(self):
+        """Called when arch changes (via settings_manager.arch_changed)."""
+        arch = self.settings_manager.get_arch()
+        self._populate_arch_list()
+        if arch:
+            self._arch_detail.set_arch(arch)
+            # Only switch to arch detail if the arch tab is active
+            if self._sidebar_stack.currentIndex() == 1:
+                self._right_stack.setCurrentIndex(2)
+        else:
+            self._arch_detail.hide()
+            if self._sidebar_stack.currentIndex() == 1:
+                self._right_stack.setCurrentIndex(0)
+        self.statusBar().showMessage("Architecture updated" if arch else "Architecture cleared")
+
+    # ===== General UI updates =====
     def _on_setting_changed(self):
         count = len(self.settings_manager.get_settings_list())
         arch = self.settings_manager.get_arch()
         arch_str = f" [Arch: {arch.code}]" if arch else ""
-        self.statusBar().showMessage(f"{count} setting{'s' if count != 1 else ''} configured{arch_str}")
-    
-    def _on_profile_loaded(self, name):
+        env_count = len(self._env_widget.get_env_dict()) if hasattr(self, '_env_widget') else 0
+        env_str = f" · {env_count} env var{'s' if env_count != 1 else ''}" if env_count else ""
+        self.statusBar().showMessage(f"{count} setting{'s' if count != 1 else ''} configured{arch_str}{env_str}")
         self._populate_settings(self._search.text())
+
+    def _on_env_changed(self):
+        env_count = len(self._env_widget.get_env_dict())
+        arch = self.settings_manager.get_arch()
+        arch_str = f" [Arch: {arch.code}]" if arch else ""
+        drs_count = len(self.settings_manager.get_settings_list())
+        self.statusBar().showMessage(
+            f"{drs_count} DRS setting{'s' if drs_count != 1 else ''} · "
+            f"{env_count} env var{'s' if env_count != 1 else ''} set{arch_str}"
+        )
+        # Keep output bar Copy All up to date
+        self._output_bar._update()
+
+    def _on_profile_loaded(self, name):
+        # 1. Reset and reload env vars from profile
+        saved_env = self.settings_manager.get_loaded_env_vars()
+        self._env_widget.load_values(saved_env)
+        # 2. Hide env editor right panel (stale data)
+        self._env_editor.hide()
+        # 3. Clear per-tab right-panel memory so tabs start fresh
+        self._tab_right_memory = {}
+        # 4. Repopulate lists
+        self._populate_settings(self._search.text())
+        self._populate_arch_list()
+        # 5. Set right panel appropriately for active tab
+        active_tab = self._sidebar_stack.currentIndex()
+        if active_tab == 1:
+            arch = self.settings_manager.get_arch()
+            if arch:
+                self._arch_detail.set_arch(arch)
+                self._right_stack.setCurrentIndex(2)
+            else:
+                self._right_stack.setCurrentIndex(0)
+        elif active_tab == 3:
+            self._right_stack.setCurrentIndex(0)
+        else:
+            self._right_stack.setCurrentIndex(0)
         self.statusBar().showMessage(f"Loaded profile: {name}")
+
+    def _update_window_title(self, profile_name):
+        if profile_name:
+            self.setWindowTitle(f"DXVK NVAPI DRS Settings Configurator — {profile_name}")
+        else:
+            self.setWindowTitle("DXVK NVAPI DRS Settings Configurator")
 
 
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    
+
     palette = QPalette()
     palette.setColor(QPalette.Window, QColor(13, 15, 18))
     palette.setColor(QPalette.WindowText, QColor(200, 205, 216))
@@ -2647,7 +3572,7 @@ def main():
     palette.setColor(QPalette.Highlight, QColor(118, 185, 0))
     palette.setColor(QPalette.HighlightedText, QColor(0, 0, 0))
     app.setPalette(palette)
-    
+
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
