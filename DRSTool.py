@@ -1161,6 +1161,604 @@ def create_all_settings() -> List[Setting]:
                 ]),
     ])
 
+    # =========================================================================
+    # Detailed descriptions – applied by ID after all settings are created.
+    # Keeps the setting definitions above clean while adding rich help text.
+    # =========================================================================
+    DETAILED_DESCS: Dict[str, str] = {
+
+        # ── OpenGL ───────────────────────────────────────────────────────────
+        "0x2089BF6C": (
+            "Applies gamma correction to the edges of antialiased lines in OpenGL. "
+            "When enabled, line edges are blended in linear light space before being "
+            "converted back to gamma-corrected output, which produces smoother and "
+            "more visually accurate results on non-linear (sRGB) displays. "
+            "Most users can leave this at its default (Disabled). "
+            "Enable it if you notice harsh or jagged line edges in OpenGL content."
+        ),
+        "0x2072C5A3": (
+            "Controls how the OpenGL driver interacts with the Windows GDI (Graphics "
+            "Device Interface) subsystem. GDI compatibility is required by legacy "
+            "applications that mix OpenGL rendering with GDI calls (e.g. drawing text "
+            "or UI elements on top of an OpenGL window). "
+            "'Auto' lets the driver decide per application; 'Prefer Enabled' forces "
+            "GDI compatibility mode which may reduce performance slightly; "
+            "'Prefer Disabled' maximises performance but can break apps that rely on "
+            "GDI/OpenGL interop."
+        ),
+        "0x20D690F8": (
+            "Selects the method used to present rendered frames to the display for "
+            "Vulkan and OpenGL. 'Auto' allows the driver to choose the best path. "
+            "'Prefer Enabled' forces direct present (lower latency, better VRR "
+            "compatibility). 'Prefer Disabled' uses a blit/copy path which can help "
+            "with capture tools or older display configurations but adds latency. "
+            "On Linux/Proton leave at 'Auto' unless you encounter tearing or sync issues."
+        ),
+        "0x2097C2F6": (
+            "Enables 10-bit (Deep Color) framebuffer output for OpenGL applications. "
+            "When enabled, the driver allocates a 10-bpc render target, allowing up to "
+            "1024 discrete values per color channel instead of 256. "
+            "Requires a display connected via DisplayPort or HDMI 2.0+ that supports "
+            "10-bit color. Has no visual effect on 8-bit displays. "
+            "Disable if you see color banding artifacts or driver-level compatibility issues."
+        ),
+        "0x206A6582": (
+            "Sets the default vertical sync (VSync) interval for OpenGL applications "
+            "that do not explicitly request one. "
+            "'VSync 1x' caps frame rate to the monitor refresh and eliminates tearing. "
+            "'Tear' (0) presents frames immediately, enabling max FPS with potential tearing. "
+            "'Force Off' overrides any per-app VSync request and disables sync entirely. "
+            "'Force On' overrides per-app requests and always enables sync. "
+            "'App Controlled' respects the application's own wglSwapIntervalEXT() call. "
+            "'Disable' (0xFFFFFFFF) is a special sentinel that prevents the driver from "
+            "applying any default — the app must set its own interval."
+        ),
+        "0x20C1221E": (
+            "Enables multi-threaded OpenGL command submission, allowing the driver to "
+            "process OpenGL calls on a separate background thread. This can improve "
+            "CPU-side performance in single-threaded games by overlapping CPU work with "
+            "GPU command processing. However, it introduces a small amount of latency "
+            "and may cause glitches in poorly written apps. "
+            "'Driver Default' lets the driver decide per application. "
+            "'Enable' forces it on; 'Disable' forces it off."
+        ),
+        "0x20FDD1F9": (
+            "Enables triple-buffering for OpenGL applications. With double-buffering "
+            "and VSync, the GPU stalls waiting for vblank. Triple-buffering adds a third "
+            "buffer so the GPU can keep rendering while the front buffer is being "
+            "displayed, reducing stuttering and improving smoothness. "
+            "Most useful in VSync-on scenarios. With VSync off, triple buffering has "
+            "minimal benefit and wastes VRAM."
+        ),
+
+        # ── Anti-Aliasing ─────────────────────────────────────────────────────
+        "0x10ECDB82": (
+            "Bitfield that controls how the global AA override and enhancement modes "
+            "interact with per-application settings. Individual bits select transition "
+            "behaviors: e.g. whether 'Override' mode can revert to 'App Controlled', "
+            "whether SLI-AA is disabled, whether CPLAA (Coverage Programmable Line AA) "
+            "is suppressed, etc. Leave at 0x0 (all bits off) unless you are "
+            "troubleshooting AA conflicts with a specific application."
+        ),
+        "0x10D773D2": (
+            "Selects the anti-aliasing sample pattern and method applied by the driver. "
+            "Supersampling (SSAA) renders at a higher internal resolution and downscales "
+            "— highest quality but very expensive. Multisampling (MSAA) only resolves "
+            "edges of geometry — good quality/performance balance. "
+            "VCAA and Mixedsample modes use coverage data from rasterisation combined "
+            "with color samples for very high effective AA at lower cost. "
+            "Values prefixed with 'Free' are unlabelled slots in the driver header. "
+            "Only effective when AA Mode is set to 'Override' or 'Enhance'."
+        ),
+        "0x107EFC5B": (
+            "Global anti-aliasing mode selector. "
+            "'App Controlled' (default) — the game decides its own AA method. "
+            "'Override' — the driver replaces whatever the app requests with the "
+            "AA Method setting above. "
+            "'Enhance' — adds driver AA on top of the application's own AA. "
+            "Use 'Override' with MSAA 4x or 8x for older DX9/OpenGL titles that lack "
+            "built-in AA options. Modern titles with TAA/DLSS should stay at 'App Controlled'."
+        ),
+        "0x107D639D": (
+            "Applies gamma correction to antialiased geometry edges. Without correction, "
+            "AA is computed in gamma space which can produce slightly darker edges. "
+            "'Off' — standard behavior. "
+            "'On if FOS' — correction only when Full Order Supersampling is active. "
+            "'On always' — always correct to linear space before resolving. "
+            "Most modern games handle this internally; this override is mainly useful "
+            "for older OpenGL/DX9 titles."
+        ),
+        "0x10FC2D9C": (
+            "Enables alpha-to-coverage (A2C) multisampling for transparent geometry. "
+            "Alpha-to-coverage uses the MSAA sample mask to approximate transparency "
+            "without alpha blending, which is more compatible with depth buffering. "
+            "Useful in vegetation-heavy scenes (grass, foliage, fences) where alpha "
+            "clipping with standard MSAA produces harsh edges. "
+            "Only effective when MSAA is enabled."
+        ),
+        "0x10D48A85": (
+            "Enables supersampling for transparent (alpha-tested) geometry. "
+            "Unlike alpha-to-coverage which approximates transparency, supersampling "
+            "fully renders transparent surfaces at a higher sample count. "
+            "'Alpha Test' — only supersample alpha-test geometry. "
+            "'Pixel Kill' — use pixel kill optimization. "
+            "'Dynamic Branch' — supersample via shader dynamic branching. "
+            "'All' — apply to all transparency types. "
+            "Most performance-intensive of the transparency AA options."
+        ),
+
+        # ── Texture Filtering ─────────────────────────────────────────────────
+        "0x101E61A9": (
+            "Sets the anisotropic filtering (AF) sample level. AF corrects texture "
+            "blur on surfaces viewed at an oblique angle. Higher values sharpen "
+            "textures at steep angles but increase GPU texture unit load. "
+            "2x is nearly free on modern hardware; 8x–16x has a small cost. "
+            "Only effective when Aniso Mode is set to 'User Override'. "
+            "Recommended: 16x for modern NVIDIA GPUs with negligible performance cost."
+        ),
+        "0x10D2BB16": (
+            "Controls when anisotropic filtering is applied. "
+            "'App Controlled' — the game decides its own AF level (recommended for "
+            "most modern titles). "
+            "'User Override' — forces the driver AF level set in Aniso Level above. "
+            "'Conditional' — applies driver AF only when the app requests a lower level."
+        ),
+        "0x00CE2691": (
+            "High-level quality/performance trade-off for all texture filtering operations. "
+            "'High Quality' applies the most accurate filtering algorithms and may enable "
+            "negative LOD bias correction for sharper results. "
+            "'Quality' is the balanced default. "
+            "'Performance' and 'High Performance' use faster but less accurate filter "
+            "implementations to save GPU texture unit bandwidth. "
+            "Most users should leave this at 'Quality'."
+        ),
+        "0x00E73211": (
+            "When enabled, the driver may reduce the effective AF sample count on "
+            "surfaces that are less oblique, where full AF would be wasted. "
+            "This optimization is nearly invisible in practice and saves GPU bandwidth. "
+            "Disable only if you notice unexpected texture blurring on surfaces that "
+            "should be filtered more sharply."
+        ),
+        "0x0019BB68": (
+            "Controls whether shaders can use negative LOD (Level of Detail) bias to "
+            "sharpen textures beyond their native resolution. "
+            "'Allow negative' — permits shaders to specify negative bias values, "
+            "which can over-sharpen textures and introduce aliasing or shimmer. "
+            "'Clamp' (recommended with DLSS/TAA) — prevents negative bias, which "
+            "avoids the shimmering artifact that occurs when temporal upscalers "
+            "combine negative bias with reconstructed sub-pixel data."
+        ),
+
+        # ── DLSS / NGX ────────────────────────────────────────────────────────
+        "0x10E41E01": (
+            "Master override switch for DLSS Super Resolution (DLSS-SR). "
+            "When set to 'On', DXVK-NVAPI allows the driver-level SR settings below "
+            "(mode, preset, scaling) to take effect, overriding whatever the game "
+            "engine has configured. Required before any DLSS-SR sub-setting takes effect. "
+            "Set via env var: DXVK_NVAPI_DRS_NGX_DLSS_SR_OVERRIDE=on"
+        ),
+        "0x10E41E02": (
+            "Master override switch for DLSS Ray Reconstruction (DLSS-RR, formerly "
+            "DLSS 3.5 Denoiser). When 'On', driver-level RR settings override the "
+            "in-game configuration. DLSS-RR replaces traditional denoising in path-traced "
+            "games (e.g. Cyberpunk 2077 with RT Overdrive) with an AI denoiser that "
+            "recovers more detail and reduces noise. "
+            "Set via env var: DXVK_NVAPI_DRS_NGX_DLSS_RR_OVERRIDE=on"
+        ),
+        "0x10E41E03": (
+            "Master override switch for DLSS Frame Generation (DLSS-FG / DLSSG). "
+            "When 'On', allows the driver to control FG behavior independent of in-game "
+            "settings. Frame Generation uses AI to synthesize intermediate frames between "
+            "rendered frames, multiplying perceived frame rate. Requires RTX 40+ (Ada) "
+            "or newer. On Turing/Ampere GPUs, DXVK_NVAPI_GPU_ARCH spoofing to GB200 "
+            "is required to enable the FG code path. "
+            "Set via env var: DXVK_NVAPI_DRS_NGX_DLSS_FG_OVERRIDE=on"
+        ),
+        "0x10E41DF3": (
+            "Forces a specific DLSS Super Resolution neural network preset. "
+            "Presets are purpose-built variants of the DLSS model that trade off "
+            "temporal stability, sharpness, and ghosting differently:\n"
+            "  A — Legacy default for Perf/Balanced/Quality. Good anti-ghosting for "
+            "games missing motion vectors.\n"
+            "  B — Legacy default for Ultra Performance mode.\n"
+            "  C — Prefers current-frame data; less ghosting but less stable.\n"
+            "  D — Favors temporal stability; was the modern default before E.\n"
+            "  E — Current recommended default for Perf/Balanced/Quality (DLSS 3.7+). "
+            "Better detail, sharpness, and reduced smearing vs D.\n"
+            "  F — Current recommended default for Ultra Performance and DLAA (DLSS 3.7+).\n"
+            "  'Latest' (0xFFFFFF) — always use the recommended preset for each mode.\n"
+            "Presets K–O require DLSS 4.5+. When in doubt use 'Latest'."
+        ),
+        "0x10E41DF7": (
+            "Forces a specific neural network preset for DLSS Ray Reconstruction. "
+            "Same preset alphabet as DLSS-SR (see DLSS-SR Preset). "
+            "RR presets control how aggressively the denoiser reconstructs ray-traced "
+            "detail — higher letter presets generally prioritize temporal stability "
+            "and reduced flickering in complex RT lighting. "
+            "Recommended: 'Latest' (0xFFFFFF) to always get NVIDIA's current best "
+            "model for RR."
+        ),
+        "0x10E41DF1": (
+            "Forces a specific neural network preset for DLSS Frame Generation. "
+            "FG presets control the motion interpolation model behavior, trading "
+            "artifact reduction vs. motion clarity at high speeds. "
+            "The preset alphabet is the same as DLSS-SR but the internal models differ. "
+            "Presets K–O require DLSS 4.5+. "
+            "Recommended: 'Latest' (0xFFFFFF) to use NVIDIA's current recommended FG model."
+        ),
+        "0x10AFB768": (
+            "Forces the DLSS Super Resolution quality tier, overriding the in-game setting. "
+            "'Performance' — renders at ~50% of output resolution (e.g. 1080p→2160p). "
+            "Highest FPS boost, some quality loss.\n"
+            "'Balanced' — renders at ~58% resolution. Good all-round choice.\n"
+            "'Quality' — renders at ~67% resolution. Closest to native with DLSS.\n"
+            "'DLAA' — renders at full native resolution and only applies anti-aliasing. "
+            "Best quality, no performance gain.\n"
+            "'Ultra Perf' — renders at ~33% resolution. Extreme FPS boost, soft image.\n"
+            "'Custom' — uses the ratio set in DLSS-SR Scaling below.\n"
+            "'Snippet Ctrl' (0x3) — leave game in control (default, no override).\n"
+            "Only active when DLSS-SR Override is On."
+        ),
+        "0x10BD9423": (
+            "Forces the DLSS Ray Reconstruction quality tier. Options are identical "
+            "in name to DLSS-SR modes but map to different internal render ratios "
+            "tuned for denoising rather than upscaling. "
+            "Most users running RT Overdrive or other path-traced titles should leave "
+            "this at 'Snippet Ctrl' and only change it if RR image quality is unsatisfactory. "
+            "Only active when DLSS-RR Override is On."
+        ),
+        "0x10E41DF4": (
+            "Forces DLSS to operate in DLAA (Deep Learning Anti-Aliasing) mode "
+            "regardless of the quality mode the game sets. DLAA runs at full native "
+            "resolution and uses the DLSS neural network solely for anti-aliasing — "
+            "it does not upscale. Provides the highest image quality of all DLSS modes "
+            "at the cost of not boosting frame rate. "
+            "Only meaningful when DLSS-SR Override is On."
+        ),
+        "0x10E41DF5": (
+            "Custom render resolution ratio for DLSS Super Resolution, expressed as "
+            "an integer percentage (33–100). For example, 75 means the game renders "
+            "at 75% of the output resolution before DLSS upscales to full output. "
+            "Only active when DLSS-SR Mode is set to 'Custom'. "
+            "Example: for 4K output at 75%, the internal render resolution is 2880×1620. "
+            "Values below 50 are generally not recommended due to visible quality loss."
+        ),
+        "0x10C7D4A2": (
+            "Custom render resolution ratio for DLSS Ray Reconstruction, expressed as "
+            "an integer percentage (33–100). Analogous to DLSS-SR Scaling but applies "
+            "only to the RR denoising pass. "
+            "Only active when DLSS-RR Mode is set to 'Custom'. "
+            "Requires DLSS-RR Override to be On."
+        ),
+        "0x104D6667": (
+            "Controls how many interpolated frames DLSS Frame Generation inserts "
+            "between each rendered frame (Multi-Frame Generation / MFG). "
+            "'Off' (0) — standard DLSS FG (1 generated frame per rendered frame = 2× FPS). "
+            "'1'–'8' — generate 1 to 8 extra frames (2× to 9× perceived FPS). "
+            "'Max(15)' — maximum of 15 generated frames per rendered frame (16× perceived). "
+            "Higher multipliers amplify latency proportionally; NVIDIA Reflex is "
+            "strongly recommended to compensate. RTX 50 (Blackwell) supports MFG "
+            "natively; earlier cards require DXVK_NVAPI_GPU_ARCH=GB200 spoofing."
+        ),
+        "0x10308298": (
+            "Controls the activation state of DLSS Frame Generation (DLSSG). "
+            "'Disabled' (0x0) — the DLSSG runtime is not initialized at all. "
+            "'Off' (0x1) — runtime initializes but FG is inactive. "
+            "'On' (0x2) — FG is active; generates frames between rendered frames. "
+            "'Auto' (0x3) — driver decides based on frame rate and system load. "
+            "'Dynamic' (0x4) — DLSSG dynamically adjusts the multiplier based on "
+            "target FPS set in DLSSG Target FPS. Requires DLSS-FG Override to be On."
+        ),
+        "0x10CF4125": (
+            "Sets the target output frame rate for DLSS Frame Generation in Dynamic mode. "
+            "The driver adjusts the MFG multiplier in real time to try to hit this FPS. "
+            "Specify in frames per second as a decimal integer: "
+            "60 = 0x3C, 120 = 0x78, 144 = 0x90, 240 = 0xF0. "
+            "Special value 0x1000000 = automatic (driver picks the target). "
+            "Only meaningful when DLSSG Mode is set to 'Dynamic'."
+        ),
+        "0x10562D0F": (
+            "Maximum number of generated frames DLSS Frame Generation can insert per "
+            "rendered frame when operating in Dynamic mode. Acts as a ceiling to prevent "
+            "excessive latency even if the dynamic algorithm would otherwise go higher. "
+            "Range 0–16777215. Typical useful values are 2–8. "
+            "Only relevant when DLSSG Mode is 'Dynamic'."
+        ),
+        "0x10AFB76C": (
+            "Forces DLSS Super Resolution into Ultra Performance mode at the driver level, "
+            "bypassing the in-game preset menu. Ultra Performance renders at ~33% of "
+            "output resolution — the most aggressive upscaling ratio — providing the "
+            "largest frame rate boost at the cost of image quality. "
+            "Useful on lower-end RTX cards at 4K output when DLAA/Quality would be "
+            "too slow. 'None' leaves mode selection to the game."
+        ),
+        "0x10444444": (
+            "Enables NVIDIA Image Scaling (NIS), NVIDIA's older spatial upscaler that "
+            "does not require Tensor cores. NIS uses an adaptive sharpening + upscaling "
+            "algorithm and works on all Turing and later GPUs. It is less accurate than "
+            "DLSS Super Resolution but has near-zero latency overhead. "
+            "Note: on Linux/Proton, NIS is typically configured per-game inside "
+            "NVIDIA Control Panel or via game settings rather than this DRS flag."
+        ),
+        "0x10E41E04": (
+            "Master override switch for DLSS Noise Reduction (DLSS-NR), an AI-based "
+            "denoiser primarily aimed at ray-traced effects in titles that expose the "
+            "NGX NR interface. When 'On', preset and mode settings for NR take effect. "
+            "This is a newer NGX feature; availability depends on game and driver version."
+        ),
+        "0x10E41DF8": (
+            "Selects the neural network preset for DLSS Noise Reduction. "
+            "Same preset alphabet as DLSS-SR (A through O, Latest). "
+            "See DLSS-SR Preset for descriptions of preset characteristics. "
+            "Recommended: 'Latest' to always use NVIDIA's current best NR model."
+        ),
+
+        # ── VRR / G-Sync ──────────────────────────────────────────────────────
+        "0x1194F158": (
+            "Global G-SYNC / VRR enable switch that applies to all applications. "
+            "'Disabled' — VRR is completely off; monitor runs at fixed refresh rate. "
+            "'Fullscreen' — VRR only active when the application is in exclusive "
+            "fullscreen mode. Most compatible and lowest overhead. "
+            "'Full+Window' — extends VRR to borderless/windowed applications. "
+            "Requires a G-SYNC compatible or native G-SYNC display. "
+            "On Wayland/Proton, VRR state is also influenced by the compositor "
+            "(KDE Plasma → Force fullscreen repaint or allow VRR per-window)."
+        ),
+        "0x1094F1F7": (
+            "Specifies which VRR modes an application is permitted to request from the driver. "
+            "This is the capability advertisement; the actual behavior also depends on "
+            "G-Sync/VRR Mode above. "
+            "'Fullscreen' — apps can only activate VRR in exclusive fullscreen. "
+            "'Full+Window' — apps can request VRR in borderless/windowed modes too. "
+            "In most cases this should match the global G-Sync/VRR Mode setting."
+        ),
+        "0x10A879CE": (
+            "Per-application VRR enable/disable switch. "
+            "'Enable' — allows this application to use VRR when the global setting "
+            "and monitor capability permit it. "
+            "'Disable' — forces fixed refresh rate for this application even if VRR "
+            "is globally on (useful for locked-framerate competitive titles). "
+            "'Not Supported' — marks the app as VRR-incompatible at the API level."
+        ),
+        "0x00A879CF": (
+            "Advanced VSync presentation mode control that interacts with VRR. "
+            "'Passive' (0x60925292) — standard behavior; VSync state controlled by "
+            "application and global settings. "
+            "'Force Off' — disables VSync regardless of app request (max FPS, tearing possible). "
+            "'Force On' — always enables VSync (capped to refresh rate, no tearing). "
+            "'Flip 2/3/4' — controls flip queue depth (number of queued frames). Deeper "
+            "queues smooth out CPU/GPU spikes at the cost of extra latency. "
+            "'Virtual' (0x18888888) — virtual VSync mode for special presentation paths."
+        ),
+        "0x10A879CF": (
+            "Per-application G-SYNC mode override. "
+            "'Allow' (default) — G-SYNC operates according to global settings. "
+            "'Force Off' — disables G-SYNC for this app. "
+            "'Disallow' — prevents the app from requesting G-SYNC. "
+            "'ULMB' — Ultra Low Motion Blur mode (strobed backlight, incompatible with VRR). "
+            "'Fixed Ref' — fixed refresh rate reference mode. "
+            "ULMB requires a G-SYNC native (not compatible) monitor."
+        ),
+
+        # ── VSync / Flip ──────────────────────────────────────────────────────
+        "0x005A375C": (
+            "Top-level control for screen tearing behavior. "
+            "'Disable tearing' (0x96861077) — enables VSync/flip synchronisation to "
+            "prevent torn frames. Default for most applications. "
+            "'Enable tearing' (0x99941284) — forces immediate presentation with no "
+            "synchronisation, allowing the display to show partial frames from "
+            "different render cycles. Minimizes latency but produces visible tearing. "
+            "Override this at the per-app level alongside G-Sync settings for "
+            "latency-critical titles."
+        ),
+
+        # ── Frame Rate / Latency ──────────────────────────────────────────────
+        "0x007BA09E": (
+            "Maximum number of frames the CPU is allowed to queue ahead of the GPU. "
+            "Lower values (1–2) reduce input latency because the CPU cannot race too far "
+            "ahead of the GPU. Higher values (3+) can smooth out frame time variance "
+            "at the cost of increased latency. "
+            "0 = driver default (typically 3). "
+            "NVIDIA Reflex supersedes this setting for latency reduction in supported games; "
+            "if using Reflex, leave Pre-Render Limit at its default."
+        ),
+        "0x10835002": (
+            "Hard frame rate cap applied at the driver's flip queue level. "
+            "The limiter fires before the frame is queued for presentation, so it "
+            "removes idle GPU spinning and reduces power/heat. "
+            "Common values: 30=0x1E, 60=0x3C, 120=0x78, 144=0x90, 165=0xA5, 240=0xF0. "
+            "0 = no limit. "
+            "Prefer an in-game limiter or NVIDIA Reflex's built-in cap for the most "
+            "latency-friendly implementation; use this DRS limiter as a fallback."
+        ),
+        "0x10835016": (
+            "Frame rate cap applied when the application loses focus (e.g. alt-tabbed "
+            "or minimized). Prevents the GPU from running at full speed while the game "
+            "window is not visible, saving power and thermal headroom. "
+            "Default is 20 FPS (0x14). "
+            "Common values: 20=0x14, 30=0x1E, 60=0x3C. "
+            "Set to a low value like 20–30 FPS for laptops on battery to conserve energy."
+        ),
+        "0x10835017": (
+            "Number of seconds the application must be in the background (unfocused) "
+            "before the Idle FPS Limit kicks in. "
+            "Default is 3 seconds. Increase if you use alt-tab frequently and find the "
+            "FPS drop too jarring when quickly switching back."
+        ),
+        "0x1095F170": (
+            "When enabled, the driver automatically aligns the NVIDIA FrameView / "
+            "Reflex latency flash trigger to the correct render event. "
+            "Leave Enabled unless you are manually calibrating a latency measurement "
+            "setup and need precise manual alignment."
+        ),
+
+        # ── Power / Performance ───────────────────────────────────────────────
+        "0x1057EB71": (
+            "Controls the GPU power management policy. "
+            "'Adaptive' — clocks scale with workload; best balance of performance and power. "
+            "'Prefer Max' — boosts clocks as high as possible; maximum performance but "
+            "higher power draw and temperatures. "
+            "'Driver Ctrl' — driver manages power state autonomously. "
+            "'Consistent Perf' — minimizes clock variation for repeatable benchmarks. "
+            "'Prefer Min' — aggressively clocks down; minimum power, lowest performance. "
+            "'Optimal Power' (default, 0x5) — NVIDIA's recommended mode; efficient "
+            "performance scaling. On the Alienware M16 R1, 'Prefer Max' paired with a "
+            "custom Curve Optimizer may improve 1% lows under sustained load."
+        ),
+        "0x10D1EF29": (
+            "Sets the maximum GPU power limit in watts at the driver level. "
+            "Range 0–175 W. 0 = use the GPU's built-in default TDP. "
+            "Lowering this value can reduce temperatures and fan noise on thermally "
+            "constrained systems (e.g. laptops). "
+            "For the RTX 4080 Mobile the factory TGP is typically 60–150 W depending "
+            "on the OEM configuration; setting a value below the base TGP will throttle "
+            "GPU clocks. Pair with Ryzenadj for coordinated CPU+GPU power budgeting."
+        ),
+        "0x00AE785C": (
+            "Controls whether the GPU throttles its power draw to comply with the PCIe "
+            "slot power specification (typically 75 W for standard slots). "
+            "'Off' — no PCIe slot throttling; the GPU may exceed slot limits, relying "
+            "on supplemental PCIe power connectors. Normal for desktop GPUs. "
+            "'On' — enforces slot power compliance; relevant for small-form-factor or "
+            "riser-connected configurations."
+        ),
+
+        # ── Shader Cache ──────────────────────────────────────────────────────
+        "0x00198FFF": (
+            "Enables the driver's on-disk shader cache. When enabled, compiled GPU "
+            "shader programs are stored to disk so they can be reused on subsequent "
+            "launches without recompilation. Disabling this forces the driver to "
+            "recompile shaders from scratch every launch, causing stuttering the first "
+            "time each shader is used. Leave Enabled unless diagnosing a shader cache "
+            "corruption or disk space issue."
+        ),
+        "0x00AC8497": (
+            "Maximum size of the driver shader disk cache in megabytes. "
+            "Once the cache reaches this size, older entries are evicted. "
+            "The default is 16384 MB (16 GB). For heavy workloads (multiple large games, "
+            "content creation), 32768 MB (32 GB) prevents premature eviction. "
+            "If disk space is limited, reduce to 4096 MB. "
+            "The cache is typically stored under "
+            "%LOCALAPPDATA%/NVIDIA/DXCache or ~/.nv/ComputeCache on Linux."
+        ),
+
+        # ── Ambient Occlusion ─────────────────────────────────────────────────
+        "0x00667329": (
+            "Controls the quality of NVIDIA's driver-injected Ambient Occlusion. "
+            "AO darkens crevices, corners, and surfaces near occluders to add contact "
+            "shadows and depth. The driver AO is a post-process approximation. "
+            "'Off' — no driver AO (use the game's built-in AO instead). "
+            "'Low/Medium/High' — increasing quality at increasing cost. "
+            "For modern titles with HBAO+ or RTAO built-in, set to 'Off' to avoid "
+            "double-AO artifacts."
+        ),
+        "0x00664339": (
+            "Per-application enable switch for driver-level Ambient Occlusion. "
+            "When Disabled, the AO Mode setting above is ignored for this application. "
+            "Enable only for older DX9/DX10/OpenGL games that lack built-in AO."
+        ),
+
+        # ── FXAA ──────────────────────────────────────────────────────────────
+        "0x1034CB89": (
+            "Controls whether FXAA (Fast Approximate Anti-Aliasing) is permitted to "
+            "activate for this application. 'Allowed' means FXAA can be enabled by "
+            "the FXAA Enable setting below; 'Disallowed' prevents FXAA even if "
+            "globally requested. Use 'Disallowed' for games that have their own "
+            "temporal AA or DLSS where FXAA would add unwanted blur."
+        ),
+        "0x1074C972": (
+            "Enables or disables NVIDIA FXAA post-process anti-aliasing. FXAA is a "
+            "screen-space, single-pass AA technique with very low performance cost. "
+            "It smooths jagged edges by blending neighboring pixels along contrast "
+            "boundaries. Quality is lower than MSAA or DLSS but it works on any game "
+            "regardless of engine support. "
+            "On modern titles with temporal AA or DLSS, FXAA often adds unwanted "
+            "softness — disable it in those cases."
+        ),
+
+        # ── Ansel ─────────────────────────────────────────────────────────────
+        "0x1035DB89": (
+            "Controls whether NVIDIA Ansel (the driver-level screenshot tool) is "
+            "permitted to activate in this application. 'Allowed' lets Ansel intercept "
+            "the Alt+F2 shortcut to enter free-camera screenshot mode. "
+            "'Disallowed' prevents Ansel from loading into the process entirely. "
+            "Disallow if you experience game crashes or anti-cheat conflicts related "
+            "to Ansel's injection."
+        ),
+        "0x1075D972": (
+            "Globally enables or disables NVIDIA Ansel. When off, the Ansel overlay "
+            "is not loaded regardless of the 'Ansel Allow' setting. "
+            "Disable system-wide if you use a different screenshot tool (e.g. Fraps, "
+            "OBS, Reshade) and don't want Ansel to interfere."
+        ),
+
+        # ── SLI ────────────────────────────────────────────────────────────────
+        "0x1033CED1": (
+            "Sets the SLI (multi-GPU) rendering mode for the application. "
+            "'Autoselect' — driver picks the best SLI mode. "
+            "'Force Single' — disables SLI, uses only the primary GPU. "
+            "'Force AFR' — Alternate Frame Rendering: GPUs alternate rendering complete frames. "
+            "'Force AFR2' — AFR with 2-frame offset for better overlap. "
+            "'Force SFR' — Split Frame Rendering: each GPU renders a horizontal band. "
+            "'AFR of SFR' — AFR applied to SFR pairs. "
+            "Note: SLI is deprecated on RTX 30/40 series; these settings are only "
+            "relevant on legacy Maxwell/Pascal/Turing multi-GPU configurations."
+        ),
+
+        # ── Optimus ────────────────────────────────────────────────────────────
+        "0x10F9DC81": (
+            "Selects which GPU handles rendering on NVIDIA Optimus (hybrid graphics) laptops. "
+            "'Integrated' — force iGPU rendering (power saving). "
+            "'Enable' — use the discrete NVIDIA GPU. "
+            "'Auto Select' (default) — driver decides based on application workload. "
+            "'Override' (0x80000000) — allow user-level profile override. "
+            "On the Alienware M16 R1 AMD, the AMD iGPU handles display output while the "
+            "RTX 4080 Mobile renders; this setting has limited effect on that platform "
+            "compared to AMD-specific MUX/switchable graphics controls."
+        ),
+        "0x10F9DC84": (
+            "Advanced bitfield controlling Optimus rendering pipeline options. "
+            "Individual bits enable/disable specific behaviors: "
+            "'Disable Async Present' — prevents asynchronous frame presentation (fixes "
+            "some tearing issues on Optimus). "
+            "'Enable DWM Async' — allows async presentation through DWM compositor. "
+            "'Disable DXGI Wrappers' — bypasses DXGI interop wrappers (can help "
+            "compatibility with custom D3D12 present paths). "
+            "'Prune Unsupported' — removes unsupported resource formats from the list. "
+            "'iGPU Transcoding' — uses the iGPU to transcode Optimus blit operations. "
+            "Leave at 0 (default) unless you are diagnosing a specific Optimus issue."
+        ),
+
+        # ── Misc ───────────────────────────────────────────────────────────────
+        "0x108F0841": (
+            "Allows applications (profilers, benchmark tools) to read GPU hardware "
+            "performance counters via NVAPI. When enabled, counters such as shader "
+            "utilization, memory bandwidth, and occupancy are accessible to user-space "
+            "profiling tools. Has no effect on rendering; disable if you want to prevent "
+            "third-party tools from reading detailed GPU metrics."
+        ),
+        "0x0098C1AC": (
+            "Enables MFAA (Multi-Frame Anti-Aliasing), an NVIDIA technique that "
+            "distributes MSAA sample positions temporally across frames. MFAA provides "
+            "similar visual quality to 4x MSAA at roughly 2x MSAA cost. "
+            "Only effective in DX11 and OpenGL; has no effect in DX12/Vulkan titles. "
+            "Combine with AA Mode 'Override' or 'Enhance' and an MSAA level for best results."
+        ),
+        "0x107CDDBC": (
+            "Associates this driver profile with a specific Steam application ID. "
+            "The value corresponds to the numeric Steam App ID (appid) found in the "
+            "game's Steam store URL. When set, NVAPI will match the profile to the "
+            "correct game even if the executable name is ambiguous. "
+            "Example: Cyberpunk 2077 = 0x00124B6D (1203220 decimal). "
+            "Leave at 0x0 for non-Steam titles or when matching by executable name."
+        ),
+    }
+
+    # Apply detailed descriptions to settings by ID
+    for s in settings:
+        if s.id in DETAILED_DESCS:
+            s.detailed_desc = DETAILED_DESCS[s.id]
+
     return settings
 
 
