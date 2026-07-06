@@ -3150,6 +3150,17 @@ NV_ENV_VARS: List[EnvVarDef] = [
               "Legacy variable for the Doom 3 game. A driver bug (fixed in 319.32) caused "
               "crashes when this was set. Kept here for reference; not needed on modern drivers.",
               options=["0", "1"]),
+
+    EnvVarDef("__GL_13ebad", "NVIDIA __GL", "enum", "",
+              "idTech engine VRAM placement workaround. Tells the NVIDIA Vulkan driver to "
+              "override application-requested memory locations and force performance-critical "
+              "resources into video memory. First needed for Doom Eternal (2020), later "
+              "confirmed for Indiana Jones and the Great Circle (Dec 2024). Workaround "
+              "confirmed by an NVIDIA engineer on the developer forum; planned for "
+              "auto-enablement in a future driver release. Only effective on idTech-based "
+              "games with the proprietary NVIDIA Linux Vulkan driver. "
+              "Steam launch options: __GL_13ebad=0x1 %command%",
+              options=["0x1"]),
 ]
 
 ALL_ENV_VARS = DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS
