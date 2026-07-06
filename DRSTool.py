@@ -2839,13 +2839,37 @@ QPushButton:pressed{
 # Environment Variable Definitions (DXVK + VKD3D-Proton)
 # ============================================================================
 
+# Per-flag descriptions for DXVK_HUD checkbox UI
+DXVK_HUD_DESCS: Dict[str, str] = {
+    "devinfo":      "GPU name, driver version and D3D feature level.",
+    "fps":          "Frames per second counter.",
+    "frametimes":   "Frame time graph showing milliseconds per frame.",
+    "submissions":  "Number of Vulkan command buffer submissions per frame.",
+    "drawcalls":    "Draw call and dispatch count per frame.",
+    "pipelines":    "Number of graphics/compute pipelines compiled so far.",
+    "memory":       "VRAM and system RAM usage by DXVK.",
+    "gpuload":      "GPU utilization percentage.",
+    "version":      "DXVK version string.",
+    "api":          "D3D feature level and API version in use.",
+    "compiler":     "Shader compiler activity indicator (spins while compiling).",
+    "samplers":     "Number of texture samplers currently in use.",
+    "descriptors":  "Descriptor pool and set statistics.",
+    "1":            "Shorthand preset: enables devinfo, fps, version and gpuload.",
+    "full":         "Shorthand preset: enables all available HUD elements.",
+    "scale=2":      "Scale HUD text to 2x. For other values type scale=N manually.",
+}
+
 DXVK_ENV_VARS: List[EnvVarDef] = [
     # ── HUD ──────────────────────────────────────────────────────────────────
-    EnvVarDef("DXVK_HUD", "DXVK", "flags", "",
-              "In-game HUD overlay. Comma-separated list of elements to display.",
-              options=["devinfo", "fps", "frametimes", "submissions", "drawcalls",
-                       "pipelines", "memory", "gpuload", "version", "api", "compiler",
-                       "samplers", "descriptors", "scale=N", "1", "full"],
+    EnvVarDef("DXVK_HUD", "DXVK", "hud_flags", "",
+              "In-game HUD overlay. Select elements to display.",
+              options=[
+                  "devinfo", "fps", "frametimes", "submissions", "drawcalls",
+                  "pipelines", "memory", "gpuload", "version", "api", "compiler",
+                  "samplers", "descriptors",
+                  "1", "full",
+                  "scale=2",
+              ],
               placeholder="e.g. devinfo,fps,memory"),
     # ── Frame Rate ───────────────────────────────────────────────────────────
     EnvVarDef("DXVK_FRAME_RATE", "DXVK", "int", "0",
@@ -3522,6 +3546,8 @@ QPushButton:pressed{ background:#a73434; }
             self._build_enum(ev, cur)
         elif ev.vtype == "vkd3d_config":
             self._build_vkd3d_config(ev, cur)
+        elif ev.vtype == "hud_flags":
+            self._build_hud_flags(ev, cur)
         elif ev.vtype == "flags" and ev.options:
             self._build_flags(ev, cur)
         else:
@@ -3575,15 +3601,21 @@ QPushButton:checked{
         self._control_layout.addLayout(grid)
 
     def _build_vkd3d_config(self, ev: EnvVarDef, cur: str):
+        """VKD3D_CONFIG: delegate to shared flag grid with VKD3D descriptions."""
+        self._build_flag_grid(ev, cur, VKD3D_CONFIG_DESCS)
+
+    def _build_hud_flags(self, ev: EnvVarDef, cur: str):
+        """DXVK_HUD: delegate to shared flag grid with HUD descriptions."""
+        self._build_flag_grid(ev, cur, DXVK_HUD_DESCS)
+
+    def _build_flag_grid(self, ev: EnvVarDef, cur: str, descs: Dict[str, str]):
         """
-        VKD3D_CONFIG: checkable button grid, one button per flag.
-        Active flags are parsed from the comma/semicolon-separated cur value.
-        Toggling any button rebuilds the value string and emits it.
+        Shared checkbox grid for comma-separated flag variables (VKD3D_CONFIG,
+        DXVK_HUD, …).  Toggling any button rebuilds the value and emits it.
         """
         active = set(f.strip() for f in cur.replace(";", ",").split(",") if f.strip()) if cur else set()
 
-        # We keep a local dict so toggle logic can read state without re-querying widgets
-        self._vkd3d_btns: Dict[str, QPushButton] = {}
+        self._flag_grid_btns: Dict[str, QPushButton] = {}
 
         grid = QGridLayout()
         grid.setSpacing(6)
@@ -3598,7 +3630,7 @@ QPushButton:checked{
         grid.addWidget(hdr_flag, 0, 0)
         grid.addWidget(hdr_desc, 0, 1)
 
-        # Separator line
+        # Separator
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
         sep.setStyleSheet("border: none; border-top: 1px solid #1e2535;")
@@ -3611,11 +3643,10 @@ QPushButton:checked{
             btn.setChecked(flag in active)
             btn.setFixedHeight(26)
             self._apply_flag_btn_style(btn)
-            btn.toggled.connect(lambda checked, f=flag: self._on_vkd3d_flag_toggled())
-            self._vkd3d_btns[flag] = btn
+            btn.toggled.connect(lambda checked, f=flag: self._on_flag_grid_toggled())
+            self._flag_grid_btns[flag] = btn
 
-            desc_text = VKD3D_CONFIG_DESCS.get(flag, "")
-            desc_lbl = QLabel(desc_text)
+            desc_lbl = QLabel(descs.get(flag, ""))
             desc_lbl.setWordWrap(True)
             desc_lbl.setStyleSheet("color:#a7afbc; font-size:9px;")
 
@@ -3647,11 +3678,11 @@ QPushButton:checked{
 }
 """)
 
-    def _on_vkd3d_flag_toggled(self):
-        """Rebuild VKD3D_CONFIG value from current checkbox states."""
-        if not hasattr(self, '_vkd3d_btns'):
+    def _on_flag_grid_toggled(self):
+        """Rebuild flag-grid variable value from current checkbox states."""
+        if not hasattr(self, '_flag_grid_btns'):
             return
-        active = [f for f, btn in self._vkd3d_btns.items() if btn.isChecked()]
+        active = [f for f, btn in self._flag_grid_btns.items() if btn.isChecked()]
         self._set_value(",".join(active))
 
     def _build_flags(self, ev: EnvVarDef, cur: str):
