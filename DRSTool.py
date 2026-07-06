@@ -1942,7 +1942,7 @@ class OutputBarWidget(QWidget):
         row2.setSpacing(6)
         row2.setContentsMargins(0, 0, 0, 0)
 
-        lbl_env = QLabel("DXVK | VKD3D-PROTON=")
+        lbl_env = QLabel("DXVK | VKD3D | __GL=")
         lbl_env.setStyleSheet(lbl_ss)
         row2.addWidget(lbl_env)
 
@@ -2979,7 +2979,180 @@ VKD3D_ENV_VARS: List[EnvVarDef] = [
               placeholder="28"),
 ]
 
-ALL_ENV_VARS = DXVK_ENV_VARS + VKD3D_ENV_VARS
+
+# ============================================================================
+# NVIDIA OpenGL Environment Variables (__GL_*)
+# ============================================================================
+
+NV_ENV_VARS: List[EnvVarDef] = [
+
+    # ── Rendering / Protocol ─────────────────────────────────────────────────
+    EnvVarDef("__GL_ALLOW_UNOFFICIAL_PROTOCOL", "NVIDIA __GL", "enum", "",
+              "Allows the NVIDIA GLX client to use 'unofficial' GLX protocol extensions for "
+              "OpenGL features beyond v1.5. Requires NVIDIA GLX libraries on both client and server.",
+              options=["0", "1"]),
+
+    EnvVarDef("__GL_FORCE_INDIRECT", "NVIDIA __GL", "enum", "",
+              "Forces the NVIDIA OpenGL driver to use indirect GLX rendering — sends GL commands "
+              "over the network to an X server. Workaround for certain compatibility issues. (1 = enable)",
+              options=["0", "1"]),
+
+    EnvVarDef("__GL_DISALLOW_SOFTWARE_FALLBACK", "NVIDIA __GL", "enum", "",
+              "Prevents the OpenGL driver from falling back to software rendering when hardware "
+              "acceleration fails.",
+              options=["0", "1"]),
+
+    EnvVarDef("__GL_NO_DSO_FINALIZER", "NVIDIA __GL", "enum", "",
+              "Workaround for multithreaded OpenGL apps: forces libGL's DSO finalizer to leave "
+              "resources in place on exit so other threads can still call OpenGL safely. "
+              "OS reclaims all memory when the process terminates.",
+              options=["0", "1"]),
+
+    EnvVarDef("__GL_WRITE_TEXT_SECTION", "NVIDIA __GL", "enum", "",
+              "Controls whether the NVIDIA OpenGL driver can write to executable memory sections. "
+              "Set to 0 to disable this optimization — workaround for segfaults in some apps.",
+              options=["0", "1"]),
+
+    EnvVarDef("__GL_IGNORE_GLSL_EXT_REQS", "NVIDIA __GL", "enum", "",
+              "Ignores certain GLSL extension requirements. Useful workaround for specific games "
+              "such as Dying Light. (1 = enable)",
+              options=["0", "1"]),
+
+    EnvVarDef("__GL_YIELD", "NVIDIA __GL", "enum", "",
+              "Specifies what the NVIDIA OpenGL driver does when it needs to yield CPU time. "
+              "USLEEP changes the yielding behavior to usleep(). Workaround for scheduling problems.",
+              options=["USLEEP", "NOTHING"],
+              placeholder="e.g. USLEEP"),
+
+    EnvVarDef("__GL_SYNC_DISPLAY_DEVICE", "NVIDIA __GL", "string", "",
+              "Specifies which display connector to synchronize rendering to (VSync target). "
+              "Use in multi-monitor setups to eliminate tearing. Also works with Vulkan apps. "
+              "Example values: HDMI-0, DP-4, DVI-D-0",
+              placeholder="e.g. HDMI-0 or DP-4"),
+
+    # ── Shader Cache ─────────────────────────────────────────────────────────
+    EnvVarDef("__GL_SHADER_DISK_CACHE_PATH", "NVIDIA __GL", "string", "",
+              "Overrides the directory path for the NVIDIA OpenGL shader disk cache. "
+              "By default the cache lives in ~/.nv. Useful to redirect to faster storage or "
+              "a shared location across users.",
+              placeholder="/path/to/cache/dir"),
+
+    EnvVarDef("__GL_SHADER_DISK_CACHE_APP_NAME", "NVIDIA __GL", "string", "",
+              "Specifies an application name for the shader disk cache, creating app-specific "
+              "cache entries. Prevents cache key collisions between different applications.",
+              placeholder="MyAppName"),
+
+    EnvVarDef("__GL_SHADER_DISK_CACHE_READ_ONLY", "NVIDIA __GL", "enum", "",
+              "Makes the shader disk cache read-only. When set, the driver will not write "
+              "new compiled shader entries to the cache — useful for locked/shared deployments.",
+              options=["0", "1"]),
+
+    EnvVarDef("__GL_SHADER_DISK_CACHE_READ_ONLY_APP_NAME", "NVIDIA __GL", "string", "",
+              "Specifies an application name for a read-only shader disk cache. "
+              "Used in conjunction with __GL_SHADER_DISK_CACHE_READ_ONLY.",
+              placeholder="MyAppName"),
+
+    EnvVarDef("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP", "NVIDIA __GL", "enum", "",
+              "Prevents the NVIDIA driver from cleaning up (evicting) old shader disk cache entries. "
+              "Can help reduce shader compilation stuttering by keeping all cached shaders intact. "
+              "(1 = skip cleanup)",
+              options=["0", "1"]),
+
+    # ── Image Sharpening ──────────────────────────────────────────────────────
+    EnvVarDef("__GL_SHARPEN_ALLOW", "NVIDIA __GL", "enum", "",
+              "Allows the NVIDIA Image Sharpening feature to be used by this process. "
+              "Must be enabled before __GL_SHARPEN_ENABLE takes effect.",
+              options=["0", "1"]),
+
+    EnvVarDef("__GL_SHARPEN_ENABLE", "NVIDIA __GL", "enum", "",
+              "Enables NVIDIA Image Sharpening for OpenGL and Vulkan games. "
+              "Improves clarity and sharpness. Available since driver 441.41. "
+              "Requires __GL_SHARPEN_ALLOW=1.",
+              options=["0", "1"]),
+
+    EnvVarDef("__GL_SHARPEN_VALUE", "NVIDIA __GL", "int", "",
+              "Controls the sharpening strength. Higher values produce a stronger effect. "
+              "Typical range 0–100.",
+              placeholder="0-100"),
+
+    EnvVarDef("__GL_SHARPEN_IGNORE_FILM_GRAIN", "NVIDIA __GL", "enum", "",
+              "Controls whether the sharpening filter ignores film grain effects. "
+              "Prevents the sharpening pass from accentuating synthetic film grain noise.",
+              options=["0", "1"]),
+
+    EnvVarDef("__GL_SHARPEN_INDICATOR_ENABLE", "NVIDIA __GL", "enum", "",
+              "Shows an on-screen indicator when NVIDIA Image Sharpening is active.",
+              options=["0", "1"]),
+
+    # ── Display / HUD ─────────────────────────────────────────────────────────
+    EnvVarDef("__GL_SHOW_GRAPHICS_OSD", "NVIDIA __GL", "enum", "",
+              "Shows an on-screen display (OSD) indicator for the graphics API currently in use. "
+              "Can also be set via nvidia-settings or an application profile.",
+              options=["0", "1"]),
+
+    # ── App Profile / Platform ────────────────────────────────────────────────
+    EnvVarDef("__GL_APPLICATION_PROFILE", "NVIDIA __GL", "string", "",
+              "Specifies an application profile name to load. Application profiles override "
+              "global and base profile settings. The driver loads these on process init.",
+              placeholder="ProfileName"),
+
+    EnvVarDef("__GL_SELINUX_BOOLEANS", "NVIDIA __GL", "enum", "",
+              "Controls SELinux policy detection for the NVIDIA OpenGL driver. "
+              "Some fallback allocation methods may be prohibited under SELinux; "
+              "this variable allows manual override of the detection.",
+              options=["0", "1"]),
+
+    EnvVarDef("__GL_MAYA_OPTIMIZE", "NVIDIA __GL", "enum", "",
+              "Enables/disables OpenGL optimizations for Autodesk Maya. "
+              "The NVIDIA Linux driver 295.59 disabled certain OpenGL optimizations that "
+              "affect Maya performance. Set to 1 to re-enable if you experience performance loss.",
+              options=["0", "1"]),
+
+    # ── Debug / Event Logging ─────────────────────────────────────────────────
+    EnvVarDef("__GL_EVENT_LOGFILE", "NVIDIA __GL", "string", "",
+              "Specifies a file path for NVIDIA OpenGL event logging. "
+              "Used for debugging and troubleshooting by NVIDIA support.",
+              placeholder="/tmp/gl_events.log"),
+
+    EnvVarDef("__GL_EVENT_LOGLEVEL", "NVIDIA __GL", "enum", "",
+              "Controls the verbosity level of NVIDIA OpenGL event logging. "
+              "TRACE is most verbose; OFF disables logging entirely.",
+              options=["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL", "OFF"]),
+
+    EnvVarDef("__GL_EXPERT_DETAIL_LEVEL", "NVIDIA __GL", "int", "",
+              "Controls the level of detail for GLExpert debugging output. "
+              "GLExpert is part of the instrumented driver providing real-time OpenGL runtime info. "
+              "Higher values produce more detailed output.",
+              placeholder="0-5"),
+
+    EnvVarDef("__GL_EXPERT_OUTPUT_MASK", "NVIDIA __GL", "string", "",
+              "Bitmask controlling where GLExpert debugging output is sent "
+              "(e.g. console, stdout, debugger). Used together with __GL_EXPERT_REPORT_MASK.",
+              placeholder="0x01 (stdout)"),
+
+    EnvVarDef("__GL_EXPERT_REPORT_MASK", "NVIDIA __GL", "string", "",
+              "Bitmask filtering which types of GLExpert debugging reports are generated. "
+              "Used together with __GL_EXPERT_OUTPUT_MASK.",
+              placeholder="0xFF (all)"),
+
+    EnvVarDef("__GL_DEBUG_FILENAME", "NVIDIA __GL", "string", "",
+              "Specifies a filename for debug trace output from the NVIDIA OpenGL driver. "
+              "Used in conjunction with __GL_DEBUG to redirect trace output.",
+              placeholder="/tmp/gl_debug.log"),
+
+    EnvVarDef("__GL_FIX_VIEWPERF2020_BUFFER_NAME_BUG", "NVIDIA __GL", "enum", "",
+              "Fixes a specific bug in SPEC Viewperf 2020 benchmarks related to buffer naming. "
+              "Viewperf data sets are GL API traces from CAD apps; the bug caused rendering "
+              "to appear darker than expected.",
+              options=["0", "1"]),
+
+    EnvVarDef("__GL_DOOM3", "NVIDIA __GL", "enum", "",
+              "Legacy variable for the Doom 3 game. A driver bug (fixed in 319.32) caused "
+              "crashes when this was set. Kept here for reference; not needed on modern drivers.",
+              options=["0", "1"]),
+]
+
+ALL_ENV_VARS = DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS
 
 
 # ============================================================================
@@ -3058,7 +3231,8 @@ QScrollBar::sub-page:vertical{
     def _populate(self):
         self.clear()
         for cat_label, env_list in [("DXVK", DXVK_ENV_VARS),
-                                     ("VKD3D-Proton", VKD3D_ENV_VARS)]:
+                                     ("VKD3D-Proton", VKD3D_ENV_VARS),
+                                     ("NVIDIA __GL", NV_ENV_VARS)]:
             hdr = QListWidgetItem(f"─── {cat_label} ───")
             hdr.setFlags(Qt.NoItemFlags)
             font = hdr.font()
@@ -3875,7 +4049,7 @@ class MainWindow(QMainWindow):
         self._arch_tab.setCheckable(True)
         self._arch_tab.clicked.connect(lambda: self._switch_tab(1))
 
-        self._env_tab = QPushButton("DXVK / VKD3D-PROTON")
+        self._env_tab = QPushButton("DXVK / VKD3D / NV")
         self._env_tab.setCheckable(True)
         self._env_tab.clicked.connect(lambda: self._switch_tab(2))
 
