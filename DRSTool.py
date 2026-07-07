@@ -2839,37 +2839,13 @@ QPushButton:pressed{
 # Environment Variable Definitions (DXVK + VKD3D-Proton)
 # ============================================================================
 
-# Per-flag descriptions for DXVK_HUD checkbox UI
-DXVK_HUD_DESCS: Dict[str, str] = {
-    "devinfo":      "GPU name, driver version and D3D feature level.",
-    "fps":          "Frames per second counter.",
-    "frametimes":   "Frame time graph showing milliseconds per frame.",
-    "submissions":  "Number of Vulkan command buffer submissions per frame.",
-    "drawcalls":    "Draw call and dispatch count per frame.",
-    "pipelines":    "Number of graphics/compute pipelines compiled so far.",
-    "memory":       "VRAM and system RAM usage by DXVK.",
-    "gpuload":      "GPU utilization percentage.",
-    "version":      "DXVK version string.",
-    "api":          "D3D feature level and API version in use.",
-    "compiler":     "Shader compiler activity indicator (spins while compiling).",
-    "samplers":     "Number of texture samplers currently in use.",
-    "descriptors":  "Descriptor pool and set statistics.",
-    "1":            "Shorthand preset: enables devinfo, fps, version and gpuload.",
-    "full":         "Shorthand preset: enables all available HUD elements.",
-    "scale=2":      "Scale HUD text to 2x. For other values type scale=N manually.",
-}
-
 DXVK_ENV_VARS: List[EnvVarDef] = [
     # ── HUD ──────────────────────────────────────────────────────────────────
-    EnvVarDef("DXVK_HUD", "DXVK", "hud_flags", "",
-              "In-game HUD overlay. Select elements to display.",
-              options=[
-                  "devinfo", "fps", "frametimes", "submissions", "drawcalls",
-                  "pipelines", "memory", "gpuload", "version", "api", "compiler",
-                  "samplers", "descriptors",
-                  "1", "full",
-                  "scale=2",
-              ],
+    EnvVarDef("DXVK_HUD", "DXVK", "flags", "",
+              "In-game HUD overlay. Comma-separated list of elements to display.",
+              options=["devinfo", "fps", "frametimes", "submissions", "drawcalls",
+                       "pipelines", "memory", "gpuload", "version", "api", "compiler",
+                       "samplers", "descriptors", "scale=N", "1", "full"],
               placeholder="e.g. devinfo,fps,memory"),
     # ── Frame Rate ───────────────────────────────────────────────────────────
     EnvVarDef("DXVK_FRAME_RATE", "DXVK", "int", "0",
@@ -2926,16 +2902,53 @@ DXVK_ENV_VARS: List[EnvVarDef] = [
 
 # Per-flag descriptions for VKD3D_CONFIG checkbox UI
 VKD3D_CONFIG_DESCS: Dict[str, str] = {
-    "vk_debug":                    "Enable Vulkan debug extensions and loads validation layer.",
-    "skip_application_workarounds": "Skip all application-specific workarounds. For debugging only.",
-    "nodxr":                       "Disable DXR (raytracing) support entirely.",
-    "dxr":                         "Force-enable DXR even when considered unsafe (auto-enabled normally).",
-    "dxr12":                       "Experimental DXR 1.2 support (requires VK_EXT_opacity_micromap).",
-    "force_static_cbv":            "Speed hack on NVIDIA — may give performance uplift or cause issues.",
-    "single_queue":                "Disable async compute/transfer queues, use a single queue.",
-    "no_upload_hvv":               "Block host-visible VRAM (resizable BAR) for the UPLOAD heap. Frees VRAM at cost of GPU perf.",
-    "force_host_cached":           "Force all host-visible allocations to CACHED. Speeds up GPU captures.",
-    "no_invariant_position":       "Disable the invariant-position workaround (enabled by default).",
+    # ── Raytracing ────────────────────────────────────────────────────────────
+    "nodxr":                                "Disable DXR (raytracing) support entirely.",
+    "dxr":                                  "Force-enable DXR even when considered unsafe (auto-enabled since v2.11).",
+    "dxr11":                                "Force-enable DXR 1.1 explicitly. Compat alias — 'dxr' also enables DXR 1.1 now. Historically needed for Cyberpunk 2077 DXR.",
+    "dxr12":                                "Experimental DXR 1.2 support (requires VK_EXT_opacity_micromap).",
+    "allow_sbt_collection":                "Allow shader-binding-table collection for DXR pipelines. Required for Cyberpunk 2077 DXR to function correctly.",
+    # ── Performance / ReBAR / Memory ─────────────────────────────────────────
+    "force_static_cbv":                     "Speed hack on NVIDIA — may give performance uplift or cause issues. Unsafe.",
+    "single_queue":                         "Disable async compute/transfer queues, use a single queue. Trades perf for stability.",
+    "no_upload_hvv":                        "Block host-visible VRAM (resizable BAR) for the UPLOAD heap. Frees VRAM at cost of GPU perf. Auto-applied for Halo Infinite, Age of Wonders 4, Red Dead Redemption, Monster Hunter Wilds, Death Stranding.",
+    "small_vram_rebar":                     "Use a conservative ReBAR budget (good for 8 GB GPUs). Auto-applied for Serious Sam 4 and all Unreal Engine 5 games (-Win64-Shipping.exe).",
+    "recycle_command_pools":                "Recycle Vulkan command pools instead of freeing them. Reduces memory fragmentation. Auto-applied for Elden Ring.",
+    "memory_allocator_skip_clear":          "Skip zeroing newly allocated committed memory. Reduces stutter in allocation-heavy games. Auto-applied for Elden Ring. Use only if game initializes its own buffers.",
+    "use_host_import_fallback":            "Use a fallback path for host-memory import instead of the primary DMA path. Workaround for amdgpu kernel bug with concurrent submissions. Auto-applied for Halo Infinite, A Plague Tale Requiem.",
+    "force_dedicated_image_allocation":    "Force every image to be allocated in its own dedicated Vulkan memory allocation. Fixes memory aliasing/corruption bugs. Auto-applied for Dead Space (2023).",
+    # ── Submission / Frame Timing ─────────────────────────────────────────────
+    "no_staggered_submit":                  "Disable staggered command-buffer submission. Auto-applied for all UE5 games and TLOU Part I. Reduces frame-time spikes in affected titles.",
+    "one_time_submit":                      "Force one-shot command-buffer submission mode. Workaround for GPU hang in Star Wars Outlaws.",
+    # ── PSO / Pipeline Cache ──────────────────────────────────────────────────
+    "pipeline_library_ignore_mismatch_driver": "Ignore driver-version mismatch when loading the pipeline library cache. Useful after driver updates to avoid cold compiles. Auto-applied for Elden Ring.",
+    "retain_psos":                          "Keep PSOs (pipeline state objects) alive instead of freeing them immediately. Prevents use-after-free crashes in FFVII Rebirth, Ark Ascended, and REANIMAL.",
+    # ── Descriptor Heap (2026) ────────────────────────────────────────────────
+    "descriptor_heap":                      "Enable the new VK_EXT_descriptor_heap code path (merged May 2026). Requires Mesa ≥ 26.1 or NVIDIA driver with descriptor heap support. Fixes Xid 109 crashes and Crimson Desert hang on Blackwell.",
+    # ── CBV / SRV Binding Workarounds ────────────────────────────────────────
+    "force_raw_va_cbv":                    "Force constant-buffer views to use raw GPU virtual addresses instead of descriptor-based binding. Fixes GPU hangs or corruption in Halo Infinite, Eve Online, Guardians of the Galaxy.",
+    "preallocate_srv_mip_clamps":          "Pre-allocate mip-clamp descriptors for all SRVs at resource creation time. Workaround for a descriptor aliasing bug. Auto-applied for Halo Infinite.",
+    # ── Rendering / Compression Workarounds ──────────────────────────────────
+    "retain_descriptor_heaps":             "Keep descriptor heaps alive longer instead of freeing them immediately. Fixes GCVM L2 faults / GPU hangs on AMD RDNA3 (Arma Reforger, others). Auto-applied for Ark Ascended.",
+    "no_invariant_position":               "Disable the invariant-position workaround (ON by default). Try if you see Z-fighting or vertex-position artifacts.",
+    "disable_uav_compression":             "Disable UAV texture compression for all images. Fixes rendering corruption in A Plague Tale Requiem, Shadow of Tomb Raider, Marvel's Spider-Man.",
+    "disable_simultaneous_uav_compression": "Disable compression only for resources with simultaneous-access flag. More targeted than disable_uav_compression. Auto-applied for Witcher 3.",
+    "disable_color_compression":           "Disable color (render target) texture compression. Fixes rendering glitches where a render target is simultaneously read/written. Auto-applied for Rise of the Tomb Raider.",
+    "force_initial_transition":            "Force all resources to perform their initial D3D12 state transition. Fixes GPU hang or rendering corruption caused by missing transitions. Auto-applied for Lost Judgment, Spider-Man, Miles Morales, Deus Ex Mankind Divided, FFXVI.",
+    "defer_resource_destruction":          "Defer resource destruction to avoid GPU use-after-free bugs with sparse resources. Auto-applied for AC: Valhalla.",
+    "prefer_thin_uav_tiling":             "Use thin image tiling for 3D UAV textures, which can help performance on some titles. Auto-applied for The Last of Us Part I.",
+    "skip_null_sparse_tiles":             "Skip GPU map operations for null/empty sparse tiles. Workaround for driver crash or hang with sparse textures. Auto-applied for Monster Hunter Wilds.",
+    "placed_texture_aliasing":            "Allow placed-resource texture aliasing using VK_IMAGE_CREATE_ALIAS_BIT. Workaround for games that alias textures via placed heaps. Auto-applied for Wreckfest 2.",
+    "force_dynamic_msaa":                 "Force dynamic MSAA resolve mode. Workaround for MSAA rendering artifacts. Auto-applied for World of Warcraft.",
+    # ── NVIDIA DGC / Alignment ────────────────────────────────────────────────
+    "huge_nv_dgc_buffers":                "Allocate oversized buffers for NVIDIA device-generated commands (DGC). Workaround for buffer overrun causing GPU hangs in Starfield on NVIDIA.",
+    "reject_padded_small_resource_alignment": "Reject the padded small-resource alignment path. Workaround for memory alignment bugs in Starfield.",
+    # ── Shader / Subgroup ─────────────────────────────────────────────────────
+    "force_minimum_subgroup_size":         "Force the minimum supported subgroup (warp/wavefront) size for compute shaders. Fixes hangs or incorrect results in benchmarks/games that assume a larger subgroup. Auto-applied for GravityMark.",
+    # ── Debug (informational) ─────────────────────────────────────────────────
+    "vk_debug":                            "Enable Vulkan debug extensions and loads validation layer.",
+    "skip_application_workarounds":        "Skip all application-specific workarounds. For debugging only.",
+    "force_host_cached":                   "Force all host-visible allocations to CACHED. Speeds up GPU captures with RenderDoc.",
 }
 
 VKD3D_ENV_VARS: List[EnvVarDef] = [
@@ -2943,18 +2956,55 @@ VKD3D_ENV_VARS: List[EnvVarDef] = [
     EnvVarDef("VKD3D_CONFIG", "VKD3D-Proton", "vkd3d_config", "",
               "Comma/semicolon-separated list of behavior flags for vkd3d-proton.",
               options=[
-                  "vk_debug",
-                  "skip_application_workarounds",
+                  # Raytracing
                   "nodxr",
                   "dxr",
+                  "dxr11",
                   "dxr12",
+                  "allow_sbt_collection",
+                  # Performance / ReBAR / Memory
                   "force_static_cbv",
                   "single_queue",
                   "no_upload_hvv",
-                  "force_host_cached",
+                  "small_vram_rebar",
+                  "recycle_command_pools",
+                  "memory_allocator_skip_clear",
+                  "use_host_import_fallback",
+                  "force_dedicated_image_allocation",
+                  # Submission / Frame Timing
+                  "no_staggered_submit",
+                  "one_time_submit",
+                  # PSO / Pipeline Cache
+                  "pipeline_library_ignore_mismatch_driver",
+                  "retain_psos",
+                  # Descriptor Heap (2026)
+                  "descriptor_heap",
+                  # CBV / SRV Binding
+                  "force_raw_va_cbv",
+                  "preallocate_srv_mip_clamps",
+                  # Rendering / Compression Workarounds
+                  "retain_descriptor_heaps",
                   "no_invariant_position",
+                  "disable_uav_compression",
+                  "disable_simultaneous_uav_compression",
+                  "disable_color_compression",
+                  "force_initial_transition",
+                  "defer_resource_destruction",
+                  "prefer_thin_uav_tiling",
+                  "skip_null_sparse_tiles",
+                  "placed_texture_aliasing",
+                  "force_dynamic_msaa",
+                  # NVIDIA DGC / Alignment
+                  "huge_nv_dgc_buffers",
+                  "reject_padded_small_resource_alignment",
+                  # Shader / Subgroup
+                  "force_minimum_subgroup_size",
+                  # Debug
+                  "vk_debug",
+                  "skip_application_workarounds",
+                  "force_host_cached",
               ],
-              placeholder="e.g. dxr,force_static_cbv"),
+              placeholder="e.g. dxr,retain_descriptor_heaps"),
     # ── Frame Rate ───────────────────────────────────────────────────────────
     EnvVarDef("VKD3D_FRAME_RATE", "VKD3D-Proton", "int", "0",
               "Frame rate limiter. 0 = uncapped. Positive value = limit to N FPS.",
@@ -3001,6 +3051,18 @@ VKD3D_ENV_VARS: List[EnvVarDef] = [
     EnvVarDef("VKD3D_SHADER_DEBUG_RING_SIZE_LOG2", "VKD3D-Proton", "int", "",
               "Log2 size in bytes of the shader printf debug ring buffer (e.g. 28 = 256 MiB).",
               placeholder="28"),
+    # ── Swapchain ────────────────────────────────────────────────────────────
+    EnvVarDef("VKD3D_SWAPCHAIN_LATENCY_FRAMES", "VKD3D-Proton", "int", "",
+              "Override the swapchain frame latency (default 3). Lower values reduce input lag at the "
+              "cost of CPU/GPU starvation risk. 2 is often stable; 1 is aggressive. "
+              "Also accepted by DXGI path. Default removed in v2.14 (was previously forced to 2).",
+              placeholder="2"),
+    # ── Tessellation ─────────────────────────────────────────────────────────
+    EnvVarDef("VKD3D_LIMIT_TESS_FACTORS", "VKD3D-Proton", "enum", "",
+              "Clamp tessellation factors to reduce GPU load in titles with excessive tessellation "
+              "(e.g. Wo Long: Fallen Dynasty). 0 = disabled (default). "
+              "Automatically enabled for known problematic games.",
+              options=["0", "1"]),
 ]
 
 
@@ -3546,8 +3608,6 @@ QPushButton:pressed{ background:#a73434; }
             self._build_enum(ev, cur)
         elif ev.vtype == "vkd3d_config":
             self._build_vkd3d_config(ev, cur)
-        elif ev.vtype == "hud_flags":
-            self._build_hud_flags(ev, cur)
         elif ev.vtype == "flags" and ev.options:
             self._build_flags(ev, cur)
         else:
@@ -3601,21 +3661,15 @@ QPushButton:checked{
         self._control_layout.addLayout(grid)
 
     def _build_vkd3d_config(self, ev: EnvVarDef, cur: str):
-        """VKD3D_CONFIG: delegate to shared flag grid with VKD3D descriptions."""
-        self._build_flag_grid(ev, cur, VKD3D_CONFIG_DESCS)
-
-    def _build_hud_flags(self, ev: EnvVarDef, cur: str):
-        """DXVK_HUD: delegate to shared flag grid with HUD descriptions."""
-        self._build_flag_grid(ev, cur, DXVK_HUD_DESCS)
-
-    def _build_flag_grid(self, ev: EnvVarDef, cur: str, descs: Dict[str, str]):
         """
-        Shared checkbox grid for comma-separated flag variables (VKD3D_CONFIG,
-        DXVK_HUD, …).  Toggling any button rebuilds the value and emits it.
+        VKD3D_CONFIG: checkable button grid, one button per flag.
+        Active flags are parsed from the comma/semicolon-separated cur value.
+        Toggling any button rebuilds the value string and emits it.
         """
         active = set(f.strip() for f in cur.replace(";", ",").split(",") if f.strip()) if cur else set()
 
-        self._flag_grid_btns: Dict[str, QPushButton] = {}
+        # We keep a local dict so toggle logic can read state without re-querying widgets
+        self._vkd3d_btns: Dict[str, QPushButton] = {}
 
         grid = QGridLayout()
         grid.setSpacing(6)
@@ -3630,7 +3684,7 @@ QPushButton:checked{
         grid.addWidget(hdr_flag, 0, 0)
         grid.addWidget(hdr_desc, 0, 1)
 
-        # Separator
+        # Separator line
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
         sep.setStyleSheet("border: none; border-top: 1px solid #1e2535;")
@@ -3643,10 +3697,11 @@ QPushButton:checked{
             btn.setChecked(flag in active)
             btn.setFixedHeight(26)
             self._apply_flag_btn_style(btn)
-            btn.toggled.connect(lambda checked, f=flag: self._on_flag_grid_toggled())
-            self._flag_grid_btns[flag] = btn
+            btn.toggled.connect(lambda checked, f=flag: self._on_vkd3d_flag_toggled())
+            self._vkd3d_btns[flag] = btn
 
-            desc_lbl = QLabel(descs.get(flag, ""))
+            desc_text = VKD3D_CONFIG_DESCS.get(flag, "")
+            desc_lbl = QLabel(desc_text)
             desc_lbl.setWordWrap(True)
             desc_lbl.setStyleSheet("color:#a7afbc; font-size:9px;")
 
@@ -3678,11 +3733,11 @@ QPushButton:checked{
 }
 """)
 
-    def _on_flag_grid_toggled(self):
-        """Rebuild flag-grid variable value from current checkbox states."""
-        if not hasattr(self, '_flag_grid_btns'):
+    def _on_vkd3d_flag_toggled(self):
+        """Rebuild VKD3D_CONFIG value from current checkbox states."""
+        if not hasattr(self, '_vkd3d_btns'):
             return
-        active = [f for f, btn in self._flag_grid_btns.items() if btn.isChecked()]
+        active = [f for f, btn in self._vkd3d_btns.items() if btn.isChecked()]
         self._set_value(",".join(active))
 
     def _build_flags(self, ev: EnvVarDef, cur: str):
