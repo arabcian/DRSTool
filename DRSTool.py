@@ -6,21 +6,22 @@ Updated based on NvApiDriverSettings.h (latest)
 """
 
 import sys
+import os
 import json
 import re
+import shlex
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import Qt, QTimer, Signal, QObject
+from PySide6.QtCore import Qt, Signal, QObject, QTimer
 from PySide6.QtGui import QColor, QPalette, QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QListWidget, QListWidgetItem, QStackedWidget,
-    QLabel, QLineEdit, QPushButton, QSpinBox, QCheckBox, QComboBox,
-    QGroupBox, QScrollArea, QFrame, QMessageBox,
-    QStatusBar, QButtonGroup, QGridLayout, QSizePolicy,
-    QTextEdit, QTextBrowser, QToolTip
+    QLabel, QLineEdit, QPushButton, QSpinBox,
+    QScrollArea, QFrame, QMessageBox,
+    QStatusBar, QGridLayout, QSizePolicy,
 )
 
 
@@ -82,6 +83,36 @@ class EnvVarDef:
     desc: str
     options: List[str] = field(default_factory=list)  # for enum/flags types
     placeholder: str = ""
+
+
+APP_TITLE = "DXVK NVAPI DRS Settings Configurator"
+
+# Shared style for the scrollable control area added to SettingEditorWidget
+# and EnvVarEditorWidget (see _build_scrollable_control_area below). Matches
+# the dark scrollbar look already used by the sidebar list widgets.
+SCROLLABLE_CONTROL_QSS = """
+QScrollArea{ border:none; background:transparent; }
+QScrollArea > QWidget > QWidget{ background:transparent; }
+QScrollBar:vertical{
+    background:#0d0f12;
+    width:5px;
+}
+QScrollBar::handle:vertical{
+    background:#1e2535;
+    border-radius:3px;
+}
+QScrollBar::handle:vertical:hover{
+    background:#5a6070;
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical{
+    height:0px;
+}
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical{
+    background:none;
+}
+"""
 
 
 # ============================================================================
@@ -1762,6 +1793,13 @@ def create_all_settings() -> List[Setting]:
     return settings
 
 
+# Built once at import time and shared everywhere. create_all_settings()
+# builds ~117 dataclass instances from scratch; it was previously being
+# called twice (once in SettingsManager.__init__, once in MainWindow.__init__)
+# for no reason other than duplicated wiring.
+ALL_SETTINGS: List[Setting] = create_all_settings()
+
+
 # ============================================================================
 # Settings Manager
 # ============================================================================
@@ -1770,6 +1808,12 @@ class SettingsManager(QObject):
     settings_changed = Signal()
     arch_changed = Signal()
     profile_loaded = Signal(str)
+    # Fired only when the profile *list itself* (names/current) changes —
+    # save/load/delete. Previously ProfileManagerWidget rebuilt its whole
+    # list on every settings_changed, i.e. on every single DRS setting edit,
+    # even though the set of saved profiles hadn't changed at all.
+    profiles_changed = Signal()
+    profile_save_error = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -1777,7 +1821,8 @@ class SettingsManager(QObject):
         self._arch: Optional[GPUArch] = None
         self._profiles: Dict[str, Dict] = {}
         self._current_profile: Optional[str] = None
-        self._all_settings = create_all_settings()
+        self._loaded_env_vars: Dict[str, str] = {}
+        self._all_settings = ALL_SETTINGS
         self._load_profiles()
 
     def get_setting(self, setting_id: str) -> Optional[str]:
@@ -1798,6 +1843,19 @@ class SettingsManager(QObject):
     def clear_all(self):
         self._settings.clear()
         self.settings_changed.emit()
+
+    def reset_everything(self):
+        """Clear DRS settings, GPU arch, and the active-profile marker in one
+        go. Used by the 'Reset All' button. Replaces the previous pattern of
+        calling clear_all() + set_arch(None) separately (which fired
+        settings_changed twice) and reaching into the private
+        self._current_profile field directly from OutputBarWidget."""
+        self._settings.clear()
+        self._arch = None
+        self._current_profile = None
+        self.arch_changed.emit()
+        self.settings_changed.emit()
+        self.profiles_changed.emit()  # "current profile" highlight must clear too
 
     def get_arch(self) -> Optional[GPUArch]:
         return self._arch
@@ -1834,7 +1892,7 @@ class SettingsManager(QObject):
         }
         self._current_profile = name
         self._save_profiles()
-        self.settings_changed.emit()
+        self.profiles_changed.emit()
 
     def load_profile(self, name: str):
         if name not in self._profiles:
@@ -1853,8 +1911,8 @@ class SettingsManager(QObject):
         self.arch_changed.emit()
 
     def get_loaded_env_vars(self) -> Dict:
-        """Returns env vars from the last loaded profile. Consumed once."""
-        return getattr(self, '_loaded_env_vars', {})
+        """Returns env vars from the last loaded profile."""
+        return self._loaded_env_vars
 
     def delete_profile(self, name: str):
         if name in self._profiles:
@@ -1862,24 +1920,58 @@ class SettingsManager(QObject):
             if self._current_profile == name:
                 self._current_profile = None
             self._save_profiles()
-            self.settings_changed.emit()
+            self.profiles_changed.emit()
+
+    # ── Profile file location ────────────────────────────────────────────────
+    # Moved to XDG_CONFIG_HOME to match the other tools in this toolbox
+    # (ryzenadj_gui.py etc. all use ~/.config/<tool>/...), instead of a
+    # dotfile directly in $HOME. Old installs are migrated once, in-place.
+    _OLD_PROFILES_PATH = Path.home() / ".drs_configurator_profiles.json"
+
+    @staticmethod
+    def _profiles_path() -> Path:
+        config_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "drstool"
+        return config_dir / "profiles.json"
 
     def _load_profiles(self):
+        data_file = self._profiles_path()
         try:
-            data_file = Path.home() / ".drs_configurator_profiles.json"
+            if not data_file.exists() and self._OLD_PROFILES_PATH.exists():
+                # One-time migration from the old ~/.drs_configurator_profiles.json
+                data_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(self._OLD_PROFILES_PATH, "r", encoding="utf-8") as f:
+                    legacy = json.load(f)
+                self._profiles = legacy
+                self._save_profiles()
+                return
             if data_file.exists():
-                with open(data_file, "r") as f:
+                with open(data_file, "r", encoding="utf-8") as f:
                     self._profiles = json.load(f)
         except Exception:
+            # Corrupt or unreadable file: don't silently discard the user's
+            # profiles by overwriting it — just start this session with an
+            # empty in-memory set and leave the file on disk untouched so
+            # it can be inspected/recovered manually.
             self._profiles = {}
+            self.profile_save_error.emit(
+                f"Could not read profiles from {data_file} — starting with no profiles this session."
+            )
 
-    def _save_profiles(self):
+    def _save_profiles(self) -> bool:
+        """Write profiles to disk atomically. Returns True on success."""
+        data_file = self._profiles_path()
         try:
-            data_file = Path.home() / ".drs_configurator_profiles.json"
-            with open(data_file, "w") as f:
+            data_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp_file = data_file.with_suffix(".json.tmp")
+            with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(self._profiles, f, indent=2)
-        except Exception:
-            pass
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_file, data_file)  # atomic on POSIX — no partial-write corruption
+            return True
+        except Exception as e:
+            self.profile_save_error.emit(f"Failed to save profiles to {data_file}: {e}")
+            return False
 
 
 # ============================================================================
@@ -2006,6 +2098,7 @@ QPushButton:pressed{background:#a13232;}"""
         self.settings_manager.settings_changed.connect(self._update)
         self.settings_manager.arch_changed.connect(self._update)
         self.settings_manager.profile_loaded.connect(self._on_profile_loaded)
+        self.settings_manager.profiles_changed.connect(self._update)
         self._update()
 
     def _update(self):
@@ -2070,9 +2163,7 @@ QPushButton:pressed{background:#a13232;}"""
             QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            self.settings_manager.clear_all()
-            self.settings_manager.set_arch(None)
-            self.settings_manager._current_profile = None
+            self.settings_manager.reset_everything()
             win = self.window()
             if win:
                 # Clear env widget
@@ -2080,11 +2171,17 @@ QPushButton:pressed{background:#a13232;}"""
                     win._env_widget.reset_all_values()
                 # Clear env editor right panel
                 if hasattr(win, '_env_editor'):
+                    win._env_editor.discard_pending_edit()
                     win._env_editor.hide()
                 # Reset window title
-                win.setWindowTitle("DXVK NVAPI DRS Settings Configurator")
+                win.setWindowTitle(APP_TITLE)
                 # Reset right panel to placeholder
                 win._right_stack.setCurrentIndex(0)
+                # Forget remembered right-panel state per tab — otherwise
+                # switching tabs after a reset could restore a now-stale
+                # editor page index with nothing behind it.
+                if hasattr(win, '_tab_right_memory'):
+                    win._tab_right_memory = {}
                 if hasattr(win, '_populate_settings'):
                     win._populate_settings()
                 if hasattr(win, '_populate_arch_list'):
@@ -2099,8 +2196,41 @@ QPushButton:pressed{background:#a13232;}"""
 # Setting Editor - Modern Card View
 # ============================================================================
 
+def _make_scrollable_control_area():
+    """
+    Build the (control_widget, control_layout, scroll_area) trio shared by
+    SettingEditorWidget and EnvVarEditorWidget for their control area.
+
+    Wrapped in a QScrollArea because some settings/env-vars have a lot of
+    options — e.g. the "AA Method" DRS setting has 47 enum values, and
+    VKD3D_CONFIG has 33 flags each with its own description — and the
+    right-hand editor panel isn't itself inside a scroll area, so that
+    content used to just get visually cut off at the bottom of the window
+    with no way to reach the rest of it. The header, description, and
+    remove/clear button stay fixed; only this middle area scrolls.
+    """
+    control_widget = QWidget()
+    control_layout = QVBoxLayout(control_widget)
+    control_layout.setContentsMargins(0, 6, 0, 0)
+    control_layout.setSpacing(6)
+
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setWidget(control_widget)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+    return control_widget, control_layout, scroll
+
+
 class SettingEditorWidget(QWidget):
-    setting_changed = Signal()
+    # NOTE: this widget used to have its own `setting_changed` signal, emitted
+    # right after settings_manager.set_setting(...) in every setter below, in
+    # addition to settings_manager's own `settings_changed` signal. Both were
+    # connected to MainWindow._on_setting_changed, so every click did a full
+    # sidebar rebuild twice and a full editor rebuild twice. Removed:
+    # settings_manager.settings_changed is the single source of truth and
+    # _update_display() (connected to it below) already keeps this widget
+    # in sync.
 
     def __init__(self, settings_manager: SettingsManager):
         super().__init__()
@@ -2172,11 +2302,8 @@ QLabel{
         self._desc_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self._desc_label)
 
-        self._control_widget = QWidget()
-        self._control_layout = QVBoxLayout(self._control_widget)
-        self._control_layout.setContentsMargins(0, 6, 0, 0)
-        self._control_layout.setSpacing(6)
-        layout.addWidget(self._control_widget)
+        self._control_widget, self._control_layout, control_scroll = _make_scrollable_control_area()
+        layout.addWidget(control_scroll, 1)  # stretch=1: absorb all extra space, keep header/desc/button fixed
 
         remove_layout = QHBoxLayout()
         remove_layout.addStretch()
@@ -2203,7 +2330,6 @@ QPushButton:pressed{
         layout.addLayout(remove_layout)
         self._remove_btn.hide()
 
-        layout.addStretch()
         self.hide()
 
         self.settings_manager.settings_changed.connect(self._update_display)
@@ -2247,6 +2373,13 @@ QPushButton:pressed{
             self._build_bitfield_control(s, cur)
         else:
             self._build_hex_control(s, cur)
+
+        # Push the control(s) to the top of the scroll area instead of
+        # letting Qt vertically center them when the content is shorter
+        # than the scroll area's viewport (which is what happens by default
+        # when a QVBoxLayout with no stretch item lives inside a
+        # setWidgetResizable(True) QScrollArea).
+        self._control_layout.addStretch()
 
         if cur is not None:
             self._remove_btn.show()
@@ -2408,7 +2541,12 @@ QSpinBox:hover{
         grid.addWidget(dec_label, 0, 0)
 
         dec_spin = QSpinBox()
-        dec_spin.setRange(0, 0xFFFFFFFF)
+        # NOTE: QSpinBox uses a 32-bit *signed* int internally, so the true
+        # unsigned 32-bit max (0xFFFFFFFF) overflows and raises OverflowError.
+        # No current setting uses type="dec-hex"; if one ever does and needs
+        # the full unsigned range, this control needs a QLineEdit + validator
+        # instead of QSpinBox.
+        dec_spin.setRange(0, 0x7FFFFFFF)
         if cur is not None:
             dec_spin.setValue(int(cur, 16))
         dec_spin.setFixedHeight(26)
@@ -2581,33 +2719,25 @@ QLineEdit:hover{
         self._control_layout.addLayout(hbox)
 
     def _set_value(self, setting_id: str, value: str):
+        # settings_manager.set_setting() emits settings_changed synchronously,
+        # which is connected to self._update_display() below — that already
+        # refreshes self._current_value and rebuilds the editor. No need to
+        # duplicate that work here.
         self.settings_manager.set_setting(setting_id, value)
-        self._current_value = value
-        self.setting_changed.emit()
-        self._build_editor()
 
     def _set_numeric(self, setting_id: str, value: int):
         hex_val = f"0x{value:X}"
         self.settings_manager.set_setting(setting_id, hex_val)
-        self._current_value = hex_val
-        self.setting_changed.emit()
-        self._build_editor()
 
     def _set_dec_hex(self, setting_id: str, value: int):
         hex_val = f"0x{value:X}"
         self.settings_manager.set_setting(setting_id, hex_val)
-        self._current_value = hex_val
-        self.setting_changed.emit()
-        self._build_editor()
 
     def _set_hex_from_edit(self, setting_id: str, value: str):
         clean = re.sub(r'[^0-9a-fA-F]', '', value)
         if clean:
             hex_val = f"0x{clean.upper()}"
             self.settings_manager.set_setting(setting_id, hex_val)
-            self._current_value = hex_val
-            self.setting_changed.emit()
-            self._build_editor()
 
     def _toggle_bitfield(self, setting_id: str, bit_val: int):
         cur = self.settings_manager.get_setting(setting_id)
@@ -2625,15 +2755,12 @@ QLineEdit:hover{
 
         hex_val = f"0x{new_val:08X}"
         self.settings_manager.set_setting(setting_id, hex_val)
-        self._current_value = hex_val
-        self.setting_changed.emit()
-        self._build_editor()
 
     def _remove_setting(self):
         if self._current_setting:
+            # remove_setting() emits settings_changed, which drives
+            # _update_display() to hide this widget since the value is gone.
             self.settings_manager.remove_setting(self._current_setting.id)
-            self.setting_changed.emit()
-            self.hide()
 
     def _update_display(self):
         if self._current_setting:
@@ -2782,11 +2909,6 @@ QLabel{
         self._code_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self._code_label)
 
-        self._example_label = QLabel()
-        self._example_label.setStyleSheet("color: #a7afbc; font-size: 11px;")
-        self._example_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout.addWidget(self._example_label)
-
         # Short description
         self._desc_label = QLabel(
             "Select this architecture to enable GPU‑specific optimizations "
@@ -2828,7 +2950,6 @@ QPushButton:pressed{
             self._name_label.setText(arch.name)
             self._arch_label.setText(f"Architecture: {arch.arch}")
             self._code_label.setText(f"Code: {arch.code}  ·  Example: {arch.example}")
-            self._example_label.setText(f"Example GPU: {arch.example}")
             self._clear_btn.show()
             self.show()
         else:
@@ -3323,13 +3444,37 @@ QScrollBar::sub-page:vertical{
     background:none;
 }
 """)
-        self._populate()
+        self.populate()
 
-    def _populate(self):
+    def populate(self, filter_text: str = ""):
+        """
+        (Re)build the list. When filter_text is given, only env vars whose
+        name, category, or description match (case-insensitive substring)
+        are shown; a category header is only added if it has at least one
+        matching var. Mirrors SettingsListWidget.populate()'s filtering so
+        the search box works the same way on both tabs.
+        """
+        current_item = self.currentItem()
+        current_name = current_item.data(Qt.UserRole) if current_item else None
+
         self.clear()
+        filter_lower = filter_text.lower()
+
         for cat_label, env_list in [("DXVK", DXVK_ENV_VARS),
                                      ("VKD3D-Proton", VKD3D_ENV_VARS),
                                      ("NVIDIA __GL", NV_ENV_VARS)]:
+            if filter_text:
+                matching = [
+                    ev for ev in env_list
+                    if filter_lower in ev.name.lower()
+                    or filter_lower in ev.cat.lower()
+                    or filter_lower in ev.desc.lower()
+                ]
+            else:
+                matching = env_list
+            if not matching:
+                continue
+
             hdr = QListWidgetItem(f"─── {cat_label} ───")
             hdr.setFlags(Qt.NoItemFlags)
             font = hdr.font()
@@ -3339,7 +3484,7 @@ QScrollBar::sub-page:vertical{
             hdr.setFont(font)
             hdr.setForeground(QColor(185, 59, 59))
             self.addItem(hdr)
-            for ev in env_list:
+            for ev in matching:
                 item = QListWidgetItem(f"  {ev.name}")
                 item.setData(Qt.UserRole, ev.name)
                 if ev.name in self._values:
@@ -3350,6 +3495,13 @@ QScrollBar::sub-page:vertical{
                 else:
                     item.setForeground(QColor(200, 205, 216))
                 self.addItem(item)
+
+        if current_name:
+            for i in range(self.count()):
+                item = self.item(i)
+                if item.data(Qt.UserRole) == current_name:
+                    self.setCurrentItem(item)
+                    break
 
     def refresh_colors(self):
         """Re-color items to reflect current set/unset state."""
@@ -3396,7 +3548,11 @@ QScrollBar::sub-page:vertical{
         return self._values.copy()
 
     def get_env_string(self) -> str:
-        return " ".join(f"{k}={v}" for k, v in self._values.items())
+        # shlex.quote() only wraps a value in quotes if it actually needs it
+        # (contains spaces, globs, etc), so plain hex/enum values are left
+        # untouched. Without this, a value like DXVK_LOG_PATH=/home/cihan/my
+        # logs silently split into two separate shell tokens when pasted.
+        return " ".join(f"{k}={shlex.quote(v)}" for k, v in self._values.items())
 
     def reset_all_values(self):
         """Clear all env var values and refresh list colors."""
@@ -3447,30 +3603,24 @@ QLineEdit{
 QLineEdit:focus{ border:1px solid #76b900; }
 QLineEdit:hover{ background:#252c37; }
 """
-    _COMBO_SS = """
-QComboBox{
-    background:#1a1f28;
-    border:1px solid #323c4b;
-    border-radius:6px;
-    color:#d8d8d8;
-    font-size:10px;
-    padding:4px 10px;
-}
-QComboBox:focus{ border:1px solid #76b900; }
-QComboBox::drop-down{ border:none; width:20px; }
-QComboBox QAbstractItemView{
-    background:#141720;
-    border:1px solid #2b3444;
-    color:#e8eaf0;
-    selection-background-color:rgba(118,185,0,0.15);
-}
-"""
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self._current_ev: Optional[EnvVarDef] = None
         self._current_name: str = ""
         self._list_widget: Optional[EnvVarsWidget] = None   # back-ref set by MainWindow
+
+        # Free-text fields (_build_text / _build_flags) used to call
+        # _set_value() on every single keystroke via textChanged. _set_value
+        # propagates into EnvVarsWidget (re-colors ~65 items) and emits
+        # value_changed, which MainWindow forwards to a statusbar update and
+        # an OutputBar refresh. Typing a path like
+        # "/home/cihan/some/long/cache/dir" fired that whole chain ~30 times.
+        # Debounce: update the header badge immediately (cheap, local-only),
+        # but only commit to the shared list widget after a short pause.
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self._commit_pending_value)
+        self._pending_value: str = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -3539,11 +3689,8 @@ QLabel{
         layout.addWidget(self._desc_label)
 
         # ── Control area ──────────────────────────────────────────────────────
-        self._control_widget = QWidget()
-        self._control_layout = QVBoxLayout(self._control_widget)
-        self._control_layout.setContentsMargins(0, 6, 0, 0)
-        self._control_layout.setSpacing(6)
-        layout.addWidget(self._control_widget)
+        self._control_widget, self._control_layout, control_scroll = _make_scrollable_control_area()
+        layout.addWidget(control_scroll, 1)  # stretch=1: absorb all extra space, keep header/desc/button fixed
 
         # ── Clear button (mirrors "Remove Setting") ───────────────────────────
         remove_layout = QHBoxLayout()
@@ -3567,7 +3714,6 @@ QPushButton:pressed{ background:#a73434; }
         layout.addLayout(remove_layout)
         self._clear_btn.hide()
 
-        layout.addStretch()
         self.hide()
 
     # ── Public ────────────────────────────────────────────────────────────────
@@ -3576,6 +3722,12 @@ QPushButton:pressed{ background:#a73434; }
         self._list_widget = lw
 
     def set_var(self, ev: EnvVarDef):
+        # Flush any pending debounced edit for the *previous* var before
+        # switching context, or that keystroke would either be lost or
+        # (worse) get committed under the new var's name.
+        if self._debounce_timer.isActive():
+            self._debounce_timer.stop()
+            self._commit_pending_value()
         self._current_ev = ev
         self._current_name = ev.name
         self._build()
@@ -3612,6 +3764,11 @@ QPushButton:pressed{ background:#a73434; }
             self._build_flags(ev, cur)
         else:
             self._build_text(ev, cur)
+
+        # Same reasoning as SettingEditorWidget._build_editor(): without this,
+        # short controls (e.g. a single line edit) get vertically centered
+        # inside the scroll area instead of sitting at the top.
+        self._control_layout.addStretch()
 
     def _clear_layout(self, layout):
         while layout.count():
@@ -3747,8 +3904,7 @@ QPushButton:checked{
         edit.setPlaceholderText(ev.placeholder or "comma-separated flags")
         edit.setFixedHeight(28)
         edit.setToolTip("Available: " + ", ".join(ev.options))
-        edit.textChanged.connect(lambda v: self._set_value(v))
-
+        edit.textChanged.connect(self._on_text_changed)
         hint = QLabel("Available: " + "  ·  ".join(ev.options))
         hint.setStyleSheet("color:#3a4a5a; font-size:8px; font-family:monospace;")
         hint.setWordWrap(True)
@@ -3762,19 +3918,23 @@ QPushButton:checked{
         edit.setStyleSheet(self._EDIT_SS)
         edit.setPlaceholderText(ev.placeholder or ev.default or "")
         edit.setFixedHeight(28)
-        edit.textChanged.connect(lambda v: self._set_value(v))
+        edit.textChanged.connect(self._on_text_changed)
         self._control_layout.addWidget(edit)
 
     # ── Setters ───────────────────────────────────────────────────────────────
 
     def _set_value(self, value: str):
+        """Immediate commit: used by buttons (enum/vkd3d flags) which don't
+        fire repeatedly the way keystrokes do, so no debounce needed here."""
         if not self._current_name:
             return
         if self._list_widget:
             self._list_widget.set_value(self._current_name, value.strip())
         self.value_changed.emit(self._current_name, value.strip())
-        # Refresh header badge without full rebuild
-        cur = value.strip()
+        self._update_value_badge(value.strip())
+
+    def _update_value_badge(self, cur: str):
+        """Cheap, local-only header refresh — safe to call on every keystroke."""
         if cur:
             self._value_label.setText(f"= {cur}")
             self._value_label.show()
@@ -3783,9 +3943,29 @@ QPushButton:checked{
             self._value_label.hide()
             self._clear_btn.hide()
 
+    def _on_text_changed(self, value: str):
+        """Handler for free-text fields (_build_text / _build_flags). Updates
+        the header badge immediately, but defers the expensive propagation
+        into the shared EnvVarsWidget (which re-colors ~65 sidebar items and
+        triggers a statusbar/output-bar refresh) until typing pauses."""
+        self._update_value_badge(value.strip())
+        self._pending_value = value
+        self._debounce_timer.start(200)
+
+    def _commit_pending_value(self):
+        self._set_value(self._pending_value)
+
+    def discard_pending_edit(self):
+        """Cancel any pending debounced keystroke without committing it.
+        Call this before hiding/resetting the editor out from under the
+        user (profile load, reset-all) so a stale edit can't land on the
+        wrong var afterwards."""
+        self._debounce_timer.stop()
+
     def _on_clear(self):
         if not self._current_name:
             return
+        self._debounce_timer.stop()  # discard any pending unsaved keystroke
         if self._list_widget:
             self._list_widget.clear_value(self._current_name)
         self.value_changed.emit(self._current_name, "")
@@ -3901,6 +4081,29 @@ QScrollBar::sub-page:vertical{
                     item.setForeground(QColor(200, 205, 216))
 
                 self.addItem(item)
+
+    def refresh_colors(self, current_state: Dict[str, str]):
+        """
+        Re-color items to reflect which settings are currently configured,
+        without clearing and rebuilding the whole list. Same pattern as
+        EnvVarsWidget.refresh_colors(). Use this for value-only changes;
+        use populate() only when the actual set of visible items changes
+        (i.e. the filter text changed).
+        """
+        for i in range(self.count()):
+            item = self.item(i)
+            setting_id = item.data(Qt.UserRole)
+            if not setting_id:
+                continue  # category header, no UserRole data
+            font = item.font()
+            if setting_id in current_state:
+                font.setBold(True)
+                item.setFont(font)
+                item.setForeground(QColor(118, 185, 0))
+            else:
+                font.setBold(False)
+                item.setFont(font)
+                item.setForeground(QColor(200, 205, 216))
 
     def _on_item_clicked(self, item: QListWidgetItem):
         setting_id = item.data(Qt.UserRole)
@@ -4031,7 +4234,11 @@ class ProfileManagerWidget(QWidget):
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
-        self.settings_manager.settings_changed.connect(self._refresh)
+        # profiles_changed (not settings_changed) — the profile list only
+        # needs a rebuild when a profile is saved/loaded/deleted, not on
+        # every single DRS setting edit.
+        self.settings_manager.profiles_changed.connect(self._refresh)
+        self.settings_manager.profile_loaded.connect(lambda _name: self._refresh())
         self._refresh()
 
     def _create_profile(self):
@@ -4086,9 +4293,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.settings_manager = SettingsManager()
-        self.all_settings = create_all_settings()
+        self.all_settings = ALL_SETTINGS
 
-        self.setWindowTitle("DXVK NVAPI DRS Settings Configurator")
+        self.setWindowTitle(APP_TITLE)
         self.setMinimumSize(900, 600)
         self.setStyleSheet("""
             QMainWindow { background: #0d0f12; }
@@ -4115,7 +4322,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.setSpacing(4)
 
         self._search = QLineEdit()
-        self._search.setPlaceholderText("🔍 Filter settings...")
+        self._search.setPlaceholderText("🔍 Filter...")
         self._search.setStyleSheet("""
             QLineEdit {
                 background: #141720;
@@ -4229,8 +4436,10 @@ class MainWindow(QMainWindow):
         self._right_stack.addWidget(self._placeholder)
 
         # Page 1: Setting editor
+        # (no longer connects a separate setting_changed signal here — it was
+        # a duplicate of settings_manager.settings_changed, connected below,
+        # and doubled every sidebar/editor rebuild on each click)
         self._setting_editor = SettingEditorWidget(self.settings_manager)
-        self._setting_editor.setting_changed.connect(self._on_setting_changed)
         self._right_stack.addWidget(self._setting_editor)
 
         # Page 2: Architecture detail
@@ -4267,6 +4476,7 @@ class MainWindow(QMainWindow):
         self.settings_manager.settings_changed.connect(self._on_setting_changed)
         self.settings_manager.arch_changed.connect(self._update_arch_ui)
         self.settings_manager.profile_loaded.connect(self._update_window_title)
+        self.settings_manager.profile_save_error.connect(self._on_profile_save_error)
 
         # Initial population
         self._populate_settings()
@@ -4281,13 +4491,19 @@ class MainWindow(QMainWindow):
     def _switch_tab(self, idx):
         # Save current right-panel index for the tab we're leaving
         prev = self._sidebar_stack.currentIndex()
-        if not hasattr(self, '_tab_right_memory'):
-            self._tab_right_memory = {}
         self._tab_right_memory[prev] = self._right_stack.currentIndex()
 
         self._sidebar_stack.setCurrentIndex(idx)
         for i, btn in enumerate([self._settings_tab, self._arch_tab, self._env_tab, self._profiles_tab]):
             btn.setChecked(i == idx)
+
+        # Re-apply whatever is currently typed in the search box to the list
+        # we just switched to, so a filter typed on one tab doesn't leave the
+        # other tab's list either stuck on stale filtering or unfiltered.
+        if idx == 0:
+            self._populate_settings(self._search.text())
+        elif idx == 2:
+            self._env_widget.populate(self._search.text())
 
         if idx == 3:
             # Profiles tab — always blank right panel
@@ -4323,7 +4539,15 @@ class MainWindow(QMainWindow):
                     break
 
     def _filter(self, text):
-        self._populate_settings(text)
+        # Route the search box to whichever list is actually visible. Before
+        # this, typing in the search box always filtered the DRS Settings
+        # list even while on the Env Vars tab — so filtering silently did
+        # nothing for the 62 DXVK/VKD3D/NVIDIA __GL vars.
+        active = self._sidebar_stack.currentIndex()
+        if active == 2:
+            self._env_widget.populate(text)
+        else:
+            self._populate_settings(text)
 
     def _open_setting(self, setting_id):
         setting = next((s for s in self.all_settings if s.id == setting_id), None)
@@ -4373,13 +4597,18 @@ class MainWindow(QMainWindow):
 
     # ===== General UI updates =====
     def _on_setting_changed(self):
+        # This fires on every single setting edit (settings_changed signal),
+        # so it must stay cheap. It used to call _populate_settings(), which
+        # clears and rebuilds the entire ~130-item sidebar list (with fresh
+        # QListWidgetItem/QFont objects) on every keystroke-adjacent click.
+        # refresh_colors() just re-colors the existing items in place.
         count = len(self.settings_manager.get_settings_list())
         arch = self.settings_manager.get_arch()
         arch_str = f" [Arch: {arch.code}]" if arch else ""
         env_count = len(self._env_widget.get_env_dict()) if hasattr(self, '_env_widget') else 0
         env_str = f" · {env_count} env var{'s' if env_count != 1 else ''}" if env_count else ""
         self.statusBar().showMessage(f"{count} setting{'s' if count != 1 else ''} configured{arch_str}{env_str}")
-        self._populate_settings(self._search.text())
+        self._settings_list.refresh_colors(self.settings_manager.get_settings_list())
 
     def _on_env_changed(self):
         env_count = len(self._env_widget.get_env_dict())
@@ -4398,6 +4627,7 @@ class MainWindow(QMainWindow):
         saved_env = self.settings_manager.get_loaded_env_vars()
         self._env_widget.load_values(saved_env)
         # 2. Hide env editor right panel (stale data)
+        self._env_editor.discard_pending_edit()
         self._env_editor.hide()
         # 3. Clear per-tab right-panel memory so tabs start fresh
         self._tab_right_memory = {}
@@ -4421,9 +4651,15 @@ class MainWindow(QMainWindow):
 
     def _update_window_title(self, profile_name):
         if profile_name:
-            self.setWindowTitle(f"DXVK NVAPI DRS Settings Configurator — {profile_name}")
+            self.setWindowTitle(f"{APP_TITLE} — {profile_name}")
         else:
-            self.setWindowTitle("DXVK NVAPI DRS Settings Configurator")
+            self.setWindowTitle(APP_TITLE)
+
+    def _on_profile_save_error(self, message: str):
+        # Profile persistence failures are silent data-loss risks (the user
+        # thinks they clicked "Save" and it worked) — a status bar blip
+        # isn't enough visibility for that, so use a modal warning.
+        QMessageBox.warning(self, "Profile Save Failed", message)
 
 
 def main():
