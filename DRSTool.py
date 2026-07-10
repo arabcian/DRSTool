@@ -3898,19 +3898,79 @@ QPushButton:checked{
         self._set_value(",".join(active))
 
     def _build_flags(self, ev: EnvVarDef, cur: str):
-        """Generic flags: free-text edit + hint."""
-        edit = QLineEdit(cur)
-        edit.setStyleSheet(self._EDIT_SS)
-        edit.setPlaceholderText(ev.placeholder or "comma-separated flags")
-        edit.setFixedHeight(28)
-        edit.setToolTip("Available: " + ", ".join(ev.options))
-        edit.textChanged.connect(self._on_text_changed)
-        hint = QLabel("Available: " + "  ·  ".join(ev.options))
-        hint.setStyleSheet("color:#3a4a5a; font-size:8px; font-family:monospace;")
-        hint.setWordWrap(True)
+        """
+        Toggleable multi-select flags (currently only DXVK_HUD uses this
+        vtype): same checkable button-grid pattern as _build_vkd3d_config,
+        just without per-flag descriptions since DXVK_HUD's flags
+        (fps, memory, devinfo, ...) are self-explanatory single words.
 
-        self._control_layout.addWidget(edit)
-        self._control_layout.addWidget(hint)
+        A couple of DXVK_HUD's options aren't simple on/off toggles though —
+        "scale=N" takes a parameter — so anything containing "=" is pulled
+        out of the button grid and left editable in a small text field
+        underneath, and both are combined into the final comma-separated
+        value.
+        """
+        plain_options = [o for o in ev.options if "=" not in o]
+        param_options = [o for o in ev.options if "=" in o]
+
+        active_tokens = [t.strip() for t in cur.replace(";", ",").split(",") if t.strip()] if cur else []
+        active_plain = set(t for t in active_tokens if t in plain_options)
+        # Anything active that isn't a plain toggle (a "scale=2", or some
+        # unrecognized token) is preserved verbatim in the text field rather
+        # than silently dropped.
+        self._flag_extra_tokens = [t for t in active_tokens if t not in plain_options]
+
+        self._flag_btns: Dict[str, QPushButton] = {}
+        cols = min(len(plain_options), 5) or 1
+        grid = QGridLayout()
+        grid.setSpacing(4)
+        row, col = 0, 0
+        for opt in plain_options:
+            btn = QPushButton(opt)
+            btn.setCheckable(True)
+            btn.setChecked(opt in active_plain)
+            btn.setFixedHeight(26)
+            self._apply_flag_btn_style(btn)
+            btn.toggled.connect(lambda checked, o=opt: self._on_flag_toggled())
+            self._flag_btns[opt] = btn
+            grid.addWidget(btn, row, col)
+            col += 1
+            if col >= cols:
+                col = 0
+                row += 1
+        self._control_layout.addLayout(grid)
+
+        if param_options:
+            hint = QLabel("Also available (type manually, comma-separated): " + ", ".join(param_options))
+            hint.setStyleSheet("color:#3a4a5a; font-size:8px; font-family:monospace;")
+            hint.setWordWrap(True)
+            self._control_layout.addWidget(hint)
+
+            extra_edit = QLineEdit(",".join(self._flag_extra_tokens))
+            extra_edit.setStyleSheet(self._EDIT_SS)
+            extra_edit.setPlaceholderText("e.g. scale=2")
+            extra_edit.setFixedHeight(28)
+            extra_edit.textChanged.connect(self._on_extra_flags_changed)
+            self._control_layout.addWidget(extra_edit)
+
+    def _on_flag_toggled(self):
+        """Button click: commit immediately, same as VKD3D_CONFIG's flags."""
+        self._commit_flags()
+
+    def _on_extra_flags_changed(self, text: str):
+        """Free-text 'scale=N'-style field: debounce like other text fields."""
+        self._flag_extra_tokens = [t.strip() for t in text.split(",") if t.strip()]
+        combined = self._combined_flags_value()
+        self._update_value_badge(combined.strip())
+        self._pending_value = combined
+        self._debounce_timer.start(200)
+
+    def _combined_flags_value(self) -> str:
+        active = [f for f, btn in self._flag_btns.items() if btn.isChecked()]
+        return ",".join(active + self._flag_extra_tokens)
+
+    def _commit_flags(self):
+        self._set_value(self._combined_flags_value())
 
     def _build_text(self, ev: EnvVarDef, cur: str):
         """String / int: plain line edit."""
