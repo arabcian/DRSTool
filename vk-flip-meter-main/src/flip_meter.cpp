@@ -297,6 +297,10 @@ static inline void maybe_reload() {
 
 static void reserve_global_maps();  // [FIX-33] tanım map bildirimlerinden sonra
 
+#ifdef FLM_PGO_INSTRUMENTED
+static void sigusr2_handler(int);  // [FIX-34] tanım now_ns()'den sonra (ileri bildirim)
+#endif
+
 static void init_config() {
     std::call_once(g_config_flag, []() {
         const char* e;
@@ -326,6 +330,19 @@ static void init_config() {
             sigaction(SIGUSR1, &sa, nullptr);
         }
 
+#ifdef FLM_PGO_INSTRUMENTED
+        // [FIX-34] SIGUSR2: oyunu kapatmadan "kill -USR2 <pid>" ile anında
+        // .gcda flush. atexit'e güvenilemeyen launcher'lar için tek yol.
+        if (sigaction(SIGUSR2, nullptr, &old) == 0 && old.sa_handler == SIG_DFL) {
+            struct sigaction sa{};
+            sa.sa_handler = sigusr2_handler;
+            sigemptyset(&sa.sa_mask);
+            sigaction(SIGUSR2, &sa, nullptr);
+        }
+        FLM_LOG(LogLevel::WARN,
+                "PGO ENSTRUMANLI derleme aktif — periyodik (60sn) + SIGUSR2 ile .gcda flush");
+#endif
+
         reserve_global_maps();  // [FIX-33]
 
         FLM_LOG(LogLevel::INFO,
@@ -336,14 +353,40 @@ static void init_config() {
     });
 }
 
-// ============================================================================
-// TIMING
-// ============================================================================
+// [FIX-34] PGO ENSTRÜMANLI derlemede atexit()'e güvenilemez: Steam/Proton
+// çoğu zaman süreci _exit()/exit_group ile kapatır, atexit handler'ları HİÇ
+// çalışmaz → .gcda asla yazılmaz. Bu blok yalnız ebuild PGO "generate" fazında
+// -DFLM_PGO_INSTRUMENTED ile derlerken aktif; normal/PGO-use derlemede yok.
+#ifdef FLM_PGO_INSTRUMENTED
+extern "C" void __gcov_dump(void);
+extern "C" void __gcov_reset(void);
+static std::atomic<int64_t> g_last_gcov_dump_ns{0};
+static std::atomic<bool>    g_gcov_dump_flag{false};
+// SIGUSR2: talep üzerine ANINDA dump (oyunu kapatmadan profil almak için).
+static void sigusr2_handler(int) { g_gcov_dump_flag.store(true, std::memory_order_relaxed); }
+#endif
+
+
 static inline int64_t now_ns() {
     timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1'000'000'000LL + ts.tv_nsec;
 }
+
+#ifdef FLM_PGO_INSTRUMENTED
+// now_ns()'e bağımlı olduğu için tanımı burada (bildirimi yukarıda).
+static inline void flm_gcov_periodic_dump() {
+    int64_t t = now_ns();
+    int64_t last = g_last_gcov_dump_ns.load(std::memory_order_relaxed);
+    bool due = g_gcov_dump_flag.exchange(false, std::memory_order_relaxed);
+    if (!due && (t - last) < 60'000'000'000LL) return;   // 60 sn periyot
+    if (g_last_gcov_dump_ns.compare_exchange_strong(last, t, std::memory_order_relaxed)) {
+        __gcov_dump();
+        FLM_LOG(LogLevel::INFO, "PGO: gcov profili diske yazildi (.gcda)");
+    }
+}
+#endif
+
 
 // Kaba kısım ABSTIME kernel uykusu (sinyal bölünmesine dayanıklı), son
 // spin_ns kadar pause-spin. spin_ns=0 → tamamen uyku (min CPU).
@@ -617,6 +660,9 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
 
     while (!stoken.stop_requested()) {
         maybe_reload();   // [FIX-21] SIGUSR1 → burada (AS-safe) uygulanır
+#ifdef FLM_PGO_INSTRUMENTED
+        flm_gcov_periodic_dump();   // [FIX-34] atexit'e güvenme, elle flush et
+#endif
         if (!st->disp || !st->disp->has_present_wait) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
@@ -1241,6 +1287,9 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkQueuePresentKHR(
     VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
 {
     maybe_reload();   // [FIX-21] ölçüm thread'i yoksa (salt limiter) da çalışsın
+#ifdef FLM_PGO_INSTRUMENTED
+    flm_gcov_periodic_dump();   // [FIX-34] measurement thread yoksa buradan da dene
+#endif
 
     QueueData qdata{};
     {
