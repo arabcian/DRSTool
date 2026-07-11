@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import Qt, Signal, QObject, QTimer
+from PySide6.QtCore import Qt, Signal, QObject, QTimer, QProcess
 from PySide6.QtGui import QColor, QPalette, QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -22,7 +22,9 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QSpinBox,
     QScrollArea, QFrame, QMessageBox,
     QStatusBar, QGridLayout, QSizePolicy,
+    QPlainTextEdit, QCheckBox, QFileDialog,
 )
+import shutil
 
 
 # ============================================================================
@@ -3370,7 +3372,126 @@ NV_ENV_VARS: List[EnvVarDef] = [
               options=["0x1"]),
 ]
 
-ALL_ENV_VARS = DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS
+FLM_ENV_VARS: List[EnvVarDef] = [
+    EnvVarDef("ENABLE_LAYER_cpu_flip_meter", "vk_flip_meter", "enum", "",
+              "Activates the Vulkan implicit layer. This is the enable_environment key from "
+              "the layer manifest; without it the layer stays inactive even if loaded. "
+              "Syntax: ENABLE_LAYER_cpu_flip_meter=1 %command%",
+              options=["1"]),
+
+    EnvVarDef("DISABLE_LAYER_cpu_flip_meter", "vk_flip_meter", "enum", "",
+              "Globally disables the layer (e.g. to turn off a system-wide implicit layer "
+              "for one specific game). "
+              "Syntax: DISABLE_LAYER_cpu_flip_meter=1 %command%",
+              options=["1"]),
+
+    EnvVarDef("FLM_MODE", "vk_flip_meter", "enum", "auto",
+              "Operating mode. auto: uses PACER if presentWait is available, otherwise "
+              "LIMITER (if FLM_TARGET_FPS is set). present: forces the PACER, for frametime "
+              "correction on a VRR panel (requires WaitForPresentKHR). limiter: a pure FPS "
+              "limiter that doesn't need presentWait — the most reliable/predictable effect, "
+              "works on any driver. off: layer loaded but inactive (useful as an A/B test "
+              "baseline). "
+              "Syntax: FLM_MODE=limiter FLM_TARGET_FPS=120 %command%",
+              options=["auto", "present", "limiter", "off"]),
+
+    EnvVarDef("FLM_TARGET_FPS", "vk_flip_meter", "int", "0",
+              "Target FPS for the limiter/pacer. 0 = the engine's natural cadence (only "
+              "paces/measures, doesn't cap frames). Must be >0 for LIMITER mode to have "
+              "any effect. "
+              "Syntax: FLM_MODE=limiter FLM_TARGET_FPS=60 %command%",
+              placeholder="e.g. 60"),
+
+    EnvVarDef("FLM_PACE_POINT", "vk_flip_meter", "enum", "present",
+              "Which Vulkan call acts as the pacing gate point in PACER mode. present: waits "
+              "before vkQueuePresentKHR (default, lowest risk). acquire: waits before "
+              "vkAcquireNextImage(2)KHR. both: paces at both points (flatter frametime on "
+              "some engines, double latency on others). "
+              "Syntax: FLM_MODE=present FLM_PACE_POINT=acquire %command%",
+              options=["present", "acquire", "both"]),
+
+    EnvVarDef("FLM_PRESENT_LEAD_NS", "vk_flip_meter", "int", "1000000",
+              "How long before the flip target (in nanoseconds) the PACER issues the present "
+              "call. Default 1ms (1000000 ns). Increase if driver/compositor submit latency "
+              "is high; can be lowered on low-latency systems like the RTX 4080M. "
+              "Syntax: FLM_MODE=present FLM_PRESENT_LEAD_NS=1500000 %command%",
+              placeholder="e.g. 1000000"),
+
+    EnvVarDef("FLM_SPIN_NS", "vk_flip_meter", "int", "150000",
+              "Window (ns) of active waiting via _mm_pause/sched_yield instead of "
+              "clock_nanosleep as the target time approaches. 0 = fully sleep-based waiting "
+              "(minimal CPU use, slightly less precise); higher values are more precise but "
+              "burn more CPU. On fast systems like the RTX 4080M/7845HX, 20000-25000 is "
+              "usually enough. "
+              "Syntax: FLM_SPIN_NS=20000 %command%",
+              placeholder="e.g. 20000"),
+
+    EnvVarDef("FLM_DRIFT_TOLERANCE_NS", "vk_flip_meter", "int", "0",
+              "How much deviation (ns) from the slot average is allowed before it's "
+              "corrected gradually (soft-slew). 0 = automatic (~1/4 of the interval). "
+              "Syntax: FLM_DRIFT_TOLERANCE_NS=2000000 %command%",
+              placeholder="e.g. 2000000 (0=automatic)"),
+
+    EnvVarDef("FLM_MFG_MULTIPLIER", "vk_flip_meter", "enum", "0",
+              "Sets the Motion Frame Generation multiplier. 0 = autodetect (based on a "
+              "threshold against the slot average: interval < 0.7·mean — fixed in v2.1 "
+              "[FIX-17]). 1-4 = force the multiplier manually (useful on engines where "
+              "autodetect misfires). "
+              "Syntax: FLM_MFG_MULTIPLIER=3 FLM_TARGET_FPS=60 %command%",
+              options=["0", "1", "2", "3", "4"]),
+
+    EnvVarDef("FLM_MEASURE_CPU", "vk_flip_meter", "string", "",
+              "CPU core range the measurement thread (std::jthread) is pinned to — useful "
+              "for CCD isolation (e.g. keeping rendering on one CCD and measurement on the "
+              "other). Defaults to cores-2 if left empty. "
+              "Syntax: FLM_MEASURE_CPU=0-3 %command%",
+              placeholder="e.g. 0-3 or 4,5,6"),
+
+    EnvVarDef("FLM_RT_PRIORITY", "vk_flip_meter", "int", "0",
+              "SCHED_FIFO real-time priority (0-99) for the measurement thread. Requires "
+              "CAP_SYS_NICE; silently falls back to normal priority with a WARN log if not "
+              "permitted. "
+              "Syntax: FLM_RT_PRIORITY=40 %command%",
+              placeholder="e.g. 40 (0=off)"),
+
+    EnvVarDef("FLM_LOG_LEVEL", "vk_flip_meter", "enum", "WARN",
+              "Log verbosity. DEBUG is the most verbose (close to per-frame), ERROR the "
+              "quietest. "
+              "Syntax: FLM_LOG_LEVEL=DEBUG %command%",
+              options=["DEBUG", "INFO", "WARN", "ERROR"]),
+
+    EnvVarDef("FLM_LOG_FILE", "vk_flip_meter", "string", "",
+              "File path the log output is written to. Written to stderr if left empty "
+              "(visible for games launched from a terminal; can get lost for games launched "
+              "via Steam/Lutris, so redirecting to a file is preferred). "
+              "Syntax: FLM_LOG_LEVEL=INFO FLM_LOG_FILE=/tmp/flm.log %command%",
+              placeholder="e.g. /tmp/flm.log"),
+
+    EnvVarDef("FLM_STATS", "vk_flip_meter", "enum", "0",
+              "If set to 1, a summary statistic (mean/range/stddev) is logged at INFO level "
+              "every 5 seconds. Useful for a general health check without a continuous log "
+              "stream. "
+              "Syntax: FLM_LOG_LEVEL=INFO FLM_STATS=1 %command%",
+              options=["0", "1"]),
+
+    EnvVarDef("FLM_CSV", "vk_flip_meter", "string", "",
+              "CSV file path where raw per-frame measurements (present interval/latency etc.) "
+              "are dumped. Used to produce objective evidence in A/B tests (e.g. comparing "
+              "FLM_MODE=off against FLM_MODE=present). "
+              "Syntax: FLM_MODE=present FLM_CSV=/tmp/on.csv %command%",
+              placeholder="e.g. /tmp/flm.csv"),
+
+    EnvVarDef("FLM_CONFIG", "vk_flip_meter", "string", "",
+              "Path to a KEY=VALUE config file that enables live tuning without closing the "
+              "game. The file is re-read via an async-signal-safe flag when a SIGUSR1 signal "
+              "is sent (FLM_MODE, FLM_TARGET_FPS, FLM_SPIN_NS, FLM_PRESENT_LEAD_NS, "
+              "FLM_DRIFT_TOLERANCE_NS, FLM_PACE_POINT, FLM_LOG_LEVEL are supported). "
+              "Syntax: FLM_CONFIG=/tmp/flm.conf %command%  →  then: "
+              "echo 'FLM_TARGET_FPS=90' > /tmp/flm.conf && kill -SIGUSR1 $(pgrep -f game)",
+              placeholder="e.g. /tmp/flm.conf"),
+]
+
+ALL_ENV_VARS = DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS + FLM_ENV_VARS
 
 
 # ============================================================================
@@ -3462,7 +3583,8 @@ QScrollBar::sub-page:vertical{
 
         for cat_label, env_list in [("DXVK", DXVK_ENV_VARS),
                                      ("VKD3D-Proton", VKD3D_ENV_VARS),
-                                     ("NVIDIA __GL", NV_ENV_VARS)]:
+                                     ("NVIDIA __GL", NV_ENV_VARS),
+                                     ("vk_flip_meter", FLM_ENV_VARS)]:
             if filter_text:
                 matching = [
                     ev for ev in env_list
@@ -4346,6 +4468,344 @@ class ProfileManagerWidget(QWidget):
 
 
 # ============================================================================
+# vk_flip_meter — Install/Build tab
+# ============================================================================
+#
+# Build runs UNPRIVILEGED (cmake configure + cmake --build, plain QProcess).
+# Only the final "cmake --install" step and the manifest library-path fixup
+# need root, and those two run through pkexec — same privilege-separation
+# shape as ryzenadj_gui's polkit architecture: never elevate more of the
+# pipeline than the two steps that actually touch /usr or /usr/local.
+
+FLM_FIELD_SS = """
+QLineEdit{
+    background:#1a1f28;
+    border:1px solid #323c4b;
+    border-radius:6px;
+    color:#d8d8d8;
+    font-family:monospace;
+    font-size:10px;
+    padding:5px 10px;
+}
+QLineEdit:focus{ border:1px solid #76b900; }
+QLineEdit:hover{ background:#252c37; }
+"""
+
+
+class FlmSidebarWidget(QWidget):
+    """
+    Left-sidebar page for the vk_flip_meter tab. Not a selectable list like
+    the other tabs (there's nothing to click through) — just orientation
+    text plus a pointer to where the actual env vars live, since FLM_MODE /
+    FLM_TARGET_FPS / etc. are configured one click away on the Env Vars tab
+    (they were added to ALL_ENV_VARS under the "vk_flip_meter" category so
+    they share the exact same enum/flags button-grid editor).
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        title = QLabel("vk_flip_meter")
+        title.setStyleSheet("color:#e8eaf0; font-size:13px; font-weight:700;")
+        layout.addWidget(title)
+
+        sub = QLabel("Frame Pacing / Cadence Modulation Vulkan Layer")
+        sub.setWordWrap(True)
+        sub.setStyleSheet("color:#5a6070; font-size:9px;")
+        layout.addWidget(sub)
+
+        info = QLabel(
+            "This panel lets you build and install the layer (on the right).\n\n"
+            "Runtime variables like FLM_MODE, FLM_TARGET_FPS, and "
+            "FLM_MFG_MULTIPLIER aren't configured here — they live under the "
+            "\"vk_flip_meter\" category on the \"DXVK / VKD3D / NV\" tab, one "
+            "click away, using the same button-grid editor, and are added to "
+            "the Copy All output automatically."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color:#a7afbc; font-size:10px; line-height:145%;")
+        layout.addWidget(info)
+
+        layout.addStretch()
+
+
+class FlmInstallWidget(QWidget):
+    """
+    Right-panel build/install widget for vk_flip_meter.
+    Unprivileged: cmake configure, cmake --build.
+    Privileged (pkexec, graphical password prompt): cmake --install,
+    manifest library-path fixup.
+    """
+
+    _STEPS = ("configure", "build", "install", "manifest", "verify")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._proc: Optional[QProcess] = None
+        self._phase: str = ""
+        self._build_dir: str = ""
+        self._prefix_used: str = ""
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        header = QLabel("vk_flip_meter — Build & Install")
+        header.setStyleSheet("color:#f2f2f2; font-size:16px; font-weight:700;")
+        layout.addWidget(header)
+
+        desc = QLabel(
+            "The build (cmake configure + build) runs as a normal user. Only "
+            "\"cmake --install\" and the manifest path fixup — the two steps "
+            "that actually need root — run through pkexec, with a graphical "
+            "password prompt."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color:#a7afbc; font-size:11px; line-height:140%;")
+        layout.addWidget(desc)
+
+        form = QGridLayout()
+        form.setSpacing(8)
+
+        src_lbl = QLabel("Source directory (vk-flip-meter):")
+        src_lbl.setStyleSheet("color:#8ea0ba; font-size:10px; font-weight:600;")
+        self._src_edit = QLineEdit()
+        self._src_edit.setStyleSheet(FLM_FIELD_SS)
+        self._src_edit.setPlaceholderText("e.g. /home/cihan/src/vk-flip-meter-main")
+        browse_btn = QPushButton("Browse")
+        browse_btn.clicked.connect(self._on_browse)
+        browse_btn.setStyleSheet(self._btn_style("#1a1f28", "#323c4b", "#d8d8d8"))
+        form.addWidget(src_lbl, 0, 0)
+        form.addWidget(self._src_edit, 0, 1)
+        form.addWidget(browse_btn, 0, 2)
+
+        prefix_lbl = QLabel("INSTALL_PREFIX:")
+        prefix_lbl.setStyleSheet("color:#8ea0ba; font-size:10px; font-weight:600;")
+        self._prefix_edit = QLineEdit("/usr/local")
+        self._prefix_edit.setStyleSheet(FLM_FIELD_SS)
+        form.addWidget(prefix_lbl, 1, 0)
+        form.addWidget(self._prefix_edit, 1, 1, 1, 2)
+
+        layout.addLayout(form)
+
+        self._native_chk = QCheckBox(
+            "FLM_NATIVE_BUILD  (-O3 -march=native -mtune=native -flto — specific to this machine, not portable)"
+        )
+        self._native_chk.setStyleSheet("""
+QCheckBox{ color:#d8d8d8; font-size:10px; spacing:8px; }
+QCheckBox::indicator{ width:14px; height:14px; border:1px solid #323c4b; border-radius:3px; background:#1a1f28; }
+QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
+""")
+        layout.addWidget(self._native_chk)
+
+        native_warn = QLabel(
+            "If enabled: the .so built for the 7845HX may not run on a different CPU (a different machine)."
+        )
+        native_warn.setStyleSheet("color:#5a6070; font-size:9px; font-style:italic;")
+        layout.addWidget(native_warn)
+
+        btn_row = QHBoxLayout()
+        self._build_btn = QPushButton("Build & Install (pkexec)")
+        self._build_btn.clicked.connect(self._on_build_clicked)
+        self._build_btn.setStyleSheet(self._btn_style("#76b900", "#76b900", "#0d0f12", bold=True))
+
+        self._verify_btn = QPushButton("Verify Installation")
+        self._verify_btn.clicked.connect(self._on_verify_clicked)
+        self._verify_btn.setStyleSheet(self._btn_style("#1a1f28", "#323c4b", "#d8d8d8"))
+
+        clear_btn = QPushButton("Clear Console")
+        clear_btn.clicked.connect(lambda: self._console.clear())
+        clear_btn.setStyleSheet(self._btn_style("#1a1f28", "#323c4b", "#d8d8d8"))
+
+        btn_row.addWidget(self._build_btn)
+        btn_row.addWidget(self._verify_btn)
+        btn_row.addWidget(clear_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        self._status_lbl = QLabel("Ready.")
+        self._status_lbl.setStyleSheet("color:#5a6070; font-size:9px;")
+        layout.addWidget(self._status_lbl)
+
+        self._console = QPlainTextEdit()
+        self._console.setReadOnly(True)
+        self._console.setStyleSheet("""
+QPlainTextEdit{
+    background:#0a0c0f;
+    border:1px solid #1e2535;
+    border-radius:6px;
+    color:#9be238;
+    font-family:monospace;
+    font-size:9px;
+    padding:6px;
+}
+""")
+        layout.addWidget(self._console, 1)
+
+        self._autodetect_src()
+
+    # ── styling helper ───────────────────────────────────────────────────────
+
+    def _btn_style(self, bg, border, fg, bold=False):
+        weight = 700 if bold else 600
+        return f"""
+QPushButton{{
+    background:{bg};
+    border:1px solid {border};
+    border-radius:5px;
+    color:{fg};
+    padding:5px 14px;
+    font-weight:{weight};
+    font-size:10px;
+}}
+QPushButton:hover{{ border:1px solid #76b900; }}
+QPushButton:disabled{{ color:#3a4250; border:1px solid #232a36; background:#12151b; }}
+"""
+
+    # ── source dir autodetect ────────────────────────────────────────────────
+
+    def _autodetect_src(self):
+        """Look for a sibling vk-flip-meter*/CMakeLists.txt near this script
+        and near the current working directory, so the field is pre-filled
+        when both projects are unpacked side by side."""
+        candidates = []
+        try:
+            script_dir = Path(__file__).resolve().parent
+            candidates.append(script_dir)
+        except Exception:
+            pass
+        candidates.append(Path.cwd())
+        candidates.append(Path.home())
+
+        for base in candidates:
+            try:
+                for entry in base.glob("vk*flip*meter*"):
+                    if (entry / "CMakeLists.txt").is_file():
+                        self._src_edit.setText(str(entry))
+                        return
+            except Exception:
+                continue
+
+    def _on_browse(self):
+        start = self._src_edit.text().strip() or str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(self, "Select the vk_flip_meter source directory", start)
+        if chosen:
+            self._src_edit.setText(chosen)
+
+    # ── console ──────────────────────────────────────────────────────────────
+
+    def _log(self, text: str):
+        self._console.appendPlainText(text)
+        self._console.verticalScrollBar().setValue(self._console.verticalScrollBar().maximum())
+
+    def _set_busy(self, busy: bool, status: str = ""):
+        self._build_btn.setEnabled(not busy)
+        self._verify_btn.setEnabled(not busy)
+        self._status_lbl.setText(status or ("Working..." if busy else "Ready."))
+
+    # ── build / install pipeline ─────────────────────────────────────────────
+
+    def _on_build_clicked(self):
+        src = self._src_edit.text().strip()
+        prefix = self._prefix_edit.text().strip() or "/usr/local"
+
+        if not src or not (Path(src) / "CMakeLists.txt").is_file():
+            QMessageBox.warning(
+                self, "Invalid source directory",
+                "No CMakeLists.txt found in the selected directory.\n"
+                "Select the folder the vk_flip_meter source was extracted into."
+            )
+            return
+
+        self._prefix_used = prefix
+        self._build_dir = str(Path(src) / "build")
+        native = "ON" if self._native_chk.isChecked() else "OFF"
+        generator = "Ninja" if shutil.which("ninja") else "Unix Makefiles"
+
+        self._console.clear()
+        self._log(f"==> Configuring  (generator={generator}, FLM_NATIVE_BUILD={native}, prefix={prefix})")
+        self._set_busy(True, "Configuring (cmake configure)...")
+        self._phase = "configure"
+
+        args = [
+            "-S", src, "-B", self._build_dir,
+            "-DCMAKE_BUILD_TYPE=Release",
+            f"-DCMAKE_INSTALL_PREFIX={prefix}",
+            "-DCMAKE_INSTALL_LIBDIR=lib64",
+            f"-DFLM_NATIVE_BUILD={native}",
+            "-G", generator,
+        ]
+        self._run_process("cmake", args, use_pkexec=False)
+
+    def _on_verify_clicked(self):
+        self._console.clear()
+        self._log("==> vulkaninfo --summary | grep -i flip_meter")
+        self._set_busy(True, "Verifying...")
+        self._phase = "verify"
+        cmd = "vulkaninfo --summary 2>/dev/null | grep -i flip_meter || echo 'flip_meter not found — check whether the layer is loaded / vulkaninfo is installed.'"
+        self._run_process("bash", ["-c", cmd], use_pkexec=False)
+
+    def _run_process(self, program: str, args: List[str], use_pkexec: bool):
+        proc = QProcess(self)
+        proc.setProcessChannelMode(QProcess.MergedChannels)
+        proc.readyReadStandardOutput.connect(lambda p=proc: self._on_output(p))
+        proc.finished.connect(self._on_proc_finished)
+        self._proc = proc
+        if use_pkexec:
+            proc.start("pkexec", [program] + args)
+        else:
+            proc.start(program, args)
+
+    def _on_output(self, proc: QProcess):
+        data = bytes(proc.readAllStandardOutput()).decode(errors="replace")
+        if data:
+            self._log(data.rstrip("\n"))
+
+    def _on_proc_finished(self, exit_code: int, exit_status):
+        if exit_code != 0:
+            self._log(f"ERROR: step '{self._phase}' failed (exit code {exit_code}).")
+            self._set_busy(False, f"Error: step '{self._phase}' failed.")
+            return
+
+        if self._phase == "configure":
+            self._log("==> Building...")
+            self._set_busy(True, "Building (cmake --build)...")
+            self._phase = "build"
+            nproc = str(os.cpu_count() or 4)
+            self._run_process("cmake", ["--build", self._build_dir, "-j", nproc], use_pkexec=False)
+
+        elif self._phase == "build":
+            self._log("==> Requesting pkexec authorization for install (root required)...")
+            self._set_busy(True, "Waiting for pkexec password...")
+            self._phase = "install"
+            self._run_process("cmake", ["--install", self._build_dir], use_pkexec=True)
+
+        elif self._phase == "install":
+            self._log("==> Updating manifest library path...")
+            self._set_busy(True, "Updating manifest (pkexec)...")
+            self._phase = "manifest"
+            manifest = f"{self._prefix_used}/share/vulkan/implicit_layer.d/VkLayer_cpu_flip_meter.json"
+            libpath = f"{self._prefix_used}/lib64/libvk_flip_meter.so"
+            shell_cmd = (
+                f"if [ -f '{manifest}' ]; then "
+                f"sed -i 's|/usr/local/lib64/libvk_flip_meter.so|{libpath}|g' '{manifest}' && "
+                f"echo 'Manifest updated: {manifest}'; "
+                f"else echo 'WARNING: manifest not found: {manifest}'; fi"
+            )
+            self._run_process("bash", ["-c", shell_cmd], use_pkexec=True)
+
+        elif self._phase == "manifest":
+            self._log("==> Installation complete.")
+            self._log("    Verify: vulkaninfo --summary | grep -i flip_meter")
+            self._set_busy(False, "Installation complete.")
+
+        elif self._phase == "verify":
+            self._set_busy(False, "Ready.")
+
+
+# ============================================================================
 # Main Window
 # ============================================================================
 
@@ -4413,13 +4873,17 @@ class MainWindow(QMainWindow):
         self._arch_tab.setCheckable(True)
         self._arch_tab.clicked.connect(lambda: self._switch_tab(1))
 
-        self._env_tab = QPushButton("DXVK / VKD3D / NV")
+        self._env_tab = QPushButton("DXVK / VKD3D / NV / FLM")
         self._env_tab.setCheckable(True)
         self._env_tab.clicked.connect(lambda: self._switch_tab(2))
 
         self._profiles_tab = QPushButton("Profiles")
         self._profiles_tab.setCheckable(True)
         self._profiles_tab.clicked.connect(lambda: self._switch_tab(3))
+
+        self._flm_tab = QPushButton("vk_flip_meter")
+        self._flm_tab.setCheckable(True)
+        self._flm_tab.clicked.connect(lambda: self._switch_tab(4))
 
         tab_style = """
             QPushButton {
@@ -4440,7 +4904,7 @@ class MainWindow(QMainWindow):
                 border-color: #4a7300;
             }
         """
-        for btn in [self._settings_tab, self._arch_tab, self._env_tab, self._profiles_tab]:
+        for btn in [self._settings_tab, self._arch_tab, self._env_tab, self._profiles_tab, self._flm_tab]:
             btn.setStyleSheet(tab_style)
             tab_layout.addWidget(btn)
 
@@ -4474,6 +4938,10 @@ class MainWindow(QMainWindow):
         profiles_scroll.setWidget(self._profiles_widget)
         profiles_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         self._sidebar_stack.addWidget(profiles_scroll)
+
+        # Page 4: vk_flip_meter sidebar (orientation text, no selectable list)
+        self._flm_sidebar = FlmSidebarWidget()
+        self._sidebar_stack.addWidget(self._flm_sidebar)
 
         splitter.addWidget(sidebar)
         splitter.setSizes([220, 680])
@@ -4511,6 +4979,10 @@ class MainWindow(QMainWindow):
         self._env_editor = EnvVarEditorWidget()
         self._env_editor.set_list_widget(self._env_widget)
         self._right_stack.addWidget(self._env_editor)
+
+        # Page 4: vk_flip_meter build/install panel
+        self._flm_install = FlmInstallWidget()
+        self._right_stack.addWidget(self._flm_install)
 
         # Show placeholder initially
         self._right_stack.setCurrentIndex(0)
@@ -4554,7 +5026,7 @@ class MainWindow(QMainWindow):
         self._tab_right_memory[prev] = self._right_stack.currentIndex()
 
         self._sidebar_stack.setCurrentIndex(idx)
-        for i, btn in enumerate([self._settings_tab, self._arch_tab, self._env_tab, self._profiles_tab]):
+        for i, btn in enumerate([self._settings_tab, self._arch_tab, self._env_tab, self._profiles_tab, self._flm_tab]):
             btn.setChecked(i == idx)
 
         # Re-apply whatever is currently typed in the search box to the list
@@ -4580,6 +5052,8 @@ class MainWindow(QMainWindow):
                     self._right_stack.setCurrentIndex(2)
                 else:
                     self._right_stack.setCurrentIndex(0)
+            elif idx == 4:
+                self._right_stack.setCurrentIndex(4)
             else:
                 self._right_stack.setCurrentIndex(0)
 
