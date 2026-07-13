@@ -1154,7 +1154,12 @@ VK_LAYER_EXPORT void VKAPI_CALL FLM_vkDestroySwapchainKHR(
 // hızlandırmaz. Bu yüzden oyunu "kaçırmaya" zorlayamaz; en kötü ihtimalle
 // hiçbir şey yapmaz. Stutter üretmemesinin temel garantisi budur.
 // ============================================================================
-static void apply_gate(SwapchainState* st, bool limiter_mode) {
+// [FIX-35] advance: timeline'ı ilerlet + slew uygula. BOTH modunda karede iki
+// çağrı olur; yalnız BİRİ (present) ilerletmeli, aksi halde kare başına 2*iv
+// dayatılır → limiter'da fps/2, pacer'da (iv=ölçüm) pozitif geri besleme
+// sarmalı: kare=2*iv → ölçüm=2*iv → iv katlanır; 50ms WaitForPresent
+// timeout'u + hitch kesintileri sarmalı ~15-17 FPS'te "kilitler".
+static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
     // Hitch veya toparlanma: pace etme, timeline'ı sıfırla (temiz yeniden anchor).
     if (st->hitch_active.load(std::memory_order_relaxed) ||
         st->hitch_recovery_frames.load(std::memory_order_relaxed) > 0) {
@@ -1188,17 +1193,22 @@ static void apply_gate(SwapchainState* st, bool limiter_mode) {
         st->limiter_next_ns = t + iv;   // ilk kare: bekletme, timeline'ı kur
         return;
     }
-    st->limiter_next_ns += iv;          // [item 4] uniform slot ilerlemesi
+    // [FIX-35] İlerletme + slew yalnız karede TEK çağrıda. advance=false olan
+    // ikinci kapı (BOTH'ta acquire) mevcut hedefe yalnız "erken kalma"
+    // kontrolü yapar — hedef geçmişteyse no-op.
+    if (advance) {
+        st->limiter_next_ns += iv;      // [item 4] uniform slot ilerlemesi
 
-    // [item 10] Soft slew: hard-rebase yalnız aşırı sapmada; küçük borcu
-    // ~8 karede yumuşakça kapat (görünür faz sıçraması yok).
-    int64_t drift = st->limiter_next_ns - t;
-    int64_t tol   = g_config.drift_tol.load(std::memory_order_relaxed);
-    if (tol <= 0) tol = std::clamp<int64_t>(iv / 4, 1'000'000LL, 4'000'000LL);
-    if (drift < -2 * iv || drift > 4 * iv) {
-        st->limiter_next_ns = t + iv;   // stall / clock jump
-    } else if (drift < -tol) {
-        st->limiter_next_ns -= drift / 8;  // drift<0 → hedefi öne çek
+        // [item 10] Soft slew: hard-rebase yalnız aşırı sapmada; küçük borcu
+        // ~8 karede yumuşakça kapat (görünür faz sıçraması yok).
+        int64_t drift = st->limiter_next_ns - t;
+        int64_t tol   = g_config.drift_tol.load(std::memory_order_relaxed);
+        if (tol <= 0) tol = std::clamp<int64_t>(iv / 4, 1'000'000LL, 4'000'000LL);
+        if (drift < -2 * iv || drift > 4 * iv) {
+            st->limiter_next_ns = t + iv;   // stall / clock jump
+        } else if (drift < -tol) {
+            st->limiter_next_ns -= drift / 8;  // drift<0 → hedefi öne çek
+        }
     }
 
     int64_t target = st->limiter_next_ns - lead;
@@ -1248,7 +1258,10 @@ static inline void acquire_gate(VkSwapchainKHR swapchain, bool has_wait)
             if (st->frame_count.load(std::memory_order_relaxed) >= FlmConst::WARMUP_FRAMES) {
                 bool limiter_mode = false;
                 if (resolve_gate(st.get(), has_wait, limiter_mode))
-                    apply_gate(st.get(), limiter_mode);
+                    // [FIX-35] BOTH: timeline'ı present ilerletir; acquire
+                    // yalnız mevcut hedefe karşı erken kalmayı engeller.
+                    apply_gate(st.get(), limiter_mode,
+                               /*advance=*/pp == PacePoint::ACQUIRE);
             }
             st->frame_count.fetch_add(1, std::memory_order_relaxed);
         }
@@ -1353,7 +1366,7 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkQueuePresentKHR(
             st->present_seq.fetch_add(1, std::memory_order_relaxed);  // [item 4]
             bool limiter_mode = false;
             if (resolve_gate(st.get(), has_wait, limiter_mode))
-                apply_gate(st.get(), limiter_mode);
+                apply_gate(st.get(), limiter_mode, /*advance=*/true);  // [FIX-35]
         }
 
         // presentWait için id enjekte et (oyun kendisi göndermiyorsa).
