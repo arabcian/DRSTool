@@ -5390,7 +5390,7 @@ class MainWindow(QMainWindow):
         self._search.textChanged.connect(self._filter)
         sidebar_layout.addWidget(self._search)
 
-        # Tab buttons  (Settings | GPU Arch | Env Vars | Profiles)
+        # Tab buttons  (Settings | GPU Arch | Env Vars | vk_flip_meter | Profiles)
         tab_layout = QHBoxLayout()
         tab_layout.setSpacing(2)
 
@@ -5409,11 +5409,11 @@ class MainWindow(QMainWindow):
 
         self._profiles_tab = QPushButton("Profiles")
         self._profiles_tab.setCheckable(True)
-        self._profiles_tab.clicked.connect(lambda: self._switch_tab(3))
+        self._profiles_tab.clicked.connect(lambda: self._switch_tab(4))
 
         self._flm_tab = QPushButton("vk_flip_meter")
         self._flm_tab.setCheckable(True)
-        self._flm_tab.clicked.connect(lambda: self._switch_tab(4))
+        self._flm_tab.clicked.connect(lambda: self._switch_tab(3))
 
         tab_style = """
             QPushButton {
@@ -5434,7 +5434,7 @@ class MainWindow(QMainWindow):
                 border-color: #4a7300;
             }
         """
-        for btn in [self._settings_tab, self._arch_tab, self._env_tab, self._profiles_tab, self._flm_tab]:
+        for btn in [self._settings_tab, self._arch_tab, self._env_tab, self._flm_tab, self._profiles_tab]:
             btn.setStyleSheet(tab_style)
             tab_layout.addWidget(btn)
 
@@ -5460,7 +5460,11 @@ class MainWindow(QMainWindow):
         self._env_widget.env_changed.connect(self._on_env_changed)
         self._sidebar_stack.addWidget(self._env_widget)
 
-        # Page 3: Profile manager
+        # Page 3: vk_flip_meter sidebar (orientation text, no selectable list)
+        self._flm_sidebar = FlmSidebarWidget()
+        self._sidebar_stack.addWidget(self._flm_sidebar)
+
+        # Page 4: Profile manager
         self._profiles_widget = ProfileManagerWidget(self.settings_manager)
         self._profiles_widget.profile_loaded.connect(self._on_profile_loaded)
         profiles_scroll = QScrollArea()
@@ -5468,10 +5472,6 @@ class MainWindow(QMainWindow):
         profiles_scroll.setWidget(self._profiles_widget)
         profiles_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         self._sidebar_stack.addWidget(profiles_scroll)
-
-        # Page 4: vk_flip_meter sidebar (orientation text, no selectable list)
-        self._flm_sidebar = FlmSidebarWidget()
-        self._sidebar_stack.addWidget(self._flm_sidebar)
 
         splitter.addWidget(sidebar)
         splitter.setSizes([220, 680])
@@ -5556,7 +5556,7 @@ class MainWindow(QMainWindow):
         self._tab_right_memory[prev] = self._right_stack.currentIndex()
 
         self._sidebar_stack.setCurrentIndex(idx)
-        for i, btn in enumerate([self._settings_tab, self._arch_tab, self._env_tab, self._profiles_tab, self._flm_tab]):
+        for i, btn in enumerate([self._settings_tab, self._arch_tab, self._env_tab, self._flm_tab, self._profiles_tab]):
             btn.setChecked(i == idx)
 
         # Re-apply whatever is currently typed in the search box to the list
@@ -5567,7 +5567,7 @@ class MainWindow(QMainWindow):
         elif idx == 2:
             self._env_widget.populate(self._search.text())
 
-        if idx == 3:
+        if idx == 4:
             # Profiles tab — always blank right panel
             self._right_stack.setCurrentIndex(0)
         elif idx in self._tab_right_memory:
@@ -5582,7 +5582,7 @@ class MainWindow(QMainWindow):
                     self._right_stack.setCurrentIndex(2)
                 else:
                     self._right_stack.setCurrentIndex(0)
-            elif idx == 4:
+            elif idx == 3:
                 self._right_stack.setCurrentIndex(4)
             else:
                 self._right_stack.setCurrentIndex(0)
@@ -5707,7 +5707,7 @@ class MainWindow(QMainWindow):
                 self._right_stack.setCurrentIndex(2)
             else:
                 self._right_stack.setCurrentIndex(0)
-        elif active_tab == 3:
+        elif active_tab == 4:
             self._right_stack.setCurrentIndex(0)
         else:
             self._right_stack.setCurrentIndex(0)
