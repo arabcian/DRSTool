@@ -3938,13 +3938,6 @@ DXVK_NVAPI_ENV_VARS: List[EnvVarDef] = [
               "Allow using DXVK-NVAPI without an NVIDIA GPU on the proprietary driver. Useful "
               "for exercising NVAPI D3D11 extensions on a non-NVIDIA GPU (e.g. Mesa/NVK).",
               options=["0", "1"]),
-    # ── DLSS Frame Generation ────────────────────────────────────────────────
-    EnvVarDef("DXVK_NVAPI_DRS_NGX_DLSSG_MULTI_FRAME_COUNT", "DXVK-NVAPI", "enum", "",
-              "Sets the DLSS Frame Generation multiplier (Multi Frame Generation on RTX "
-              "40/50-series): 2 = classic 2x FG, 3/4 = generate 2-3 extra frames per rendered "
-              "frame on RTX 50-series. Quick single-flag alternative to building the full "
-              "DXVK_NVAPI_DRS_SETTINGS string by hand.",
-              options=["2", "3", "4"]),
 ]
 
 # ============================================================================
