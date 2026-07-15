@@ -3021,6 +3021,14 @@ DXVK_ENV_VARS: List[EnvVarDef] = [
     EnvVarDef("DXVK_ENABLE_NVAPI", "DXVK", "enum", "",
               "Enable NVAPI support. Required for DLSS, Reflex, and MFG.",
               options=["0", "1"]),
+    # ── Shader Compiler ──────────────────────────────────────────────────────
+    EnvVarDef("DXVK_NUM_COMPILER_THREADS", "DXVK", "int", "0",
+              "Number of pipeline compiler threads. 0 = use all available CPU cores; "
+              "a positive number enforces that exact thread count. Some threads are "
+              "reserved for high-priority work when the graphics pipeline library "
+              "feature is enabled. Set to 1 to force fully single-threaded shader "
+              "compilation (deterministic, but slower cold-start compiles).",
+              placeholder="0 = all cores, or e.g. 1"),
 ]
 
 # Per-flag descriptions for VKD3D_CONFIG checkbox UI
@@ -3185,6 +3193,28 @@ VKD3D_ENV_VARS: List[EnvVarDef] = [
               "Clamp tessellation factors to reduce GPU load in titles with excessive tessellation "
               "(e.g. Wo Long: Fallen Dynasty). 0 = disabled (default). "
               "Automatically enabled for known problematic games.",
+              options=["0", "1"]),
+    # ── Pipeline Library / Threading ──────────────────────────────────────────
+    EnvVarDef("VKD3D_FEATURE_LEVEL", "VKD3D-Proton", "enum", "",
+              "Force the reported D3D12 feature level, regardless of what the Vulkan driver "
+              "would otherwise expose. Useful for games that refuse to start when they detect "
+              "a feature level they don't expect, or that under-report driver capability.",
+              options=["12_0", "12_1"]),
+    EnvVarDef("VKD3D_WORKER_THREAD_COUNT", "VKD3D-Proton", "int", "",
+              "Number of background worker threads vkd3d-proton uses for shader/pipeline "
+              "compilation and pipeline-library disk-cache I/O. Fewer threads reduce CPU "
+              "contention from compile storms on busy many-core systems; more can speed up "
+              "cold-cache compile bursts at the cost of using more cores at once.",
+              placeholder="e.g. 2"),
+    EnvVarDef("VKD3D_PIPELINE_LIBRARY_SIZE", "VKD3D-Proton", "int", "",
+              "Caps the size (in bytes) of the automatic vkd3d-proton.cache pipeline library "
+              "vkd3d-proton maintains on disk. Once the cap is hit, older/least-used entries "
+              "are evicted rather than letting the cache grow without bound.",
+              placeholder="e.g. 2147483648 (2 GiB)"),
+    EnvVarDef("VKD3D_PIPELINE_LIBRARY_APP_CACHE_ONLY", "VKD3D-Proton", "enum", "",
+              "Restrict pipeline caching to whatever the application itself explicitly manages "
+              "through ID3D12PipelineLibrary, instead of also letting vkd3d-proton silently "
+              "cache every PSO it sees in its own automatic vkd3d-proton.cache disk cache.",
               options=["0", "1"]),
 ]
 
@@ -3491,7 +3521,340 @@ FLM_ENV_VARS: List[EnvVarDef] = [
               placeholder="e.g. /tmp/flm.conf"),
 ]
 
-ALL_ENV_VARS = DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS + FLM_ENV_VARS
+# ============================================================================
+# Proton Environment Variables (PROTON_* runtime config, Valve + Proton-CachyOS)
+# ============================================================================
+
+PROTON_ENV_VARS: List[EnvVarDef] = [
+    # ── Sync / Scheduling ────────────────────────────────────────────────────
+    EnvVarDef("PROTON_USE_NTSYNC", "Proton", "enum", "",
+              "Use the kernel-backed ntsync driver for Wine's in-process synchronization "
+              "primitives instead of Esync/Fsync. Lower CPU overhead and more consistent "
+              "timing than Fsync in titles that need it. On newer Proton-CachyOS/Valve "
+              "Proton 11 builds ntsync is already the default and this variable has been "
+              "removed there — use PROTON_NO_NTSYNC=1 on those builds to go back to Fsync.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NO_NTSYNC", "Proton", "enum", "",
+              "Disable ntsync (the default kernel sync driver on Proton 11 / current "
+              "Proton-CachyOS) and fall back to Fsync. Useful for the rare title that "
+              "misbehaves specifically under ntsync.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NO_ESYNC", "Proton", "enum", "",
+              "Do not use eventfd-based in-process synchronization primitives (disables Esync).",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NO_FSYNC", "Proton", "enum", "",
+              "Do not use futex-based in-process synchronization primitives (disables Fsync). "
+              "Automatically disabled anyway on systems without FUTEX_WAIT_MULTIPLE support.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_PRIORITY_HIGH", "Proton", "enum", "",
+              "Not part of any official Proton, Proton-CachyOS or Proton-GE variable table — "
+              "no confirmed source reads this exact name. Community shorthand for 'give the "
+              "game process a higher scheduling priority' is usually done via a launch wrapper "
+              "(gamemoderun, CachyOS's game-performance) rather than an env var read by Proton "
+              "itself. Kept here so the value is captured, but verify it actually does anything "
+              "on your setup before relying on it.",
+              options=["0", "1"]),
+    # ── HDR / Display ────────────────────────────────────────────────────────
+    EnvVarDef("PROTON_ENABLE_HDR", "Proton", "enum", "",
+              "Legacy HDR toggle. Retired in current Proton-CachyOS in favour of DXVK_HDR "
+              "(see the DXVK category), but Valve's stable Proton and most Proton-GE builds "
+              "still read this name directly. Combine with ENABLE_HDR_WSI if needed.",
+              options=["0", "1"]),
+    EnvVarDef("ENABLE_HDR_WSI", "Proton", "enum", "",
+              "Enables the HDR window-system-integration Vulkan extension path. Needed "
+              "alongside DXVK_HDR/PROTON_ENABLE_HDR on NVIDIA driver versions older than "
+              "595.x, or together with a compositor-side HDR layer (e.g. vk-hdr-layer on "
+              "KDE 6) when the compositor itself needs to be told HDR is coming.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_ENABLE_WAYLAND", "Proton", "enum", "",
+              "Enable Wine's native winewayland.drv instead of XWayland/winex11.drv. "
+              "Experimental — can improve latency and frame pacing and is required for "
+              "HDR without Gamescope, but currently breaks the Steam Overlay and Steam "
+              "Input in several builds. Alias: PROTON_USE_WAYLAND.",
+              options=["0", "1"]),
+    # ── NVIDIA / NGX ─────────────────────────────────────────────────────────
+    EnvVarDef("PROTON_HIDE_NVIDIA_GPU", "Proton", "enum", "",
+              "Force NVIDIA GPUs to always be reported as AMD GPUs. Some games require this "
+              "if they depend on Windows-only NVIDIA driver functionality. See also DXVK's "
+              "nvapiHack config, which only affects reporting from Direct3D.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_ENABLE_NVAPI", "Proton", "enum", "",
+              "Enable NVIDIA's NVAPI GPU support library inside the Wine prefix. Required for "
+              "DLSS, Reflex, and MFG in titles that aren't already on Proton's built-in NVAPI "
+              "allow-list. Usually paired with PROTON_HIDE_NVIDIA_GPU=0.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_DISABLE_NVAPI", "Proton", "enum", "",
+              "Disable NVIDIA's NVAPI GPU support library. Occasionally fixes crashes or low "
+              "performance in titles that have buggy NVAPI code paths on Linux.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NVAPI_BYPASS", "Proton", "enum", "",
+              "Not a documented Proton/DXVK/VKD3D variable — no official source for this "
+              "exact name was found. Most likely a mix-up with PROTON_DISABLE_NVAPI or "
+              "DXVK_ENABLE_NVAPI (see the DXVK category). Kept here so the typed value is "
+              "captured, but treat it as unconfirmed.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_ENABLE_NGX_UPDATER", "Proton", "enum", "",
+              "Enables NVIDIA's NGX Updater inside the Wine prefix, letting NGX Core download "
+              "newer DLSS/DLSS-G DLLs at runtime instead of using the ones shipped with the "
+              "game. This is the one-launch-option way to force a newer DLSS preset via "
+              "DXVK_NVAPI_DRS_NGX_* (see DXVK-NVAPI category). Known to cause 2nd-run crashes "
+              "in a few Unreal Engine titles — disable it again if that happens.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_DLSS_UPGRADE", "Proton", "string", "",
+              "Automatically download and use a newer nvngx_dlss(d|g).dll than the one the "
+              "game ships with. Set to 1 for the latest known-good version, or a specific "
+              "version string (e.g. '310.2') to pin one. Also sets DXVK_NVAPI_DRS_SETTINGS "
+              "to the latest preset unless you override it yourself.",
+              placeholder="1 or e.g. 310.2"),
+    EnvVarDef("PROTON_NVIDIA_LIBS", "Proton", "enum", "",
+              "Enable alternative NVIDIA library shims (nvcuda, nvenc, nvml, nvoptix) missing "
+              "from stock Proton. Needed for things like hardware-accelerated PhysX. Only "
+              "enable when a game actually needs it — incompatible with PROTON_USE_WOW64=1.",
+              options=["0", "1"]),
+    # ── Renderer / Latency ───────────────────────────────────────────────────
+    EnvVarDef("PROTON_USE_WINED3D", "Proton", "enum", "",
+              "Use OpenGL-based wined3d instead of Vulkan-based DXVK for d3d11/d3d10/d3d9. "
+              "Rarely an improvement, but occasionally works around a DXVK-specific bug.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_DXVK_LOWLATENCY", "Proton", "enum", "",
+              "Enable the dxvk-low-latency fork (Proton-CachyOS/community builds), which adds "
+              "low-latency frame pacing on top of DXVK to reduce input lag and improve frame "
+              "pacing consistency. Mainly worth it in single-player titles.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_DXVK_LLASYNC", "Proton", "string", "",
+              "Not a documented Proton/Proton-CachyOS variable under this exact spelling. "
+              "Most likely intended as PROTON_DXVK_LOWLATENCY (low-latency frame pacing) or "
+              "the now-removed PROTON_DXVK_GPLASYNC (old async-compile patch). Kept here so "
+              "the typed value is captured, but treat it as unconfirmed.",
+              placeholder="likely meant PROTON_DXVK_LOWLATENCY"),
+    EnvVarDef("PROTON_VKD3D_HEAP", "Proton", "enum", "",
+              "Retired in current Proton-CachyOS with no replacement. Historically toggled an "
+              "alternate vkd3d-proton heap allocation strategy. Kept here for older builds.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_LOCAL_SHADER_CACHE", "Proton", "enum", "",
+              "Enable a per-game shader cache even when Steam's own 'Shader Pre-Caching' is "
+              "off, mimicking it by keeping each game's cache under "
+              "<steamlibrary>/shadercache/<appid>. Does not precompile shaders ahead of time — "
+              "it only isolates each game's cache.",
+              options=["0", "1"]),
+    # ── Input / Window ───────────────────────────────────────────────────────
+    EnvVarDef("PROTON_PREFER_SDL", "Proton", "enum", "",
+              "Use SDL for controller input instead of HIDRAW/Steam Input. Can help controller "
+              "detection issues under winewayland.drv. Alias: PROTON_USE_SDL.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NO_WM_DECORATION", "Proton", "enum", "",
+              "Disable window decorations drawn by the window manager, letting Wine draw its "
+              "own decorations instead. Occasionally fixes windowed-mode focus/resize glitches.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_FORCE_LARGE_ADDRESS_AWARE", "Proton", "enum", "",
+              "Force Wine to enable the LARGE_ADDRESS_AWARE flag for all executables, letting "
+              "32-bit processes use more than 2 GiB of address space. Enabled by default.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_SET_GAME_DRIVE", "Proton", "enum", "",
+              "Create an S: drive inside the Wine prefix pointing at the Steam library that "
+              "contains the game. Some titles look for their install on a specific drive letter.",
+              options=["0", "1"]),
+    # ── Debug ────────────────────────────────────────────────────────────────
+    EnvVarDef("PROTON_LOG", "Proton", "enum", "",
+              "Dump a debug log to $PROTON_LOG_DIR/steam-$APPID.log. Set to 1 for the default "
+              "WINEDEBUG channels, or a string to append extra channels to the default set.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_LOG_DIR", "Proton", "string", "",
+              "Directory to write PROTON_LOG output into. Defaults to your home directory.",
+              placeholder="/path/to/log/dir"),
+]
+
+# ============================================================================
+# Wine Environment Variables (WINE_* / WINEDEBUG, Wine + Proton runtime)
+# ============================================================================
+
+WINE_ENV_VARS: List[EnvVarDef] = [
+    # ── CPU / Scheduling ─────────────────────────────────────────────────────
+    EnvVarDef("WINE_CPU_TOPOLOGY", "Wine", "string", "",
+              "Overrides the CPU topology Wine reports to the game: 'N:i,j,k,...' exposes N "
+              "logical CPUs, mapped onto host CPU indices i,j,k,.... Works around games that "
+              "crash or refuse to launch on very high thread-count systems (Far Cry 4, "
+              "Warhammer 40k: Space Marine and others cap out around 26-31 threads).",
+              placeholder="e.g. 12:0,1,2,3,4,5,6,7,8,9,10,11"),
+    EnvVarDef("WINE_DISABLE_HARDWARE_SCHEDULING", "Wine", "enum", "",
+              "Disable Wine's hardware-accelerated GPU scheduling emulation path. Community "
+              "workaround for titles (e.g. RTX Remix ports) that misbehave when this path is "
+              "active on Linux.",
+              options=["0", "1"]),
+    # ── Rendering Workarounds ────────────────────────────────────────────────
+    EnvVarDef("WINE_DISABLE_VULKAN_OPWR", "Wine", "enum", "",
+              "Disable Vulkan 'other process window rendering'. Works around issues on "
+              "Wayland where the blit ends up one frame behind (compat string: noopwr).",
+              options=["0", "1"]),
+    EnvVarDef("WINE_FULLSCREEN_INTEGER_SCALING", "Wine", "enum", "",
+              "Enable integer scaling in fullscreen mode, for sharp pixel-perfect upscaling "
+              "instead of a blurry bilinear stretch.",
+              options=["0", "1"]),
+    EnvVarDef("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER", "Wine", "enum", "",
+              "Workaround for video/audio playback issues in some games caused by incomplete "
+              "IMFDXGIDeviceManager support (compat string: nomfdxgiman).",
+              options=["0", "1"]),
+    EnvVarDef("WINE_USE_KWIN_HACKS", "Wine", "enum", "",
+              "Enable KDE-specific windowing workarounds that can help on KDE Plasma older "
+              "than 6.4 on Wayland or older than 6.6 on X11.",
+              options=["0", "1"]),
+    # ── Audio ────────────────────────────────────────────────────────────────
+    EnvVarDef("WINEPULSE_FAST_POLLING", "Wine", "enum", "",
+              "Retired variable (no longer read by current Proton-CachyOS). Used to help "
+              "eliminate crackling with the default PulseAudio driver, at the cost of rare "
+              "crackling in some titles (e.g. God of War Ragnarok) with power-of-two quantum "
+              "sizes like 512/768/1024. Kept here for older Proton/Wine builds.",
+              options=["0", "1"]),
+    EnvVarDef("WINEALSA_CHANNELS", "Wine", "enum", "",
+              "Select the channel count for the winealsa driver, or force-disable spatial "
+              "audio. 2 disables spatial audio; 4/6/8 select 2-front+2-rear/5.1/7.1. Useful "
+              "when dialogue or effects come out of the wrong speaker.",
+              options=["2", "4", "6", "8"]),
+    EnvVarDef("WINEALSA_SPATIAL", "Wine", "enum", "",
+              "Properly downmix spatial audio (including height channels) with winealsa. "
+              "Only recommended if WINEALSA_CHANNELS alone still sounds wrong.",
+              options=["0", "1"]),
+    # ── Network ──────────────────────────────────────────────────────────────
+    EnvVarDef("WINE_BLOCK_HOSTS", "Wine", "string", "",
+              "Comma- or semicolon-separated list of hosts Wine should refuse to connect to "
+              "(max 16 hosts, 256 chars each). Useful for blocking telemetry/DRM phone-home "
+              "hosts that cause launch hangs.",
+              placeholder="host1.org,host2.net"),
+    # ── Debug ────────────────────────────────────────────────────────────────
+    EnvVarDef("WINEDEBUG", "Wine", "flags", "",
+              "Wine's own debug channel logging control. '-all' silences everything (fastest, "
+              "recommended for normal play); '+all' is maximally verbose. Combine toggles with "
+              "commas, e.g. '-all,+loaded' to see only module loads.",
+              options=["-all", "+all", "+relay", "+seh", "+heap", "+loaded",
+                       "+module", "+process", "+timestamp", "+pid", "+tid"]),
+]
+
+# ============================================================================
+# DXVK-NVAPI Environment Variables (jp7677/dxvk-nvapi runtime tuning)
+# ============================================================================
+
+DXVK_NVAPI_ENV_VARS: List[EnvVarDef] = [
+    # ── D3D12 / Shader Extensions ────────────────────────────────────────────
+    EnvVarDef("DXVK_NVAPI_D3D12_NV_SHADER_EXTN", "DXVK-NVAPI", "enum", "",
+              "Enables experimental support for NVIDIA shader extensions in D3D12 titles "
+              "(via VKD3D-Proton).",
+              options=["0", "1"]),
+    # ── NGX / DLSS Debug ─────────────────────────────────────────────────────
+    EnvVarDef("DXVK_NVAPI_SET_NGX_DEBUG_OPTIONS", "DXVK-NVAPI", "string", "",
+              "Comma-separated key=value pairs forwarded to NVIDIA NGX's own debug-option "
+              "system — the same mechanism as the Windows registry indicator keys. Commonly "
+              "used to show an on-screen DLSS/DLSS-G indicator to confirm which preset/build "
+              "is actually active.",
+              placeholder="DLSSIndicator=1024,DLSSGIndicator=2"),
+    EnvVarDef("__NV_SIGNED_LOAD_CHECK", "DXVK-NVAPI", "enum", "",
+              "Disables the NGX Core signature check that normally blocks loading non-"
+              "NVIDIA-signed NGX features. Only disable this when you're confident every NGX "
+              "feature DLL on the system is authentic — it exists to stop malicious NGX "
+              "feature loading.",
+              options=["none"]),
+    # ── Vulkan Reflex Layer ──────────────────────────────────────────────────
+    EnvVarDef("DXVK_NVAPI_VKREFLEX", "DXVK-NVAPI", "enum", "",
+              "Enables DXVK-NVAPI's own Vulkan Reflex compatibility layer, for Reflex support "
+              "in native-Vulkan titles (Portal RTX, Path of Exile 1/2, DOOM: The Dark Ages). "
+              "Disabled by default even when installed, since it can interfere with other "
+              "Vulkan apps that don't use Reflex. Formerly named PROTON_VKREFLEX.",
+              options=["0", "1"]),
+    EnvVarDef("DISABLE_DXVK_NVAPI_VKREFLEX", "DXVK-NVAPI", "enum", "",
+              "Any non-empty value forcibly disables the Vulkan Reflex layer, overriding "
+              "DXVK_NVAPI_VKREFLEX=1.",
+              options=["1"]),
+    EnvVarDef("DXVK_NVAPI_VKREFLEX_LAYER_LOG_LEVEL", "DXVK-NVAPI", "enum", "",
+              "Log verbosity for the Vulkan Reflex compatibility layer specifically (separate "
+              "from DXVK_NVAPI_LOG_LEVEL below).",
+              options=["none", "error", "warn", "info", "debug", "trace"]),
+    # ── General Logging / Driver Reporting ───────────────────────────────────
+    EnvVarDef("DXVK_NVAPI_LOG_LEVEL", "DXVK-NVAPI", "enum", "",
+              "Log verbosity for DXVK-NVAPI itself. In most released versions only 'info' "
+              "produces output (no other level does anything); logging is off by default.",
+              options=["none", "info"]),
+    EnvVarDef("DXVK_NVAPI_LOG_PATH", "DXVK-NVAPI", "string", "",
+              "Also write DXVK-NVAPI's log to dxvk-nvapi.log in this directory, in addition "
+              "to console output. Entries are appended to an existing file.",
+              placeholder="/path/to/log/dir"),
+    EnvVarDef("DXVK_NVAPI_DRIVER_VERSION", "DXVK-NVAPI", "int", "",
+              "Override the driver version DXVK-NVAPI reports to the game. Value is the "
+              "version number with no dots, e.g. 47141 reports as driver 471.41.",
+              placeholder="e.g. 47141"),
+    EnvVarDef("DXVK_NVAPI_ALLOW_OTHER_DRIVERS", "DXVK-NVAPI", "enum", "",
+              "Allow using DXVK-NVAPI without an NVIDIA GPU on the proprietary driver. Useful "
+              "for exercising NVAPI D3D11 extensions on a non-NVIDIA GPU (e.g. Mesa/NVK).",
+              options=["0", "1"]),
+]
+
+# ============================================================================
+# NVIDIA Smooth Motion Environment Variables (VK_LAYER_NV_present / NVPresent)
+# ============================================================================
+
+NVPRESENT_ENV_VARS: List[EnvVarDef] = [
+    EnvVarDef("NVPRESENT_ENABLE_SMOOTH_MOTION", "NVIDIA Smooth Motion", "enum", "",
+              "Enables VK_LAYER_NV_present, NVIDIA's driver-based frame-interpolation layer "
+              "for Vulkan titles that don't have DLSS Frame Generation. RTX 50-series only.",
+              options=["0", "1"]),
+    EnvVarDef("NVPRESENT_QUEUE_FAMILY", "NVIDIA Smooth Motion", "enum", "",
+              "The layer presents from an asynchronous compute queue by default, which can "
+              "conflict with some third-party overlays. Set to 1 to present from the graphics "
+              "queue instead, at a small performance cost.",
+              options=["0", "1"]),
+    EnvVarDef("NVPRESENT_LOG_LEVEL", "NVIDIA Smooth Motion", "enum", "",
+              "Debug log verbosity for the NVPresent/Smooth Motion layer. Logs go to stderr "
+              "by default; redirect with NVPRESENT_LOG_FILE. If nothing gets logged, check "
+              "with VK_LOADER_DEBUG=layer whether the layer is loading at all.",
+              options=["0", "1", "2", "3", "4"]),
+    EnvVarDef("NVPRESENT_LOG_FILE", "NVIDIA Smooth Motion", "string", "",
+              "Redirect NVPresent/Smooth Motion debug logging to this file instead of stderr.",
+              placeholder="/tmp/nvpresent.log"),
+]
+
+# ============================================================================
+# System / Loader Environment Variables (Vulkan loader, dynamic linker, SDL)
+# ============================================================================
+
+SYS_ENV_VARS: List[EnvVarDef] = [
+    # ── Vulkan Loader ────────────────────────────────────────────────────────
+    EnvVarDef("VK_DRIVER_FILES", "System / Loader", "string", "",
+              "Colon-separated list of Vulkan ICD manifest JSON files for the loader to use, "
+              "overriding normal driver discovery. Modern replacement for the older "
+              "VK_ICD_FILENAMES name (both are still accepted).",
+              placeholder="/usr/share/vulkan/icd.d/nvidia_icd.json"),
+    EnvVarDef("VK_LOADER_DEBUG", "System / Loader", "flags", "",
+              "Vulkan loader debug output channels. 'layer' shows which implicit/explicit "
+              "layers are being discovered and loaded — the first thing to check when a "
+              "Vulkan layer (NVPresent, MangoHud, gamescope's WSI layer, ...) doesn't seem "
+              "to be active.",
+              options=["error", "warn", "info", "debug", "layer", "all"]),
+    # ── Dynamic Linker ───────────────────────────────────────────────────────
+    EnvVarDef("LD_PRELOAD", "System / Loader", "string", "",
+              "Colon-separated list of shared libraries to load before all others for every "
+              "process. Commonly used to preload an alternative allocator such as jemalloc "
+              "or tcmalloc to reduce heap fragmentation/allocation overhead in some titles, "
+              "or to inject overlay/hook libraries.",
+              placeholder="/usr/lib64/libjemalloc.so:/usr/lib32/libjemalloc.so"),
+    EnvVarDef("LD_BIND_NOW", "System / Loader", "enum", "",
+              "Force immediate (non-lazy) symbol binding at process start instead of lazy "
+              "PLT resolution on first call. Slightly longer startup in exchange for removing "
+              "small first-call resolution stutters later — mostly a micro-optimization.",
+              options=["0", "1"]),
+    # ── Display Backend ──────────────────────────────────────────────────────
+    EnvVarDef("__GLX_VENDOR_LIBRARY_NAME", "System / Loader", "enum", "",
+              "Forces which GLX vendor implementation libglvnd's vendor-neutral dispatch "
+              "loads. Set to 'nvidia' to force the NVIDIA GLX path on hybrid/PRIME laptops "
+              "where Mesa might otherwise be picked for the display GPU.",
+              options=["nvidia", "mesa"]),
+    EnvVarDef("SDL_VIDEODRIVER", "System / Loader", "enum", "",
+              "SDL2 hint forcing which video backend SDL uses. 'wayland' forces native "
+              "Wayland instead of SDL's default XWayland fallback; useful together with "
+              "PROTON_ENABLE_WAYLAND.",
+              options=["x11", "wayland", "kmsdrm", "offscreen"]),
+]
+
+ALL_ENV_VARS = (DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS + PROTON_ENV_VARS +
+                 WINE_ENV_VARS + DXVK_NVAPI_ENV_VARS + NVPRESENT_ENV_VARS +
+                 SYS_ENV_VARS + FLM_ENV_VARS)
 
 
 # ============================================================================
@@ -3584,6 +3947,11 @@ QScrollBar::sub-page:vertical{
         for cat_label, env_list in [("DXVK", DXVK_ENV_VARS),
                                      ("VKD3D-Proton", VKD3D_ENV_VARS),
                                      ("NVIDIA __GL", NV_ENV_VARS),
+                                     ("Proton", PROTON_ENV_VARS),
+                                     ("Wine", WINE_ENV_VARS),
+                                     ("DXVK-NVAPI", DXVK_NVAPI_ENV_VARS),
+                                     ("NVIDIA Smooth Motion", NVPRESENT_ENV_VARS),
+                                     ("System / Loader", SYS_ENV_VARS),
                                      ("vk_flip_meter", FLM_ENV_VARS)]:
             if filter_text:
                 matching = [
