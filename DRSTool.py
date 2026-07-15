@@ -3400,6 +3400,87 @@ NV_ENV_VARS: List[EnvVarDef] = [
               "games with the proprietary NVIDIA Linux Vulkan driver. "
               "Steam launch options: __GL_13ebad=0x1 %command%",
               options=["0x1"]),
+    # ── Latency / Frame Queue ────────────────────────────────────────────────
+    EnvVarDef("__GL_MaxFramesAllowed", "NVIDIA __GL", "enum", "",
+              "Caps how many frames the OpenGL driver will queue ahead of the display "
+              "(pre-rendered frames). Defaults to 2. Set to 1 for the Linux equivalent of "
+              "Windows' NVIDIA 'Low Latency Mode: On' — noticeably reduces input lag and "
+              "frame-pacing jitter in compositors/games that rely on it. 0 aims for the "
+              "'Ultra' equivalent but is reported to not fully work on Linux.",
+              options=["0", "1", "2"]),
+    EnvVarDef("__GL_THREADED_OPTIMIZATIONS", "NVIDIA __GL", "enum", "",
+              "Offloads some of the OpenGL driver's CPU-side work to a separate worker "
+              "thread. Helps CPU-bound OpenGL titles; can hurt titles that make heavy "
+              "synchronous calls like glGet*. Requires the app to link pthreads (use "
+              "LD_PRELOAD=libpthread.so.0 if it doesn't). Enabled by default under some "
+              "conditions with self-disable if it isn't helping; this forces it on.",
+              options=["0", "1"]),
+    EnvVarDef("__GL_SYNC_TO_VBLANK", "NVIDIA __GL", "enum", "",
+              "Classic OpenGL VSync toggle. 0 lets glXSwapBuffers return immediately "
+              "without waiting for vblank (tearing possible, lowest latency); 1 (default) "
+              "syncs every swap to the display's vertical refresh.",
+              options=["0", "1"]),
+    # ── G-SYNC / VRR ─────────────────────────────────────────────────────────
+    EnvVarDef("__GL_GSYNC_ALLOWED", "NVIDIA __GL", "enum", "",
+              "Allows (1) or blocks (0) G-SYNC/variable refresh rate on a G-SYNC-capable "
+              "display for OpenGL applications. NOTE: only affects OpenGL — Vulkan/DXVK/"
+              "VKD3D-Proton titles ignore this entirely; VRR for those is controlled at the "
+              "compositor/display-server level instead.",
+              options=["0", "1"]),
+    EnvVarDef("__GL_VRR_ALLOWED", "NVIDIA __GL", "enum", "",
+              "Same G-SYNC/adaptive-sync allow/block toggle as __GL_GSYNC_ALLOWED, under the "
+              "more generic 'VRR' name. Same OpenGL-only caveat applies — has no effect on "
+              "Vulkan applications.",
+              options=["0", "1"]),
+    # ── Shader Disk Cache ────────────────────────────────────────────────────
+    EnvVarDef("__GL_SHADER_DISK_CACHE", "NVIDIA __GL", "enum", "",
+              "Master on/off switch for the NVIDIA OpenGL driver's shader disk cache. The "
+              "other __GL_SHADER_DISK_CACHE_* variables only take effect while this is on "
+              "(on by default when a cache directory is resolvable).",
+              options=["0", "1"]),
+    EnvVarDef("__GL_SHADER_DISK_CACHE_SIZE", "NVIDIA __GL", "int", "",
+              "Maximum size in bytes of the NVIDIA OpenGL shader disk cache. Once exceeded, "
+              "older entries are evicted. Raise this if a big/long game library keeps "
+              "thrashing the cache and causing re-compiles.",
+              placeholder="e.g. 1073741824 (1 GiB)"),
+    # ── Antialiasing ─────────────────────────────────────────────────────────
+    EnvVarDef("__GL_FSAA_MODE", "NVIDIA __GL", "int", "",
+              "Forces a specific driver-level full-screen antialiasing mode, using the same "
+              "integer values as `nvidia-settings --assign FSAA=N`. Run `nvidia-settings "
+              "--query fsaa` to list the modes your GPU supports. Only takes effect for "
+              "modes the app doesn't already control itself (see FSAAAppControlled).",
+              placeholder="e.g. 5"),
+]
+
+# ============================================================================
+# NVIDIA PRIME / Hybrid GPU Environment Variables (Optimus laptops)
+# ============================================================================
+
+NVIDIA_PRIME_ENV_VARS: List[EnvVarDef] = [
+    EnvVarDef("__NV_PRIME_RENDER_OFFLOAD", "NVIDIA PRIME", "enum", "",
+              "On a hybrid laptop (iGPU driving the display, NVIDIA dGPU idle), forces the "
+              "OpenGL/EGL side of an application to render on the NVIDIA GPU via PRIME "
+              "render offload instead of the iGPU. Pair with __GLX_VENDOR_LIBRARY_NAME=nvidia "
+              "(System / Loader category) and __VK_LAYER_NV_optimus below for the Vulkan half. "
+              "Directly relevant on this machine's Ryzen iGPU + RTX 4080 Mobile combo.",
+              options=["0", "1"]),
+    EnvVarDef("__NV_PRIME_RENDER_OFFLOAD_PROVIDER", "NVIDIA PRIME", "string", "",
+              "Only needed with more than one discrete GPU to offload to: names the specific "
+              "Xorg PRIME provider to render on, e.g. 'NVIDIA-G0'. Find yours with "
+              "`xrandr --listproviders`. Leave unset on a normal single-dGPU laptop.",
+              placeholder="e.g. NVIDIA-G0"),
+    EnvVarDef("__VK_LAYER_NV_optimus", "NVIDIA PRIME", "enum", "",
+              "Loads NVIDIA's Vulkan PRIME-offload layer so a Vulkan app actually picks the "
+              "NVIDIA GPU. Needed because Vulkan apps otherwise just take the first device "
+              "the loader enumerates, which on a hybrid laptop is often the iGPU. "
+              "'NVIDIA_only' is the value actually used, not a boolean.",
+              options=["NVIDIA_only"]),
+    EnvVarDef("DRI_PRIME", "NVIDIA PRIME", "string", "",
+              "The Mesa-side equivalent PRIME offload switch (1 = use the secondary GPU, or "
+              "a specific 'pci-xxxx_xx_xx_x' bus address). Mainly relevant here if you're "
+              "running the open-source Nouveau driver on the RTX 4080 Mobile instead of the "
+              "proprietary driver — has no effect on the proprietary NVIDIA driver path.",
+              placeholder="1 or pci-0000_01_00_0"),
 ]
 
 FLM_ENV_VARS: List[EnvVarDef] = [
@@ -3611,6 +3692,35 @@ PROTON_ENV_VARS: List[EnvVarDef] = [
               "from stock Proton. Needed for things like hardware-accelerated PhysX. Only "
               "enable when a game actually needs it — incompatible with PROTON_USE_WOW64=1.",
               options=["0", "1"]),
+    EnvVarDef("PROTON_NVIDIA_LIBS_NO_32BIT", "Proton", "enum", "",
+              "Use together with PROTON_NVIDIA_LIBS to restrict the shims to 64-bit only. "
+              "Fixes bad performance/crashes on RTX 4000/5000-series cards when the 32-bit "
+              "nvidia-libs shims get loaded for a 32-bit game.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NVIDIA_NVCUDA", "Proton", "enum", "",
+              "Enable only the alternative nvcuda.dll shim from nvidia-libs, without pulling "
+              "in nvenc/nvml/nvoptix too. Narrower alternative to PROTON_NVIDIA_LIBS.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NVIDIA_NVENC", "Proton", "enum", "",
+              "Enable only the alternative NVENC hardware-encode shim from nvidia-libs. "
+              "Relevant for in-game recording/streaming pipelines that call NVENC directly.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NVIDIA_NVML", "Proton", "enum", "",
+              "Enable only the NVML shim from nvidia-libs (GPU temperature/utilization "
+              "queries). Lets in-game or overlay tools read real GPU stats. Enabled by "
+              "default in Proton-CachyOS.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NVIDIA_NVOPTIX", "Proton", "enum", "",
+              "Enable only the OptiX ray-tracing shim from nvidia-libs. Needed by the rare "
+              "title that uses NVIDIA OptiX directly rather than DXR/VKD3D-Proton's "
+              "raytracing path.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_DLSS_INDICATOR", "Proton", "enum", "",
+              "Show a small on-screen DLSS status overlay confirming DLSS is actually active "
+              "and which mode it's running in — the same overlay toggled by "
+              "DXVK_NVAPI_SET_NGX_DEBUG_OPTIONS=DLSSIndicator=1024 (DXVK-NVAPI category), "
+              "just as a one-flag shortcut.",
+              options=["0", "1"]),
     # ── Renderer / Latency ───────────────────────────────────────────────────
     EnvVarDef("PROTON_USE_WINED3D", "Proton", "enum", "",
               "Use OpenGL-based wined3d instead of Vulkan-based DXVK for d3d11/d3d10/d3d9. "
@@ -3653,6 +3763,25 @@ PROTON_ENV_VARS: List[EnvVarDef] = [
     EnvVarDef("PROTON_SET_GAME_DRIVE", "Proton", "enum", "",
               "Create an S: drive inside the Wine prefix pointing at the Steam library that "
               "contains the game. Some titles look for their install on a specific drive letter.",
+              options=["0", "1"]),
+    # ── Meta / Compatibility ─────────────────────────────────────────────────
+    EnvVarDef("PROTON_ADD_CONFIG", "Proton", "flags", "",
+              "[Proton-EM / Proton-CachyOS] Comma-separated shortcut list that expands to "
+              "several other variables at once, e.g. PROTON_ADD_CONFIG=wayland,ntsync is the "
+              "same as setting PROTON_USE_WAYLAND=1 PROTON_USE_NTSYNC=1. Handy for combining "
+              "several of the toggles above without a wall of launch options.",
+              options=["wayland", "ntsync", "nontsync", "sdlinput", "wow64"]),
+    EnvVarDef("PROTON_USE_WOW64", "Proton", "enum", "",
+              "[GE-Proton / Proton-EM / Proton-CachyOS, experimental] Run the game through "
+              "Wine's newer WoW64 architecture (32-bit game, 64-bit Unix process via thunks) "
+              "instead of a traditional 32-bit process. Some 32-bit titles report smoother "
+              "frame timings with this on; others are still rough since it's experimental. "
+              "Incompatible with PROTON_NVIDIA_LIBS.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_HEAP_DELAY_FREE", "Proton", "enum", "",
+              "Delay freeing some memory instead of releasing it immediately, to work around "
+              "application use-after-free bugs. A stability tweak more than a speed one, but "
+              "avoids the stutter/crash a UAF bug would otherwise cause mid-game.",
               options=["0", "1"]),
     # ── Debug ────────────────────────────────────────────────────────────────
     EnvVarDef("PROTON_LOG", "Proton", "enum", "",
@@ -3698,6 +3827,26 @@ WINE_ENV_VARS: List[EnvVarDef] = [
               "Enable KDE-specific windowing workarounds that can help on KDE Plasma older "
               "than 6.4 on Wayland or older than 6.6 on X11.",
               options=["0", "1"]),
+    # ── Wayland Input (Proton-EM only) ───────────────────────────────────────
+    EnvVarDef("WAYLANDDRV_RAWINPUT", "Wine", "string", "",
+              "[Proton-EM only, 10.0-1e+] Tunes mouse input under winewayland.drv. Set to 0 "
+              "to fall back to accelerated (OS pointer-accel) input if raw input feels overly "
+              "sensitive. On Proton-EM 10.0-2D+ you can instead pass any positive real number "
+              "(e.g. 0.5) as a sensitivity multiplier for raw input — directly useful for "
+              "dialing in mouse feel in FPS/aim-heavy titles run through the Wayland driver.",
+              placeholder="0, or a multiplier like 0.5"),
+    EnvVarDef("WAYLANDDRV_PRIMARY_MONITOR", "Wine", "string", "",
+              "[Proton-EM only, 10.0-1b+] Explicitly names which monitor winewayland.drv "
+              "should treat as primary (e.g. for fullscreen placement), since Wayland has no "
+              "concept of a global primary monitor the way X11 does. Value is a compositor "
+              "output name like 'eDP-1'. Shouldn't be needed on Proton-EM 10.0-25+.",
+              placeholder="e.g. eDP-1"),
+    EnvVarDef("WINE_WAYLAND_HACKS", "Wine", "enum", "",
+              "[Proton-EM / Proton-CachyOS] Master toggle for winewayland.drv-specific "
+              "workarounds. Set to 0 to disable them if they're the cause of an issue — one "
+              "known case is critical-section timeouts in some launchers (e.g. EA App via "
+              "the link2ea protocol) that clear up with this off.",
+              options=["0", "1"]),
     # ── Audio ────────────────────────────────────────────────────────────────
     EnvVarDef("WINEPULSE_FAST_POLLING", "Wine", "enum", "",
               "Retired variable (no longer read by current Proton-CachyOS). Used to help "
@@ -3720,6 +3869,11 @@ WINE_ENV_VARS: List[EnvVarDef] = [
               "(max 16 hosts, 256 chars each). Useful for blocking telemetry/DRM phone-home "
               "hosts that cause launch hangs.",
               placeholder="host1.org,host2.net"),
+    EnvVarDef("WINE_ENABLE_TIMEOUT_FIX", "Wine", "enum", "",
+              "[Proton-DW (dwproton) only] Works around connection-timeout failures some "
+              "setups hit launching live-service titles (originally documented for Genshin "
+              "Impact / Zenless Zone Zero) that otherwise hang or fail to reach their servers.",
+              options=["0", "1"]),
     # ── Debug ────────────────────────────────────────────────────────────────
     EnvVarDef("WINEDEBUG", "Wine", "flags", "",
               "Wine's own debug channel logging control. '-all' silences everything (fastest, "
@@ -3784,6 +3938,13 @@ DXVK_NVAPI_ENV_VARS: List[EnvVarDef] = [
               "Allow using DXVK-NVAPI without an NVIDIA GPU on the proprietary driver. Useful "
               "for exercising NVAPI D3D11 extensions on a non-NVIDIA GPU (e.g. Mesa/NVK).",
               options=["0", "1"]),
+    # ── DLSS Frame Generation ────────────────────────────────────────────────
+    EnvVarDef("DXVK_NVAPI_DRS_NGX_DLSSG_MULTI_FRAME_COUNT", "DXVK-NVAPI", "enum", "",
+              "Sets the DLSS Frame Generation multiplier (Multi Frame Generation on RTX "
+              "40/50-series): 2 = classic 2x FG, 3/4 = generate 2-3 extra frames per rendered "
+              "frame on RTX 50-series. Quick single-flag alternative to building the full "
+              "DXVK_NVAPI_DRS_SETTINGS string by hand.",
+              options=["2", "3", "4"]),
 ]
 
 # ============================================================================
@@ -3852,8 +4013,8 @@ SYS_ENV_VARS: List[EnvVarDef] = [
               options=["x11", "wayland", "kmsdrm", "offscreen"]),
 ]
 
-ALL_ENV_VARS = (DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS + PROTON_ENV_VARS +
-                 WINE_ENV_VARS + DXVK_NVAPI_ENV_VARS + NVPRESENT_ENV_VARS +
+ALL_ENV_VARS = (DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS + NVIDIA_PRIME_ENV_VARS +
+                 PROTON_ENV_VARS + WINE_ENV_VARS + DXVK_NVAPI_ENV_VARS + NVPRESENT_ENV_VARS +
                  SYS_ENV_VARS + FLM_ENV_VARS)
 
 
@@ -3947,6 +4108,7 @@ QScrollBar::sub-page:vertical{
         for cat_label, env_list in [("DXVK", DXVK_ENV_VARS),
                                      ("VKD3D-Proton", VKD3D_ENV_VARS),
                                      ("NVIDIA __GL", NV_ENV_VARS),
+                                     ("NVIDIA PRIME", NVIDIA_PRIME_ENV_VARS),
                                      ("Proton", PROTON_ENV_VARS),
                                      ("Wine", WINE_ENV_VARS),
                                      ("DXVK-NVAPI", DXVK_NVAPI_ENV_VARS),
