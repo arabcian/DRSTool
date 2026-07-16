@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import Qt, Signal, QObject, QTimer, QProcess
-from PySide6.QtGui import QColor, QPalette, QFont
+from PySide6.QtGui import QColor, QPalette, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QListWidget, QListWidgetItem, QStackedWidget,
@@ -96,6 +96,84 @@ class EnvVarDef:
 
 
 APP_TITLE = "DXVK NVAPI DRS Settings Configurator"
+
+# Uygulama ikonu: script'in yanındaki assets/drstool.png dosyasından yüklenir.
+# Wayland altında sistem barı/taskbar ikonu genellikle .desktop dosyasındaki
+# Icon= alanına göre eşleşir; bu yüzden hem QApplication ikonu hem de
+# ensure_desktop_entry() ile bir .desktop girdisi kaydedilir.
+APP_ID = "drstool"
+_SCRIPT_DIR = Path(__file__).resolve().parent
+ICON_PATH = _SCRIPT_DIR / "assets" / "drstool.png"
+
+try:
+    import setproctitle
+    _HAVE_SETPROCTITLE = True
+except ImportError:
+    _HAVE_SETPROCTITLE = False
+
+
+def apply_wayland_app_id(app_id: str) -> None:
+    """python-exec2c gibi bir wrapper üzerinden (emerge/ebuild kurulumu) veya
+    doğrudan 'python3 DRSTool.py' ile çalıştırıldığında, gerçek process adı
+    'python3'/'python3.14' olarak kalır. KDE Plasma Wayland (KWin) altında
+    Qt'nin QApplication.setDesktopFileName() çağrısı bu durumda native
+    Wayland app_id protokol mesajını etkilemiyor; KWin app_id'yi gerçek
+    process adından türetiyor ve .desktop/Icon eşleşmesini kaybedip jenerik
+    Wayland ikonuna düşüyor.
+    setproctitle mevcutsa (dev-python/setproctitle veya `pip install
+    setproctitle`), argv[0] belleğini gerçekten patch'leyerek process adını
+    app_id ile aynı yapar — hem ebuild kurulumunda hem de repo'yu klonlayıp
+    doğrudan çalıştıranlarda (kurulum betiği/elle) aynı şekilde çalışır.
+    setproctitle yoksa sessizce atlanır; sadece ikon eşleşmesi etkilenir,
+    program normal çalışmaya devam eder."""
+    if not _HAVE_SETPROCTITLE:
+        return
+    try:
+        setproctitle.setproctitle(app_id)
+    except Exception:
+        pass
+
+
+def ensure_desktop_entry(icon_path: Path) -> None:
+    """~/.local/share/applications altına bir .desktop dosyası ve
+    ~/.local/share/icons altına ikonu kurar, böylece Wayland masaüstü
+    ortamı (GNOME/KDE/wlroots) pencereyi jenerik ikon yerine bu ikonla
+    eşleştirebilir. Sessizce başarısız olur; kritik değildir."""
+    try:
+        icons_dir = Path.home() / ".local" / "share" / "icons" / "hicolor" / "1024x1024" / "apps"
+        icons_dir.mkdir(parents=True, exist_ok=True)
+        installed_icon = icons_dir / f"{APP_ID}.png"
+        if icon_path.is_file():
+            if (not installed_icon.exists()
+                    or installed_icon.stat().st_mtime < icon_path.stat().st_mtime):
+                shutil.copyfile(icon_path, installed_icon)
+
+        apps_dir = Path.home() / ".local" / "share" / "applications"
+        apps_dir.mkdir(parents=True, exist_ok=True)
+        desktop_file = apps_dir / f"{APP_ID}.desktop"
+        exec_path = shlex.quote(str(Path(sys.argv[0]).resolve()))
+        desktop_contents = (
+            "[Desktop Entry]\n"
+            "Type=Application\n"
+            f"Name={APP_TITLE}\n"
+            f"Exec=python3 {exec_path}\n"
+            f"Icon={APP_ID}\n"
+            f"StartupWMClass={APP_ID}\n"
+            "Categories=Utility;\n"
+            "Terminal=false\n"
+        )
+        if not desktop_file.exists() or desktop_file.read_text() != desktop_contents:
+            desktop_file.write_text(desktop_contents)
+
+        # Icon cache güncellemesi (varsa); yoksa sessizce geç.
+        gtk_update = shutil.which("gtk-update-icon-cache")
+        if gtk_update:
+            import subprocess
+            base_icons_dir = Path.home() / ".local" / "share" / "icons" / "hicolor"
+            subprocess.run([gtk_update, "-f", "-t", str(base_icons_dir)],
+                           check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 # Shared style for the scrollable control area added to SettingEditorWidget
 # and EnvVarEditorWidget (see _build_scrollable_control_area below). Matches
@@ -5877,6 +5955,8 @@ class MainWindow(QMainWindow):
         self.all_settings = ALL_SETTINGS
 
         self.setWindowTitle(APP_TITLE)
+        if ICON_PATH.is_file():
+            self.setWindowIcon(QIcon(str(ICON_PATH)))
         self.setMinimumSize(900, 600)
         self.setStyleSheet("""
             QMainWindow { background: #0d0f12; }
@@ -6300,8 +6380,32 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    # Gerçek process adını (argv[0]) 'drstool' yapar — python-exec2c/python3
+    # olarak görünmesini önler. QApplication oluşturulmadan önce, mümkün
+    # olduğunca erken çağrılmalı ki Wayland platform eklentisi app_id'yi
+    # okurken zaten doğru argv[0]'ı görsün.
+    apply_wayland_app_id(APP_ID)
+
+    # Wayland altında pencere sınıfının .desktop girdisiyle eşleşmesi için
+    # QApplication oluşturulmadan önce app adı ayarlanır.
+    QApplication.setDesktopFileName(APP_ID)
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    app.setApplicationName(APP_TITLE)
+    app.setApplicationDisplayName(APP_TITLE)
+
+    if ICON_PATH.is_file():
+        app.setWindowIcon(QIcon(str(ICON_PATH)))
+    # NOT: ensure_desktop_entry() burada KASITLI olarak çağrılmıyor.
+    # Paket ebuild üzerinden kurulduğunda /usr/share/applications/drstool.desktop
+    # zaten doğru (Exec=drstool, doğrudan shebang'li çalıştırılabilir) girdiyi
+    # sağlıyor. Bu fonksiyon ~/.local/share/applications altına ayrıca
+    # Exec=python3 <path> şeklinde İKİNCİ bir .desktop yazıyordu; XDG öncelik
+    # sırasında kullanıcı dizini sistem dizininden önce geldiği için KDE bu
+    # ikinci (python3 sarmalı) girdiyi kullanıyor, Qt Wayland app_id'yi
+    # "python3" üzerinden türetiyor ve StartupWMClass eşleşmesi bozuluyor —
+    # sonuç: başlangıçta doğru ikon, pencere map olunca jenerik "W" ikonu.
 
     palette = QPalette()
     palette.setColor(QPalette.Window, QColor(13, 15, 18))
