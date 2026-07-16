@@ -4630,6 +4630,7 @@ QPushButton:pressed{ background:#a73434; }
             btn.setCheckable(True)
             if opt == cur:
                 btn.setChecked(True)
+            btn.setFixedHeight(26)
             btn.setStyleSheet("""
 QPushButton{
     background:#1a1f28;
