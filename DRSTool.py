@@ -2821,6 +2821,7 @@ class ArchListWidget(QListWidget):
         self.setSelectionMode(QListWidget.SingleSelection)
         self.setAlternatingRowColors(True)
         self.itemClicked.connect(self._on_item_clicked)
+        self.currentItemChanged.connect(self._on_current_item_changed)
         self.setFont(QFont("Segoe UI", 9))
 
         self.setStyleSheet("""
@@ -2878,6 +2879,10 @@ QScrollBar::sub-page:vertical{
 
     def populate(self, archs: List[GPUArch], selected_arch: Optional[GPUArch]):
         """Fill the list with architecture items, highlighting the selected one."""
+        # Block currentItemChanged for the rebuild - same reasoning as
+        # SettingsListWidget.populate: clear()+re-add can fire spurious
+        # selection-changed signals we don't want driving navigation here.
+        self.blockSignals(True)
         self.clear()
         # Add a category header (non-selectable)
         cat_item = QListWidgetItem("─── GPU Architectures ───")
@@ -2901,9 +2906,17 @@ QScrollBar::sub-page:vertical{
             else:
                 item.setForeground(QColor(200, 205, 216))
             self.addItem(item)
+        self.blockSignals(False)
 
     def _on_item_clicked(self, item):
         arch = item.data(Qt.UserRole)
+        if arch:
+            self.arch_selected.emit(arch)
+
+    def _on_current_item_changed(self, current, previous):
+        if current is None:
+            return
+        arch = current.data(Qt.UserRole)
         if arch:
             self.arch_selected.emit(arch)
 
@@ -4072,6 +4085,7 @@ class EnvVarsWidget(QListWidget):
         self.setSelectionMode(QListWidget.SingleSelection)
         self.setAlternatingRowColors(True)
         self.itemClicked.connect(self._on_item_clicked)
+        self.currentItemChanged.connect(self._on_current_item_changed)
         self.setFont(QFont("Segoe UI", 9))
         self.setStyleSheet("""
 QListWidget{
@@ -4130,6 +4144,10 @@ QScrollBar::sub-page:vertical{
         current_item = self.currentItem()
         current_name = current_item.data(Qt.UserRole) if current_item else None
 
+        # Block currentItemChanged for the rebuild - same reasoning as
+        # SettingsListWidget.populate: clear()+re-add can fire spurious
+        # selection-changed signals while typing in the search box.
+        self.blockSignals(True)
         self.clear()
         filter_lower = filter_text.lower()
 
@@ -4182,6 +4200,7 @@ QScrollBar::sub-page:vertical{
                 if item.data(Qt.UserRole) == current_name:
                     self.setCurrentItem(item)
                     break
+        self.blockSignals(False)
 
     def refresh_colors(self):
         """Re-color items to reflect current set/unset state."""
@@ -4203,6 +4222,13 @@ QScrollBar::sub-page:vertical{
 
     def _on_item_clicked(self, item):
         name = item.data(Qt.UserRole)
+        if name:
+            self.env_var_selected.emit(name)
+
+    def _on_current_item_changed(self, current, previous):
+        if current is None:
+            return
+        name = current.data(Qt.UserRole)
         if name:
             self.env_var_selected.emit(name)
 
@@ -4727,6 +4753,12 @@ class SettingsListWidget(QListWidget):
         self.setSelectionMode(QListWidget.SingleSelection)
         self.setAlternatingRowColors(True)
         self.itemClicked.connect(self._on_item_clicked)
+        # currentItemChanged also fires on keyboard Up/Down navigation (not
+        # just mouse clicks), so arrowing through the list opens each
+        # setting's detail the same way clicking it does. Category headers
+        # have Qt.NoItemFlags (not selectable), so Qt's keyboard handling
+        # already skips over them when arrowing past.
+        self.currentItemChanged.connect(self._on_current_item_changed)
         self.setFont(QFont("Segoe UI", 9))
 
         self.setStyleSheet("""
@@ -4783,6 +4815,13 @@ QScrollBar::sub-page:vertical{
 """)
 
     def populate(self, settings: List[Setting], current_state: Dict[str, str], filter_text: str = ""):
+        # Rebuilding the list (clear + re-add) can make Qt fire
+        # currentItemChanged on its own as items are removed/added - that
+        # would spuriously re-trigger setting_selected on every keystroke
+        # while typing in the search box, fighting with whatever the user
+        # actually has open in the right panel. Block it for the rebuild;
+        # real user navigation (clicks, arrow keys) re-enables it right after.
+        self.blockSignals(True)
         self.clear()
         filter_lower = filter_text.lower()
 
@@ -4823,6 +4862,8 @@ QScrollBar::sub-page:vertical{
 
                 self.addItem(item)
 
+        self.blockSignals(False)
+
     def refresh_colors(self, current_state: Dict[str, str]):
         """
         Re-color items to reflect which settings are currently configured,
@@ -4848,6 +4889,13 @@ QScrollBar::sub-page:vertical{
 
     def _on_item_clicked(self, item: QListWidgetItem):
         setting_id = item.data(Qt.UserRole)
+        if setting_id:
+            self.setting_selected.emit(setting_id)
+
+    def _on_current_item_changed(self, current: Optional[QListWidgetItem], previous: Optional[QListWidgetItem]):
+        if current is None:
+            return
+        setting_id = current.data(Qt.UserRole)
         if setting_id:
             self.setting_selected.emit(setting_id)
 
