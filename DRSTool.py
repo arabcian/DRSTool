@@ -23,8 +23,15 @@ from PySide6.QtWidgets import (
     QScrollArea, QFrame, QMessageBox,
     QStatusBar, QGridLayout, QSizePolicy,
     QPlainTextEdit, QCheckBox, QFileDialog,
+    QComboBox, QGroupBox, QTabWidget,
 )
 import shutil
+
+try:
+    import yaml
+    _HAVE_YAML = True
+except ImportError:
+    _HAVE_YAML = False
 
 
 # ============================================================================
@@ -3599,6 +3606,30 @@ FLM_ENV_VARS: List[EnvVarDef] = [
               "Syntax: FLM_MFG_MULTIPLIER=3 FLM_TARGET_FPS=60 %command%",
               options=["0", "1", "2", "3", "4"]),
 
+    EnvVarDef("FLM_FLOOR_PACING", "vk_flip_meter", "enum", "1",
+              "FIX-36 floor-pacing, for a VRR panel + Frame Generation (DLSS-FG/FSR-FG) "
+              "on GPUs without hardware flip metering (e.g. RTX 40-series), where "
+              "generated frames land unevenly (short/short/short/long — ε,ε,ε,T pattern) "
+              "and are felt as micro-judder on the panel. Only takes effect on the PACER "
+              "path (FLM_TARGET_FPS=0); has no effect once FLM_TARGET_FPS>0 switches to "
+              "LIMITER. Real frames are passed through untouched; only the ε-spaced "
+              "generated frame is held back. Already on by default; set to 0 to fall back "
+              "to the old absolute-grid pacer. "
+              "Syntax: FLM_MODE=present FLM_FLOOR_PACING=1 FLM_FLOOR_RATIO=850 %command%",
+              options=["0", "1"]),
+
+    EnvVarDef("FLM_FLOOR_RATIO", "vk_flip_meter", "int", "850",
+              "The floor-pacing knob to actually feel your way through. A frame is allowed "
+              "to land at earliest floor_ratio/1000 of the slot width after the previous "
+              "one — 850 = at least 85% of the slot. Higher (900-950) = stricter floor, "
+              "flatter frame spacing, fixes remaining micro-judder/MFG rhythm feel. Lower "
+              "(700-750) = looser floor, some natural jitter returns but input feels less "
+              "sticky/heavy. Sensible range 700-950. Doesn't help with real one-off stutter "
+              "(shader-comp hitches) — those are already passed through by the "
+              "hitch_active guard regardless of this value. "
+              "Syntax: FLM_MODE=present FLM_FLOOR_PACING=1 FLM_FLOOR_RATIO=900 %command%",
+              placeholder="e.g. 850 (700-950 sensible range)"),
+
     EnvVarDef("FLM_MEASURE_CPU", "vk_flip_meter", "string", "",
               "CPU core range the measurement thread (std::jthread) is pinned to — useful "
               "for CCD isolation (e.g. keeping rendering on one CCD and measurement on the "
@@ -5075,6 +5106,395 @@ class ProfileManagerWidget(QWidget):
 
 
 # ============================================================================
+# Lutris game-config sync
+# ============================================================================
+#
+# Lutris stores one YAML file per game under
+# ~/.local/share/lutris/games/<slug>-<id>.yml (or under
+# $XDG_DATA_HOME/lutris/games/ if XDG_DATA_HOME is set). The env vars we
+# care about live at system.env — a flat string->string mapping, exactly
+# like the sample alan-wake-2-*.yml. This widget lets the user pick a
+# discovered Lutris game and merge the currently-configured env vars
+# (DRS settings + DXVK/VKD3D/NV/FLM vars) straight into that file's
+# system.env block, instead of retyping them one at a time into Lutris'
+# own UI or hand-writing a pre-launch script.
+#
+# Merge, never blind-overwrite: existing keys in the game's system.env
+# that we're not touching are left alone; keys we ARE writing are
+# overwritten with the tool's current value; everything else in the
+# YAML (game.*, wine.*, system.gamescope, etc.) is round-tripped
+# untouched. A timestamped .bak copy of the original file is written
+# next to it before every save.
+
+class LutrisGameEntry:
+    __slots__ = ("path", "slug", "game_name", "runner")
+
+    def __init__(self, path: Path, slug: str, game_name: str, runner: str):
+        self.path = path
+        self.slug = slug
+        self.game_name = game_name
+        self.runner = runner
+
+
+class LutrisSyncWidget(QWidget):
+    """Discovers Lutris per-game YAML configs and merges the tool's
+    current env vars into their system.env block."""
+
+    def __init__(self, settings_manager: SettingsManager, parent=None):
+        super().__init__(parent)
+        self.settings_manager = settings_manager
+        self._games: List[LutrisGameEntry] = []
+        self._current_yaml_text: Optional[str] = None  # raw text of selected game's file, for round-tripping
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        header = QLabel("Lutris Game Sync")
+        header.setStyleSheet("color:#e8eaf0; font-size:11px; font-weight:700;")
+        layout.addWidget(header)
+
+        if not _HAVE_YAML:
+            warn = QLabel(
+                "PyYAML not found (import yaml failed). Install it "
+                "(pip install pyyaml / your distro's python-yaml package) "
+                "to enable Lutris sync."
+            )
+            warn.setWordWrap(True)
+            warn.setStyleSheet("color:#e84545; font-size:10px;")
+            layout.addWidget(warn)
+            layout.addStretch()
+            return
+
+        desc = QLabel(
+            "Scans your Lutris games folder and writes the env vars "
+            "configured in this tool directly into a game's system.env — "
+            "no manual copy/paste into Lutris' own config screen."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color:#8a8f9c; font-size:9px;")
+        layout.addWidget(desc)
+
+        # ── Games folder + rescan ────────────────────────────────────
+        scan_row = QHBoxLayout()
+        scan_row.setSpacing(4)
+
+        self._path_label = QLineEdit()
+        self._path_label.setReadOnly(True)
+        self._path_label.setStyleSheet("""
+            QLineEdit {
+                background: #141720;
+                border: 1px solid #1e2535;
+                color: #8a8f9c;
+                font-size: 9px;
+                font-family: monospace;
+                padding: 3px 8px;
+                border-radius: 3px;
+                min-height: 22px;
+            }
+        """)
+        scan_row.addWidget(self._path_label, stretch=1)
+
+        browse_btn = QPushButton("...")
+        browse_btn.setFixedWidth(28)
+        browse_btn.clicked.connect(self._browse_games_dir)
+        rescan_btn = QPushButton("Rescan")
+        rescan_btn.clicked.connect(self._scan_games)
+        for b in (browse_btn, rescan_btn):
+            b.setStyleSheet("""
+                QPushButton {
+                    border: 1px solid #1e2535;
+                    border-radius: 3px;
+                    padding: 3px 8px;
+                    background: #141720;
+                    color: #c8cdd8;
+                    font-size: 9px;
+                    min-height: 22px;
+                }
+                QPushButton:hover { border-color: #4a7300; }
+            """)
+            scan_row.addWidget(b)
+        layout.addLayout(scan_row)
+
+        self._games_dir: Path = self._default_games_dir()
+        self._path_label.setText(str(self._games_dir))
+
+        # ── Game picker ───────────────────────────────────────────────
+        self._game_combo = QComboBox()
+        self._game_combo.setStyleSheet("""
+            QComboBox {
+                background: #141720;
+                border: 1px solid #1e2535;
+                color: #e8eaf0;
+                font-size: 10px;
+                padding: 3px 8px;
+                border-radius: 3px;
+                min-height: 24px;
+            }
+            QComboBox:hover { border-color: #4a7300; }
+        """)
+        self._game_combo.currentIndexChanged.connect(self._on_game_selected)
+        layout.addWidget(self._game_combo)
+
+        # ── What will be written ─────────────────────────────────────
+        which_group = QGroupBox("Env vars to write")
+        which_group.setStyleSheet("""
+            QGroupBox {
+                color: #8a8f9c; font-size: 9px; font-weight: 700;
+                border: 1px solid #1e2535; border-radius: 3px;
+                margin-top: 6px; padding-top: 10px;
+            }
+            QGroupBox::title { subcontrol-origin: margin; left: 6px; padding: 0 4px; }
+        """)
+        which_layout = QVBoxLayout(which_group)
+        which_layout.setSpacing(2)
+
+        self._chk_drs = QCheckBox("DXVK_NVAPI_DRS_SETTINGS + DXVK_NVAPI_GPU_ARCH")
+        self._chk_drs.setChecked(True)
+        self._chk_env = QCheckBox("DXVK / VKD3D / NVIDIA / vk_flip_meter env vars")
+        self._chk_env.setChecked(True)
+        for c in (self._chk_drs, self._chk_env):
+            c.setStyleSheet("QCheckBox{ color:#c8cdd8; font-size:9px; }")
+            which_layout.addWidget(c)
+        layout.addWidget(which_group)
+
+        # ── Preview ───────────────────────────────────────────────────
+        self._preview = QPlainTextEdit()
+        self._preview.setReadOnly(True)
+        self._preview.setStyleSheet("""
+            QPlainTextEdit {
+                background: #0d0f12;
+                border: 1px solid #1e2535;
+                color: #9fd63a;
+                font-family: monospace;
+                font-size: 9px;
+                border-radius: 3px;
+            }
+        """)
+        self._preview.setPlaceholderText("Select a game to preview the resulting system.env block...")
+        layout.addWidget(self._preview, stretch=1)
+
+        # ── Actions ───────────────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(4)
+
+        self._apply_btn = QPushButton("Write to Lutris config")
+        self._apply_btn.clicked.connect(self._apply_to_game)
+        self._apply_btn.setStyleSheet("""
+            QPushButton {
+                background: #76b900; color: #000;
+                border: 1px solid #76b900; border-radius: 3px;
+                padding: 4px 12px; font-size: 10px; font-weight: 700;
+                min-height: 24px;
+            }
+            QPushButton:hover { background: #8fd400; }
+            QPushButton:disabled { background: #2a2f38; color: #5a6070; border-color: #1e2535; }
+        """)
+        btn_row.addWidget(self._apply_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        self._status_label = QLabel("")
+        self._status_label.setWordWrap(True)
+        self._status_label.setStyleSheet("color:#8a8f9c; font-size:9px;")
+        layout.addWidget(self._status_label)
+
+        for w in (self._chk_drs, self._chk_env):
+            w.stateChanged.connect(self._update_preview)
+
+        self._scan_games()
+
+    # ── Discovery ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _default_games_dir() -> Path:
+        data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+        return data_home / "lutris" / "games"
+
+    def _browse_games_dir(self):
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Lutris games folder", str(self._games_dir)
+        )
+        if chosen:
+            self._games_dir = Path(chosen)
+            self._path_label.setText(str(self._games_dir))
+            self._scan_games()
+
+    def _scan_games(self):
+        self._games = []
+        self._game_combo.blockSignals(True)
+        self._game_combo.clear()
+
+        if not self._games_dir.exists():
+            self._status_label.setText(f"Folder not found: {self._games_dir}")
+            self._game_combo.blockSignals(False)
+            self._apply_btn.setEnabled(False)
+            return
+
+        found = sorted(self._games_dir.glob("*.yml")) + sorted(self._games_dir.glob("*.yaml"))
+        for path in found:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+            except Exception:
+                continue  # skip unreadable/corrupt files rather than aborting the whole scan
+            game_section = data.get("game") or {}
+            exe = game_section.get("exe", "")
+            slug = path.stem
+            display_name = Path(exe).stem if exe else slug
+            runner = data.get("system", {}).get("runner", "") if isinstance(data.get("system"), dict) else ""
+            entry = LutrisGameEntry(path, slug, display_name, runner)
+            self._games.append(entry)
+            self._game_combo.addItem(f"{display_name}  ({slug})")
+
+        self._game_combo.blockSignals(False)
+        if self._games:
+            self._status_label.setText(f"Found {len(self._games)} game config(s) in {self._games_dir}")
+            self._game_combo.setCurrentIndex(0)
+            self._on_game_selected(0)
+        else:
+            self._status_label.setText(f"No .yml files found in {self._games_dir}")
+            self._apply_btn.setEnabled(False)
+            self._preview.clear()
+
+    # ── Selection / preview ───────────────────────────────────────────
+
+    def _on_game_selected(self, index: int):
+        self._current_yaml_text = None
+        if 0 <= index < len(self._games):
+            entry = self._games[index]
+            try:
+                with open(entry.path, "r", encoding="utf-8") as f:
+                    self._current_yaml_text = f.read()
+            except Exception as e:
+                self._status_label.setText(f"Could not read {entry.path}: {e}")
+        self._update_preview()
+
+    def _collect_env_to_write(self) -> Dict[str, str]:
+        """Gathers the env vars this tool currently has configured,
+        respecting the two checkboxes."""
+        result: Dict[str, str] = {}
+        if self._chk_drs.isChecked():
+            arch = self.settings_manager.get_arch()
+            if arch:
+                result["DXVK_NVAPI_GPU_ARCH"] = arch.code
+            settings_str = self.settings_manager.get_settings_string()
+            if settings_str:
+                result["DXVK_NVAPI_DRS_SETTINGS"] = settings_str
+        if self._chk_env.isChecked():
+            win = self.window()
+            if win and hasattr(win, "_env_widget"):
+                result.update(win._env_widget.get_env_dict())
+        return result
+
+    def _update_preview(self):
+        if not self._games or self._current_yaml_text is None:
+            self._preview.clear()
+            self._apply_btn.setEnabled(False)
+            return
+
+        to_write = self._collect_env_to_write()
+        if not to_write:
+            self._preview.setPlainText("(Nothing configured to write yet — set DRS "
+                                        "settings and/or env vars in the other tabs first.)")
+            self._apply_btn.setEnabled(False)
+            return
+
+        try:
+            merged_yaml_text, changed_keys = self._merge_env(self._current_yaml_text, to_write)
+        except Exception as e:
+            self._preview.setPlainText(f"(Could not parse this game's YAML: {e})")
+            self._apply_btn.setEnabled(False)
+            return
+
+        lines = [f"# {len(changed_keys)} key(s) will be set in system.env:"]
+        for k in sorted(changed_keys):
+            lines.append(f"#   {k}={to_write[k]}")
+        lines.append("")
+        lines.append("--- resulting system.env ---")
+        try:
+            data = yaml.safe_load(merged_yaml_text) or {}
+            env = (data.get("system") or {}).get("env") or {}
+            for k in sorted(env):
+                lines.append(f"{k}: {env[k]!r}")
+        except Exception:
+            pass
+        self._preview.setPlainText("\n".join(lines))
+        self._apply_btn.setEnabled(True)
+
+    # ── Merge / write ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _merge_env(original_text: str, to_write: Dict[str, str]):
+        """Parses original_text, merges to_write into system.env (creating
+        system/env if absent), and returns (new_yaml_text, changed_keys).
+        Everything else in the document is preserved as-is via ruamel-free
+        safe_load + dump — comments in the original file are not
+        preserved (PyYAML's safe round-trip doesn't keep them), but every
+        key/value and the rest of the document structure is."""
+        data = yaml.safe_load(original_text) or {}
+        if "system" not in data or not isinstance(data.get("system"), dict):
+            data["system"] = {}
+        if "env" not in data["system"] or not isinstance(data["system"].get("env"), dict):
+            data["system"]["env"] = {}
+
+        env = data["system"]["env"]
+        changed_keys = set(to_write.keys())
+        for k, v in to_write.items():
+            env[k] = str(v)
+
+        new_text = yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        return new_text, changed_keys
+
+    def _apply_to_game(self):
+        index = self._game_combo.currentIndex()
+        if not (0 <= index < len(self._games)):
+            return
+        entry = self._games[index]
+        to_write = self._collect_env_to_write()
+        if not to_write:
+            return
+
+        try:
+            with open(entry.path, "r", encoding="utf-8") as f:
+                original_text = f.read()
+            new_text, changed_keys = self._merge_env(original_text, to_write)
+        except Exception as e:
+            QMessageBox.critical(self, "Merge failed", f"Could not merge env vars: {e}")
+            return
+
+        reply = QMessageBox.question(
+            self, "Write Lutris config",
+            f"Write {len(changed_keys)} env var(s) into:\n{entry.path}\n\n"
+            f"A backup (.bak) of the current file will be created first.",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            backup_path = entry.path.with_suffix(entry.path.suffix + ".bak")
+            shutil.copy2(entry.path, backup_path)
+
+            tmp_path = entry.path.with_suffix(entry.path.suffix + ".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(new_text)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, entry.path)
+        except Exception as e:
+            QMessageBox.critical(self, "Write failed", f"Could not write {entry.path}: {e}")
+            return
+
+        self._current_yaml_text = new_text
+        self._status_label.setText(
+            f"Wrote {len(changed_keys)} env var(s) to {entry.path.name} "
+            f"(backup: {backup_path.name})"
+        )
+        self._update_preview()
+
+
+# ============================================================================
 # vk_flip_meter — Install/Build tab
 # ============================================================================
 #
@@ -5548,7 +5968,27 @@ class MainWindow(QMainWindow):
         profiles_scroll.setWidgetResizable(True)
         profiles_scroll.setWidget(self._profiles_widget)
         profiles_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        self._sidebar_stack.addWidget(profiles_scroll)
+
+        self._lutris_sync_widget = LutrisSyncWidget(self.settings_manager)
+        lutris_scroll = QScrollArea()
+        lutris_scroll.setWidgetResizable(True)
+        lutris_scroll.setWidget(self._lutris_sync_widget)
+        lutris_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        profiles_subtabs = QTabWidget()
+        profiles_subtabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #1e2535; top: -1px; }
+            QTabBar::tab {
+                background: #141720; color: #8a8f9c;
+                border: 1px solid #1e2535; border-bottom: none;
+                padding: 4px 10px; font-size: 9px; font-weight: 600;
+            }
+            QTabBar::tab:selected { background: #1a1f2e; color: #e8eaf0; border-color: #4a7300; }
+            QTabBar::tab:hover { color: #c8cdd8; }
+        """)
+        profiles_subtabs.addTab(profiles_scroll, "Saved Profiles")
+        profiles_subtabs.addTab(lutris_scroll, "Lutris Sync")
+        self._sidebar_stack.addWidget(profiles_subtabs)
 
         splitter.addWidget(sidebar)
         splitter.setSizes([220, 680])
