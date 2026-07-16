@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QStatusBar, QGridLayout, QSizePolicy,
     QPlainTextEdit, QCheckBox, QFileDialog,
     QComboBox, QGroupBox, QTabWidget,
+    QButtonGroup,
 )
 import shutil
 
@@ -2432,6 +2433,13 @@ QPushButton:pressed{
         grid = QGridLayout()
         grid.setSpacing(4)
 
+        # Enum settings accept exactly one value. Group the buttons so Qt
+        # enforces single-selection (checking one unchecks the others) instead
+        # of letting every button toggle independently — which previously left
+        # several options highlighted at once.
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+
         row, col = 0, 0
         for val in s.values:
             btn = QPushButton(val.name)
@@ -2463,7 +2471,15 @@ QPushButton:checked{
 }
 """)
 
-            btn.clicked.connect(lambda checked, bid=s.id, bval=val.val: self._set_value(bid, bval))
+            group.addButton(btn)
+            # `checked` reflects the button's state *after* the click. When the
+            # user clicks the already-active option, Qt (with an exclusive
+            # group) keeps it checked and re-fires with checked=True — treat
+            # that as "toggle off" and remove the setting entirely, so the
+            # highlight and the stored value never diverge.
+            btn.clicked.connect(
+                lambda checked, bid=s.id, bval=val.val: self._toggle_enum_value(bid, bval)
+            )
             grid.addWidget(btn, row, col)
 
             col += 1
@@ -2480,7 +2496,7 @@ QPushButton:checked{
         row, col = 0, 0
         for preset in s.presets:
             btn = QPushButton(preset.name)
-            btn.clicked.connect(lambda checked, bid=s.id, bval=preset.val: self._set_value(bid, bval))
+            btn.clicked.connect(lambda checked, bid=s.id, bval=preset.val: self._toggle_enum_value(bid, bval))
 
             if preset.val == cur:
                 btn.setStyleSheet("""
@@ -2745,6 +2761,15 @@ QLineEdit:hover{
 
         hbox.addStretch()
         self._control_layout.addLayout(hbox)
+
+    def _toggle_enum_value(self, setting_id: str, value: str):
+        # Single-select enum click: if this value is already the stored one the
+        # user is clicking to deselect it, so remove the setting; otherwise set
+        # it. This keeps the button highlight and the underlying value in sync.
+        if self.settings_manager.get_setting(setting_id) == value:
+            self.settings_manager.remove_setting(setting_id)
+        else:
+            self.settings_manager.set_setting(setting_id, value)
 
     def _set_value(self, setting_id: str, value: str):
         # settings_manager.set_setting() emits settings_changed synchronously,
