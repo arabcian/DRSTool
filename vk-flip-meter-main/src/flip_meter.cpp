@@ -1,5 +1,5 @@
 // ============================================================================
-// FLM — Vulkan Flip Meter / Frame Pacing Layer  (v2.1 — "gerçek etki")
+// FLM — Vulkan Flip Meter / Frame Pacing Layer  (v2.3 — "gerçek etki")
 //
 // TASARIM ÖZETİ
 // -------------
@@ -90,6 +90,39 @@
 //   [FIX-32] FLM_STATS_INTERVAL=<sn> (hot-reload edilebilir, varsayılan 5).
 //   [FIX-33] FLM_TARGET_FPS [0,1000] klempi (atoi taşması / iv=0 koruması) ve
 //            map'lere başlangıç reserve()'i.
+//
+// v2.3 düzeltmeleri (akıcılık + input lag):
+//   [FIX-37] FLOOR-PACING DONMA/FREN SARMALI. real_win yalnız NON-FAKE
+//            aralıklarla besleniyordu; floor etkin ve m>1 iken TÜM aralıklar
+//            (uniform ≈T/m ve real'in kalan payı) fake eşiğinin (≈0.75T)
+//            ALTINA düşer → real_win + kabul-medyanı tamamen DONAR → slot_iv
+//            eski T₀'da kilitlenir. VRR'de FPS yükselince floor bayat kalır,
+//            kapı her present'i frenler; frenlenmiş aralıklar da fake sınıfında
+//            kaldığı için tahmin kendini asla düzeltemez (pozitif kilit) —
+//            FIX-36'nın yok etmeye çalıştığı "mutlak grid freni" kalıcı geri
+//            geliyordu. ÇÖZÜM: T tahmini artık fake filtresinden bağımsız,
+//            faz-duyarsız DÖNGÜ TOPLAMI ile: son m HAM aralığın toplamı ≈ T
+//            (paced/unpaced/bimodal her durumda; ε+(T-ε)=T). Her flip'te
+//            güncellenir → FPS değişimini frenlemeden takip eder, fren
+//            oluşursa negatif geri besleme ile kendini bırakır. Fake sınıfı
+//            yalnız istatistik/CSV için kaldı. display_intervals medyanı
+//            (tek tüketicisi buydu) kaldırıldı; hitch eşiği ve fake split de
+//            bu canlı T tahminine bağlandı (bayat medyanla kaçan hitch'ler).
+//   [FIX-38] FIX-36 false-sharing regresyonu: real_win/real_idx/real_count
+//            present-thread cache-line'ına (limiter_next_ns yanına) konmuştu
+//            ama bu alanlara HER karede ÖLÇÜM thread'i yazıyor → FIX-28'in
+//            çözdüğü cache-line ping-pong'u geri gelmişti. Ölçüm bloğuna
+//            taşındı; present satırında yalnız present-thread alanları kaldı.
+//   [FIX-39] ADAPTİF SPİN: kernel uykusunun gerçek uyanma gecikmesi (oversleep)
+//            sönümlü-maksimum ile izlenir; spin payı buna göre ayarlanır.
+//            Yüklü sistemde sabit 150µs pay yetmeyince kapı GEÇ kalıyordu
+//            (floor kaçırılır → jitter spike); hassas sistemde ise her karede
+//            boşa spin yakılıyordu. FLM_SPIN_ADAPT=0 → eski sabit davranış,
+//            FLM_SPIN_NS=0 → saf uyku (değişmedi).
+//   [FIX-40] Düşük-FPS ısınma kilidi: hitch eşiği varsayılan 16.6ms tabanla
+//            başladığından ~30 FPS oyunlarda İLK kareler hitch sayılıp tahmin
+//            penceresi hiç ısınamıyor, pacing kalıcı kapalı kalabiliyordu.
+//            Pencere ısınana kadar (4 örnek) hitch sınıflandırması bastırılır.
 // ============================================================================
 
 #include <vulkan/vulkan.h>
@@ -125,8 +158,6 @@
 #  define FLM_CPU_PAUSE() std::this_thread::yield()
 #endif
 
-using NS = std::chrono::nanoseconds;
-
 // ============================================================================
 // LOGGING
 // ============================================================================
@@ -153,7 +184,6 @@ namespace FlmConst {
     constexpr int64_t  DEFAULT_LEAD_NS     = 1'000'000LL;
     constexpr int      HITCH_RECOVERY      = 8;
     constexpr int      WARMUP_FRAMES       = 30;
-    constexpr int      HISTORY_SIZE        = 8;
     constexpr uint64_t WAIT_TIMEOUT_NS     = 50'000'000ULL;
     constexpr int64_t  MAX_PACE_WAIT_NS    = 20'000'000LL;
     constexpr uint32_t STACK_PRESENT_IDS   = 8;
@@ -164,7 +194,11 @@ namespace FlmConst {
     // [FIX-36] VRR + MFG floor-pacing: real-frame periyot medyanı için kısa,
     // FPS değişimine hızlı tepki veren pencere. SLOT_WINDOW (mean, 12) FPS
     // 150↔220 dalgalanırken gerçek anlık periyodun gerisinde kalıyordu.
-    constexpr int      REAL_WINDOW         = 8;    // son N real-frame periyodu
+    // [FIX-37] Pencere artık ham aralık değil DÖNGÜ-TOPLAMI (son m aralığın
+    // toplamı ≈ T) tahminleri tutar — paced/unpaced fark etmeksizin her
+    // flip'te güncellenir, fake filtresine bağımlı değildir.
+    constexpr int      REAL_WINDOW         = 8;    // son N adet T tahmini
+    constexpr int      CYC_RING            = 4;    // [FIX-37] son ham aralıklar (maks MFG çarpanı)
     constexpr int64_t  MIN_FLOOR_NS        = 500'000LL;   // 2000 FPS tavanı: floor asla bunun altına inmez
     constexpr int      MFG_DETECT_WINDOW   = 64;   // [item 7]
     constexpr int      MIN_SC_WIDTH        = 640;  // [item 11]
@@ -208,6 +242,10 @@ struct FLMConfig {
     // %85 slot sonra çıkar. Düşük = daha gevşek (jitter geçer), yüksek = daha sıkı
     // (daha düz ama geç kalırsa hitch). Hisle ayarlanacak asıl knob budur.
     std::atomic<int>     floor_ratio {850};     // FLM_FLOOR_RATIO (500-1000)
+
+    // [FIX-39] Uyanma gecikmesine göre spin payını otomatik ayarla (hot-reload).
+    // 0 = eski davranış: FLM_SPIN_NS ne diyorsa sabit o kadar spin.
+    std::atomic<bool>    spin_adapt {true};     // FLM_SPIN_ADAPT (varsayılan 1)
 };
 
 static FLMConfig      g_config;
@@ -241,6 +279,7 @@ static void apply_dynamic_kv(const char* key, const char* val) {
     else if (!strcmp(key, "FLM_PACE_POINT"))         g_config.pace_point.store((int)parse_pace_point(val));
     else if (!strcmp(key, "FLM_FLOOR_PACING"))       g_config.floor_pacing.store(atoi(val) != 0);   // [FIX-36]
     else if (!strcmp(key, "FLM_FLOOR_RATIO"))        g_config.floor_ratio.store(std::clamp(atoi(val), 500, 1000)); // [FIX-36]
+    else if (!strcmp(key, "FLM_SPIN_ADAPT"))         g_config.spin_adapt.store(atoi(val) != 0);   // [FIX-39]
     else if (!strcmp(key, "FLM_LOG_LEVEL")) {
         if      (!strcmp(val, "DEBUG")) g_log_level.store((int)LogLevel::DEBUG);
         else if (!strcmp(val, "INFO"))  g_log_level.store((int)LogLevel::INFO);
@@ -286,6 +325,7 @@ static void snapshot_dynamic_env() {
         "FLM_PRESENT_LEAD_NS", "FLM_DRIFT_TOLERANCE_NS",
         "FLM_MODE", "FLM_PACE_POINT", "FLM_LOG_LEVEL",
         "FLM_FLOOR_PACING", "FLM_FLOOR_RATIO",   // [FIX-36]
+        "FLM_SPIN_ADAPT",                        // [FIX-39]
     };
     for (const char* k : keys)
         if (const char* e = getenv(k)) g_env_snapshot.emplace_back(k, e);
@@ -407,10 +447,32 @@ static inline void flm_gcov_periodic_dump() {
 
 
 // Kaba kısım ABSTIME kernel uykusu (sinyal bölünmesine dayanıklı), son
-// spin_ns kadar pause-spin. spin_ns=0 → tamamen uyku (min CPU).
+// spin kadar pause-spin. FLM_SPIN_NS=0 → tamamen uyku (min CPU).
+//
+// [FIX-39] ADAPTİF SPİN. clock_nanosleep'in gerçek uyanma gecikmesi
+// (oversleep = uyanılan an - istenen an; timer slack + scheduler kuyruğu)
+// sönümlü-MAKSİMUM ile izlenir:
+//   est = max(ölçülen, est - est/256)     → büyüme anında, sönüm ~256 örnek
+// ve spin payı est*1.5 + 20µs olarak seçilir. Sabit 150µs payın iki
+// başarısızlık modu vardı:
+//   * Yüklü sistem: oversleep > 150µs → kapı hedefi KAÇIRIR → present geç
+//     çıkar → floor/limiter'ın düzelttiği jitter'ı kapının kendisi üretir.
+//   * Boş/RT sistem: oversleep ~5-30µs → her karede ~120µs boşa spin
+//     (240 FPS'te çekirdek zamanının ~%3'ü ısıya gider).
+// Adaptif pay iki modu da çözer; present her zaman TAM hedefte bırakılır
+// (akıcılık) ve asla gereksiz erken spin'e girilmez (CPU → oyuna kalır).
+static std::atomic<int64_t> g_oversleep_est{100'000};  // ns; ılımlı başlangıç
+
 static void precise_wait_absolute(int64_t target) {
     if (target <= 0) return;
-    const int64_t spin = g_config.spin_ns.load(std::memory_order_relaxed);
+    const int64_t spin_cfg = g_config.spin_ns.load(std::memory_order_relaxed);
+    const bool    adapt    = spin_cfg > 0 &&
+                             g_config.spin_adapt.load(std::memory_order_relaxed);
+    int64_t spin = spin_cfg;
+    if (adapt) {
+        int64_t est = g_oversleep_est.load(std::memory_order_relaxed);
+        spin = std::clamp<int64_t>(est + est / 2 + 20'000, 30'000, 2'000'000);
+    }
     for (;;) {
         int64_t left = target - now_ns();
         if (left <= spin) break;
@@ -419,6 +481,14 @@ static void precise_wait_absolute(int64_t target) {
         ts.tv_sec  = wake / 1'000'000'000LL;
         ts.tv_nsec = wake % 1'000'000'000LL;
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, nullptr);
+        if (adapt) {
+            int64_t os = now_ns() - wake;   // sinyal kesmesi → negatif → atla
+            if (os > 0) {
+                int64_t est = g_oversleep_est.load(std::memory_order_relaxed);
+                g_oversleep_est.store(std::max(os, est - est / 256),
+                                      std::memory_order_relaxed);
+            }
+        }
     }
     while (now_ns() < target) FLM_CPU_PAUSE();
 }
@@ -482,15 +552,22 @@ struct SwapchainState {
     // (ölçüm thread'i yayınlar) okunur.
     alignas(64) int64_t limiter_next_ns   = 0;
     int64_t             last_present_ns    = 0;   // [FIX-36] önceki present anı
-    int64_t             real_win[FlmConst::REAL_WINDOW] = {};  // [FIX-36] son real-frame periyotları
-    int                 real_idx           = 0;
-    int                 real_count         = 0;
 
-    // [FIX-28] Yalnız ölçüm thread'i dokunur → kilitsiz; present-thread
-    // alanlarından ayrı cache-line'da başlar.
-    alignas(64) NS display_intervals[FlmConst::HISTORY_SIZE] = {};
-    int     di_idx      = 0;
-    int     di_count    = 0;
+    // [FIX-28][FIX-38] Yalnız ölçüm thread'i dokunur → kilitsiz; present-
+    // thread alanlarından ayrı cache-line'da başlar. (FIX-36 real_win'i
+    // yanlışlıkla yukarıdaki present satırına koymuştu; bu alanlara her
+    // karede ölçüm thread'i yazdığından FIX-28'in çözdüğü false sharing
+    // geri gelmişti — buraya taşındı.)
+    // [FIX-37] Döngü halkası: son CYC_RING HAM aralık. Son m tanesinin
+    // toplamı ≈ T (real periyot) — paced/unpaced/bimodal fark etmez.
+    alignas(64) int64_t cyc_win[FlmConst::CYC_RING] = {};
+    int     cyc_idx     = 0;
+    int     cyc_count   = 0;
+    // [FIX-36/37] T (real-frame periyodu) tahmin penceresi — medyanı floor
+    // pacing'in tabanıdır. Artık her flip'te döngü toplamıyla beslenir.
+    int64_t real_win[FlmConst::REAL_WINDOW] = {};
+    int     real_idx    = 0;
+    int     real_count  = 0;
     // [FIX-16] Slot penceresi: TÜM aralıkların kayan ortalaması (MFG'nin
     // bimodal ε/T desenini per-sample EMA'nın aksine tam doğru ortalar).
     int64_t slot_win[FlmConst::SLOT_WINDOW] = {};
@@ -536,13 +613,14 @@ struct SwapchainState {
         return std::min<int64_t>(adaptive, avg_ns + 30'000'000LL);
     }
 
-    NS get_median_interval() const {
-        int n = std::min(di_count, FlmConst::HISTORY_SIZE);
-        // [FIX-27] Fallback yalnız ilk kabul edilen aralıktan ÖNCE tetiklenir;
-        // eski EMA o noktada hiç güncellenmemiş oluyordu → sabitle eşdeğer.
-        if (n == 0) return NS(FlmConst::DEFAULT_INTERVAL_NS);
-        NS tmp[FlmConst::HISTORY_SIZE];
-        std::copy(display_intervals, display_intervals + n, tmp);
+    // [FIX-37] Real-frame periyodu (T) medyanı — döngü-toplam tahminlerinden.
+    // display_intervals medyanının yerini aldı: m=1'de birebir aynı semantik
+    // (döngü toplamı = ham aralık), m>1'de fake filtresiz ve faz-duyarsız.
+    int64_t real_period_median() const {
+        int n = std::min(real_count, FlmConst::REAL_WINDOW);
+        if (n == 0) return FlmConst::DEFAULT_INTERVAL_NS;
+        int64_t tmp[FlmConst::REAL_WINDOW];
+        std::copy(real_win, real_win + n, tmp);
         std::sort(tmp, tmp + n);
         return tmp[n / 2];
     }
@@ -719,11 +797,74 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
         int64_t tnow = now_ns();
 
         if (last_valid) {
-            int64_t interval_ns   = tnow - last_display_ns;
-            int64_t avg_before_ns = st->get_median_interval().count();
+            int64_t interval_ns = tnow - last_display_ns;
 
             // Efektif çarpan
             int m = st->eff_mfg.load(std::memory_order_relaxed);
+
+            // [FIX-37] Önceki T tahmini (döngü-toplam medyanı). Fake split ve
+            // hitch eşiği artık buna bağlı — pacing altında donan eski
+            // kabul-medyanına değil.
+            const int64_t T_prev = st->real_period_median();
+            // [FIX-40] Pencere ısınmadan (4 tahmin) hitch/fake sınıflandırma
+            // yapılmaz: T_prev henüz 16.6ms varsayılanındayken düşük-FPS
+            // oyunlarda her kare hitch sayılıp tahmin hiç ısınamıyordu.
+            const bool warm = st->real_count >= 4;
+
+            // [FIX-37] HITCH ÖNCE ve HAM aralıktan. Hitch aralığı uzundur;
+            // fake (kısa) sınıfına düşemez → [FIX-19] koruması aynen geçerli.
+            bool is_hitch = warm &&
+                            interval_ns > st->get_hitch_threshold(T_prev);
+            if (is_hitch) {
+                st->hitch_active.store(true, std::memory_order_relaxed);
+                st->hitch_recovery_frames.store(FlmConst::HITCH_RECOVERY,
+                                                std::memory_order_relaxed);
+                // Hitch'i kapsayan döngü toplamları T'yi zehirler → halka reset.
+                st->cyc_count = 0;
+                st->cyc_idx   = 0;
+            } else {
+                if (st->hitch_active.load(std::memory_order_relaxed)) {
+                    if (st->hitch_recovery_frames.fetch_sub(1, std::memory_order_relaxed) <= 1)
+                        st->hitch_active.store(false, std::memory_order_relaxed);
+                }
+
+                // [FIX-37] DÖNGÜ TOPLAMI ile T tahmini. Ham aralığı halkaya it;
+                // son m aralığın toplamı, present'ler NASIL dağılmış olursa
+                // olsun ≈ T'dir:
+                //   unpaced bimodal : ε + (T-ε)            = T
+                //   floor-paced     : floor + (T-floor)     = T
+                //   uniform paced   : m * (T/m)             = T
+                // Yani tahmin pacing'in kendi etkisine KÖR — eski non-fake
+                // beslemesinin donma/fren kilidi (v2.2) yapısal olarak yok.
+                st->cyc_win[st->cyc_idx] = interval_ns;
+                st->cyc_idx = (st->cyc_idx + 1) % FlmConst::CYC_RING;
+                if (st->cyc_count < FlmConst::CYC_RING) st->cyc_count++;
+
+                const int mm = std::clamp(m, 1, FlmConst::CYC_RING);
+                if (st->cyc_count >= mm) {
+                    int64_t T_est = 0;
+                    for (int k = 0; k < mm; k++)
+                        T_est += st->cyc_win[(st->cyc_idx - 1 - k +
+                                              FlmConst::CYC_RING) % FlmConst::CYC_RING];
+                    // Isındıktan sonra tek örnek tahmini en çok 2x/0.25x
+                    // oynatabilsin (hitch dışı anomali/clock koruması; FPS
+                    // sıçramalarında yine ~2-3 flip'te yakalar).
+                    if (warm)
+                        T_est = std::clamp(T_est, T_prev / 4, T_prev * 2);
+                    st->real_win[st->real_idx] = T_est;
+                    st->real_idx = (st->real_idx + 1) % FlmConst::REAL_WINDOW;
+                    if (st->real_count < FlmConst::REAL_WINDOW) st->real_count++;
+                }
+            }
+
+            // [FIX-37] Fake sınıflandırma — artık YALNIZ istatistik/CSV için
+            // (pacing tahmini fake filtresine bağımlı değil). Split canlı T
+            // tahmininden türetilir.
+            bool is_fake = false;
+            if (m > 1 && warm && !is_hitch) {
+                int64_t split_ns = (T_prev * (m + 1)) / (2LL * m);
+                is_fake = (interval_ns < split_ns);
+            }
 
             // [FIX-16] SLOT ORTALAMASI — TÜM aralıklar üzerinden kayan pencere.
             // m present toplamda bir gerçek kare süresi (T) alır → ortalama
@@ -739,16 +880,6 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
                 st->slot_idx = (st->slot_idx + 1) % FlmConst::SLOT_WINDOW;
                 if (st->slot_count < FlmConst::SLOT_WINDOW) st->slot_count++;
                 st->slot_mean_ns = st->slot_sum / st->slot_count;
-            }
-
-            // Fake-frame sınıflandırma (yalnız FİLTRE için — pacing her
-            // present'i uniform aralar; fake tespiti gerçek-kare EMA'sını korur).
-            // [FIX-19] "interval > 2.5*avg → fake" dalı KALDIRILDI: büyük
-            // hitch'ler fake sayılıp hitch tespitinden kaçıyordu.
-            bool is_fake = false;
-            if (m > 1 && st->di_count > 4) {
-                int64_t split_ns = (avg_before_ns * (m + 1)) / (2LL * m);
-                is_fake = (interval_ns < split_ns);
             }
 
             // [FIX-17] MFG algılama: eşik slot-EMA'ya göre (ema ≈ T/m).
@@ -782,60 +913,22 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
                 }
             }
 
-            bool is_hitch = false;
-            if (is_fake) {
-                // Fake kareyi filtre dışı bırak; cadence bozulmasın.
-            } else {
-                is_hitch = interval_ns > st->get_hitch_threshold(avg_before_ns);
-                if (is_hitch) {
-                    st->hitch_active.store(true, std::memory_order_relaxed);
-                    st->hitch_recovery_frames.store(FlmConst::HITCH_RECOVERY,
-                                                    std::memory_order_relaxed);
-                } else if (st->hitch_active.load(std::memory_order_relaxed)) {
-                    if (st->hitch_recovery_frames.fetch_sub(1, std::memory_order_relaxed) <= 1)
-                        st->hitch_active.store(false, std::memory_order_relaxed);
-                }
-
-                st->display_intervals[st->di_idx] = NS(interval_ns);
-                st->di_idx = (st->di_idx + 1) % FlmConst::HISTORY_SIZE;
-                if (st->di_count < FlmConst::HISTORY_SIZE) st->di_count++;
-                // [FIX-27] filtered_interval_ns EMA'sı kaldırıldı: tek okunduğu
-                // yer di_count==0 fallback'iydi ve o anda hiç güncellenmemişti.
-
-                // [FIX-36] REAL-FRAME PERİYOT MEDYANI (VRR floor-pacing için).
-                // Non-fake kareler = real kareler (m=1'de hepsi). Ardışık real
-                // kareler arası interval, MFG'de burst'ün toplam süresi ≈ T'dir
-                // (fake filtrelendiği için buraya yalnız real'ler düşer, aralık
-                // = son real'den bu real'e = T). Kısa pencere (8) + medyan:
-                // mean'in aksine tek bir uzun kareye (1.3×) dayanıklı ve FPS
-                // 150↔220 değişimini hızlı takip eder. slot = median(T)/m.
-                st->real_win[st->real_idx] = interval_ns;
-                st->real_idx = (st->real_idx + 1) % FlmConst::REAL_WINDOW;
-                if (st->real_count < FlmConst::REAL_WINDOW) st->real_count++;
-            }
-
-            // [FIX-36] Real-frame periyot medyanı (fake'ler zaten pencereye
-            // girmedi → doğrudan T örnekleri).
-            int64_t real_med = st->slot_mean_ns;
-            if (st->real_count > 0) {
-                int64_t tmp[FlmConst::REAL_WINDOW];
-                int rn = std::min(st->real_count, FlmConst::REAL_WINDOW);  // klemp: -Warray-bounds
-                std::copy(st->real_win, st->real_win + rn, tmp);
-                std::sort(tmp, tmp + rn);
-                real_med = tmp[rn / 2];
-            }
-
-            // [FIX-16/36] Yayınlanacak slot aralığı:
+            // [FIX-16/36/37] Yayınlanacak slot aralığı:
             //   fps>0        → sabit hedef (limiter/cap yolu, değişmedi)
-            //   floor_pacing → median(real T)/m  (VRR: FPS'e hızlı uyum, robust)
+            //   floor_pacing → median(T)/m — T döngü-toplam tahmini: pacing
+            //                  altında DONMAZ, FPS değişimini flip hızında
+            //                  takip eder; fren oluşursa ölçüm frenlenmiş
+            //                  aralığı görür → floor kısalır → fren çözülür
+            //                  (negatif geri besleme; v2.2'de pozitif kilitti).
             //   klasik pacer → slot_mean (eski davranış, geri dönüş)
             int fps = g_config.target_fps.load(std::memory_order_relaxed);
             int64_t slot_iv;
             if (fps > 0) {
                 slot_iv = 1'000'000'000LL / fps;
             } else if (g_config.floor_pacing.load(std::memory_order_relaxed)) {
-                int mm = std::max(1, m);
-                slot_iv = std::max<int64_t>(real_med / mm, FlmConst::MIN_FLOOR_NS);
+                int mm2 = std::max(1, m);
+                slot_iv = std::max<int64_t>(st->real_period_median() / mm2,
+                                            FlmConst::MIN_FLOOR_NS);
             } else {
                 slot_iv = st->slot_mean_ns;
             }
@@ -1585,6 +1678,10 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(
 //                              CANLI: FLM_CONFIG dosyasına yaz + kill -USR1 <pid>.
 //  FLM_PRESENT_LEAD_NS=1000000 flip'ten ne kadar önce present (ns)
 //  FLM_SPIN_NS=150000          son N ns pause-spin (0 = tamamen uyku, min CPU)
+//  FLM_SPIN_ADAPT=1            [FIX-39] spin payını ölçülen uyanma gecikmesine
+//                              göre otomatik ayarla (30µs-2ms; hot-reload).
+//                              1 iken FLM_SPIN_NS yalnız açık/kapalı anlamlıdır;
+//                              0 → FLM_SPIN_NS kadar sabit spin (eski davranış).
 //  FLM_DRIFT_TOLERANCE_NS=0    0 = otomatik (iv/4)
 //  FLM_MFG_MULTIPLIER=0        0 = otomatik algıla, 1-4 = zorla
 //  FLM_RT_PRIORITY=0           ölçüm thread SCHED_FIFO önceliği (CAP_SYS_NICE)
