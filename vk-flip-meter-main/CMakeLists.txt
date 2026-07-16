@@ -5,6 +5,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# build.sh her zaman Release geçer; ama doğrudan `cmake ..` çağıran biri
+# tip vermezse -O0 katman derlenir (ölçüm thread'i gereksiz yavaş). Emniyetli
+# varsayılan: tip verilmemişse Release.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 # ============================================================================
 # Seçenekler
 # ============================================================================
