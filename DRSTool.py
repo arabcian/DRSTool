@@ -2225,6 +2225,8 @@ def _make_scrollable_control_area():
 
 
 class SettingEditorWidget(QWidget):
+    cleared = Signal()  # emitted when the current setting's value is removed
+
     # NOTE: this widget used to have its own `setting_changed` signal, emitted
     # right after settings_manager.set_setting(...) in every setter below, in
     # addition to settings_manager's own `settings_changed` signal. Both were
@@ -2302,6 +2304,16 @@ QLabel{
 """)
         self._desc_label.setWordWrap(True)
         self._desc_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        # Word-wrapped QLabels don't reliably report a correct heightForWidth
+        # to the surrounding QVBoxLayout on first layout pass (Qt has to know
+        # the label's actual width before it can compute how many lines a
+        # long detailed_desc wraps to). Left at the default Preferred/Preferred
+        # policy, long descriptions could end up laid out with too little
+        # vertical space reserved, so the control area below it (added right
+        # after) would visually overlap the last line or two of text.
+        # Minimum vertical policy + explicit resize-event driven rewrap fixes
+        # that: see _resize_desc_label below.
+        self._desc_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         layout.addWidget(self._desc_label)
 
         self._control_widget, self._control_layout, control_scroll = _make_scrollable_control_area()
@@ -2332,15 +2344,12 @@ QPushButton:pressed{
         layout.addLayout(remove_layout)
         self._remove_btn.hide()
 
-        self.hide()
-
         self.settings_manager.settings_changed.connect(self._update_display)
 
     def set_setting(self, setting: Setting):
         self._current_setting = setting
         self._current_value = self.settings_manager.get_setting(setting.id)
         self._build_editor()
-        self.show()
 
     def _build_editor(self):
         if not self._current_setting:
@@ -2359,6 +2368,16 @@ QPushButton:pressed{
 
         desc_text = s.detailed_desc if s.detailed_desc else s.desc
         self._desc_label.setText(desc_text)
+        # Detailed descriptions vary a lot in length (a one-line desc vs. a
+        # multi-sentence detailed_desc), which changes how many lines the
+        # word-wrapped label needs. Explicitly recompute its height for the
+        # current width now, and re-activate the layout, so the control area
+        # added below it is positioned using the up-to-date height instead of
+        # a stale one from the previous setting - otherwise long descriptions
+        # could visually overlap the first control(s).
+        self._desc_label.setMinimumHeight(0)
+        self._desc_label.updateGeometry()
+        self.layout().activate()
 
         self._clear_layout(self._control_layout)
         self._remove_btn.hide()
@@ -2524,7 +2543,7 @@ QSpinBox:hover{
     background:#252c37;
 }
 """)
-        spin.editingFinished.connect(lambda: self._set_numeric(s.id, spin.value()))
+        spin.valueChanged.connect(lambda v: self._set_numeric(s.id, v))
         hbox.addWidget(spin)
 
         range_label = QLabel(f"Range: {s.min}–{s.max}")
@@ -2568,7 +2587,7 @@ QSpinBox:hover{
     background:#252c37;
 }
 """)
-        dec_spin.editingFinished.connect(lambda: self._set_dec_hex(s.id, dec_spin.value()))
+        dec_spin.valueChanged.connect(lambda v: self._set_dec_hex(s.id, v))
         grid.addWidget(dec_spin, 0, 1)
 
         hex_label = QLabel("Hex: 0x")
@@ -2598,7 +2617,7 @@ QLineEdit:hover{
     background:#252c37;
 }
 """)
-        hex_edit.editingFinished.connect(lambda: self._set_hex_from_edit(s.id, hex_edit.text()))
+        hex_edit.textChanged.connect(lambda t: self._set_hex_from_edit(s.id, t))
         grid.addWidget(hex_edit, 0, 3)
 
         self._control_layout.addLayout(grid)
@@ -2714,7 +2733,7 @@ QLineEdit:hover{
     background:#252c37;
 }
 """)
-        hex_edit.editingFinished.connect(lambda: self._set_hex_from_edit(s.id, hex_edit.text()))
+        hex_edit.textChanged.connect(lambda t: self._set_hex_from_edit(s.id, t))
         hbox.addWidget(hex_edit)
 
         hbox.addStretch()
@@ -2766,11 +2785,27 @@ QLineEdit:hover{
 
     def _update_display(self):
         if self._current_setting:
-            self._current_value = self.settings_manager.get_setting(self._current_setting.id)
-            if self._current_value is not None:
-                self._build_editor()
-            else:
-                self.hide()
+            new_value = self.settings_manager.get_setting(self._current_setting.id)
+            if new_value is None:
+                self._current_value = None
+                self.cleared.emit()
+                return
+            if new_value == self._current_value:
+                # Value unchanged (redundant signal) - nothing to do.
+                return
+            self._current_value = new_value
+            # If the change came from a control the user is actively typing
+            # into/dragging (it or a child still has focus), skip the full
+            # rebuild: recreating the widgets would drop focus and cursor
+            # position mid-edit. Just refresh the "= value" chip instead.
+            focus_widget = QApplication.focusWidget()
+            if focus_widget is not None and self._control_widget.isAncestorOf(focus_widget):
+                self._value_label.setText(f"= {new_value}")
+                self._value_label.show()
+                if not self._remove_btn.isVisible():
+                    self._remove_btn.show()
+                return
+            self._build_editor()
 
 
 # ============================================================================
@@ -2944,18 +2979,18 @@ QPushButton:pressed{
 """)
         layout.addWidget(self._clear_btn)
 
-        self.hide()
-
     def set_arch(self, arch: Optional[GPUArch]):
-        """Update the detail view with the given architecture (or hide)."""
+        """Update the detail view with the given architecture (or clear it)."""
         if arch:
             self._name_label.setText(arch.name)
             self._arch_label.setText(f"Architecture: {arch.arch}")
             self._code_label.setText(f"Code: {arch.code}  ·  Example: {arch.example}")
             self._clear_btn.show()
-            self.show()
         else:
-            self.hide()
+            self._name_label.setText("")
+            self._arch_label.setText("")
+            self._code_label.setText("")
+            self._clear_btn.hide()
 
 
 # ============================================================================
@@ -4331,6 +4366,7 @@ QLabel{
 """)
         self._desc_label.setWordWrap(True)
         self._desc_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._desc_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         layout.addWidget(self._desc_label)
 
         # ── Control area ──────────────────────────────────────────────────────
@@ -4359,8 +4395,6 @@ QPushButton:pressed{ background:#a73434; }
         layout.addLayout(remove_layout)
         self._clear_btn.hide()
 
-        self.hide()
-
     # ── Public ────────────────────────────────────────────────────────────────
 
     def set_list_widget(self, lw: EnvVarsWidget):
@@ -4376,7 +4410,6 @@ QPushButton:pressed{ background:#a73434; }
         self._current_ev = ev
         self._current_name = ev.name
         self._build()
-        self.show()
 
     # ── Builder ───────────────────────────────────────────────────────────────
 
@@ -4399,6 +4432,9 @@ QPushButton:pressed{ background:#a73434; }
             self._clear_btn.hide()
 
         self._desc_label.setText(ev.desc)
+        self._desc_label.setMinimumHeight(0)
+        self._desc_label.updateGeometry()
+        self.layout().activate()
         self._clear_layout(self._control_layout)
 
         if ev.vtype == "enum" and ev.options:
@@ -5491,6 +5527,7 @@ class MainWindow(QMainWindow):
         # a duplicate of settings_manager.settings_changed, connected below,
         # and doubled every sidebar/editor rebuild on each click)
         self._setting_editor = SettingEditorWidget(self.settings_manager)
+        self._setting_editor.cleared.connect(self._on_setting_cleared)
         self._right_stack.addWidget(self._setting_editor)
 
         # Page 2: Architecture detail
@@ -5612,6 +5649,13 @@ class MainWindow(QMainWindow):
             self._right_stack.setCurrentIndex(1)
             self._setting_editor.set_setting(setting)
 
+    def _on_setting_cleared(self):
+        # Fired when the currently-open setting's value is removed (via the
+        # Remove Setting button). Only fall back to the placeholder if we're
+        # still looking at the settings-editor page.
+        if self._right_stack.currentIndex() == 1:
+            self._right_stack.setCurrentIndex(0)
+
     def _open_env_var(self, var_name: str):
         ev = next((e for e in ALL_ENV_VARS if e.name == var_name), None)
         if ev:
@@ -5647,7 +5691,7 @@ class MainWindow(QMainWindow):
             if self._sidebar_stack.currentIndex() == 1:
                 self._right_stack.setCurrentIndex(2)
         else:
-            self._arch_detail.hide()
+            self._arch_detail.set_arch(None)
             if self._sidebar_stack.currentIndex() == 1:
                 self._right_stack.setCurrentIndex(0)
         self.statusBar().showMessage("Architecture updated" if arch else "Architecture cleared")
