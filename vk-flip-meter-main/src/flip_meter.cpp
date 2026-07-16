@@ -161,6 +161,11 @@ namespace FlmConst {
     constexpr int      SLOT_WINDOW         = 12;   // [FIX-16] 12 = ekok(1..4) →
                                                    // her MFG çarpanında tam döngü,
                                                    // faz kaynaklı ortalama sapması yok
+    // [FIX-36] VRR + MFG floor-pacing: real-frame periyot medyanı için kısa,
+    // FPS değişimine hızlı tepki veren pencere. SLOT_WINDOW (mean, 12) FPS
+    // 150↔220 dalgalanırken gerçek anlık periyodun gerisinde kalıyordu.
+    constexpr int      REAL_WINDOW         = 8;    // son N real-frame periyodu
+    constexpr int64_t  MIN_FLOOR_NS        = 500'000LL;   // 2000 FPS tavanı: floor asla bunun altına inmez
     constexpr int      MFG_DETECT_WINDOW   = 64;   // [item 7]
     constexpr int      MIN_SC_WIDTH        = 640;  // [item 11]
     constexpr int      MIN_SC_HEIGHT       = 480;
@@ -193,6 +198,16 @@ struct FLMConfig {
     std::atomic<int>     mode       {(int)PaceMode::AUTO};
     std::atomic<int>     pace_point {(int)PacePoint::PRESENT};
     std::atomic<int64_t> stats_interval_ns {FlmConst::STATS_INTERVAL_NS}; // [FIX-32]
+
+    // [FIX-36] VRR + MFG floor-pacing ayarları — HEPSİ hot-reload.
+    // pace_mode: grid (eski mutlak-grid davranışı) | floor (yeni slew-limit).
+    // floor modu VRR'de değişken FPS'i frenlemez; yalnız ε-burst'ün çok erken
+    // çıkmasını engelleyip generated/real uçurumunu yumuşatır.
+    std::atomic<bool>    floor_pacing {true};   // FLM_FLOOR_PACING=1 (varsayılan açık)
+    // floor = slot_iv * (floor_ratio/1000). 850 = 0.85 → present öncekinden en az
+    // %85 slot sonra çıkar. Düşük = daha gevşek (jitter geçer), yüksek = daha sıkı
+    // (daha düz ama geç kalırsa hitch). Hisle ayarlanacak asıl knob budur.
+    std::atomic<int>     floor_ratio {850};     // FLM_FLOOR_RATIO (500-1000)
 };
 
 static FLMConfig      g_config;
@@ -224,6 +239,8 @@ static void apply_dynamic_kv(const char* key, const char* val) {
     else if (!strcmp(key, "FLM_DRIFT_TOLERANCE_NS")) g_config.drift_tol.store(std::max<int64_t>(0, atoll(val)));
     else if (!strcmp(key, "FLM_MODE"))               g_config.mode.store((int)parse_mode(val));
     else if (!strcmp(key, "FLM_PACE_POINT"))         g_config.pace_point.store((int)parse_pace_point(val));
+    else if (!strcmp(key, "FLM_FLOOR_PACING"))       g_config.floor_pacing.store(atoi(val) != 0);   // [FIX-36]
+    else if (!strcmp(key, "FLM_FLOOR_RATIO"))        g_config.floor_ratio.store(std::clamp(atoi(val), 500, 1000)); // [FIX-36]
     else if (!strcmp(key, "FLM_LOG_LEVEL")) {
         if      (!strcmp(val, "DEBUG")) g_log_level.store((int)LogLevel::DEBUG);
         else if (!strcmp(val, "INFO"))  g_log_level.store((int)LogLevel::INFO);
@@ -268,6 +285,7 @@ static void snapshot_dynamic_env() {
         "FLM_TARGET_FPS", "FLM_STATS_INTERVAL", "FLM_SPIN_NS",
         "FLM_PRESENT_LEAD_NS", "FLM_DRIFT_TOLERANCE_NS",
         "FLM_MODE", "FLM_PACE_POINT", "FLM_LOG_LEVEL",
+        "FLM_FLOOR_PACING", "FLM_FLOOR_RATIO",   // [FIX-36]
     };
     for (const char* k : keys)
         if (const char* e = getenv(k)) g_env_snapshot.emplace_back(k, e);
@@ -458,7 +476,17 @@ struct SwapchainState {
     // [FIX-28] LIMITER timeline'ı — YALNIZ QueuePresent thread'i, her karede
     // yazar. Kendi cache-line'ında olmalı; aksi halde ölçüm thread'inin her
     // karede yazdığı blokla (aşağısı) ping-pong yapar.
-    alignas(64) int64_t limiter_next_ns = 0;
+    // [FIX-36] Aynı cache-line'da present-side floor-pacing durumu (yalnız
+    // present thread dokunur, kilitsiz). last_present_ns present ritmini
+    // ölçüm gecikmesi olmadan anchor'lar; real_period_ns present tarafında
+    // tahmin edilen real-frame periyodudur (floor'un tabanı).
+    alignas(64) int64_t limiter_next_ns   = 0;
+    int64_t             last_present_ns    = 0;   // [FIX-36] önceki present anı
+    int64_t             real_period_ns     = FlmConst::DEFAULT_INTERVAL_NS; // [FIX-36] T tahmini (present-side)
+    int64_t             real_win[FlmConst::REAL_WINDOW] = {};  // [FIX-36] son real-frame periyotları
+    int                 real_idx           = 0;
+    int                 real_count         = 0;
+    int64_t             burst_anchor_ns    = 0;   // [FIX-36] son real kare present anı (T ölçümü için)
 
     // [FIX-28] Yalnız ölçüm thread'i dokunur → kilitsiz; present-thread
     // alanlarından ayrı cache-line'da başlar.
@@ -775,13 +803,44 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
                 if (st->di_count < FlmConst::HISTORY_SIZE) st->di_count++;
                 // [FIX-27] filtered_interval_ns EMA'sı kaldırıldı: tek okunduğu
                 // yer di_count==0 fallback'iydi ve o anda hiç güncellenmemişti.
+
+                // [FIX-36] REAL-FRAME PERİYOT MEDYANI (VRR floor-pacing için).
+                // Non-fake kareler = real kareler (m=1'de hepsi). Ardışık real
+                // kareler arası interval, MFG'de burst'ün toplam süresi ≈ T'dir
+                // (fake filtrelendiği için buraya yalnız real'ler düşer, aralık
+                // = son real'den bu real'e = T). Kısa pencere (8) + medyan:
+                // mean'in aksine tek bir uzun kareye (1.3×) dayanıklı ve FPS
+                // 150↔220 değişimini hızlı takip eder. slot = median(T)/m.
+                st->real_win[st->real_idx] = interval_ns;
+                st->real_idx = (st->real_idx + 1) % FlmConst::REAL_WINDOW;
+                if (st->real_count < FlmConst::REAL_WINDOW) st->real_count++;
             }
 
-            // [FIX-16] Yayınlanacak slot aralığı: hedef fps varsa ondan, yoksa
-            // slot-EMA (tüm aralıkların ortalaması ≈ T/m — MFG dahil doğru).
+            // [FIX-36] Real-frame periyot medyanı (fake'ler zaten pencereye
+            // girmedi → doğrudan T örnekleri).
+            int64_t real_med = st->slot_mean_ns;
+            if (st->real_count > 0) {
+                int64_t tmp[FlmConst::REAL_WINDOW];
+                int rn = std::min(st->real_count, FlmConst::REAL_WINDOW);  // klemp: -Warray-bounds
+                std::copy(st->real_win, st->real_win + rn, tmp);
+                std::sort(tmp, tmp + rn);
+                real_med = tmp[rn / 2];
+            }
+
+            // [FIX-16/36] Yayınlanacak slot aralığı:
+            //   fps>0        → sabit hedef (limiter/cap yolu, değişmedi)
+            //   floor_pacing → median(real T)/m  (VRR: FPS'e hızlı uyum, robust)
+            //   klasik pacer → slot_mean (eski davranış, geri dönüş)
             int fps = g_config.target_fps.load(std::memory_order_relaxed);
-            int64_t slot_iv = (fps > 0) ? (1'000'000'000LL / fps)
-                                        : st->slot_mean_ns;
+            int64_t slot_iv;
+            if (fps > 0) {
+                slot_iv = 1'000'000'000LL / fps;
+            } else if (g_config.floor_pacing.load(std::memory_order_relaxed)) {
+                int mm = std::max(1, m);
+                slot_iv = std::max<int64_t>(real_med / mm, FlmConst::MIN_FLOOR_NS);
+            } else {
+                slot_iv = st->slot_mean_ns;
+            }
             st->slot_interval_ns.store(slot_iv, std::memory_order_relaxed);
 
             // [FIX-18] GPU-bound bekçisi: yalnız AÇIK hedef (fps>0) varken ve
@@ -1172,6 +1231,56 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
         return;
     }
 
+    // ========================================================================
+    // [FIX-36] FLOOR PACING — VRR + MFG için asıl yol.
+    // ------------------------------------------------------------------------
+    // Neden mutlak-grid DEĞİL: VRR'de doğru frametime sabit değil; FPS
+    // 150↔220 dalgalanıyor. Mutlak grid, FPS artarken kareleri frenler
+    // (görünür titreme). Bunun yerine present çıkışına ÖNCEKİ present'e göreli
+    // bir TABAN (floor) koyarız: bir present, öncekinden en az floor kadar
+    // sonra çıkabilir. Bu, Ada MFG'nin ε aralıklı generated karelerinin çok
+    // erken çıkmasını engeller (onları floor'a kadar bekletir), ama real
+    // karenin (uzun aralık sonrası) geç gelmesine DOKUNMAZ. Sonuç: bimodal
+    // ε/T deseni düzleşir, değişken FPS frenlenmez.
+    //
+    // floor = (slot_iv) * floor_ratio.  slot_iv = T/m (ölçümden, m dahil).
+    // last_present_ns present thread'inde her karede güncellenir → ölçüm
+    // gecikmesi grid'i kaydırmaz (mutlak-grid'in 1-kare bayat sorunu yok).
+    // ========================================================================
+    if (!limiter_mode && g_config.floor_pacing.load(std::memory_order_relaxed)) {
+        int64_t slot_iv = st->slot_interval_ns.load(std::memory_order_relaxed);
+        if (slot_iv <= 0) return;
+        int     ratio   = g_config.floor_ratio.load(std::memory_order_relaxed);
+        int64_t floor   = std::max<int64_t>((slot_iv * ratio) / 1000, FlmConst::MIN_FLOOR_NS);
+
+        int64_t t = now_ns();
+        if (st->last_present_ns == 0) {          // ilk present: yalnız anchor
+            st->last_present_ns = t;
+            return;
+        }
+
+        int64_t since = t - st->last_present_ns; // önceki present'ten bu yana
+
+        // advance=false (BOTH'ta acquire kapısı): yalnız erken kalmayı önle,
+        // last_present_ns'i present dalı günceller (çift ilerletme olmasın).
+        int64_t target = st->last_present_ns + floor;
+
+        // Present floor'un içinde mi? (çok erken generated kare) → beklet.
+        // Floor'u aşmışsa (real kare / geç kare) → hiç bekleme, hemen geç.
+        if (since < floor) {
+            int64_t left = target - t;
+            // Tavan: floor'un ~2 katından uzun beklemeyi asla dayatma (hitch/
+            // clock-jump koruması). MFG'de bu tetiklenmemeli.
+            if (left > 0 && left < floor * 2) {
+                st->last_gate_wait_ns.store(t, std::memory_order_relaxed);  // [FIX-17]
+                precise_wait_absolute(target);
+                t = now_ns();
+            }
+        }
+        if (advance) st->last_present_ns = t;    // present ritmini anchor'la
+        return;
+    }
+
     int64_t iv, lead;
     if (limiter_mode) {
         int fps = g_config.target_fps.load(std::memory_order_relaxed);
@@ -1469,6 +1578,19 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(
 //     off      : hiçbir şey yapma (A/B testi taban çizgisi)
 //  FLM_TARGET_FPS=<n>          limiter/pacer hedef fps (0 = doğal cadence)
 //  FLM_PACE_POINT=present|acquire|both  (varsayılan present) — TEK kapı noktası
+//  FLM_FLOOR_PACING=1          [FIX-36] VRR+MFG floor-pacing (varsayılan 1/açık).
+//                              fps=0 (doğal cadence) + pacer yolunda devreye
+//                              girer. Mutlak-grid yerine present'e göreli TABAN:
+//                              present öncekinden en az floor kadar sonra çıkar.
+//                              Ada (40-serisi, HW flip metering YOK) MFG'nin
+//                              ε aralıklı generated karelerini eşitler, real
+//                              kareyi frenlemez, değişken FPS'i bozmaz.
+//                              0 = eski mutlak-grid pacer'a dön.
+//  FLM_FLOOR_RATIO=850         [FIX-36] floor = (T/m) * ratio/1000  (500-1000).
+//                              Asıl "hisle ayarlanan" knob. Düşük (700) = gevşek,
+//                              jitter geçer ama daha az düzeltme. Yüksek (950) =
+//                              sıkı, daha düz ama geç kalırsa hitch riski.
+//                              CANLI: FLM_CONFIG dosyasına yaz + kill -USR1 <pid>.
 //  FLM_PRESENT_LEAD_NS=1000000 flip'ten ne kadar önce present (ns)
 //  FLM_SPIN_NS=150000          son N ns pause-spin (0 = tamamen uyku, min CPU)
 //  FLM_DRIFT_TOLERANCE_NS=0    0 = otomatik (iv/4)
