@@ -5302,6 +5302,15 @@ class LutrisSyncWidget(QWidget):
         for w in (self._chk_drs, self._chk_env):
             w.stateChanged.connect(self._update_preview)
 
+        # Keep the preview (and therefore the apply button's enabled state)
+        # in sync with the *live* configuration, not just with game
+        # selection / checkbox toggles. Without this, changing a DRS
+        # setting or env var after a game was already selected left the
+        # button stuck in whatever state it was in before the edit — the
+        # user had to reselect the game from the combo to "wake it up".
+        self.settings_manager.settings_changed.connect(self._update_preview)
+        self.settings_manager.arch_changed.connect(self._update_preview)
+
         self._scan_games()
 
     # ── Discovery ─────────────────────────────────────────────────────
@@ -5970,6 +5979,7 @@ class MainWindow(QMainWindow):
         profiles_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         self._lutris_sync_widget = LutrisSyncWidget(self.settings_manager)
+        self._env_widget.env_changed.connect(self._lutris_sync_widget._update_preview)
         lutris_scroll = QScrollArea()
         lutris_scroll.setWidgetResizable(True)
         lutris_scroll.setWidget(self._lutris_sync_widget)
@@ -6134,8 +6144,17 @@ class MainWindow(QMainWindow):
     def _open_setting(self, setting_id):
         setting = next((s for s in self.all_settings if s.id == setting_id), None)
         if setting:
-            self._right_stack.setCurrentIndex(1)
             self._setting_editor.set_setting(setting)
+            # Only steal the right panel if the DRS Settings sidebar page is
+            # actually the one showing. Without this guard, anything that
+            # re-fires currentItemChanged on the (hidden) settings list --
+            # e.g. _populate_settings() restoring the previously-selected
+            # item after a rebuild -- pops the setting editor into view even
+            # while the user is looking at a completely different tab, like
+            # Profiles. The editor's content is still kept up to date above;
+            # we just don't force it on screen.
+            if self._sidebar_stack.currentIndex() == 0:
+                self._right_stack.setCurrentIndex(1)
 
     def _on_setting_cleared(self):
         # Fired when the currently-open setting's value is removed (via the
@@ -6147,8 +6166,12 @@ class MainWindow(QMainWindow):
     def _open_env_var(self, var_name: str):
         ev = next((e for e in ALL_ENV_VARS if e.name == var_name), None)
         if ev:
-            self._right_stack.setCurrentIndex(3)
             self._env_editor.set_var(ev)
+            # Same guard as _open_setting: don't yank the right panel onto
+            # the env var editor unless the Env Vars sidebar page is what's
+            # actually showing right now.
+            if self._sidebar_stack.currentIndex() == 2:
+                self._right_stack.setCurrentIndex(3)
 
     # ===== Architecture =====
     def _populate_arch_list(self):
