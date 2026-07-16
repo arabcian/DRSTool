@@ -478,15 +478,13 @@ struct SwapchainState {
     // karede yazdığı blokla (aşağısı) ping-pong yapar.
     // [FIX-36] Aynı cache-line'da present-side floor-pacing durumu (yalnız
     // present thread dokunur, kilitsiz). last_present_ns present ritmini
-    // ölçüm gecikmesi olmadan anchor'lar; real_period_ns present tarafında
-    // tahmin edilen real-frame periyodudur (floor'un tabanı).
+    // ölçüm gecikmesi olmadan anchor'lar; floor'un tabanı slot_interval_ns'ten
+    // (ölçüm thread'i yayınlar) okunur.
     alignas(64) int64_t limiter_next_ns   = 0;
     int64_t             last_present_ns    = 0;   // [FIX-36] önceki present anı
-    int64_t             real_period_ns     = FlmConst::DEFAULT_INTERVAL_NS; // [FIX-36] T tahmini (present-side)
     int64_t             real_win[FlmConst::REAL_WINDOW] = {};  // [FIX-36] son real-frame periyotları
     int                 real_idx           = 0;
     int                 real_count         = 0;
-    int64_t             burst_anchor_ns    = 0;   // [FIX-36] son real kare present anı (T ölçümü için)
 
     // [FIX-28] Yalnız ölçüm thread'i dokunur → kilitsiz; present-thread
     // alanlarından ayrı cache-line'da başlar.
@@ -1446,11 +1444,6 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkQueuePresentKHR(
     if (sc_count > FlmConst::STACK_PRESENT_IDS) { ids_heap.resize(sc_count, 0); present_ids = ids_heap.data(); }
     else std::fill(ids_stack, ids_stack + sc_count, 0ULL);
 
-    std::shared_ptr<SwapchainState> states_stack[FlmConst::STACK_PRESENT_IDS];
-    std::vector<std::shared_ptr<SwapchainState>> states_heap;
-    std::shared_ptr<SwapchainState>* states = states_stack;
-    if (sc_count > FlmConst::STACK_PRESENT_IDS) { states_heap.resize(sc_count); states = states_heap.data(); }
-
     // [item 6] present kapısı yalnız pace_point PRESENT/BOTH ise.
     PacePoint pp = (PacePoint)g_config.pace_point.load(std::memory_order_relaxed);
     bool gate_here = (pp == PacePoint::PRESENT || pp == PacePoint::BOTH);
@@ -1458,7 +1451,6 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkQueuePresentKHR(
     bool any_id = false;
     for (uint32_t i = 0; i < sc_count; i++) {
         auto st = find_sc_state(pPresentInfo->pSwapchains[i]);
-        states[i] = st;
         if (!st) continue;
 
         if (app_has_present_id) {
