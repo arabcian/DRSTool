@@ -6277,10 +6277,11 @@ class MainWindow(QMainWindow):
 
     def _on_setting_cleared(self):
         # Fired when the currently-open setting's value is removed (via the
-        # Remove Setting button). Only fall back to the placeholder if we're
-        # still looking at the settings-editor page.
-        if self._right_stack.currentIndex() == 1:
-            self._right_stack.setCurrentIndex(0)
+        # Remove Setting button). The editor panel should stay visible,
+        # showing the setting with nothing selected yet (SettingEditorWidget
+        # already rebuilds itself for this) - it must NOT fall back to the
+        # placeholder page, which used to hide the whole right-hand panel.
+        pass
 
     def _open_env_var(self, var_name: str):
         ev = next((e for e in ALL_ENV_VARS if e.name == var_name), None)
