@@ -2898,6 +2898,10 @@ QLineEdit:hover{
             new_value = self.settings_manager.get_setting(self._current_setting.id)
             if new_value is None:
                 self._current_value = None
+                # Rebuild so the option grid drops its stale "checked" state
+                # (buttons unchecked, Remove Setting hidden) instead of
+                # freezing on whatever was highlighted before removal.
+                self._build_editor()
                 self.cleared.emit()
                 return
             if new_value == self._current_value:
@@ -4624,6 +4628,14 @@ QPushButton:pressed{ background:#a73434; }
         cols = min(len(ev.options), 5)
         grid = QGridLayout()
         grid.setSpacing(4)
+
+        # Enum env vars (e.g. on/off __GL_* switches) accept exactly one
+        # value. Without a QButtonGroup, each button toggled independently
+        # and both e.g. "0" and "1" could end up checked at once. Group them
+        # so Qt enforces single-selection, same fix as _build_enum_control.
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+
         row, col = 0, 0
         for opt in ev.options:
             btn = QPushButton(opt)
@@ -4651,6 +4663,7 @@ QPushButton:checked{
     color:#76b900;
 }
 """)
+            group.addButton(btn)
             btn.clicked.connect(lambda checked, o=opt: self._set_value(o))
             grid.addWidget(btn, row, col)
             col += 1
