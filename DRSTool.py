@@ -2912,8 +2912,21 @@ QLineEdit:hover{
             # into/dragging (it or a child still has focus), skip the full
             # rebuild: recreating the widgets would drop focus and cursor
             # position mid-edit. Just refresh the "= value" chip instead.
+            #
+            # Bitfield/enum controls are grids of QPushButtons: clicking one
+            # gives THAT button focus, so it always satisfied this "still
+            # has focus" check and skipped _build_editor() below - meaning
+            # the pressed (and any other) button in the grid never got its
+            # checked/highlight style refreshed after the click. Those
+            # button grids have no mid-edit cursor/focus state worth
+            # protecting, so force the full rebuild for them regardless of
+            # focus; only line-edit/spinbox style controls take the
+            # shortcut.
             focus_widget = QApplication.focusWidget()
-            if focus_widget is not None and self._control_widget.isAncestorOf(focus_widget):
+            no_shortcut_types = ("bitfield", "enum")
+            if (self._current_setting.type not in no_shortcut_types
+                    and focus_widget is not None
+                    and self._control_widget.isAncestorOf(focus_widget)):
                 self._value_label.setText(f"= {new_value}")
                 self._value_label.show()
                 if not self._remove_btn.isVisible():
@@ -4664,13 +4677,33 @@ QPushButton:checked{
 }
 """)
             group.addButton(btn)
-            btn.clicked.connect(lambda checked, o=opt: self._set_value(o))
+            # Same reasoning as SettingEditorWidget._build_enum_control's
+            # _toggle_enum_value: with an exclusive QButtonGroup, clicking
+            # the already-active option re-fires clicked(checked=True)
+            # instead of unchecking it (Qt won't let an exclusive group end
+            # up with zero checked buttons via a plain click). Previously
+            # this connected straight to _set_value(opt), so clicking the
+            # active option was a no-op and the only way to clear the var
+            # was the separate "Clear Variable" button below - clicking a
+            # highlighted option a second time never removed it. Route
+            # through a toggle helper that clears the var in that case.
+            btn.clicked.connect(lambda checked, o=opt: self._toggle_enum_option(o))
             grid.addWidget(btn, row, col)
             col += 1
             if col >= cols:
                 col = 0
                 row += 1
         self._control_layout.addLayout(grid)
+
+    def _toggle_enum_option(self, opt: str):
+        """Enum env-var button click: clicking the currently-set option
+        clears the variable instead of re-setting the same value, mirroring
+        DRS Settings' enum behavior."""
+        cur = self._list_widget.get_value(self._current_name) if self._list_widget else ""
+        if cur == opt:
+            self._on_clear()
+        else:
+            self._set_value(opt)
 
     def _build_vkd3d_config(self, ev: EnvVarDef, cur: str):
         """
