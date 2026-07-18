@@ -59,6 +59,20 @@ class SettingValue:
 class BitField:
     name: str
     val: int
+    # Optional explicit sub-field mask. When several BitFields share the same
+    # mask (e.g. Override→App Ctrl=0x1, Override→Enhance=0x2,
+    # Disable Override=0x3 all live in bits 0-1, mask=0x3), they represent
+    # mutually-exclusive values of ONE multi-bit field rather than
+    # independent flags. Previously this grouping wasn't modeled at all -
+    # _toggle_bitfield guessed "is this a mask" purely from whether bit.val
+    # itself was a power of two, so 0x1/0x2 were XOR'd independently while
+    # 0x3 was mask-toggled, even though all three read/write the same two
+    # bits. That let 0x1 and 0x2 be turned on together, silently producing
+    # 0x3 (== "Disable Override") without that button ever being clicked,
+    # and clicking 0x3 afterwards behaved inconsistently with the other two.
+    # If left as 0 (default), the field falls back to per-bit XOR toggling
+    # for plain independent flags - unaffected by this fix.
+    mask: int = 0
 
 
 @dataclass
@@ -385,12 +399,15 @@ def create_all_settings() -> List[Setting]:
                 "AA behavior flags",
                 "Controls how AA modes interact with applications.",
                 bits=[
-                    BitField("Override→App Ctrl", 0x00000001),
-                    BitField("Override→Enhance", 0x00000002),
-                    BitField("Disable Override", 0x00000003),
-                    BitField("Enhance→App Ctrl", 0x00000004),
-                    BitField("Enhance→Override", 0x00000008),
-                    BitField("Disable Enhance", 0x0000000c),
+                    # Bits 0-1 (mask 0x3): mutually-exclusive Override sub-field
+                    BitField("Override→App Ctrl", 0x00000001, mask=0x00000003),
+                    BitField("Override→Enhance", 0x00000002, mask=0x00000003),
+                    BitField("Disable Override", 0x00000003, mask=0x00000003),
+                    # Bits 2-3 (mask 0xc): mutually-exclusive Enhance sub-field
+                    BitField("Enhance→App Ctrl", 0x00000004, mask=0x0000000c),
+                    BitField("Enhance→Override", 0x00000008, mask=0x0000000c),
+                    BitField("Disable Enhance", 0x0000000c, mask=0x0000000c),
+                    # Independent single-bit flags outside those sub-fields
                     BitField("VCAA→Multisample", 0x00010000),
                     BitField("SLI Disable TSS", 0x00020000),
                     BitField("Disable CPLAA", 0x00040000),
@@ -465,15 +482,26 @@ def create_all_settings() -> List[Setting]:
                     SettingValue("Mixedsample 64x", "0x2c"),
                     SettingValue("Mixedsample 128x", "0x2d"),
                 ]),
-        Setting("0x10D48A85", "AA Transp. SS", "Anti-Aliasing", "enum", "0x0",
+        Setting("0x10D48A85", "AA Transp. SS", "Anti-Aliasing", "bitfield", "0x0",
                 "AA - Transparency Supersampling",
-                "Controls supersampling for transparent textures.",
-                values=[
-                    SettingValue("Off", "0x0"),
-                    SettingValue("Alpha Test", "0x1"),
-                    SettingValue("Pixel Kill", "0x2"),
-                    SettingValue("Dynamic Branch", "0x4"),
-                    SettingValue("All", "0x8"),
+                "Controls supersampling for transparent textures. Combines a "
+                "replay MODE sub-field (bits 0-3, mask 0xf) with a SAMPLES "
+                "sub-field (bits 4-6, mask 0x70) and an independent "
+                "Disallow TRAA flag (bit 8, 0x100).",
+                bits=[
+                    # MODE sub-field (mask 0xf) - mutually exclusive
+                    BitField("Mode: Off", 0x00000000, mask=0x0000000f),
+                    BitField("Mode: Alpha Test", 0x00000001, mask=0x0000000f),
+                    BitField("Mode: Pixel Kill", 0x00000002, mask=0x0000000f),
+                    BitField("Mode: Dynamic Branch", 0x00000004, mask=0x0000000f),
+                    BitField("Mode: All", 0x00000008, mask=0x0000000f),
+                    # SAMPLES sub-field (mask 0x70) - mutually exclusive
+                    BitField("Samples: One", 0x00000000, mask=0x00000070),
+                    BitField("Samples: Two", 0x00000010, mask=0x00000070),
+                    BitField("Samples: Four", 0x00000020, mask=0x00000070),
+                    BitField("Samples: Eight", 0x00000030, mask=0x00000070),
+                    # Independent single-bit flag outside those sub-fields
+                    BitField("Disallow TRAA", 0x00000100),
                 ]),
         Setting("0x107EFC5B", "AA Mode Selector", "Anti-Aliasing", "enum", "0x0",
                 "AA - Mode",
@@ -1262,21 +1290,36 @@ def create_all_settings() -> List[Setting]:
                 "Shim Rendering Options",
                 "Advanced Optimus rendering options.",
                 bits=[
-                    BitField("Default", 0x00000000),
+                    BitField("Default Rendering Mode", 0x00000000),
                     BitField("Disable Async Present", 0x00000001),
                     BitField("EHSHELL Detect", 0x00000002),
-                    BitField("FlashPlayer Host", 0x00000004),
-                    BitField("Video DRM", 0x00000008),
+                    BitField("FlashPlayer Host Detect", 0x00000004),
+                    BitField("Video DRM App Detect", 0x00000008),
                     BitField("Ignore Overrides", 0x00000010),
-                    BitField("Enable DWM Async", 0x00000040),
+                    # 0x00000020 = SHIM_RENDERING_OPTIONS_RESERVED1 (skipped)
+                    BitField("Enable DWM Async Present", 0x00000040),
+                    # 0x00000080 = SHIM_RENDERING_OPTIONS_RESERVED2 (skipped)
                     BitField("Allow Inheritance", 0x00000100),
                     BitField("Disable Wrappers", 0x00000200),
                     BitField("Disable DXGI Wrappers", 0x00000400),
-                    BitField("Prune Unsupported", 0x00000800),
+                    BitField("Prune Unsupported Formats", 0x00000800),
                     BitField("Enable Alpha Format", 0x00001000),
                     BitField("iGPU Transcoding", 0x00002000),
                     BitField("Disable CUDA", 0x00004000),
-                    BitField("Allow CP Caps", 0x00008000),
+                    BitField("Allow CP Caps For Video", 0x00008000),
+                    BitField("iGPU Transcoding Fwd Optimus", 0x00010000),
+                    BitField("Disable During Secure Boot", 0x00020000),
+                    BitField("Invert For Quadro", 0x00040000),
+                    BitField("Invert For MSHybrid", 0x00080000),
+                    BitField("Register Process Enable Gold", 0x00100000),
+                    BitField("Handle Windowed Mode Perf Opt", 0x00200000),
+                    BitField("Handle Win7 Async Runtime Bug", 0x00400000),
+                    BitField("Explicit Adapter Opted By App", 0x00800000),
+                    BitField("Allow Dynamic Display Mux Switch", 0x01000000),
+                    BitField("Disallow Dynamic Display Mux Switch", 0x02000000),
+                    BitField("Disable Turing Power Policy", 0x04000000),
+                    BitField("Allow Dynamic Display Mux Switch MDM", 0x08000000),
+                    BitField("Disallow Dynamic Display Mux Switch MDM", 0x10000000),
                 ]),
     ])
 
@@ -2732,9 +2775,17 @@ QLineEdit:hover{
         row, col = 0, 0
 
         for bit in s.bits:
-            is_mask = (bit.val & (bit.val - 1)) != 0 and bit.val > 1
-            if is_mask:
-                active = (cur_val & bit.val) == bit.val
+            # A bit is "active" if it's the value currently stored in its
+            # sub-field. For a masked multi-bit field (mask != 0), that means
+            # the masked-out bits of cur_val exactly equal this option's
+            # value - so at most one button per mask lights up, matching the
+            # mutually-exclusive semantics of a real bitfield sub-field.
+            # Independent single-bit flags (mask == 0) just test their bit.
+            if bit.mask:
+                active = (cur_val & bit.mask) == bit.val
+            elif bit.val == 0:
+                # "Default"/0x0 flag: active only when nothing else is set.
+                active = (cur_val == 0)
             else:
                 active = bool(cur_val & bit.val)
 
@@ -2742,7 +2793,7 @@ QLineEdit:hover{
             btn.setCheckable(True)
             btn.setChecked(active)
             btn.setProperty("bit_value", bit.val)
-            btn.clicked.connect(lambda checked, bid=s.id, bval=bit.val: self._toggle_bitfield(bid, bval))
+            btn.clicked.connect(lambda checked, bid=s.id, bval=bit.val, bmask=bit.mask: self._toggle_bitfield(bid, bval, bmask))
 
             if active:
                 btn.setStyleSheet("""
@@ -2870,18 +2921,28 @@ QLineEdit:hover{
             hex_val = f"0x{clean.upper()}"
             self.settings_manager.set_setting(setting_id, hex_val)
 
-    def _toggle_bitfield(self, setting_id: str, bit_val: int):
+    def _toggle_bitfield(self, setting_id: str, bit_val: int, mask: int = 0):
         cur = self.settings_manager.get_setting(setting_id)
         cur_val = int(cur, 16) if cur else 0
 
-        is_mask = (bit_val & (bit_val - 1)) != 0 and bit_val > 1
-
-        if is_mask:
-            if (cur_val & bit_val) == bit_val:
-                new_val = cur_val & ~bit_val
+        if mask:
+            # Multi-bit sub-field (e.g. 2 bits shared by 3 mutually-exclusive
+            # options): clear just this sub-field's bits, then OR the new
+            # value in - unless this option is already the active one, in
+            # which case clicking it again clears the sub-field entirely
+            # (same "click active = deselect" behavior as the enum grids).
+            if (cur_val & mask) == bit_val:
+                new_val = cur_val & ~mask
             else:
-                new_val = (cur_val & ~bit_val) | bit_val
+                new_val = (cur_val & ~mask) | bit_val
+        elif bit_val == 0:
+            # A "Default"/"None" style flag defined as 0x0 (e.g. Shim
+            # Rendering Options' "Default") can't be XOR'd - cur_val ^ 0 is
+            # always cur_val, so the button was a dead no-op. Treat it as an
+            # explicit "clear every independent flag on this setting".
+            new_val = 0
         else:
+            # Independent single-bit flag: plain XOR toggle.
             new_val = cur_val ^ bit_val
 
         hex_val = f"0x{new_val:08X}"
