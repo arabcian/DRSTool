@@ -3742,6 +3742,13 @@ FLM_ENV_VARS: List[EnvVarDef] = [
               "Syntax: FLM_MODE=limiter FLM_TARGET_FPS=120 %command%",
               options=["auto", "present", "limiter", "off"]),
 
+    EnvVarDef("FLM_PACE_FIFO", "vk_flip_meter", "enum", "0",
+              "Forces frame pacer to run even when FIFO swapchain modes are enabled. "
+              "This creates possibility for pacer to fight with FIFO mechanism "
+              "For testing. "
+              "Syntax: FLM_PACE_FIFO=1",
+              options=["0", "1"]),
+
     EnvVarDef("FLM_TARGET_FPS", "vk_flip_meter", "int", "0",
               "Target FPS for the limiter/pacer. 0 = the engine's natural cadence (only "
               "paces/measures, doesn't cap frames). Must be >0 for LIMITER mode to have "
