@@ -243,6 +243,17 @@ struct FLMConfig {
     // (daha düz ama geç kalırsa hitch). Hisle ayarlanacak asıl knob budur.
     std::atomic<int>     floor_ratio {850};     // FLM_FLOOR_RATIO (500-1000)
 
+    // [FIX-41] MFG-adaptif ratio gevşetmesi. Ada (40-serisi) GPU, çarpan (m)
+    // arttıkça ekstra üretilen kareleri aynı GPU tavanına sıkıştırmak zorunda
+    // kalıyor -> gerçek slot süresi (T/m civarı) daha büyük varyansla dağılıyor.
+    // Sabit floor_ratio, m=2'de iyi çalışsa da m=3/4'te real kareyi floor
+    // içinde tutmaya çalışıp gereksiz bekleme + fren yaratabilir (hitch% ve
+    // cov%'ın m ile katlanarak artmasının bir parçası). Bu yüzden m arttıkça
+    // ratio'yu kademeli gevşetiyoruz: her ekstra çarpan adımı için ratio'dan
+    // FLM_FLOOR_MFG_STEP kadar düş (varsayılan 40/1000 birim). m=1'de etkisiz.
+    std::atomic<bool>     floor_mfg_adapt {true};   // FLM_FLOOR_MFG_ADAPT (varsayılan 1/açık)
+    std::atomic<int>      floor_mfg_step  {40};     // FLM_FLOOR_MFG_STEP (0-200), ratio birimi/adım
+
     // [FIX-39] Uyanma gecikmesine göre spin payını otomatik ayarla (hot-reload).
     // 0 = eski davranış: FLM_SPIN_NS ne diyorsa sabit o kadar spin.
     std::atomic<bool>    spin_adapt {true};     // FLM_SPIN_ADAPT (varsayılan 1)
@@ -279,6 +290,8 @@ static void apply_dynamic_kv(const char* key, const char* val) {
     else if (!strcmp(key, "FLM_PACE_POINT"))         g_config.pace_point.store((int)parse_pace_point(val));
     else if (!strcmp(key, "FLM_FLOOR_PACING"))       g_config.floor_pacing.store(atoi(val) != 0);   // [FIX-36]
     else if (!strcmp(key, "FLM_FLOOR_RATIO"))        g_config.floor_ratio.store(std::clamp(atoi(val), 500, 1000)); // [FIX-36]
+    else if (!strcmp(key, "FLM_FLOOR_MFG_ADAPT"))    g_config.floor_mfg_adapt.store(atoi(val) != 0);   // [FIX-41]
+    else if (!strcmp(key, "FLM_FLOOR_MFG_STEP"))     g_config.floor_mfg_step.store(std::clamp(atoi(val), 0, 200)); // [FIX-41]
     else if (!strcmp(key, "FLM_SPIN_ADAPT"))         g_config.spin_adapt.store(atoi(val) != 0);   // [FIX-39]
     else if (!strcmp(key, "FLM_LOG_LEVEL")) {
         if      (!strcmp(val, "DEBUG")) g_log_level.store((int)LogLevel::DEBUG);
@@ -325,6 +338,7 @@ static void snapshot_dynamic_env() {
         "FLM_PRESENT_LEAD_NS", "FLM_DRIFT_TOLERANCE_NS",
         "FLM_MODE", "FLM_PACE_POINT", "FLM_LOG_LEVEL",
         "FLM_FLOOR_PACING", "FLM_FLOOR_RATIO",   // [FIX-36]
+        "FLM_FLOOR_MFG_ADAPT", "FLM_FLOOR_MFG_STEP",   // [FIX-41]
         "FLM_SPIN_ADAPT",                        // [FIX-39]
     };
     for (const char* k : keys)
@@ -1342,6 +1356,18 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
         int64_t slot_iv = st->slot_interval_ns.load(std::memory_order_relaxed);
         if (slot_iv <= 0) return;
         int     ratio   = g_config.floor_ratio.load(std::memory_order_relaxed);
+        // [FIX-41] m arttıkça ratio'yu kademeli gevşet. GPU zaten tavandaysa
+        // (40-serisi MFG donanım-hızlandırmasız) m=3/4'te generated kare
+        // üretim süresi daha büyük varyansla dağılır; sabit sıkı ratio real
+        // kareyi de floor içinde gereksiz bekletip fren/hitch üretebiliyor.
+        // Yalnız m>1 (MFG aktif) iken devrede, m=1'de davranış değişmez.
+        if (g_config.floor_mfg_adapt.load(std::memory_order_relaxed)) {
+            int m_now = st->eff_mfg.load(std::memory_order_relaxed);
+            if (m_now > 1) {
+                int step = g_config.floor_mfg_step.load(std::memory_order_relaxed);
+                ratio = std::clamp(ratio - (m_now - 1) * step, 500, 1000);
+            }
+        }
         int64_t floor   = std::max<int64_t>((slot_iv * ratio) / 1000, FlmConst::MIN_FLOOR_NS);
 
         int64_t t = now_ns();
@@ -1676,6 +1702,17 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(
 //                              jitter geçer ama daha az düzeltme. Yüksek (950) =
 //                              sıkı, daha düz ama geç kalırsa hitch riski.
 //                              CANLI: FLM_CONFIG dosyasına yaz + kill -USR1 <pid>.
+//  FLM_FLOOR_MFG_ADAPT=1       [FIX-41] m (MFG çarpanı) arttıkça FLOOR_RATIO'yu
+//                              kademeli gevşet (yalnız m>1 iken). Ada'da (40-
+//                              serisi) GPU tavanda iken m=3/4'te generated kare
+//                              üretim varyansı büyür; sabit sıkı ratio real
+//                              kareyi de gereksiz bekletip hitch/cov artırabilir.
+//                              0 = eski davranış (ratio tüm m'lerde sabit).
+//  FLM_FLOOR_MFG_STEP=40       [FIX-41] her (m-1) adımı için ratio'dan düşülen
+//                              miktar (0-1000 birim ölçeğinde). Örn. ratio=850,
+//                              step=40 → m=2:810, m=3:770, m=4:730. Yüksek step
+//                              = daha agresif gevşetme (daha az fren, biraz daha
+//                              gevşek ε-eşitleme). CANLI ayarlanabilir.
 //  FLM_PRESENT_LEAD_NS=1000000 flip'ten ne kadar önce present (ns)
 //  FLM_SPIN_NS=150000          son N ns pause-spin (0 = tamamen uyku, min CPU)
 //  FLM_SPIN_ADAPT=1            [FIX-39] spin payını ölçülen uyanma gecikmesine
