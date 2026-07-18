@@ -3749,6 +3749,12 @@ FLM_ENV_VARS: List[EnvVarDef] = [
               "Syntax: FLM_MODE=limiter FLM_TARGET_FPS=60 %command%",
               placeholder="e.g. 60"),
 
+    EnvVarDef("FLM_STATS_INTERVAL", "vk_flip_meter", "int", "5",
+              "How often (seconds) the FLM_STATS summary is logged. Clamped to 1-3600. "
+              "Only relevant when FLM_STATS=1. "
+              "Syntax: FLM_STATS=1 FLM_STATS_INTERVAL=10 %command%",
+              placeholder="e.g. 5 (1-3600)"),
+
     EnvVarDef("FLM_PACE_POINT", "vk_flip_meter", "enum", "present",
               "Which Vulkan call acts as the pacing gate point in PACER mode. present: waits "
               "before vkQueuePresentKHR (default, lowest risk). acquire: waits before "
@@ -3811,6 +3817,22 @@ FLM_ENV_VARS: List[EnvVarDef] = [
               "Syntax: FLM_MODE=present FLM_FLOOR_PACING=1 FLM_FLOOR_RATIO=900 %command%",
               placeholder="e.g. 850 (700-950 sensible range)"),
 
+    EnvVarDef("FLM_FLOOR_MFG_ADAPT", "vk_flip_meter", "enum", "0",
+              "FIX-41: lets the floor ratio adapt automatically to the detected MFG "
+              "multiplier instead of staying fixed at FLM_FLOOR_RATIO. Useful when the "
+              "game switches between 2x/3x/4x Frame Generation at runtime and a single "
+              "static ratio doesn't fit every multiplier equally well. "
+              "Syntax: FLM_MODE=present FLM_FLOOR_PACING=1 FLM_FLOOR_MFG_ADAPT=1 %command%",
+              options=["0", "1"]),
+
+    EnvVarDef("FLM_FLOOR_MFG_STEP", "vk_flip_meter", "int", "0",
+              "FIX-41: step size (0-200, floor_ratio/1000 units) applied per MFG multiplier "
+              "increment when FLM_FLOOR_MFG_ADAPT=1. 0 = adaptation disabled even if "
+              "FLM_FLOOR_MFG_ADAPT is set. Higher values tighten the floor more aggressively "
+              "as the multiplier increases. "
+              "Syntax: FLM_FLOOR_MFG_ADAPT=1 FLM_FLOOR_MFG_STEP=25 %command%",
+              placeholder="e.g. 25 (0-200)"),
+
     EnvVarDef("FLM_MEASURE_CPU", "vk_flip_meter", "string", "",
               "CPU core range the measurement thread (std::jthread) is pinned to — useful "
               "for CCD isolation (e.g. keeping rendering on one CCD and measurement on the "
@@ -3824,6 +3846,14 @@ FLM_ENV_VARS: List[EnvVarDef] = [
               "permitted. "
               "Syntax: FLM_RT_PRIORITY=40 %command%",
               placeholder="e.g. 40 (0=off)"),
+
+    EnvVarDef("FLM_SPIN_ADAPT", "vk_flip_meter", "enum", "0",
+              "FIX-39: lets FLM_SPIN_NS adapt at runtime instead of staying fixed, based on "
+              "observed wake-up jitter. Useful on systems where scheduler latency varies "
+              "(e.g. under thermal throttling or background load) so the spin window doesn't "
+              "need to be hand-tuned for a single steady state. "
+              "Syntax: FLM_SPIN_ADAPT=1 FLM_SPIN_NS=20000 %command%",
+              options=["0", "1"]),
 
     EnvVarDef("FLM_LOG_LEVEL", "vk_flip_meter", "enum", "WARN",
               "Log verbosity. DEBUG is the most verbose (close to per-frame), ERROR the "
@@ -3855,8 +3885,10 @@ FLM_ENV_VARS: List[EnvVarDef] = [
     EnvVarDef("FLM_CONFIG", "vk_flip_meter", "string", "",
               "Path to a KEY=VALUE config file that enables live tuning without closing the "
               "game. The file is re-read via an async-signal-safe flag when a SIGUSR1 signal "
-              "is sent (FLM_MODE, FLM_TARGET_FPS, FLM_SPIN_NS, FLM_PRESENT_LEAD_NS, "
-              "FLM_DRIFT_TOLERANCE_NS, FLM_PACE_POINT, FLM_LOG_LEVEL are supported). "
+              "is sent (FLM_TARGET_FPS, FLM_STATS_INTERVAL, FLM_SPIN_NS, FLM_PRESENT_LEAD_NS, "
+              "FLM_DRIFT_TOLERANCE_NS, FLM_MODE, FLM_PACE_POINT, FLM_LOG_LEVEL, "
+              "FLM_FLOOR_PACING, FLM_FLOOR_RATIO, FLM_FLOOR_MFG_ADAPT, FLM_FLOOR_MFG_STEP, "
+              "FLM_SPIN_ADAPT are supported). "
               "Syntax: FLM_CONFIG=/tmp/flm.conf %command%  →  then: "
               "echo 'FLM_TARGET_FPS=90' > /tmp/flm.conf && kill -SIGUSR1 $(pgrep -f game)",
               placeholder="e.g. /tmp/flm.conf"),
