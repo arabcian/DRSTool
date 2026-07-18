@@ -1,5 +1,5 @@
 // ============================================================================
-// FLM — Vulkan Flip Meter / Frame Pacing Layer  (v2.3 — "gerçek etki")
+// FLM — Vulkan Flip Meter / Frame Pacing Layer  (v2.4 — "gerçek etki")
 //
 // TASARIM ÖZETİ
 // -------------
@@ -123,6 +123,36 @@
 //            başladığından ~30 FPS oyunlarda İLK kareler hitch sayılıp tahmin
 //            penceresi hiç ısınamıyor, pacing kalıcı kapalı kalabiliyordu.
 //            Pencere ısınana kadar (4 örnek) hitch sınıflandırması bastırılır.
+//
+// v2.4 düzeltmeleri (akıcılık — konsept doğrulama incelemesi):
+//   [FIX-42] fps>0 iken floor yolu LIMITER'ı deliyordu: floor dalı yalnız
+//            !limiter_mode'a bakıyordu. AUTO + presentWait + FLM_TARGET_FPS=120
+//            → slot=8.33ms, floor=7.08ms → oyun hedefin %117'sine (≈141 FPS)
+//            kadar kaçar; hedefe kilit yok → dalgalı frametime. Floor artık
+//            YALNIZ fps==0 (doğal cadence) yolunda; fps>0'da klasik timeline
+//            pacer (lead'li, tam kilit) kullanılır. README ile tutarlı.
+//   [FIX-43] ÖLÇÜM TAZELİK BEKÇİSİ. presentWait ölçümü hiç örnek üretmezse
+//            (id=0 gönderen oyun → sürekli TIMEOUT) slot_interval_ns 16.6ms
+//            varsayılanında kalır → floor≈14.2ms → 240Hz oyun ~70 FPS'e
+//            FRENLENİR. Alt-tab/OUT_OF_DATE sonrası bayat T ile aynı sınıf.
+//            Ölçüm thread'i her başarılı flip'te last_flip_ns yayınlar; pacer
+//            ve floor kapıları (limiter DEĞİL) örnek yoksa ya da son flip
+//            MEAS_FRESH_NS'ten (250ms) eskiyse kendini kapatır ve anchor'ları
+//            sıfırlar. Ölçüm akmadan pacing OLMAZ.
+//   [FIX-44] FLOOR RATIO AUTOTUNE (kapalı çevrim). ratio=850, m=2'de kararlı
+//            durum aralıkları 0.425T/0.575T ALTERNASYONU yapar (CoV ~%15) —
+//            "iyileşti ama tam akıcı değil" hissinin yapısal kaynağı. İdeal
+//            ratio çoğu zaman 1000'e yakın ama sabit yüksek ratio erken gelen
+//            real kareyi frenler. Çözüm: geçen present'lerin headroom'u
+//            (since-floor) bolsa ratio YAVAŞ sıkılır (+1/kare), headroom
+//            incelirse ya da ardışık >=max(2,m) present tutulursa (fren
+//            belirtisi) HIZLI gevşetilir. Delta [-150,+150], taban ratio ve
+//            MFG-adapt üstüne biner, [500,1000] klempi korunur.
+//            FLM_FLOOR_AUTOTUNE=0 → eski sabit-ratio davranışı.
+//   [FIX-45] Temizlik: floor yolundaki ölü tavan (left < floor*2 — since>=0
+//            iken left<=floor olduğundan hiç tetiklenmez) sadeleşti; hitch
+//            dalı floor anchor'ını (last_present_ns) ve autotune fren
+//            sayacını da açıkça sıfırlar (örtük yerine belirgin re-anchor).
 // ============================================================================
 
 #include <vulkan/vulkan.h>
@@ -205,6 +235,7 @@ namespace FlmConst {
     constexpr int      MIN_SC_HEIGHT       = 480;
     constexpr int      CSV_BUFFER          = 256;  // [item 12]
     constexpr int64_t  STATS_INTERVAL_NS   = 5'000'000'000LL;  // [FIX-32]
+    constexpr int64_t  MEAS_FRESH_NS       = 250'000'000LL;    // [FIX-43] ölçüm tazelik penceresi
     constexpr size_t   CSV_STDIO_BUF       = 1u << 20;         // [FIX-30]
     constexpr size_t   LOG_STDIO_BUF       = 64u << 10;        // [FIX-29]
 }
@@ -254,6 +285,10 @@ struct FLMConfig {
     std::atomic<bool>     floor_mfg_adapt {true};   // FLM_FLOOR_MFG_ADAPT (varsayılan 1/açık)
     std::atomic<int>      floor_mfg_step  {40};     // FLM_FLOOR_MFG_STEP (0-200), ratio birimi/adım
 
+    // [FIX-44] Kapalı-çevrim ratio ayarı: headroom bolsa sık, fren belirtisinde
+    // gevşet. Taban FLM_FLOOR_RATIO + MFG-adapt üstüne [-150,+150] delta.
+    std::atomic<bool>     floor_autotune  {true};   // FLM_FLOOR_AUTOTUNE (varsayılan 1/açık)
+
     // [FIX-39] Uyanma gecikmesine göre spin payını otomatik ayarla (hot-reload).
     // 0 = eski davranış: FLM_SPIN_NS ne diyorsa sabit o kadar spin.
     std::atomic<bool>    spin_adapt {true};     // FLM_SPIN_ADAPT (varsayılan 1)
@@ -292,6 +327,7 @@ static void apply_dynamic_kv(const char* key, const char* val) {
     else if (!strcmp(key, "FLM_FLOOR_RATIO"))        g_config.floor_ratio.store(std::clamp(atoi(val), 500, 1000)); // [FIX-36]
     else if (!strcmp(key, "FLM_FLOOR_MFG_ADAPT"))    g_config.floor_mfg_adapt.store(atoi(val) != 0);   // [FIX-41]
     else if (!strcmp(key, "FLM_FLOOR_MFG_STEP"))     g_config.floor_mfg_step.store(std::clamp(atoi(val), 0, 200)); // [FIX-41]
+    else if (!strcmp(key, "FLM_FLOOR_AUTOTUNE"))     g_config.floor_autotune.store(atoi(val) != 0);   // [FIX-44]
     else if (!strcmp(key, "FLM_SPIN_ADAPT"))         g_config.spin_adapt.store(atoi(val) != 0);   // [FIX-39]
     else if (!strcmp(key, "FLM_LOG_LEVEL")) {
         if      (!strcmp(val, "DEBUG")) g_log_level.store((int)LogLevel::DEBUG);
@@ -339,6 +375,7 @@ static void snapshot_dynamic_env() {
         "FLM_MODE", "FLM_PACE_POINT", "FLM_LOG_LEVEL",
         "FLM_FLOOR_PACING", "FLM_FLOOR_RATIO",   // [FIX-36]
         "FLM_FLOOR_MFG_ADAPT", "FLM_FLOOR_MFG_STEP",   // [FIX-41]
+        "FLM_FLOOR_AUTOTUNE",                    // [FIX-44]
         "FLM_SPIN_ADAPT",                        // [FIX-39]
     };
     for (const char* k : keys)
@@ -549,6 +586,9 @@ struct SwapchainState {
     // Hot-path atomikleri — ayrı cache-line (false sharing engeli)
     alignas(64) std::atomic<uint64_t> next_present_id{1};
     alignas(64) std::atomic<int64_t>  slot_interval_ns{FlmConst::DEFAULT_INTERVAL_NS};
+                std::atomic<int64_t>  last_flip_ns{0};   // [FIX-43] son başarılı flip anı
+                                                         // (aynı satır: ikisini de ölçüm
+                                                         // thread'i yazar, present okur)
     alignas(64) std::atomic<int64_t>  last_gate_wait_ns{0};     // [FIX-17] tespit dondurma
     alignas(64) std::atomic<uint32_t> present_seq{0};           // [item 4]
     alignas(64) std::atomic<int>      eff_mfg{1};               // [item 7] efektif çarpan
@@ -566,6 +606,8 @@ struct SwapchainState {
     // (ölçüm thread'i yayınlar) okunur.
     alignas(64) int64_t limiter_next_ns   = 0;
     int64_t             last_present_ns    = 0;   // [FIX-36] önceki present anı
+    int                 ratio_auto         = 0;   // [FIX-44] öğrenilen ratio deltası [-150,150]
+    int                 held_run           = 0;   // [FIX-44] ardışık tutulan present sayısı
 
     // [FIX-28][FIX-38] Yalnız ölçüm thread'i dokunur → kilitsiz; present-
     // thread alanlarından ayrı cache-line'da başlar. (FIX-36 real_win'i
@@ -809,6 +851,7 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
         }
 
         int64_t tnow = now_ns();
+        st->last_flip_ns.store(tnow, std::memory_order_relaxed);   // [FIX-43]
 
         if (last_valid) {
             int64_t interval_ns = tnow - last_display_ns;
@@ -1328,12 +1371,36 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
     if (st->hitch_active.load(std::memory_order_relaxed) ||
         st->hitch_recovery_frames.load(std::memory_order_relaxed) > 0) {
         st->limiter_next_ns = 0;
+        st->last_present_ns = 0;   // [FIX-45] floor da temiz re-anchor yapsın
+        st->held_run        = 0;   // [FIX-44] hitch dizisi fren belirtisi değildir
         return;
     }
     // [item 8] GPU-bound → pace etme.
     if (!st->pacing_enabled.load(std::memory_order_relaxed)) {
         st->limiter_next_ns = 0;
+        st->last_present_ns = 0;   // [FIX-45]
         return;
+    }
+
+    const int fps = g_config.target_fps.load(std::memory_order_relaxed);
+
+    // ========================================================================
+    // [FIX-43] ÖLÇÜM TAZELİK BEKÇİSİ — yalnız ölçüme dayanan yollar (pacer +
+    // floor). LIMITER ölçüm istemez, ona dokunma. Ölçüm hiç örnek üretmediyse
+    // (id=0 gönderen oyun → sürekli TIMEOUT) ya da bayatsa (alt-tab,
+    // OUT_OF_DATE döngüsü) slot_interval_ns varsayılan/eski T'de kalır ve
+    // kapı oyunu O değere frenler (16.6ms varsayılan → 240Hz oyun ~70 FPS'e
+    // kilitlenirdi). Taze veri yoksa pacing YOK; anchor'lar sıfırlanır ki
+    // ölçüm dönünce temiz başlansın.
+    // ========================================================================
+    if (!limiter_mode) {
+        int64_t lf = st->last_flip_ns.load(std::memory_order_relaxed);
+        if (lf == 0 || now_ns() - lf > FlmConst::MEAS_FRESH_NS) {
+            st->limiter_next_ns = 0;
+            st->last_present_ns = 0;
+            st->held_run        = 0;
+            return;
+        }
     }
 
     // ========================================================================
@@ -1352,7 +1419,12 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
     // last_present_ns present thread'inde her karede güncellenir → ölçüm
     // gecikmesi grid'i kaydırmaz (mutlak-grid'in 1-kare bayat sorunu yok).
     // ========================================================================
-    if (!limiter_mode && g_config.floor_pacing.load(std::memory_order_relaxed)) {
+    // [FIX-42] Floor YALNIZ fps==0 (doğal cadence). fps>0'da klasik timeline
+    // pacer hedefe TAM kilitler; floor ise göreli taban olduğundan hedefin
+    // %117'sine kadar kaçırıyordu (ratio=850 → 1/0.85). README zaten "fps=0
+    // yolunda" diyordu; kod artık uyuyor.
+    if (!limiter_mode && fps == 0 &&
+        g_config.floor_pacing.load(std::memory_order_relaxed)) {
         int64_t slot_iv = st->slot_interval_ns.load(std::memory_order_relaxed);
         if (slot_iv <= 0) return;
         int     ratio   = g_config.floor_ratio.load(std::memory_order_relaxed);
@@ -1361,13 +1433,17 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
         // üretim süresi daha büyük varyansla dağılır; sabit sıkı ratio real
         // kareyi de floor içinde gereksiz bekletip fren/hitch üretebiliyor.
         // Yalnız m>1 (MFG aktif) iken devrede, m=1'de davranış değişmez.
+        int m_now = st->eff_mfg.load(std::memory_order_relaxed);
         if (g_config.floor_mfg_adapt.load(std::memory_order_relaxed)) {
-            int m_now = st->eff_mfg.load(std::memory_order_relaxed);
             if (m_now > 1) {
                 int step = g_config.floor_mfg_step.load(std::memory_order_relaxed);
                 ratio = std::clamp(ratio - (m_now - 1) * step, 500, 1000);
             }
         }
+        // [FIX-44] Öğrenilen delta taban+adapt üstüne biner; klemp korunur.
+        const bool autotune = g_config.floor_autotune.load(std::memory_order_relaxed);
+        if (autotune)
+            ratio = std::clamp(ratio + st->ratio_auto, 500, 1000);
         int64_t floor   = std::max<int64_t>((slot_iv * ratio) / 1000, FlmConst::MIN_FLOOR_NS);
 
         int64_t t = now_ns();
@@ -1378,17 +1454,45 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
 
         int64_t since = t - st->last_present_ns; // önceki present'ten bu yana
 
+        // [FIX-44] KAPALI ÇEVRİM (yalnız advance=true, yani asıl present
+        // kapısı; BOTH'un acquire ayağı ölçmeye karışmasın). Bu karenin
+        // gözlemi bir SONRAKİ karenin ratio'sunu ayarlar:
+        //   * since <  floor  → present tutulacak. Normal MFG'de karede en çok
+        //     m-1 present tutulur; ardışık >= max(2,m) tutulma REAL karenin de
+        //     frenlendiğini gösterir → hızlı gevşet (-4).
+        //   * since >= floor  → headroom = since - floor.
+        //       headroom > slot/12 → aralıklar hâlâ dengesiz (alternasyon
+        //                            yaşıyoruz) → yavaşça sık (+1).
+        //       headroom < slot/50 → floor real kareyi sıyırıyor → gevşet (-2).
+        // Böylece ratio=850'nin yapısal 0.425T/0.575T alternasyonu, fren
+        // belirtisi çıkmadığı sürece kendiliğinden ~0.5T/0.5T'ye düzleşir;
+        // FPS düşüp real kare erken gelmeye başlarsa delta anında geri çekilir.
+        if (autotune && advance) {
+            if (since < floor) {
+                if (++st->held_run >= std::max(2, m_now)) {
+                    st->ratio_auto -= 4;
+                    st->held_run = 0;
+                }
+            } else {
+                st->held_run = 0;
+                int64_t head = since - floor;
+                if      (head > slot_iv / 12) st->ratio_auto += 1;
+                else if (head < slot_iv / 50) st->ratio_auto -= 2;
+            }
+            st->ratio_auto = std::clamp(st->ratio_auto, -150, 150);
+        }
+
         // advance=false (BOTH'ta acquire kapısı): yalnız erken kalmayı önle,
         // last_present_ns'i present dalı günceller (çift ilerletme olmasın).
         int64_t target = st->last_present_ns + floor;
 
         // Present floor'un içinde mi? (çok erken generated kare) → beklet.
         // Floor'u aşmışsa (real kare / geç kare) → hiç bekleme, hemen geç.
+        // [FIX-45] Eski "left < floor*2" tavanı ölü koddu: since>=0 iken
+        // left = floor - since <= floor, tavan hiç tetiklenemez. Kaldırıldı.
         if (since < floor) {
             int64_t left = target - t;
-            // Tavan: floor'un ~2 katından uzun beklemeyi asla dayatma (hitch/
-            // clock-jump koruması). MFG'de bu tetiklenmemeli.
-            if (left > 0 && left < floor * 2) {
+            if (left > 0) {
                 st->last_gate_wait_ns.store(t, std::memory_order_relaxed);  // [FIX-17]
                 precise_wait_absolute(target);
                 t = now_ns();
@@ -1400,7 +1504,6 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
 
     int64_t iv, lead;
     if (limiter_mode) {
-        int fps = g_config.target_fps.load(std::memory_order_relaxed);
         if (fps <= 0) return;
         iv   = 1'000'000'000LL / fps;
         lead = 0;  // limiter tam hedefe kilitler
@@ -1713,6 +1816,12 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(
 //                              step=40 → m=2:810, m=3:770, m=4:730. Yüksek step
 //                              = daha agresif gevşetme (daha az fren, biraz daha
 //                              gevşek ε-eşitleme). CANLI ayarlanabilir.
+//  FLM_FLOOR_AUTOTUNE=1        [FIX-44] ratio'yu kapalı çevrimle ayarla:
+//                              geçen present'lerin headroom'u bolsa yavaşça
+//                              sık (aralıklar düzleşir), ardışık tutulma /
+//                              ince headroom görülünce hızla gevşet (fren
+//                              önlenir). Delta [-150,+150], taban ratio ve
+//                              MFG-adapt üstüne biner. 0 = sabit ratio.
 //  FLM_PRESENT_LEAD_NS=1000000 flip'ten ne kadar önce present (ns)
 //  FLM_SPIN_NS=150000          son N ns pause-spin (0 = tamamen uyku, min CPU)
 //  FLM_SPIN_ADAPT=1            [FIX-39] spin payını ölçülen uyanma gecikmesine
