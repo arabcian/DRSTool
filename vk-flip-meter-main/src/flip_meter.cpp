@@ -199,6 +199,14 @@
 //   [FIX-52] resolve_gate PRESENT/AUTO byte-identical branches merged; CMake/
 //            manifest version now generated from one place (configure_file),
 //            build.sh sed patching removed.
+//   [FIX-53] FLM_PACE_FIFO=1: opt-in to allow PACER (and floor-pacing) on
+//            FIFO/FIFO_RELAXED swapchains. Previously resolve_gate excluded
+//            FIFO unconditionally with no override — the only path was
+//            LIMITER. Default stays off (0): FIFO is already vsync-locked,
+//            layering PACER on top can fight the compositor's own pacing on
+//            most content. For engines that only expose FIFO but still
+//            benefit from PACER/floor smoothing (e.g. MFG), the filter can
+//            now be lifted explicitly.
 // ============================================================================
 
 #include <vulkan/vulkan.h>
@@ -316,6 +324,14 @@ struct FLMConfig {
     std::atomic<int>     pace_point {(int)PacePoint::PRESENT};
     std::atomic<int64_t> stats_interval_ns {FlmConst::STATS_INTERVAL_NS}; // [FIX-32]
 
+    // [FIX-53] FLM_PACE_FIFO=1: allow PACER on FIFO/FIFO_RELAXED swapchains.
+    // Off by default — FIFO is already vsync-locked, so PACER's uniform-
+    // cadence estimate normally fights the compositor's own timing (double
+    // pacing). Explicit opt-in for cases where that's actually wanted (e.g.
+    // an MFG-capable engine that only offers FIFO, or comparing PACER's
+    // frametime smoothing against the driver's own FIFO cadence).
+    std::atomic<bool>    pace_fifo {false};    // FLM_PACE_FIFO
+
     // [FIX-36] VRR + MFG floor-pacing settings — ALL hot-reloadable.
     // floor mode does not brake variable FPS on VRR; it only prevents
     // ε-bursts from exiting too early, smoothing the generated/real gap.
@@ -374,6 +390,7 @@ static void apply_dynamic_kv(const char* key, const char* val) {
     else if (!strcmp(key, "FLM_DRIFT_TOLERANCE_NS")) g_config.drift_tol.store(std::max<int64_t>(0, atoll(val)));
     else if (!strcmp(key, "FLM_MODE"))               g_config.mode.store((int)parse_mode(val));
     else if (!strcmp(key, "FLM_PACE_POINT"))         g_config.pace_point.store((int)parse_pace_point(val));
+    else if (!strcmp(key, "FLM_PACE_FIFO"))          g_config.pace_fifo.store(atoi(val) != 0);   // [FIX-53]
     else if (!strcmp(key, "FLM_FLOOR_PACING"))       g_config.floor_pacing.store(atoi(val) != 0);   // [FIX-36]
     else if (!strcmp(key, "FLM_FLOOR_RATIO"))        g_config.floor_ratio.store(std::clamp(atoi(val), 500, 1000)); // [FIX-36]
     else if (!strcmp(key, "FLM_FLOOR_MFG_ADAPT"))    g_config.floor_mfg_adapt.store(atoi(val) != 0);   // [FIX-41]
@@ -424,6 +441,7 @@ static void snapshot_dynamic_env() {
         "FLM_TARGET_FPS", "FLM_STATS_INTERVAL", "FLM_SPIN_NS",
         "FLM_PRESENT_LEAD_NS", "FLM_DRIFT_TOLERANCE_NS",
         "FLM_MODE", "FLM_PACE_POINT", "FLM_LOG_LEVEL",
+        "FLM_PACE_FIFO",                         // [FIX-53]
         "FLM_FLOOR_PACING", "FLM_FLOOR_RATIO",   // [FIX-36]
         "FLM_FLOOR_MFG_ADAPT", "FLM_FLOOR_MFG_STEP",   // [FIX-41]
         "FLM_FLOOR_AUTOTUNE",                    // [FIX-44]
@@ -1744,10 +1762,18 @@ static bool resolve_gate(const SwapchainState* st, bool has_wait, bool& limiter_
     int      fps  = g_config.target_fps.load(std::memory_order_relaxed);
 
     // [item 11] FIFO/FIFO_RELAXED already locked to vsync → PACER (uniform
-    // cadence estimate) is unnecessary and fights the compositor. LIMITER
-    // (cap to a lower FPS) is still valid and useful on these modes.
+    // cadence estimate) is unnecessary and normally fights the compositor.
+    // LIMITER (cap to a lower FPS) is still valid and useful on these modes.
+    // [FIX-53] FLM_PACE_FIFO=1 lifts this filter: PACER (and floor-pacing,
+    // since it lives on the same fps==0 branch in apply_gate) becomes
+    // available on FIFO too. Opt-in because it's a real behavior change, not
+    // just a default flip — on most FIFO content the compositor's own vsync
+    // pacing already does this job, and layering PACER on top can add its own
+    // jitter. Intended for opt-in cases: an MFG engine that only offers FIFO,
+    // or A/B'ing PACER's smoothing against the driver's native FIFO cadence.
     bool is_fifo = (st->present_mode == VK_PRESENT_MODE_FIFO_KHR ||
-                    st->present_mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR);
+                    st->present_mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR) &&
+                   !g_config.pace_fifo.load(std::memory_order_relaxed);
 
     switch (mode) {
         case PaceMode::OFF:     return false;
@@ -1981,6 +2007,11 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(
 //     off      : do nothing (A/B test baseline)
 //  FLM_TARGET_FPS=<n>          limiter/pacer target fps (0 = natural cadence)
 //  FLM_PACE_POINT=present|acquire|both  (default: present) — SINGLE gate point
+//  FLM_PACE_FIFO=1             [FIX-53] allow PACER/floor-pacing on FIFO too
+//                              (default 0). FIFO is already vsync-locked;
+//                              only lift this if you specifically want PACER's
+//                              smoothing on top of it (e.g. FIFO-only MFG
+//                              engine). LIMITER is unaffected either way.
 //  FLM_FLOOR_PACING=1          [FIX-36] VRR+MFG floor-pacing (default 1/on).
 //                              Active on the fps=0 (natural cadence) + pacer
 //                              path. Relative floor instead of absolute grid:
