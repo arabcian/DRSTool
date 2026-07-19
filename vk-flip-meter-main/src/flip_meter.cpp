@@ -223,6 +223,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -525,10 +526,15 @@ static void init_config() {
         reserve_global_maps();  // [FIX-33]
 
         FLM_LOG(LogLevel::INFO,
-                "Config: mode=%d fps=%d mfg_env=%d spin=%lldns lead=%lldns rt=%d",
+                "Config: mode=%d fps=%d mfg_env=%d spin=%lldns lead=%lldns rt=%d csv=%s",
                 g_config.mode.load(), g_config.target_fps.load(), g_config.mfg_mult_env,
                 (long long)g_config.spin_ns.load(), (long long)g_config.lead_ns.load(),
-                g_config.rt_priority);
+                g_config.rt_priority,
+                // [FIX-55] Log the CSV path FLM actually resolved at startup —
+                // previously invisible in the config line, so a wrong path
+                // (typo, unexpanded var, wrong FLM_CSV name) looked identical
+                // to "CSV disabled" in the log. Empty string = not configured.
+                g_config.csv_path.empty() ? "(none)" : g_config.csv_path.c_str());
     });
 }
 
@@ -943,6 +949,14 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
             setvbuf(st->csv_fp, nullptr, _IOFBF, FlmConst::CSV_STDIO_BUF);
             fprintf(st->csv_fp,
                     "flip_ns,interval_ns,is_fake,is_hitch,slot,mfg,slot_mean_ns,pacing\n");
+        } else {
+            // [FIX-54] v2.5 silently dropped CSV logging on fopen failure —
+            // no way to tell "CSV disabled" from "CSV path unwritable" (wrong
+            // dir, missing perms, or a container/sandbox mount namespace that
+            // doesn't share the host's view of the path, e.g. Steam Linux
+            // Runtime / Pressure Vessel). Now logged loudly with errno.
+            FLM_LOG(LogLevel::WARN, "FLM_CSV fopen('%s') failed: %s",
+                    g_config.csv_path.c_str(), strerror(errno));
         }
     }
 
