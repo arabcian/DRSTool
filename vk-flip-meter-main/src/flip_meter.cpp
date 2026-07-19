@@ -207,6 +207,18 @@
 //            most content. For engines that only expose FIFO but still
 //            benefit from PACER/floor smoothing (e.g. MFG), the filter can
 //            now be lifted explicitly.
+//   [FIX-56] FLOOR_MFG_ADAPT was relaxing floor_ratio LINEARLY in (m-1), on
+//            the assumption that each extra generated frame adds a fixed
+//            variance increment. Same-scene A/B data (identical GPU load)
+//            showed 4x producing a 5.50% hitch rate against 2x's 0.02% — a
+//            ~275x gap a linear step cannot explain. The three interpolated
+//            frames in 4x share optical-flow cost variance from the same
+//            motion-vector pass, so the needed slack grows faster than
+//            linearly. Ratio relax now scales with (m-1)*m/2 (1/3/6 at
+//            m=2/3/4) instead of (m-1) (1/2/3); the autotune brake's loosen
+//            step (on consecutive held real frames) scales with (m-1)
+//            instead of a fixed -4, so it clears a high-m backlog in one
+//            correction instead of several cycles of repeated hitching.
 // ============================================================================
 
 #include <vulkan/vulkan.h>
@@ -1649,11 +1661,22 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
         // at m=3/4; a fixed tight ratio can hold real frames inside the floor
         // unnecessarily, causing stalls and hitches. Only active when m>1;
         // no effect at m=1.
+        // [FIX-56] Linear step was insufficient: A/B data (same scene, same
+        // GPU load) showed 4x producing a 5.50% hitch rate against 2x's 0.02%
+        // — a ~275x gap, not the ~3x a linear (m-1)*step would predict. Each
+        // additional generated frame doesn't add a fixed variance increment;
+        // the THREE interpolated frames in 4x each inherit optical-flow cost
+        // variance from the same motion-vector pass, so the ratio needs to
+        // open up faster than linearly as m climbs past 2. Step now scales
+        // with (m-1)^2 instead of (m-1): unchanged at m=2 (one factor of
+        // step), triple at m=3, and six-fold at m=4 — matching the observed
+        // cliff rather than a straight line through it.
         int m_now = st->eff_mfg.load(std::memory_order_relaxed);
         if (g_config.floor_mfg_adapt.load(std::memory_order_relaxed)) {
             if (m_now > 1) {
                 int step = g_config.floor_mfg_step.load(std::memory_order_relaxed);
-                ratio = std::clamp(ratio - (m_now - 1) * step, 500, 1000);
+                int64_t d = (int64_t)step * (m_now - 1) * m_now / 2;  // 1,3,6.. for m=2,3,4
+                ratio = (int)std::clamp<int64_t>(ratio - d, 500, 1000);
             }
         }
         // [FIX-44] Learned delta stacks on top of base + adapt; clamp preserved.
@@ -1687,7 +1710,13 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
         if (autotune && advance) {
             if (since < floor) {
                 if (++st->held_run >= std::max(2, m_now)) {
-                    st->ratio_auto -= 4;
+                    // [FIX-56] Loosen step scales with m: at m=4 a held real
+                    // frame means the floor is fighting THREE stacked
+                    // interpolated-frame variances at once, not one — a fixed
+                    // -4 took several cycles to recover at high m, during
+                    // which the held run kept re-triggering hitches. -4*max(1,m-1)
+                    // clears the backlog in one shot at higher multipliers.
+                    st->ratio_auto -= 4 * std::max(1, m_now - 1);
                     st->held_run = 0;
                 }
             } else {
@@ -2039,7 +2068,9 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(
 //                              passes but less correction. High (950) = tight,
 //                              flatter but risks hitch if late.
 //                              LIVE: write to FLM_CONFIG file + kill -USR1 <pid>.
-//  FLM_FLOOR_MFG_ADAPT=1       [FIX-41] relax FLOOR_RATIO as m (MFG multiplier)
+//  FLM_FLOOR_MFG_ADAPT=1       [FIX-41][FIX-56] relax FLOOR_RATIO as m (MFG
+//                              multiplier) grows: -step*(m-1)*m/2, i.e.
+//                              1x/3x/6x step at m=2/3/4 (was linear (m-1)).
 //                              grows (only when m>1). On Ada (40-series) GPU at
 //                              ceiling with m=3/4, generated-frame production
 //                              variance grows; a fixed tight ratio may hold real
