@@ -1,5 +1,5 @@
 // ============================================================================
-// FLM — Vulkan Flip Meter / Frame Pacing Layer  (v2.4 — "real impact")
+// FLM — Vulkan Flip Meter / Frame Pacing Layer  (v2.5 — "steady state")
 //
 // DESIGN SUMMARY
 // --------------
@@ -164,6 +164,41 @@
 //            GPU-bound branches now explicitly reset the floor anchor
 //            (last_present_ns) and autotune brake counter (explicit re-anchor
 //            instead of implicit).
+//
+// v2.5 fixes (steady-state robustness + hot-path cost):
+//   [FIX-46] ADAPTIVE SPIN OUTLIER STICKINESS. The damped maximum
+//            (est = max(os, est - est/256)) let a single 2ms oversleep (page
+//            fault / P-state / SMI) pin the spin margin near ~3ms for ≈256
+//            samples — >1s of ~3ms-per-frame spinning at 240 FPS, burning
+//            ≈70% of a core and feeding boost-clock backpressure into
+//            frametime. Estimator replaced with a 16-sample ring + p75
+//            (isolated spikes cannot move it; genuine load converges in 4-5
+//            samples); margin cap lowered 2ms → 500µs.
+//   [FIX-47] MFG DETECTION FREEZE/HOT-GATE DEADLOCK. Floor pacing holds ≥1
+//            present per cycle at m>1 → gate_hot never cooled → the FIX-17
+//            detection freeze became PERMANENT: an in-game multiplier change
+//            (2→3, or MFG off) was never picked up; 3x content ran with a 2x
+//            distribution forever. Every 10s the gate now stands down for 24
+//            flips (invisible on VRR) and m is re-measured from the raw
+//            stream (probe). m→1 was already self-correcting via cycle sums;
+//            this closes the upward path.
+//   [FIX-48] MFG detect window 64 → 32: halves the mixed-sample transient
+//            real_win ingests during a multiplier transition (~0.3-0.5s →
+//            ~0.15-0.25s); p=(m-1)/m is still cleanly resolved at 32 samples.
+//   [FIX-49] present_seq incremented only inside the gate condition → with
+//            FLM_PACE_POINT=acquire the CSV slot column froze at 0. Telemetry
+//            decoupled from gating; every primary-swapchain present counts.
+//   [FIX-50] Hot-path cost: (a) thread_local generation-validated swapchain
+//            state cache — shared_mutex + hash + shared_ptr copy no longer
+//            paid twice per frame; (b) single now_ns() per gate entry (was up
+//            to 3 on the floor path); (c) real_win median cached and
+//            recomputed once per PUSH instead of copy+sort twice per flip.
+//   [FIX-51] Cache-line layout: atomics regrouped BY WRITER THREAD (present-
+//            written line + measurement-written line) instead of one line per
+//            atomic — same writer-isolation guarantee, 9 lines → 2.
+//   [FIX-52] resolve_gate PRESENT/AUTO byte-identical branches merged; CMake/
+//            manifest version now generated from one place (configure_file),
+//            build.sh sed patching removed.
 // ============================================================================
 
 #include <vulkan/vulkan.h>
@@ -242,7 +277,12 @@ namespace FlmConst {
     constexpr int      REAL_WINDOW         = 8;    // last N T estimates
     constexpr int      CYC_RING            = 4;    // [FIX-37] last raw intervals (max MFG mult)
     constexpr int64_t  MIN_FLOOR_NS        = 500'000LL;   // 2000 FPS ceiling: floor never goes below this
-    constexpr int      MFG_DETECT_WINDOW   = 64;   // [item 7]
+    constexpr int      MFG_DETECT_WINDOW   = 32;   // [item 7][FIX-48] 64→32: halves the
+                                                   // mixed-sample transient real_win sees
+                                                   // during an m transition; at 32 samples
+                                                   // p=(m-1)/m is still well-resolved
+    constexpr int64_t  PROBE_PERIOD_NS     = 10'000'000'000LL; // [FIX-47] re-sample every 10s
+    constexpr int      PROBE_FLIPS         = 24;               // [FIX-47] probe length (flips)
     constexpr int      MIN_SC_WIDTH        = 640;  // [item 11]
     constexpr int      MIN_SC_HEIGHT       = 480;
     constexpr int      CSV_BUFFER          = 256;  // [item 12]
@@ -515,17 +555,49 @@ static inline void flm_gcov_periodic_dump() {
 //
 // [FIX-39] ADAPTIVE SPIN. The actual wakeup latency of clock_nanosleep
 // (oversleep = wakeup time - requested time; timer slack + scheduler queue)
-// is tracked with a damped maximum:
-//   est = max(measured, est - est/256)   → grows instantly, decays ≈256 samples
-// and spin margin = est*1.5 + 20µs. The fixed 150µs margin had two failure
-// modes:
+// is tracked and used to size the spin margin. The fixed 150µs margin had two
+// failure modes:
 //   * Loaded system: oversleep > 150µs → gate MISSES its target → late present
 //     → the gate itself produces the jitter that floor/limiter tries to fix.
 //   * Idle/RT system: oversleep ≈5-30µs → ~120µs of wasted spin every frame
 //     (≈3% of core time at 240 FPS goes to heat).
-// Adaptive margin fixes both: present always lands EXACTLY on target
-// (smoothness) and never spins unnecessarily early (CPU stays with the game).
-static std::atomic<int64_t> g_oversleep_est{100'000};  // ns; conservative start
+// [FIX-46] The v2.4 damped maximum (est = max(os, est - est/256)) was OUTLIER-
+// STICKY: a single 2ms oversleep (page fault, P-state transition, SMI) pinned
+// the margin near ~3ms for ≈256 samples — at 240 FPS that is >1s of ~3ms spin
+// per frame (≈70% of a core burned as heat, boost-clock backpressure feeding
+// straight back into frametime). Estimator is now a 16-sample ring + p75:
+// robust to isolated spikes (one outlier can never move p75 of 16), still
+// converges to a genuinely loaded system within 4-5 samples. Margin cap
+// lowered 2ms → 500µs: beyond that, missing by a little beats burning a core.
+namespace FlmSpin {
+    constexpr int     RING       = 16;
+    constexpr int64_t MARGIN_MIN = 30'000LL;
+    constexpr int64_t MARGIN_MAX = 500'000LL;   // [FIX-46] was 2ms
+}
+static std::atomic<int64_t> g_os_ring[FlmSpin::RING];   // zero-init
+static std::atomic<int>     g_os_idx{0};                // one present thread in practice;
+static std::atomic<int>     g_os_cnt{0};                // atomics keep the rare multi-
+                                                        // present-thread case UB-free
+static std::atomic<int64_t> g_spin_margin{100'000};     // cached p75-derived margin (ns)
+
+// Push one oversleep sample and refresh the cached margin. Cost: 16-element
+// copy + nth_element — negligible next to the clock_nanosleep it follows.
+static void spin_margin_update(int64_t os) {
+    int idx = g_os_idx.load(std::memory_order_relaxed);
+    g_os_ring[idx].store(os, std::memory_order_relaxed);
+    g_os_idx.store((idx + 1) % FlmSpin::RING, std::memory_order_relaxed);
+    int cnt = g_os_cnt.load(std::memory_order_relaxed);
+    if (cnt < FlmSpin::RING) g_os_cnt.store(++cnt, std::memory_order_relaxed);
+    int64_t tmp[FlmSpin::RING];
+    const int n = cnt;
+    for (int i = 0; i < n; i++) tmp[i] = g_os_ring[i].load(std::memory_order_relaxed);
+    const int k = (n * 3) / 4;          // p75
+    std::nth_element(tmp, tmp + k, tmp + n);
+    int64_t p75 = tmp[k];
+    g_spin_margin.store(std::clamp<int64_t>(p75 + p75 / 2 + 20'000,
+                                            FlmSpin::MARGIN_MIN, FlmSpin::MARGIN_MAX),
+                        std::memory_order_relaxed);
+}
 
 static void precise_wait_absolute(int64_t target) {
     if (target <= 0) return;
@@ -533,10 +605,8 @@ static void precise_wait_absolute(int64_t target) {
     const bool    adapt    = spin_cfg > 0 &&
                              g_config.spin_adapt.load(std::memory_order_relaxed);
     int64_t spin = spin_cfg;
-    if (adapt) {
-        int64_t est = g_oversleep_est.load(std::memory_order_relaxed);
-        spin = std::clamp<int64_t>(est + est / 2 + 20'000, 30'000, 2'000'000);
-    }
+    if (adapt)
+        spin = g_spin_margin.load(std::memory_order_relaxed);   // [FIX-46] one load, p75-derived
     for (;;) {
         int64_t left = target - now_ns();
         if (left <= spin) break;
@@ -547,11 +617,7 @@ static void precise_wait_absolute(int64_t target) {
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, nullptr);
         if (adapt) {
             int64_t os = now_ns() - wake;   // signal interrupt → negative → skip
-            if (os > 0) {
-                int64_t est = g_oversleep_est.load(std::memory_order_relaxed);
-                g_oversleep_est.store(std::max(os, est - est / 256),
-                                      std::memory_order_relaxed);
-            }
+            if (os > 0) spin_margin_update(os);   // [FIX-46]
         }
     }
     while (now_ns() < target) FLM_CPU_PAUSE();
@@ -596,19 +662,25 @@ struct SwapchainState {
 
     std::jthread    measure_thread;
 
-    // Hot-path atomics — separate cache lines (false sharing guard)
+    // [FIX-51] Hot-path atomics grouped BY WRITER THREAD. v2.4 gave every
+    // atomic its own alignas(64) line (9 lines ≈ 576B); writer isolation is
+    // the actual requirement — fields written by the SAME thread can share a
+    // line freely (a reader-only thread never dirties it). Two lines total:
+    //
+    // Line P — written by the PRESENT/ACQUIRE thread, read by measurement:
     alignas(64) std::atomic<uint64_t> next_present_id{1};
+                std::atomic<int64_t>  last_gate_wait_ns{0};     // [FIX-17] detection freeze
+                std::atomic<uint32_t> present_seq{0};           // [item 4]
+                std::atomic<int>      frame_count{0};
+    //
+    // Line M — written by the MEASUREMENT thread, read by present:
     alignas(64) std::atomic<int64_t>  slot_interval_ns{FlmConst::DEFAULT_INTERVAL_NS};
-                std::atomic<int64_t>  last_flip_ns{0};   // [FIX-43] timestamp of last successful flip
-                                                         // (same line: both written by measurement
-                                                         // thread, read by present thread)
-    alignas(64) std::atomic<int64_t>  last_gate_wait_ns{0};     // [FIX-17] detection freeze
-    alignas(64) std::atomic<uint32_t> present_seq{0};           // [item 4]
-    alignas(64) std::atomic<int>      eff_mfg{1};               // [item 7] effective multiplier
-    alignas(64) std::atomic<int>      frame_count{0};
-    alignas(64) std::atomic<bool>     hitch_active{false};
-    alignas(64) std::atomic<int>      hitch_recovery_frames{0};
-    alignas(64) std::atomic<bool>     pacing_enabled{true};     // [item 8] GPU-bound guard
+                std::atomic<int64_t>  last_flip_ns{0};   // [FIX-43] last successful flip ts
+                std::atomic<int>      eff_mfg{1};               // [item 7] effective multiplier
+                std::atomic<int>      hitch_recovery_frames{0};
+                std::atomic<bool>     hitch_active{false};
+                std::atomic<bool>     pacing_enabled{true};     // [item 8] GPU-bound guard
+                std::atomic<bool>     probe_active{false};      // [FIX-47] MFG re-sample probe
 
     // [FIX-28] LIMITER timeline — written ONLY by the QueuePresent thread,
     // every frame. Must live on its own cache line; otherwise it ping-pongs
@@ -636,6 +708,12 @@ struct SwapchainState {
     int64_t real_win[FlmConst::REAL_WINDOW] = {};
     int     real_idx    = 0;
     int     real_count  = 0;
+    // [FIX-50] Cached median of real_win — recomputed once per push instead of
+    // copy+sort twice per flip (T_prev read + slot_iv publish both hit it).
+    int64_t real_median_cache = FlmConst::DEFAULT_INTERVAL_NS;
+    // [FIX-47] MFG re-sample probe bookkeeping (measurement thread only).
+    int64_t probe_last_ns = 0;
+    int     probe_left    = 0;
     // [FIX-16] Slot window: sliding mean over ALL intervals (correctly centres
     // MFG's bimodal ε/T pattern, unlike per-sample EMA which is phase-dependent).
     // 4x hitch-poisoning clamp.
@@ -685,13 +763,17 @@ struct SwapchainState {
     // [FIX-37] Real-frame period (T) median — from cycle-sum estimates.
     // Replaces display_intervals median: identical semantics at m=1 (cycle
     // sum = raw interval), and at m>1 it is fake-filter-free and phase-insensitive.
-    int64_t real_period_median() const {
+    // [FIX-50] Reads are now a cache hit; the sort runs once per PUSH (in
+    // real_median_recompute), not once per read — v2.4 sorted twice per flip.
+    int64_t real_period_median() const { return real_median_cache; }
+
+    void real_median_recompute() {
         int n = std::min(real_count, FlmConst::REAL_WINDOW);
-        if (n == 0) return FlmConst::DEFAULT_INTERVAL_NS;
+        if (n == 0) { real_median_cache = FlmConst::DEFAULT_INTERVAL_NS; return; }
         int64_t tmp[FlmConst::REAL_WINDOW];
         std::copy(real_win, real_win + n, tmp);
         std::sort(tmp, tmp + n);
-        return tmp[n / 2];
+        real_median_cache = tmp[n / 2];
     }
 
     // [FIX-30] No fflush here: 1 MB _IOFBF buffer set after fopen; fprintf
@@ -754,10 +836,31 @@ static DeviceDispatch* find_device_dispatch(VkDevice device) {
     return (it != g_dev_map.end()) ? &it->second : nullptr;
 }
 
+// [FIX-50] Hot-path swapchain lookup cache. Games overwhelmingly present one
+// swapchain, yet v2.4 paid shared_mutex + hash + shared_ptr copy TWICE per
+// frame (acquire + present). thread_local {handle, state} pair short-circuits
+// that. Correctness: g_sc_gen bumps on EVERY g_sc_map mutation (create /
+// destroy / device destroy); a stale generation forces the slow path, so
+// handle reuse after destroy+recreate can never serve the old state.
+static std::atomic<uint64_t> g_sc_gen{0};
+
 static std::shared_ptr<SwapchainState> find_sc_state(VkSwapchainKHR sc) {
-    std::shared_lock lk(g_sc_lock);
-    auto it = g_sc_map.find(sc);
-    return (it != g_sc_map.end()) ? it->second : nullptr;  // [FIX-1] copy
+    thread_local VkSwapchainKHR                 c_sc  = VK_NULL_HANDLE;
+    thread_local uint64_t                       c_gen = ~0ULL;
+    thread_local std::shared_ptr<SwapchainState> c_st;
+
+    uint64_t gen = g_sc_gen.load(std::memory_order_acquire);
+    if (sc == c_sc && gen == c_gen && c_st)
+        return c_st;                       // fast path: no lock, no hash
+
+    std::shared_ptr<SwapchainState> st;
+    {
+        std::shared_lock lk(g_sc_lock);
+        auto it = g_sc_map.find(sc);
+        if (it != g_sc_map.end()) st = it->second;   // [FIX-1] copy
+    }
+    c_sc = sc; c_gen = gen; c_st = st;
+    return st;
 }
 
 static void stop_and_join(std::shared_ptr<SwapchainState>& st) {
@@ -926,6 +1029,7 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
                     st->real_win[st->real_idx] = T_est;
                     st->real_idx = (st->real_idx + 1) % FlmConst::REAL_WINDOW;
                     if (st->real_count < FlmConst::REAL_WINDOW) st->real_count++;
+                    st->real_median_recompute();   // [FIX-50] once per push
                 }
             }
 
@@ -963,12 +1067,56 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
             if (g_config.mfg_mult_env > 0) {
                 if (m != g_config.mfg_mult_env)
                     st->eff_mfg.store(g_config.mfg_mult_env, std::memory_order_relaxed);
+            } else if (st->probe_left > 0) {
+                // ============================================================
+                // [FIX-47] PROBE ACTIVE — gate is standing down (apply_gate
+                // sees probe_active and passes everything through), so the
+                // intervals arriving here are RAW. Detection runs UNFROZEN
+                // on exactly these samples.
+                // ============================================================
+                if (interval_ns * 10 < st->slot_mean_ns * 7) st->mfg_small_cnt++;
+                st->mfg_total_cnt++;
+                if (--st->probe_left == 0) {
+                    if (st->mfg_total_cnt >= 16) {
+                        double p = (double)st->mfg_small_cnt / (double)st->mfg_total_cnt;
+                        int mhat = (p < 0.99) ? (int)std::lround(1.0 / (1.0 - p)) : 4;
+                        mhat = std::clamp(mhat, 1, 4);
+                        if (mhat != m) {
+                            FLM_LOG(LogLevel::INFO, "MFG multiplier (probe): %d -> %d", m, mhat);
+                            st->eff_mfg.store(mhat, std::memory_order_relaxed);
+                        }
+                    }
+                    st->mfg_small_cnt = 0;
+                    st->mfg_total_cnt = 0;
+                    st->probe_last_ns = tnow;
+                    st->probe_active.store(false, std::memory_order_relaxed);
+                }
             } else {
                 bool gate_hot = (tnow - st->last_gate_wait_ns.load(std::memory_order_relaxed))
                                 < 1'000'000'000LL;
                 if (gate_hot && m > 1) {
                     st->mfg_small_cnt = 0;   // frozen window: start clean
                     st->mfg_total_cnt = 0;
+                    // ========================================================
+                    // [FIX-47] FREEZE + ALWAYS-HOT GATE DEADLOCK. Floor pacing
+                    // holds at least one present per cycle at m>1, so gate_hot
+                    // never cools → detection stayed frozen FOREVER: an in-game
+                    // multiplier change (2→3, or MFG off mid-session) could
+                    // never be picked up; 3x content ran with a 2x distribution
+                    // (0.425T/0.425T/0.15T) permanently. Fix: every
+                    // PROBE_PERIOD, suspend the gate for PROBE_FLIPS flips
+                    // (~100-200ms — invisible on VRR) and re-measure m from the
+                    // raw stream. m→1 transitions were already self-correcting
+                    // via cycle-sum; this closes the upward path too.
+                    // ========================================================
+                    if (st->probe_last_ns == 0) {
+                        st->probe_last_ns = tnow;   // anchor on first frozen flip
+                    } else if (tnow - st->probe_last_ns >= FlmConst::PROBE_PERIOD_NS) {
+                        st->probe_left = FlmConst::PROBE_FLIPS;
+                        st->probe_active.store(true, std::memory_order_relaxed);
+                        FLM_LOG(LogLevel::DEBUG, "MFG probe: gate suspended for %d flips",
+                                FlmConst::PROBE_FLIPS);
+                    }
                 } else {
                     if (interval_ns * 10 < st->slot_mean_ns * 7) st->mfg_small_cnt++;
                     st->mfg_total_cnt++;
@@ -1263,6 +1411,7 @@ VK_LAYER_EXPORT void VKAPI_CALL FLM_vkDestroyDevice(
             } else ++it;
         }
     }
+    g_sc_gen.fetch_add(1, std::memory_order_release);   // [FIX-50] invalidate caches
     for (auto& st : orphans) stop_and_join(st);
 
     {
@@ -1348,6 +1497,7 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkCreateSwapchainKHR(
         if (it != g_sc_map.end()) stale = std::move(it->second);
         g_sc_map[*pSwapchain] = std::move(st);
     }
+    g_sc_gen.fetch_add(1, std::memory_order_release);   // [FIX-50] invalidate caches
     stop_and_join(stale);
     return res;
 }
@@ -1364,6 +1514,7 @@ VK_LAYER_EXPORT void VKAPI_CALL FLM_vkDestroySwapchainKHR(
             auto it = g_sc_map.find(swapchain);
             if (it != g_sc_map.end()) { st = std::move(it->second); g_sc_map.erase(it); }
         }
+        g_sc_gen.fetch_add(1, std::memory_order_release);   // [FIX-50] invalidate caches
         stop_and_join(st);
     }
     if (disp && disp->DestroySwapchainKHR)
@@ -1411,9 +1562,23 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
     // default → 240Hz game gets capped at ~70 FPS). Without fresh data, no
     // pacing; anchors are reset so measurement restart gives a clean start.
     // ========================================================================
+    // [FIX-50] One clock read per gate entry. v2.4 called now_ns() up to three
+    // times on the floor path (freshness guard, floor anchor, autotune); the
+    // vDSO call is cheap but the reads could also disagree by the interleaving
+    // time. Single timestamp, re-read only after an actual wait.
+    int64_t t = now_ns();
+
     if (!limiter_mode) {
         int64_t lf = st->last_flip_ns.load(std::memory_order_relaxed);
-        if (lf == 0 || now_ns() - lf > FlmConst::MEAS_FRESH_NS) {
+        if (lf == 0 || t - lf > FlmConst::MEAS_FRESH_NS) {
+            st->limiter_next_ns = 0;
+            st->last_present_ns = 0;
+            st->held_run        = 0;
+            return;
+        }
+        // [FIX-47] MFG re-sample probe: gate stands down so RAW intervals
+        // reach the detector. Limiter is measurement-free and unaffected.
+        if (st->probe_active.load(std::memory_order_relaxed)) {
             st->limiter_next_ns = 0;
             st->last_present_ns = 0;
             st->held_run        = 0;
@@ -1465,7 +1630,7 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
             ratio = std::clamp(ratio + st->ratio_auto, 500, 1000);
         int64_t floor   = std::max<int64_t>((slot_iv * ratio) / 1000, FlmConst::MIN_FLOOR_NS);
 
-        int64_t t = now_ns();
+        // [FIX-50] t taken once at gate entry; only re-read after a real wait.
         if (st->last_present_ns == 0) {          // first present: anchor only
             st->last_present_ns = t;
             return;
@@ -1537,7 +1702,7 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
         lead = std::min(g_config.lead_ns.load(std::memory_order_relaxed), iv / 2);
     }
 
-    int64_t t = now_ns();
+    // [FIX-50] t from gate entry (single clock read per gate).
     if (st->limiter_next_ns == 0) {
         st->limiter_next_ns = t + iv;   // first frame: don't wait, set up timeline
         return;
@@ -1587,13 +1752,11 @@ static bool resolve_gate(const SwapchainState* st, bool has_wait, bool& limiter_
     switch (mode) {
         case PaceMode::OFF:     return false;
         case PaceMode::LIMITER: limiter_mode = true;  return fps > 0;
-        case PaceMode::PRESENT:
-            if (has_wait && !is_fifo) { limiter_mode = false; return true; }
-            limiter_mode = true; return fps > 0;   // FIFO or no wait → limiter
+        case PaceMode::PRESENT:  // [FIX-52] PRESENT and AUTO were byte-identical — merged
         case PaceMode::AUTO:
         default:
             if (has_wait && !is_fifo) { limiter_mode = false; return true; }
-            limiter_mode = true; return fps > 0;
+            limiter_mode = true; return fps > 0;   // FIFO or no wait → limiter
     }
 }
 
@@ -1703,10 +1866,16 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkQueuePresentKHR(
             }
         }
 
+        // [FIX-49] present_seq is TELEMETRY (CSV slot column), not gate state.
+        // v2.4 only incremented it inside the gate condition → with
+        // FLM_PACE_POINT=acquire the slot column froze at 0 and regression
+        // analysis silently broke. Count every primary-swapchain present.
+        if (i == 0)
+            st->present_seq.fetch_add(1, std::memory_order_relaxed);  // [item 4]
+
         // SINGLE GATE (only on the first/primary swapchain; multiple swapchains are rare)
         if (gate_here && i == 0 &&
             st->frame_count.load(std::memory_order_relaxed) >= FlmConst::WARMUP_FRAMES) {
-            st->present_seq.fetch_add(1, std::memory_order_relaxed);  // [item 4]
             bool limiter_mode = false;
             if (resolve_gate(st.get(), has_wait, limiter_mode))
                 apply_gate(st.get(), limiter_mode, /*advance=*/true);  // [FIX-35]
