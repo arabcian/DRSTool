@@ -1,4 +1,4 @@
-# FLM — Vulkan Flip Meter / Frame Pacing Layer (v2.5 — "steady state")
+# FLM — Vulkan Flip Meter / Frame Pacing Layer (v2.2 + FIX-36 floor-pacing)
 
 Vulkan katmanı olarak çalışan bir frame pacing aracı. İki bağımsız yolu var:
 

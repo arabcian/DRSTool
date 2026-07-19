@@ -1,4 +1,4 @@
-# FLM — Vulkan Flip Meter / Frame Pacing Layer (v2.5 — "steady state")
+# FLM — Vulkan Flip Meter / Frame Pacing Layer (v2.2 + FIX-36 floor-pacing)
 
 A Vulkan layer that does frame pacing. Two independent paths:
 
@@ -132,18 +132,9 @@ instead of pushing it to the ceiling constantly.
 **Situation:** The game uses FIFO, not MAILBOX/IMMEDIATE (already locked to
 vsync).
 
-By default, nothing to configure — the code detects this itself
-(`resolve_gate`): PACER never activates on FIFO (so it doesn't fight the
-compositor), only LIMITER (if `FLM_TARGET_FPS` is set) runs. Floor-pacing
-stays inactive on FIFO too.
-
-If you specifically want PACER (or floor-pacing) active on a FIFO swapchain
-anyway — e.g. an engine that only exposes FIFO but still runs MFG and you
-want the ε-frame equalization — set `FLM_PACE_FIFO=1` to lift the exclusion.
-This is an explicit opt-in: on ordinary FIFO content the compositor is
-already doing the pacing job, and PACER on top can introduce its own jitter
-instead of removing any. A/B with CSVs (Scenario in the reference section
-below) before keeping it on.
+Nothing to configure — the code detects this itself (`resolve_gate`): PACER
+never activates on FIFO (so it doesn't fight the compositor), only LIMITER
+(if `FLM_TARGET_FPS` is set) runs. Floor-pacing stays inactive on FIFO too.
 
 ---
 
