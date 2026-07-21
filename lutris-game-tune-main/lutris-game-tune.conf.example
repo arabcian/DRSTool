@@ -1,0 +1,95 @@
+# /etc/lutris-game-tune.conf — lutris-game-tune configuration
+#
+# Install:
+#   sudo install -o root -g root -m 644 lutris-game-tune.conf.example /etc/lutris-game-tune.conf
+#
+# SECURITY: This file must be owned by root and must not be group/other
+# writable; otherwise the script ignores it completely. The format is
+# strict: KEY=VALUE, no spaces, values may only contain [a-zA-Z0-9_.-]
+# characters (except CCD_EXTRA_GOOD_PROCS, CCD_PROTECTED_CGROUPS, and
+# CCD_PROTECTED_PROCS — those may contain spaces, for multiple names).
+#
+# Changes take effect on the next PRE run — no need to rebuild/reinstall.
+
+# --- CPU Governor / EPP -------------------------------------------------------
+CPU_GOVERNOR=performance
+SET_CPU_GOVERNOR=1
+
+# --- PCIe ASPM -----------------------------------------------------------------
+# PCIe ASPM policy during gameplay: performance | default | powersave
+ASPM_POLICY=performance
+SET_ASPM=1
+
+# --- Deep C-state disabling (optional) ------------------------------------------
+# Reduces DPC/frame-time jitter but noticeably increases heat/power draw.
+# Worth trying on a laptop while plugged in.
+DISABLE_DEEP_CSTATES=0
+# Deepest state index to keep enabled (0=POLL, 1=C1)
+CSTATE_KEEP_MAX=1
+
+# --- VM --------------------------------------------------------------------------
+# vm.swappiness value while in game mode
+VM_SWAPPINESS=10
+
+# --- CCD/CCX core isolation ------------------------------------------------------
+# Note: THP settings (enabled/shmem_enabled/defrag) are INTENTIONALLY absent
+# here — all three are always hardcoded to "always" in the script and are
+# not configurable (the old THP_MODE key is no longer read by the script).
+
+# Enable (1) or fully disable (0) CCD isolation. When disabled, the script
+# never does topology detection and never touches any cgroups.
+CCD_ISOLATION_ENABLED=1
+
+# --- CCD isolation architecture (read this before touching the two keys below) --
+#
+# The script does NOT move existing processes out of their cgroups. Every
+# cgroup that already exists (login sessions, elogind, dbus, other service
+# cgroups, ...) is left exactly where it is and is instead constrained IN
+# PLACE by writing its own cpuset.cpus to the system CCD — every process
+# inside it (and any of its descendants) is confined to those CPUs without
+# ever changing cgroup membership.
+#
+# This matters because moving a process OUT of its cgroup — even briefly,
+# even straight back into the exact same one — can break things that watch
+# cgroup membership for identity or lifecycle tracking. The concrete
+# incident that drove this design: a login-session process got swept during
+# an earlier, move-based version of this script; that silently broke
+# D-Bus/PolicyKit's notion of "this process belongs to an active local
+# session", so polkit-gated tools (e.g. power-manager GUIs calling pkexec)
+# started failing with "Not authorized" — sometimes cascading into a wedged
+# TTY/session that needed a reboot to clear. The two keys below exist only
+# as a defense for the ONE thing this script still does move: stray
+# processes that were never inside a cgroup of their own to begin with
+# (found sitting directly in the cgroup-v2 root at scan time).
+
+# LEGACY / not used by the current architecture. Nothing needs to be
+# listed here to be protected — every process that already has its own
+# cgroup is left untouched by construction (see above). Kept only so
+# existing config files with this key don't produce a warning.
+CCD_PROTECTED_CGROUPS=
+
+# Safety net: process NAMES (matched with pgrep -x) that must never be
+# swept into theUgly even if found sitting directly in the root cgroup.
+# Covers common OpenRC- and systemd-side daemon/session-manager names so
+# the same list is safe to use unchanged across init systems — a name
+# that doesn't exist on your system simply never matches anything.
+CCD_PROTECTED_PROCS=elogind elogind-daemon systemd-logind dbus-daemon dbus-broker polkitd openrc-user login gdm gdm3 sddm lightdm
+
+# Launcher process name to search for with pgrep -x. "steam" for Steam,
+# "heroic" for Heroic, "bottles" for Bottles, etc.
+CCD_LAUNCHER=lutris
+
+# Extra process names to add to the theGood (performance) group, space-separated.
+# Example: CCD_EXTRA_GOOD_PROCS=gamescope picom
+CCD_EXTRA_GOOD_PROCS=
+
+# How many seconds to keep scanning for newly spawned child processes
+# (shader compilation, DXVK/VKD3D workers) after the launcher is moved.
+# 0 = one-shot move only.
+CCD_MONITOR_SECONDS=30
+
+# cpuset.cpus.partition type: "root" (allows housekeeping) or "isolated"
+# (more aggressive isolation). If you want to reduce jitter you can try
+# "isolated" for theGood — it may cause stability issues on some systems.
+CCD_GOOD_PARTITION_TYPE=root
+CCD_UGLY_PARTITION_TYPE=root
