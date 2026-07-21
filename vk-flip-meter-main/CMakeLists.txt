@@ -126,7 +126,15 @@ include(GNUInstallDirs)
 
 # [FIX-52] Manifest is generated from a template: library path and version are
 # written at configure time — the post-install sed patch in build.sh is gone.
-set(FLM_LIB_PATH "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libvk_flip_meter.so")
+# [FIX-61] Allow callers (e.g. Portage's ebuild which knows the real get_libdir
+# on multilib Gentoo) to override the path via -DFLM_LIB_PATH=...
+# A plain set() always wins over a -D argument; using CACHE STRING + FORCE only
+# when no external value was supplied keeps the override semantics correct.
+if(NOT DEFINED FLM_LIB_PATH)
+    set(FLM_LIB_PATH
+        "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libvk_flip_meter.so"
+        CACHE STRING "Absolute path written into the layer manifest (library_path)" FORCE)
+endif()
 configure_file(
     manifest/VkLayer_cpu_flip_meter.json.in
     ${CMAKE_CURRENT_BINARY_DIR}/VkLayer_cpu_flip_meter.json

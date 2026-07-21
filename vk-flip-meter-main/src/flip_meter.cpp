@@ -244,6 +244,10 @@
 //            verifiable at INFO level — typo'd keys are silently ignored by
 //            apply_dynamic_kv, and the old 4-field line couldn't confirm the
 //            floor knobs landed.
+//   [FIX-61] FLM_LIB_PATH in CMakeLists now overridable via -D (CACHE STRING).
+//            A plain set() always wins over -D args; the old form silently
+//            ignored Portage get_libdir, writing the wrong path into the
+//            installed manifest on multilib Gentoo.
 // ============================================================================
 
 #include <vulkan/vulkan.h>
