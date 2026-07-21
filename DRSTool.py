@@ -4340,9 +4340,299 @@ SYS_ENV_VARS: List[EnvVarDef] = [
               options=["x11", "wayland", "kmsdrm", "offscreen"]),
 ]
 
+# ============================================================================
+# Gamescope Environment Variables
+# These control Valve's Wayland micro-compositor used to embed Windows games
+# in a dedicated Vulkan-rendered surface.  Set them in your game launch command
+# before the gamescope invocation, e.g.:
+#   GAMESCOPE_LIMITER_RES=1 gamescope -W 2560 -H 1440 -r 165 -- %command%
+# ============================================================================
+
+GAMESCOPE_ENV_VARS: List[EnvVarDef] = [
+
+    # ── Output / window geometry ──────────────────────────────────────────────
+
+    EnvVarDef("GAMESCOPE_WIDTH", "Gamescope", "int", "",
+              "Sets the composited output width in pixels that gamescope presents to the "
+              "display or host compositor.  Equivalent to the -W / --output-width CLI flag — "
+              "use this when launching via a wrapper that doesn't expose the flag directly "
+              "(e.g. some Lutris runners).  If unset, gamescope defaults to the game's "
+              "native resolution or the host display size.  "
+              "Example: GAMESCOPE_WIDTH=2560 gamescope -- %command%",
+              placeholder="e.g. 2560"),
+
+    EnvVarDef("GAMESCOPE_HEIGHT", "Gamescope", "int", "",
+              "Sets the composited output height in pixels.  Pair with GAMESCOPE_WIDTH; "
+              "both are passed through to -W/-H internally.  "
+              "Example: GAMESCOPE_HEIGHT=1440 gamescope -- %command%",
+              placeholder="e.g. 1440"),
+
+    EnvVarDef("GAMESCOPE_GAME_WIDTH", "Gamescope", "int", "",
+              "Target render width presented to the game (-w / --nested-width).  "
+              "gamescope upscales / downscales from this to the output resolution.  "
+              "Setting this below GAMESCOPE_WIDTH while keeping a high output resolution "
+              "enables GPU-load reduction + upscaling (FSR, NIS, pixel) in one step.  "
+              "Example: GAMESCOPE_GAME_WIDTH=1920 (upscale from 1080p to 1440p output)",
+              placeholder="e.g. 1920"),
+
+    EnvVarDef("GAMESCOPE_GAME_HEIGHT", "Gamescope", "int", "",
+              "Target render height presented to the game (-h / --nested-height).  "
+              "Pair with GAMESCOPE_GAME_WIDTH.  "
+              "Example: GAMESCOPE_GAME_HEIGHT=1080",
+              placeholder="e.g. 1080"),
+
+    # ── Frame rate / VRR ─────────────────────────────────────────────────────
+
+    EnvVarDef("GAMESCOPE_FRAME_RATE_LIMIT", "Gamescope", "int", "",
+              "Hard frame-rate cap applied by the gamescope compositor (-r / --framerate-limit).  "
+              "Gamescope inserts a precise sleep-based limiter at the presentation layer, "
+              "independent of any in-game or FLM cap.  Useful to avoid runaway GPU clocks "
+              "in menus or to stay just below the VRR range floor (e.g. cap to 60 on a "
+              "60–165 Hz VRR panel keeps VRR engaged instead of dropping to low-fps fallback).  "
+              "Set to 0 to disable.  "
+              "Example: GAMESCOPE_FRAME_RATE_LIMIT=120",
+              placeholder="e.g. 120"),
+
+    EnvVarDef("GAMESCOPE_FRAME_RATE_LIMIT_FOCUS", "Gamescope", "int", "",
+              "Frame-rate cap to apply only while the gamescope window has focus (--framerate-limit).  "
+              "On some gamescope builds this is the primary name for the rate-limit flag; "
+              "on others it is a separate focused-window variant.  "
+              "Example: GAMESCOPE_FRAME_RATE_LIMIT_FOCUS=165",
+              placeholder="e.g. 165"),
+
+    EnvVarDef("GAMESCOPE_FRAME_RATE_LIMIT_UNFOCUS", "Gamescope", "int", "",
+              "Frame-rate cap applied when the gamescope window loses focus (--framerate-limit-unfocus / -o).  "
+              "Useful to reduce GPU load / power when alt-tabbing without fully pausing the game.  "
+              "Example: GAMESCOPE_FRAME_RATE_LIMIT_UNFOCUS=30",
+              placeholder="e.g. 30"),
+
+    EnvVarDef("GAMESCOPE_FORCE_GRAB_CURSOR", "Gamescope", "enum", "",
+              "Force gamescope to grab the cursor inside the game window regardless of "
+              "what the game requests (--force-grab-cursor).  Prevents cursor from leaving "
+              "the window in windowed / borderless mode.  "
+              "Example: GAMESCOPE_FORCE_GRAB_CURSOR=1",
+              options=["0", "1"]),
+
+    # ── Upscaling / sharpening ────────────────────────────────────────────────
+
+    EnvVarDef("GAMESCOPE_UPSCALE_FILTER", "Gamescope", "enum", "",
+              "Upscaling algorithm gamescope uses when render resolution < output resolution "
+              "(-F / --filter).  "
+              "'fsr': AMD FidelityFX Super Resolution 1.0 — spatial upscaler, lowest GPU cost, "
+              "sharpens via the Lanczos-derived FSR kernel.  "
+              "'nis': NVIDIA Image Scaling — alternative spatial upscaler from NVIDIA, "
+              "slightly different sharpening curve from FSR; works fine on any GPU.  "
+              "'pixel': nearest-neighbour integer scaling (only useful for pixel-art games).  "
+              "'linear': bilinear — soft, reference quality, no sharpening.  "
+              "'nearest': nearest-neighbour without integer snapping.  "
+              "Example: GAMESCOPE_UPSCALE_FILTER=fsr",
+              options=["fsr", "nis", "pixel", "linear", "nearest"]),
+
+    EnvVarDef("GAMESCOPE_UPSCALE_SHARPNESS", "Gamescope", "int", "",
+              "Sharpness slider for FSR and NIS upscalers (--sharpness / --fsr-sharpness).  "
+              "Scale is 0–20 for FSR (0 = sharpest, 20 = softest — note the inversion) "
+              "and 0–5 for NIS (0 = no sharpening).  FSR default is 2 (very sharp).  "
+              "Raise FSR value toward 5–8 if the image looks over-sharpened / aliased.  "
+              "Example: GAMESCOPE_UPSCALE_SHARPNESS=5  (moderately sharp FSR)",
+              placeholder="0–20 (FSR) or 0–5 (NIS)"),
+
+    EnvVarDef("GAMESCOPE_UPSCALE_INTEGER_SCALE", "Gamescope", "enum", "",
+              "Restrict pixel / nearest upscale to integer multiples only "
+              "(--integer-scale / -i).  Guarantees each game pixel maps to an exact NxN "
+              "block of output pixels — eliminates sub-pixel shimmer at the cost of "
+              "unused black borders when the ratio is non-integer.  Only meaningful with "
+              "pixel or nearest filter.  "
+              "Example: GAMESCOPE_UPSCALE_INTEGER_SCALE=1",
+              options=["0", "1"]),
+
+    # ── HDR ──────────────────────────────────────────────────────────────────
+
+    EnvVarDef("GAMESCOPE_HDR_ENABLED", "Gamescope", "enum", "",
+              "Enable HDR output through the gamescope compositor (--hdr-enabled).  "
+              "Requires a display and driver with HDR support (NVIDIA 495+ on Wayland, "
+              "or AMDGPU with KMS HDR patches).  gamescope tone-maps HDR10 PQ -> the "
+              "display's peak luminance if the game outputs HDR.  Also needed when using "
+              "DXVK_HDR=1 inside Proton — gamescope is the compositor that actually "
+              "signals HDR to the driver.  "
+              "Example: GAMESCOPE_HDR_ENABLED=1",
+              options=["0", "1"]),
+
+    EnvVarDef("GAMESCOPE_HDR_SDR_CONTENT_NITS", "Gamescope", "int", "",
+              "Target brightness (nits) for SDR content displayed inside an HDR gamescope "
+              "session (--hdr-sdr-content-nits).  When the game is SDR but you want the "
+              "compositor to map it into the HDR colour volume at a specific luminance "
+              "rather than the driver default.  Typical range 200–400 nits.  "
+              "Example: GAMESCOPE_HDR_SDR_CONTENT_NITS=300",
+              placeholder="e.g. 300"),
+
+    EnvVarDef("GAMESCOPE_HDR_ITERATED_TONEMAPPING", "Gamescope", "enum", "",
+              "Enable the iterative auto-exposure tone-mapping path (--hdr-iterated-tonemapping).  "
+              "gamescope repeatedly adjusts the per-frame exposure key to prevent the "
+              "scene from clipping on scenes with extreme dynamic range.  Can improve "
+              "HDR highlight rendering in games that don't expose their own tone-map curve.  "
+              "Example: GAMESCOPE_HDR_ITERATED_TONEMAPPING=1",
+              options=["0", "1"]),
+
+    # ── VRR / tearing / sync ──────────────────────────────────────────────────
+
+    EnvVarDef("GAMESCOPE_ALLOW_TEARING", "Gamescope", "enum", "",
+              "Allow tearing presents inside gamescope (--immediate-flips).  "
+              "gamescope will attempt to use immediate/async KMS flips or the "
+              "VK_EXT_present_mode_fifo_latest_ready / mailbox Vulkan present modes "
+              "instead of FIFO, eliminating one frame of compositor latency at the cost "
+              "of possible horizontal tear lines.  Most effective at high (>= monitor refresh) "
+              "frame rates.  Pairs well with GAMESCOPE_FRAME_RATE_LIMIT just below refresh "
+              "to keep tearing rare.  "
+              "Example: GAMESCOPE_ALLOW_TEARING=1",
+              options=["0", "1"]),
+
+    EnvVarDef("GAMESCOPE_VRR_ENABLED", "Gamescope", "enum", "",
+              "Request VRR / Adaptive Sync from the KMS driver for the gamescope output "
+              "(--adaptive-sync).  On supported display + driver combos gamescope signals "
+              "FREESYNC/G-SYNC Compatible to the kernel, letting the panel vary its refresh "
+              "rate to match frame delivery.  Reduces perceived stutter without a fixed cap.  "
+              "Check dmesg for 'vrr_enabled' confirmation if it doesn't seem active.  "
+              "Example: GAMESCOPE_VRR_ENABLED=1",
+              options=["0", "1"]),
+
+    # ── Latency / input ───────────────────────────────────────────────────────
+
+    EnvVarDef("GAMESCOPE_LOW_LATENCY", "Gamescope", "enum", "",
+              "Enable gamescope's low-latency present path (--expose-wayland / varies by build).  "
+              "On Steam Deck / SteamOS this instructs gamescope to minimise queued frames "
+              "before the flip.  Effect on desktop builds varies — on current upstream "
+              "gamescope the primary latency lever is GAMESCOPE_ALLOW_TEARING plus a tight "
+              "GAMESCOPE_FRAME_RATE_LIMIT.  "
+              "Example: GAMESCOPE_LOW_LATENCY=1",
+              options=["0", "1"]),
+
+    EnvVarDef("GAMESCOPE_RESHADE_EFFECT_DIR", "Gamescope", "string", "",
+              "Path to a directory containing ReShade .fx effect files to apply at the "
+              "gamescope compositor level (--reshade-effect-path).  "
+              "Effects are applied post-upscale, GPU-side, to the final composited frame — "
+              "without touching the game process at all.  Useful for CRT masks, colour "
+              "grading, or RCAS-style sharpening passes.  "
+              "Requires a gamescope build with ReShade support compiled in.  "
+              "Example: GAMESCOPE_RESHADE_EFFECT_DIR=/home/cihan/.reshade/effects",
+              placeholder="/path/to/reshade/effects"),
+
+    # ── Debugging / diagnostics ───────────────────────────────────────────────
+
+    EnvVarDef("GAMESCOPE_LOG_LEVEL", "Gamescope", "enum", "",
+              "Verbosity of gamescope's own log output (written to stderr by default).  "
+              "'0' / error: only fatal/error messages.  "
+              "'1' / warn: warnings + errors.  "
+              "'2' / info: normal operational messages (flip timings, layer changes).  "
+              "'3' / debug: very verbose — KMS plane assignment, Vulkan submit details.  "
+              "Combine with GAMESCOPE_LOG_FILE to capture to a file.  "
+              "Example: GAMESCOPE_LOG_LEVEL=2",
+              options=["0", "1", "2", "3"]),
+
+    EnvVarDef("GAMESCOPE_DISABLE_LAYER_FEEDBACK", "Gamescope", "enum", "",
+              "Prevent gamescope from sending back-pressure (damage / frame-pacing hints) "
+              "to the nested Wayland compositor or XWayland clients.  Normally gamescope "
+              "signals when it is ready for the next frame; disabling this removes the "
+              "signal and lets the game submit frames as fast as it likes.  Can help "
+              "diagnose stutter caused by feedback loops but may increase GPU queue depth.  "
+              "Example: GAMESCOPE_DISABLE_LAYER_FEEDBACK=1",
+              options=["0", "1"]),
+
+    EnvVarDef("GAMESCOPE_DISABLE_ASYNC_COMPUTE", "Gamescope", "enum", "",
+              "Disable the async compute queue gamescope uses for colour-management "
+              "and upscaling shader dispatches.  "
+              "gamescope submits upscale/tonemapping passes on an async compute queue by "
+              "default so they overlap with game rendering.  On some NVIDIA driver + Vulkan "
+              "combinations this causes sync validation errors or GPU hangs — set to 1 "
+              "to fall back to the graphics queue.  "
+              "Example: GAMESCOPE_DISABLE_ASYNC_COMPUTE=1",
+              options=["0", "1"]),
+
+    EnvVarDef("GAMESCOPE_FORCE_COMPOSITION", "Gamescope", "enum", "",
+              "Force gamescope to always composite (re-draw) the game frame through its "
+              "own Vulkan renderer rather than attempting a direct scanout (DRM plane) path.  "
+              "Direct scanout skips the compositor's Vulkan pass entirely and reduces latency "
+              "but requires the game surface to be the only visible layer and at native "
+              "output resolution.  Setting this to 1 is useful to confirm whether a visual "
+              "artefact (wrong colour space, missing overlay) is caused by the direct-scanout "
+              "path or by the compositor itself.  "
+              "Example: GAMESCOPE_FORCE_COMPOSITION=1",
+              options=["0", "1"]),
+
+    # ── Steam integration ─────────────────────────────────────────────────────
+
+    EnvVarDef("STEAMID", "Gamescope", "string", "",
+              "The Steam App ID of the game currently running inside gamescope.  "
+              "Set automatically by the Steam client when launching through Steam.  "
+              "gamescope reads this to look up the game's artwork for the overlay, "
+              "apply per-game DRS presets on Steam Deck, and for FPS limit reporting "
+              "in the Steam HUD.  You can set it manually in a Lutris command to give "
+              "gamescope the right game context without going through Steam.  "
+              "Example: STEAMID=730  (Counter-Strike 2)",
+              placeholder="e.g. 730"),
+
+    EnvVarDef("STEAM_GAMESCOPE_HW_UPSCALE_FILTER", "Gamescope", "enum", "",
+              "Steam-specific override to select the upscale filter for gamescope "
+              "via the Steam Settings UI path.  Maps to the same -F / --filter flag "
+              "as GAMESCOPE_UPSCALE_FILTER but is written by the Steam client itself "
+              "based on the per-game 'Scaling Filter' setting.  Setting it manually "
+              "overrides whatever the Steam UI chose.  "
+              "Example: STEAM_GAMESCOPE_HW_UPSCALE_FILTER=fsr",
+              options=["fsr", "nis", "pixel", "linear", "nearest"]),
+
+    EnvVarDef("STEAM_GAMESCOPE_HW_UPSCALE_SHARPNESS", "Gamescope", "int", "",
+              "Steam-specific sharpness override corresponding to the sharpness slider "
+              "in Steam Settings → Resolution.  Written by the client; override manually "
+              "to bypass the UI.  Same 0–20 (FSR) / 0–5 (NIS) scale as "
+              "GAMESCOPE_UPSCALE_SHARPNESS.  "
+              "Example: STEAM_GAMESCOPE_HW_UPSCALE_SHARPNESS=5",
+              placeholder="0–20 (FSR) or 0–5 (NIS)"),
+
+    EnvVarDef("STEAM_GAMESCOPE_VRR_ENABLED", "Gamescope", "enum", "",
+              "Steam client's per-game VRR toggle, written into gamescope's environment "
+              "when you enable 'Allow Tearing' or 'VRR' in the Steam per-game settings.  "
+              "Identical effect to GAMESCOPE_VRR_ENABLED; the STEAM_ prefix just "
+              "indicates it was set by the client rather than the user.  Override to "
+              "force VRR on/off regardless of what the Steam UI shows.  "
+              "Example: STEAM_GAMESCOPE_VRR_ENABLED=1",
+              options=["0", "1"]),
+
+    EnvVarDef("STEAM_GAMESCOPE_TEARING_SUPPORT", "Gamescope", "enum", "",
+              "Steam client flag advertising that the gamescope session supports tearing "
+              "presents.  When set, the Steam HUD and the per-game settings panel show "
+              "the 'Allow Tearing' toggle.  Set automatically in SteamOS; on desktop "
+              "you may need to set it manually if you want Steam's tearing toggle to "
+              "have any effect.  "
+              "Example: STEAM_GAMESCOPE_TEARING_SUPPORT=1",
+              options=["0", "1"]),
+
+    EnvVarDef("STEAM_GAMESCOPE_DYNAMIC_REFRESH_SUPPORT", "Gamescope", "enum", "",
+              "Advertises VRR / dynamic refresh rate support to the Steam client so the "
+              "per-game refresh-rate selector is shown.  Required on desktop gamescope "
+              "if you want Steam's frame-rate-limit UI to work correctly.  "
+              "Example: STEAM_GAMESCOPE_DYNAMIC_REFRESH_SUPPORT=1",
+              options=["0", "1"]),
+
+    EnvVarDef("STEAM_GAMESCOPE_LIMITER_RES", "Gamescope", "enum", "",
+              "Enables gamescope's own Steam-integrated FPS limiter UI.  "
+              "When set to 1, the Steam overlay's frame-rate slider adjusts gamescope's "
+              "-r cap in real time without restarting the game.  Set to 0 to manage the "
+              "cap entirely via GAMESCOPE_FRAME_RATE_LIMIT.  "
+              "Example: STEAM_GAMESCOPE_LIMITER_RES=1",
+              options=["0", "1"]),
+
+    EnvVarDef("STEAM_GAMESCOPE_XWAYLAND_DISPLAY", "Gamescope", "string", "",
+              "The :DISPLAY number of the XWayland server gamescope started internally.  "
+              "Set automatically by gamescope; forwarded to the game process so it can "
+              "connect to gamescope's private XWayland rather than the host X server.  "
+              "You normally never set this manually — it appears here so you can inspect "
+              "or pin it when debugging multi-compositor scenarios.  "
+              "Example: STEAM_GAMESCOPE_XWAYLAND_DISPLAY=:1",
+              placeholder="e.g. :1"),
+]
+
 ALL_ENV_VARS = (DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS + NVIDIA_PRIME_ENV_VARS +
                  PROTON_ENV_VARS + WINE_ENV_VARS + DXVK_NVAPI_ENV_VARS + NVPRESENT_ENV_VARS +
-                 SYS_ENV_VARS + FLM_ENV_VARS)
+                 SYS_ENV_VARS + FLM_ENV_VARS + GAMESCOPE_ENV_VARS)
 
 
 # ============================================================================
@@ -4446,7 +4736,8 @@ QScrollBar::sub-page:vertical{
                                      ("DXVK-NVAPI", DXVK_NVAPI_ENV_VARS),
                                      ("NVIDIA Smooth Motion", NVPRESENT_ENV_VARS),
                                      ("System / Loader", SYS_ENV_VARS),
-                                     ("vk_flip_meter", FLM_ENV_VARS)]:
+                                     ("vk_flip_meter", FLM_ENV_VARS),
+                                     ("Gamescope", GAMESCOPE_ENV_VARS)]:
             if filter_text:
                 matching = [
                     ev for ev in env_list
