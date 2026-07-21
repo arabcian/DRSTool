@@ -7676,7 +7676,7 @@ class GamescopeFlagsWidget(QWidget):
         outer.setSpacing(6)
 
         header = QLabel("Gamescope Command Builder")
-        header.setStyleSheet("color:#e8eaf0; font-size:11px; font-weight:700;")
+        header.setStyleSheet("color:#e8eaf0; font-size:12px; font-weight:700;")
         outer.addWidget(header)
 
         desc = QLabel(
@@ -7686,12 +7686,12 @@ class GamescopeFlagsWidget(QWidget):
             "(STEAM_GAMESCOPE_*, ENABLE_GAMESCOPE_WSI, ...) are still in the Env Vars tab."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color:#8a8f9c; font-size:9px;")
+        desc.setStyleSheet("color:#8a8f9c; font-size:10px;")
         outer.addWidget(desc)
 
         self._enable_chk = QCheckBox("Enable Gamescope wrapper")
         self._enable_chk.setStyleSheet(
-            "QCheckBox{color:#e8eaf0; font-size:10px; font-weight:600;} "
+            "QCheckBox{color:#e8eaf0; font-size:11px; font-weight:600;} "
             "QCheckBox::indicator{width:14px; height:14px;}"
         )
         self._enable_chk.toggled.connect(self._on_master_toggled)
@@ -7710,7 +7710,7 @@ class GamescopeFlagsWidget(QWidget):
         for cat, flags in by_cat.items():
             box = QGroupBox(cat)
             box.setStyleSheet(
-                "QGroupBox{color:#b93b3b; font-size:9px; font-weight:700; "
+                "QGroupBox{color:#b93b3b; font-size:10px; font-weight:700; "
                 "border:1px solid #1e2535; border-radius:3px; margin-top:8px; padding-top:8px;} "
                 "QGroupBox::title{subcontrol-origin:margin; left:8px; padding:0 4px;}"
             )
@@ -7721,7 +7721,7 @@ class GamescopeFlagsWidget(QWidget):
             for gf in flags:
                 label_txt = gf.name + (f"  ({gf.short})" if gf.short else "")
                 lbl = QLabel(label_txt)
-                lbl.setStyleSheet("color:#c8cdd8; font-size:9px;")
+                lbl.setStyleSheet("color:#c8cdd8; font-size:10px;")
                 lbl.setToolTip(gf.desc)
 
                 if gf.kind == "toggle":
@@ -7741,7 +7741,7 @@ class GamescopeFlagsWidget(QWidget):
                 ctrl.setToolTip(gf.desc)
                 ctrl.setStyleSheet(
                     "QLineEdit,QComboBox{background:#141720; border:1px solid #1e2535; "
-                    "color:#e8eaf0; font-size:9px; padding:2px 4px; min-height:18px;} "
+                    "color:#e8eaf0; font-size:10px; padding:2px 4px; min-height:18px;} "
                     "QCheckBox::indicator{width:13px; height:13px;}"
                 )
                 self._controls[gf.flag] = ctrl
@@ -7753,14 +7753,14 @@ class GamescopeFlagsWidget(QWidget):
 
         # ── Live command preview ────────────────────────────────────────────
         preview_lbl = QLabel("Preview")
-        preview_lbl.setStyleSheet("color:#8a8f9c; font-size:9px; font-weight:700;")
+        preview_lbl.setStyleSheet("color:#8a8f9c; font-size:10px; font-weight:700;")
         outer.addWidget(preview_lbl)
 
         self._preview = QLineEdit()
         self._preview.setReadOnly(True)
         self._preview.setStyleSheet(
             "QLineEdit{background:#0d0f12; border:1px solid #1e2535; color:#76b900; "
-            "font-family:monospace; font-size:9px; padding:4px 6px;}"
+            "font-family:monospace; font-size:10px; padding:4px 6px;}"
         )
         outer.addWidget(self._preview)
 
@@ -7769,7 +7769,7 @@ class GamescopeFlagsWidget(QWidget):
         copy_btn = QPushButton("Copy Command")
         copy_btn.setStyleSheet(
             "QPushButton{background:#141720; border:1px solid #1e2535; color:#e8eaf0; "
-            "font-size:9px; padding:4px 10px; border-radius:3px;} "
+            "font-size:10px; padding:4px 10px; border-radius:3px;} "
             "QPushButton:hover{border-color:#4a7300;}"
         )
         copy_btn.clicked.connect(self._copy_command)
