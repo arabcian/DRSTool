@@ -3292,6 +3292,20 @@ DXVK_ENV_VARS: List[EnvVarDef] = [
               "feature is enabled. Set to 1 to force fully single-threaded shader "
               "compilation (deterministic, but slower cold-start compiles).",
               placeholder="0 = all cores, or e.g. 1"),
+    # ── Inline Config Override ───────────────────────────────────────────────
+    EnvVarDef("DXVK_CONFIG_FILE", "DXVK", "string", "",
+              "Overrides the path DXVK searches for its dxvk.conf. By default DXVK looks "
+              "for dxvk.conf in the working directory (usually the game's exe folder). "
+              "Useful for keeping a shared config outside a Windows-only game folder.",
+              placeholder="/home/user/dxvk.conf"),
+    EnvVarDef("DXVK_CONFIG", "DXVK", "string", "",
+              "Sets one or more dxvk.conf keys directly through the environment instead of "
+              "a config file, using the same key = value syntax, with ; as a separator "
+              "between entries. Any key documented in dxvk.conf can be set this way "
+              "(dxgi.*, d3d9.*, d3d11.*, dxvk.*), e.g. dxgi.maxFrameLatency, dxgi.hideNvidiaGpu, "
+              "dxvk.enableGraphicsPipelineLibrary, d3d11.samplerAnisotropy. Takes priority "
+              "over an on-disk dxvk.conf for the keys it sets.",
+              placeholder="dxgi.hideAmdGpu = True; dxgi.syncInterval = 0"),
 ]
 
 # Per-flag descriptions for VKD3D_CONFIG checkbox UI
@@ -4133,6 +4147,24 @@ PROTON_ENV_VARS: List[EnvVarDef] = [
     EnvVarDef("PROTON_LOG_DIR", "Proton", "string", "",
               "Directory to write PROTON_LOG output into. Defaults to your home directory.",
               placeholder="/path/to/log/dir"),
+    EnvVarDef("PROTON_DEBUG_DIR", "Proton", "string", "",
+              "Root directory Proton writes its per-game debug helper scripts into "
+              "(proton_$USER/ subfolder, e.g. gdb_run for attaching a debugger). "
+              "Defaults to /tmp. Only useful together with debugging workflows; has no "
+              "effect on normal gameplay.",
+              placeholder="/tmp"),
+    # ── Anti-Cheat Runtimes ──────────────────────────────────────────────────
+    EnvVarDef("PROTON_EAC_RUNTIME", "Proton", "string", "",
+              "Path to the 'Proton EasyAntiCheat Runtime' Steam depot, needed by some "
+              "EAC-protected games that don't auto-detect it (install the runtime via "
+              "Steam's 'Tools' category first, then point this at its folder). Usually not "
+              "needed manually when the game's Steam depot already declares the dependency.",
+              placeholder='"/home/user/.steam/steam/steamapps/common/Proton EasyAntiCheat Runtime/"'),
+    EnvVarDef("PROTON_BATTLEYE_RUNTIME", "Proton", "string", "",
+              "Path to the 'Proton BattlEye Runtime' Steam depot, needed by some "
+              "BattlEye-protected games that don't auto-detect it. Same idea as "
+              "PROTON_EAC_RUNTIME — install the Steam Tools depot, then point here.",
+              placeholder='"/home/user/.steam/steam/steamapps/common/Proton BattlEye Runtime/"'),
 ]
 
 # ============================================================================
@@ -4223,6 +4255,30 @@ WINE_ENV_VARS: List[EnvVarDef] = [
               "commas, e.g. '-all,+loaded' to see only module loads.",
               options=["-all", "+all", "+relay", "+seh", "+heap", "+loaded",
                        "+module", "+process", "+timestamp", "+pid", "+tid"]),
+    # ── Sync Primitives (plain Wine/Lutris — Proton uses PROTON_NO_ESYNC/ ───
+    # ── PROTON_NO_FSYNC/PROTON_USE_NTSYNC instead, see Proton category) ──────
+    EnvVarDef("WINEESYNC", "Wine", "enum", "1",
+              "Enables the eventfd-based esync fast synchronization primitives in vanilla "
+              "Wine/Lutris runners (not the Steam Proton wrapper, which is toggled via "
+              "PROTON_NO_ESYNC instead). Reduces sync overhead vs the default server-side "
+              "wineserver sync. Superseded by fsync/ntsync on kernels that support them, but "
+              "still the common baseline on custom Wine builds without those patches.",
+              options=["0", "1"]),
+    EnvVarDef("WINEFSYNC", "Wine", "enum", "1",
+              "Enables futex-based fsync synchronization in vanilla Wine/Lutris runners "
+              "(requires a Wine build with the fsync patches and a reasonably recent kernel). "
+              "Lower overhead than esync; takes priority over WINEESYNC when both a build "
+              "supports fsync and this is set. Proton's equivalent toggle is PROTON_NO_FSYNC.",
+              options=["0", "1"]),
+    # ── DLL Overrides ─────────────────────────────────────────────────────────
+    EnvVarDef("WINEDLLOVERRIDES", "Wine", "string", "",
+              "Per-DLL override list controlling whether Wine uses its own built-in "
+              "implementation or a native Windows DLL placed in the prefix, e.g. for staging "
+              "in a DXVK/VKD3D DLL manually, or forcing a component to 'disabled' to work "
+              "around a broken native/builtin implementation. Comma-separated "
+              "'dllname=mode' pairs; mode is n (native), b (builtin), n,b or b,n (try both, "
+              "first listed wins), or empty (disabled).",
+              placeholder="e.g. d3d11,dxgi=n;winemenubuilder.exe=d"),
 ]
 
 # ============================================================================
@@ -4636,6 +4692,38 @@ GAMESCOPE_ENV_VARS: List[EnvVarDef] = [
               "or pin it when debugging multi-compositor scenarios.  "
               "Example: STEAM_GAMESCOPE_XWAYLAND_DISPLAY=:1",
               placeholder="e.g. :1"),
+
+    # ── WSI / session ─────────────────────────────────────────────────────────
+
+    EnvVarDef("ENABLE_GAMESCOPE_WSI", "Gamescope", "enum", "",
+              "Toggles gamescope's Vulkan WSI (VK_layer) integration for the wrapped game. "
+              "Proton sets this to 1 automatically when it detects it's running under "
+              "gamescope, which lets the game present directly through gamescope's "
+              "low-latency compositing path. Native (non-Proton) titles launched directly "
+              "under gamescope do NOT get this set automatically, so setting it manually "
+              "can improve latency for native Linux games. Conversely, some games show "
+              "black/corrupted video playback or cutscenes with the WSI layer active — set "
+              "to 0 as a workaround in that case. "
+              "Example: ENABLE_GAMESCOPE_WSI=0 gamescope -- %command%",
+              options=["0", "1"]),
+
+    EnvVarDef("STEAM_MULTIPLE_XWAYLANDS", "Gamescope", "enum", "",
+              "Requests a second, dedicated XWayland server from gamescope (--xwayland-count 2 "
+              "equivalent at the session level) so overlay windows (Steam overlay, some "
+              "anti-cheat/launcher UIs) run in their own XWayland instance separate from the "
+              "game's. Reduces overlay-related stutter/input issues in embedded gamescope "
+              "sessions. Mainly relevant when running a full gamescope session rather than a "
+              "single windowed game launch. "
+              "Example: STEAM_MULTIPLE_XWAYLANDS=1 gamescope -e -- steam -gamepadui",
+              options=["0", "1"]),
+
+    EnvVarDef("STEAM_GAMESCOPE_VRR_SUPPORTED", "Gamescope", "enum", "",
+              "Advertises to the Steam client that the current gamescope session is capable "
+              "of VRR at all (distinct from STEAM_GAMESCOPE_VRR_ENABLED, which is the "
+              "per-game on/off toggle). Needed on some desktop setups for Steam's VRR "
+              "toggle to appear/function in per-game display settings. "
+              "Example: STEAM_GAMESCOPE_VRR_SUPPORTED=1",
+              options=["0", "1"]),
 ]
 
 ALL_ENV_VARS = (DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS + NVIDIA_PRIME_ENV_VARS +
