@@ -7787,6 +7787,7 @@ class GamescopeFlagsWidget(QWidget):
                     ctrl.addItem("")  # unset
                     ctrl.addItems(gf.options)
                     ctrl.currentTextChanged.connect(lambda _=None: self._emit_changed())
+                    ctrl.installEventFilter(_NO_SCROLL_FILTER)
                 else:  # "int" / "string"
                     ctrl = QLineEdit()
                     if gf.placeholder:
@@ -7802,7 +7803,16 @@ class GamescopeFlagsWidget(QWidget):
                         "QLineEdit:focus,QComboBox:focus{border-color:#76b900;} "
                         "QLineEdit:disabled,QComboBox:disabled{color:#6a7284; background:#14171d; "
                         "border-color:#242a38;} "
-                        "QComboBox::drop-down{border:none; width:16px;} "
+                        "QComboBox{padding-right:20px;} "
+                        "QComboBox::drop-down{subcontrol-origin:padding; subcontrol-position:right; "
+                        "width:20px; border-left:1px solid #3a4256; "
+                        "border-top-right-radius:3px; border-bottom-right-radius:3px; "
+                        "background:#252c3d;} "
+                        "QComboBox::drop-down:hover{background:#2f3850;} "
+                        "QComboBox::down-arrow{width:0; height:0; "
+                        "border-left:4px solid transparent; border-right:4px solid transparent; "
+                        "border-top:5px solid #a8b0c0; margin-right:6px;} "
+                        "QComboBox::down-arrow:disabled{border-top-color:#4a5164;} "
                         "QComboBox QAbstractItemView{background:#181d28; color:#e8eaf0; "
                         "selection-background-color:#3a4a1a; border:1px solid #3a4256;}"
                     )
