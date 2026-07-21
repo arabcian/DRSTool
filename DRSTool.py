@@ -2325,13 +2325,21 @@ QPushButton:pressed{background:#a13232;}"""
                     win._env_editor.hide()
                 # Reset window title
                 win.setWindowTitle(APP_TITLE)
-                # Reset right panel to placeholder
-                win._right_stack.setCurrentIndex(0)
                 # Forget remembered right-panel state per tab — otherwise
                 # switching tabs after a reset could restore a now-stale
                 # editor page index with nothing behind it.
                 if hasattr(win, '_tab_right_memory'):
                     win._tab_right_memory = {}
+                # Restore the correct right-panel page for whichever tab is
+                # currently active.  Simply calling setCurrentIndex(0) (the
+                # old behaviour) left the Extra Tools tab (index 3) showing
+                # a blank panel because its right-panel page is 4, not 0 —
+                # and _switch_tab(3) is never re-called while the user stays
+                # on that tab, so the page never got fixed without a
+                # restart or profile load.
+                if hasattr(win, '_sidebar_stack') and hasattr(win, '_switch_tab'):
+                    active = win._sidebar_stack.currentIndex()
+                    win._switch_tab(active)
                 if hasattr(win, '_populate_settings'):
                     win._populate_settings()
                 if hasattr(win, '_populate_arch_list'):
@@ -5709,6 +5717,25 @@ class ProfileManagerWidget(QWidget):
 # untouched. A timestamped .bak copy of the original file is written
 # next to it before every save.
 
+from PySide6.QtCore import QEvent
+
+class _NoScrollFilter(QObject):
+    """Event filter that swallows wheel events so QComboBox/QSpinBox inside
+    a QScrollArea don't change value when the user scrolls the page.
+    Install with widget.installEventFilter(_NO_SCROLL_FILTER)."""
+
+    def eventFilter(self, obj, event):          # noqa: N802
+        if event.type() == QEvent.Wheel:
+            # Let the scroll area (or any ancestor) handle the scroll instead
+            event.ignore()
+            return True
+        return False
+
+
+# Singleton — one instance shared across all widgets that need it.
+_NO_SCROLL_FILTER = _NoScrollFilter()
+
+
 class LutrisGameEntry:
     __slots__ = ("path", "slug", "game_name", "runner")
 
@@ -5957,6 +5984,7 @@ QSpinBox:hover{ border:1px solid #76b900; }
                     sp.setStyleSheet(_field_ss)
                     sp.setSpecialValueText("—")
                     sp.valueChanged.connect(self._update_preview)
+                    sp.installEventFilter(_NO_SCROLL_FILTER)
                 sp_sep = QLabel("×")
                 sp_sep.setStyleSheet("color:#5a6070; font-size:9px;")
                 row_l.addWidget(sp_w)
@@ -5977,6 +6005,7 @@ QSpinBox:hover{ border:1px solid #76b900; }
                 ctrl.addItems(opts or [])
                 ctrl.setStyleSheet(_field_ss)
                 ctrl.currentIndexChanged.connect(self._update_preview)
+                ctrl.installEventFilter(_NO_SCROLL_FILTER)
                 row_l.addWidget(ctrl)
                 row_l.addWidget(desc_lbl, 1)
                 gs_grid.addWidget(row_w, row_i, 1)
@@ -7358,6 +7387,7 @@ QComboBox{ background:#1a1f28; border:1px solid #323c4b; border-radius:4px;
 QComboBox:hover{ border:1px solid #76b900; }
 QComboBox QAbstractItemView{ background:#141720; color:#d8d8d8; selection-background-color:#1e2535; }
 """)
+                ctrl.installEventFilter(_NO_SCROLL_FILTER)
 
             elif wtype == "spin":
                 ctrl = QSpinBox()
@@ -7370,6 +7400,7 @@ QSpinBox{ background:#1a1f28; border:1px solid #323c4b; border-radius:4px;
 QSpinBox:hover{ border:1px solid #76b900; }
 QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
 """)
+                ctrl.installEventFilter(_NO_SCROLL_FILTER)
 
             elif wtype in ("line", "line_space"):
                 ctrl = QLineEdit(default)
