@@ -5932,9 +5932,9 @@ class LutrisSyncWidget(QWidget):
 
       Lutris Game Tune (optional, own group below): when enabled, writes
       prelaunch_command / postexit_command / prefix_command pointing at
-      lutris-game-tune-wrapper PRE / POST / RUN <nice>, plus
-      prefer_system_libs, straight into system.* — no extra confirmation
-      beyond the normal "Write to Lutris config" dialog.
+      lutris-game-tune-wrapper PRE / POST / RUN <nice>, straight into
+      system.* — no extra confirmation beyond the normal "Write to
+      Lutris config" dialog.
     """
 
     # ── Gamescope CLI flag → Lutris system.* key mappings ─────────────────────
@@ -6067,12 +6067,9 @@ class LutrisSyncWidget(QWidget):
         """
         lgtune_group = QGroupBox("Lutris Game Tune")
         lgtune_group.setStyleSheet(_grp_ss)
+        lgtune_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         lgtune_layout = QVBoxLayout(lgtune_group)
         lgtune_layout.setSpacing(10)
-
-        self._chk_prefer_libs = QCheckBox("prefer_system_libs")
-        self._chk_prefer_libs.setStyleSheet(_chk_ss)
-        lgtune_layout.addWidget(self._chk_prefer_libs)
 
         self._chk_lgtune = QCheckBox(
             "Wire lutris-game-tune (prelaunch_command / postexit_command / "
@@ -6114,9 +6111,8 @@ class LutrisSyncWidget(QWidget):
             "color:#8a92a5; font-size:11px; font-family:monospace;"
         )
         lgtune_layout.addWidget(lgtune_note)
-        lgtune_layout.addStretch()
 
-        layout.addWidget(lgtune_group, 1)
+        layout.addWidget(lgtune_group)
 
         # ── Preview ───────────────────────────────────────────────────────────
         self._preview = QPlainTextEdit()
@@ -6153,7 +6149,7 @@ class LutrisSyncWidget(QWidget):
         self._status_label.setStyleSheet("color:#a8adb8; font-size:9px;")
         layout.addWidget(self._status_label)
 
-        for w in (self._chk_prefer_libs, self._chk_lgtune):
+        for w in (self._chk_lgtune,):
             w.stateChanged.connect(self._update_preview)
         self._lgtune_nice.valueChanged.connect(self._update_preview)
         self.settings_manager.settings_changed.connect(self._update_preview)
@@ -6321,11 +6317,6 @@ class LutrisSyncWidget(QWidget):
             if leftover_parts:
                 system_keys["gamescope_flags"] = " ".join(leftover_parts)
 
-        # prefer_system_libs — plain Lutris system.* boolean, independent of
-        # gamescope.
-        if self._chk_prefer_libs.isChecked():
-            system_keys["prefer_system_libs"] = True
-
         # lutris-game-tune wiring — written straight into system.* like
         # everything else here; no separate confirmation prompt.
         if self._chk_lgtune.isChecked():
@@ -6347,7 +6338,7 @@ class LutrisSyncWidget(QWidget):
         if not system_keys and not env_vars:
             self._preview.setPlainText(
                 "(Nothing configured yet — set DRS settings, env vars, "
-                "gamescope flags, prefer_system_libs, or lutris-game-tune "
+                "gamescope flags, or lutris-game-tune "
                 "in the other tabs/groups first.)"
             )
             self._apply_btn.setEnabled(False)
