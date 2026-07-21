@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QStatusBar, QGridLayout, QSizePolicy,
     QPlainTextEdit, QCheckBox, QFileDialog,
     QComboBox, QGroupBox, QTabWidget,
-    QButtonGroup,
+    QButtonGroup, QFormLayout,
 )
 import shutil
 
@@ -108,6 +108,29 @@ class EnvVarDef:
     default: str
     desc: str
     options: List[str] = field(default_factory=list)  # for enum/flags types
+    placeholder: str = ""
+
+
+@dataclass
+class GamescopeFlagDef:
+    """
+    Definition of a real `gamescope` command-line argument (per `gamescope --help`).
+    NOT an environment variable — gamescope reads these from argv only, e.g.:
+        gamescope -W 2560 -H 1440 --hdr-enabled --adaptive-sync -- %command%
+    kind:
+      "toggle" — bare flag, included with no value when enabled (e.g. --rt)
+      "int"    — flag takes a numeric argument (e.g. -r 165)
+      "enum"   — flag takes one of `options` as its argument (e.g. -F fsr)
+      "string" — flag takes a free-form string/path argument
+    short: the short form (e.g. "-W"), if any — used in the preview when set.
+    """
+    name: str          # human label, e.g. "Output Width"
+    flag: str          # long flag as it appears in --help, e.g. "--output-width"
+    cat: str           # grouping shown in the UI, e.g. "Geometry", "HDR", "Debug"
+    kind: str          # "toggle" | "int" | "enum" | "string"
+    desc: str
+    short: str = ""
+    options: List[str] = field(default_factory=list)
     placeholder: str = ""
 
 
@@ -4405,224 +4428,17 @@ SYS_ENV_VARS: List[EnvVarDef] = [
 ]
 
 # ============================================================================
-# Gamescope Environment Variables
-# These control Valve's Wayland micro-compositor used to embed Windows games
-# in a dedicated Vulkan-rendered surface.  Set them in your game launch command
-# before the gamescope invocation, e.g.:
-#   GAMESCOPE_LIMITER_RES=1 gamescope -W 2560 -H 1440 -r 165 -- %command%
+# Gamescope — Steam-side Environment Variables
+# These are genuinely read from the environment (by the Steam client's own
+# gamescope-session integration, or by gamescope's Steam-overlay path) —
+# confirmed against gamescope's GitHub issues/source and Steam community
+# session scripts. They are NOT read by the gamescope binary's own argv
+# parser. Everything that IS a gamescope command-line option (resolution,
+# HDR, upscaling, VRR, debug flags, etc.) lives in GAMESCOPE_FLAGS below and
+# is rendered as a CLI flag builder, not as env vars.
 # ============================================================================
 
 GAMESCOPE_ENV_VARS: List[EnvVarDef] = [
-
-    # ── Output / window geometry ──────────────────────────────────────────────
-
-    EnvVarDef("GAMESCOPE_WIDTH", "Gamescope", "int", "",
-              "Sets the composited output width in pixels that gamescope presents to the "
-              "display or host compositor.  Equivalent to the -W / --output-width CLI flag — "
-              "use this when launching via a wrapper that doesn't expose the flag directly "
-              "(e.g. some Lutris runners).  If unset, gamescope defaults to the game's "
-              "native resolution or the host display size.  "
-              "Example: GAMESCOPE_WIDTH=2560 gamescope -- %command%",
-              placeholder="e.g. 2560"),
-
-    EnvVarDef("GAMESCOPE_HEIGHT", "Gamescope", "int", "",
-              "Sets the composited output height in pixels.  Pair with GAMESCOPE_WIDTH; "
-              "both are passed through to -W/-H internally.  "
-              "Example: GAMESCOPE_HEIGHT=1440 gamescope -- %command%",
-              placeholder="e.g. 1440"),
-
-    EnvVarDef("GAMESCOPE_GAME_WIDTH", "Gamescope", "int", "",
-              "Target render width presented to the game (-w / --nested-width).  "
-              "gamescope upscales / downscales from this to the output resolution.  "
-              "Setting this below GAMESCOPE_WIDTH while keeping a high output resolution "
-              "enables GPU-load reduction + upscaling (FSR, NIS, pixel) in one step.  "
-              "Example: GAMESCOPE_GAME_WIDTH=1920 (upscale from 1080p to 1440p output)",
-              placeholder="e.g. 1920"),
-
-    EnvVarDef("GAMESCOPE_GAME_HEIGHT", "Gamescope", "int", "",
-              "Target render height presented to the game (-h / --nested-height).  "
-              "Pair with GAMESCOPE_GAME_WIDTH.  "
-              "Example: GAMESCOPE_GAME_HEIGHT=1080",
-              placeholder="e.g. 1080"),
-
-    # ── Frame rate / VRR ─────────────────────────────────────────────────────
-
-    EnvVarDef("GAMESCOPE_FRAME_RATE_LIMIT", "Gamescope", "int", "",
-              "Hard frame-rate cap applied by the gamescope compositor (-r / --framerate-limit).  "
-              "Gamescope inserts a precise sleep-based limiter at the presentation layer, "
-              "independent of any in-game or FLM cap.  Useful to avoid runaway GPU clocks "
-              "in menus or to stay just below the VRR range floor (e.g. cap to 60 on a "
-              "60–165 Hz VRR panel keeps VRR engaged instead of dropping to low-fps fallback).  "
-              "Set to 0 to disable.  "
-              "Example: GAMESCOPE_FRAME_RATE_LIMIT=120",
-              placeholder="e.g. 120"),
-
-    EnvVarDef("GAMESCOPE_FRAME_RATE_LIMIT_FOCUS", "Gamescope", "int", "",
-              "Frame-rate cap to apply only while the gamescope window has focus (--framerate-limit).  "
-              "On some gamescope builds this is the primary name for the rate-limit flag; "
-              "on others it is a separate focused-window variant.  "
-              "Example: GAMESCOPE_FRAME_RATE_LIMIT_FOCUS=165",
-              placeholder="e.g. 165"),
-
-    EnvVarDef("GAMESCOPE_FRAME_RATE_LIMIT_UNFOCUS", "Gamescope", "int", "",
-              "Frame-rate cap applied when the gamescope window loses focus (--framerate-limit-unfocus / -o).  "
-              "Useful to reduce GPU load / power when alt-tabbing without fully pausing the game.  "
-              "Example: GAMESCOPE_FRAME_RATE_LIMIT_UNFOCUS=30",
-              placeholder="e.g. 30"),
-
-    EnvVarDef("GAMESCOPE_FORCE_GRAB_CURSOR", "Gamescope", "enum", "",
-              "Force gamescope to grab the cursor inside the game window regardless of "
-              "what the game requests (--force-grab-cursor).  Prevents cursor from leaving "
-              "the window in windowed / borderless mode.  "
-              "Example: GAMESCOPE_FORCE_GRAB_CURSOR=1",
-              options=["0", "1"]),
-
-    # ── Upscaling / sharpening ────────────────────────────────────────────────
-
-    EnvVarDef("GAMESCOPE_UPSCALE_FILTER", "Gamescope", "enum", "",
-              "Upscaling algorithm gamescope uses when render resolution < output resolution "
-              "(-F / --filter).  "
-              "'fsr': AMD FidelityFX Super Resolution 1.0 — spatial upscaler, lowest GPU cost, "
-              "sharpens via the Lanczos-derived FSR kernel.  "
-              "'nis': NVIDIA Image Scaling — alternative spatial upscaler from NVIDIA, "
-              "slightly different sharpening curve from FSR; works fine on any GPU.  "
-              "'pixel': nearest-neighbour integer scaling (only useful for pixel-art games).  "
-              "'linear': bilinear — soft, reference quality, no sharpening.  "
-              "'nearest': nearest-neighbour without integer snapping.  "
-              "Example: GAMESCOPE_UPSCALE_FILTER=fsr",
-              options=["fsr", "nis", "pixel", "linear", "nearest"]),
-
-    EnvVarDef("GAMESCOPE_UPSCALE_SHARPNESS", "Gamescope", "int", "",
-              "Sharpness slider for FSR and NIS upscalers (--sharpness / --fsr-sharpness).  "
-              "Scale is 0–20 for FSR (0 = sharpest, 20 = softest — note the inversion) "
-              "and 0–5 for NIS (0 = no sharpening).  FSR default is 2 (very sharp).  "
-              "Raise FSR value toward 5–8 if the image looks over-sharpened / aliased.  "
-              "Example: GAMESCOPE_UPSCALE_SHARPNESS=5  (moderately sharp FSR)",
-              placeholder="0–20 (FSR) or 0–5 (NIS)"),
-
-    EnvVarDef("GAMESCOPE_UPSCALE_INTEGER_SCALE", "Gamescope", "enum", "",
-              "Restrict pixel / nearest upscale to integer multiples only "
-              "(--integer-scale / -i).  Guarantees each game pixel maps to an exact NxN "
-              "block of output pixels — eliminates sub-pixel shimmer at the cost of "
-              "unused black borders when the ratio is non-integer.  Only meaningful with "
-              "pixel or nearest filter.  "
-              "Example: GAMESCOPE_UPSCALE_INTEGER_SCALE=1",
-              options=["0", "1"]),
-
-    # ── HDR ──────────────────────────────────────────────────────────────────
-
-    EnvVarDef("GAMESCOPE_HDR_ENABLED", "Gamescope", "enum", "",
-              "Enable HDR output through the gamescope compositor (--hdr-enabled).  "
-              "Requires a display and driver with HDR support (NVIDIA 495+ on Wayland, "
-              "or AMDGPU with KMS HDR patches).  gamescope tone-maps HDR10 PQ -> the "
-              "display's peak luminance if the game outputs HDR.  Also needed when using "
-              "DXVK_HDR=1 inside Proton — gamescope is the compositor that actually "
-              "signals HDR to the driver.  "
-              "Example: GAMESCOPE_HDR_ENABLED=1",
-              options=["0", "1"]),
-
-    EnvVarDef("GAMESCOPE_HDR_SDR_CONTENT_NITS", "Gamescope", "int", "",
-              "Target brightness (nits) for SDR content displayed inside an HDR gamescope "
-              "session (--hdr-sdr-content-nits).  When the game is SDR but you want the "
-              "compositor to map it into the HDR colour volume at a specific luminance "
-              "rather than the driver default.  Typical range 200–400 nits.  "
-              "Example: GAMESCOPE_HDR_SDR_CONTENT_NITS=300",
-              placeholder="e.g. 300"),
-
-    EnvVarDef("GAMESCOPE_HDR_ITERATED_TONEMAPPING", "Gamescope", "enum", "",
-              "Enable the iterative auto-exposure tone-mapping path (--hdr-iterated-tonemapping).  "
-              "gamescope repeatedly adjusts the per-frame exposure key to prevent the "
-              "scene from clipping on scenes with extreme dynamic range.  Can improve "
-              "HDR highlight rendering in games that don't expose their own tone-map curve.  "
-              "Example: GAMESCOPE_HDR_ITERATED_TONEMAPPING=1",
-              options=["0", "1"]),
-
-    # ── VRR / tearing / sync ──────────────────────────────────────────────────
-
-    EnvVarDef("GAMESCOPE_ALLOW_TEARING", "Gamescope", "enum", "",
-              "Allow tearing presents inside gamescope (--immediate-flips).  "
-              "gamescope will attempt to use immediate/async KMS flips or the "
-              "VK_EXT_present_mode_fifo_latest_ready / mailbox Vulkan present modes "
-              "instead of FIFO, eliminating one frame of compositor latency at the cost "
-              "of possible horizontal tear lines.  Most effective at high (>= monitor refresh) "
-              "frame rates.  Pairs well with GAMESCOPE_FRAME_RATE_LIMIT just below refresh "
-              "to keep tearing rare.  "
-              "Example: GAMESCOPE_ALLOW_TEARING=1",
-              options=["0", "1"]),
-
-    EnvVarDef("GAMESCOPE_VRR_ENABLED", "Gamescope", "enum", "",
-              "Request VRR / Adaptive Sync from the KMS driver for the gamescope output "
-              "(--adaptive-sync).  On supported display + driver combos gamescope signals "
-              "FREESYNC/G-SYNC Compatible to the kernel, letting the panel vary its refresh "
-              "rate to match frame delivery.  Reduces perceived stutter without a fixed cap.  "
-              "Check dmesg for 'vrr_enabled' confirmation if it doesn't seem active.  "
-              "Example: GAMESCOPE_VRR_ENABLED=1",
-              options=["0", "1"]),
-
-    # ── Latency / input ───────────────────────────────────────────────────────
-
-    EnvVarDef("GAMESCOPE_LOW_LATENCY", "Gamescope", "enum", "",
-              "Enable gamescope's low-latency present path (--expose-wayland / varies by build).  "
-              "On Steam Deck / SteamOS this instructs gamescope to minimise queued frames "
-              "before the flip.  Effect on desktop builds varies — on current upstream "
-              "gamescope the primary latency lever is GAMESCOPE_ALLOW_TEARING plus a tight "
-              "GAMESCOPE_FRAME_RATE_LIMIT.  "
-              "Example: GAMESCOPE_LOW_LATENCY=1",
-              options=["0", "1"]),
-
-    EnvVarDef("GAMESCOPE_RESHADE_EFFECT_DIR", "Gamescope", "string", "",
-              "Path to a directory containing ReShade .fx effect files to apply at the "
-              "gamescope compositor level (--reshade-effect-path).  "
-              "Effects are applied post-upscale, GPU-side, to the final composited frame — "
-              "without touching the game process at all.  Useful for CRT masks, colour "
-              "grading, or RCAS-style sharpening passes.  "
-              "Requires a gamescope build with ReShade support compiled in.  "
-              "Example: GAMESCOPE_RESHADE_EFFECT_DIR=/home/cihan/.reshade/effects",
-              placeholder="/path/to/reshade/effects"),
-
-    # ── Debugging / diagnostics ───────────────────────────────────────────────
-
-    EnvVarDef("GAMESCOPE_LOG_LEVEL", "Gamescope", "enum", "",
-              "Verbosity of gamescope's own log output (written to stderr by default).  "
-              "'0' / error: only fatal/error messages.  "
-              "'1' / warn: warnings + errors.  "
-              "'2' / info: normal operational messages (flip timings, layer changes).  "
-              "'3' / debug: very verbose — KMS plane assignment, Vulkan submit details.  "
-              "Combine with GAMESCOPE_LOG_FILE to capture to a file.  "
-              "Example: GAMESCOPE_LOG_LEVEL=2",
-              options=["0", "1", "2", "3"]),
-
-    EnvVarDef("GAMESCOPE_DISABLE_LAYER_FEEDBACK", "Gamescope", "enum", "",
-              "Prevent gamescope from sending back-pressure (damage / frame-pacing hints) "
-              "to the nested Wayland compositor or XWayland clients.  Normally gamescope "
-              "signals when it is ready for the next frame; disabling this removes the "
-              "signal and lets the game submit frames as fast as it likes.  Can help "
-              "diagnose stutter caused by feedback loops but may increase GPU queue depth.  "
-              "Example: GAMESCOPE_DISABLE_LAYER_FEEDBACK=1",
-              options=["0", "1"]),
-
-    EnvVarDef("GAMESCOPE_DISABLE_ASYNC_COMPUTE", "Gamescope", "enum", "",
-              "Disable the async compute queue gamescope uses for colour-management "
-              "and upscaling shader dispatches.  "
-              "gamescope submits upscale/tonemapping passes on an async compute queue by "
-              "default so they overlap with game rendering.  On some NVIDIA driver + Vulkan "
-              "combinations this causes sync validation errors or GPU hangs — set to 1 "
-              "to fall back to the graphics queue.  "
-              "Example: GAMESCOPE_DISABLE_ASYNC_COMPUTE=1",
-              options=["0", "1"]),
-
-    EnvVarDef("GAMESCOPE_FORCE_COMPOSITION", "Gamescope", "enum", "",
-              "Force gamescope to always composite (re-draw) the game frame through its "
-              "own Vulkan renderer rather than attempting a direct scanout (DRM plane) path.  "
-              "Direct scanout skips the compositor's Vulkan pass entirely and reduces latency "
-              "but requires the game surface to be the only visible layer and at native "
-              "output resolution.  Setting this to 1 is useful to confirm whether a visual "
-              "artefact (wrong colour space, missing overlay) is caused by the direct-scanout "
-              "path or by the compositor itself.  "
-              "Example: GAMESCOPE_FORCE_COMPOSITION=1",
-              options=["0", "1"]),
-
-    # ── Steam integration ─────────────────────────────────────────────────────
 
     EnvVarDef("STEAMID", "Gamescope", "string", "",
               "The Steam App ID of the game currently running inside gamescope.  "
@@ -4637,24 +4453,24 @@ GAMESCOPE_ENV_VARS: List[EnvVarDef] = [
     EnvVarDef("STEAM_GAMESCOPE_HW_UPSCALE_FILTER", "Gamescope", "enum", "",
               "Steam-specific override to select the upscale filter for gamescope "
               "via the Steam Settings UI path.  Maps to the same -F / --filter flag "
-              "as GAMESCOPE_UPSCALE_FILTER but is written by the Steam client itself "
-              "based on the per-game 'Scaling Filter' setting.  Setting it manually "
-              "overrides whatever the Steam UI chose.  "
+              "as the CLI 'Upscale Filter' option below but is written by the Steam "
+              "client itself based on the per-game 'Scaling Filter' setting.  Setting "
+              "it manually overrides whatever the Steam UI chose.  "
               "Example: STEAM_GAMESCOPE_HW_UPSCALE_FILTER=fsr",
               options=["fsr", "nis", "pixel", "linear", "nearest"]),
 
     EnvVarDef("STEAM_GAMESCOPE_HW_UPSCALE_SHARPNESS", "Gamescope", "int", "",
               "Steam-specific sharpness override corresponding to the sharpness slider "
-              "in Steam Settings → Resolution.  Written by the client; override manually "
-              "to bypass the UI.  Same 0–20 (FSR) / 0–5 (NIS) scale as "
-              "GAMESCOPE_UPSCALE_SHARPNESS.  "
+              "in Steam Settings -> Resolution.  Written by the client; override manually "
+              "to bypass the UI.  Same 0-20 (FSR) / 0-5 (NIS) scale as the CLI --sharpness "
+              "flag.  "
               "Example: STEAM_GAMESCOPE_HW_UPSCALE_SHARPNESS=5",
-              placeholder="0–20 (FSR) or 0–5 (NIS)"),
+              placeholder="0-20 (FSR) or 0-5 (NIS)"),
 
     EnvVarDef("STEAM_GAMESCOPE_VRR_ENABLED", "Gamescope", "enum", "",
               "Steam client's per-game VRR toggle, written into gamescope's environment "
               "when you enable 'Allow Tearing' or 'VRR' in the Steam per-game settings.  "
-              "Identical effect to GAMESCOPE_VRR_ENABLED; the STEAM_ prefix just "
+              "Same effect as the CLI --adaptive-sync flag; the STEAM_ prefix just "
               "indicates it was set by the client rather than the user.  Override to "
               "force VRR on/off regardless of what the Steam UI shows.  "
               "Example: STEAM_GAMESCOPE_VRR_ENABLED=1",
@@ -4680,7 +4496,7 @@ GAMESCOPE_ENV_VARS: List[EnvVarDef] = [
               "Enables gamescope's own Steam-integrated FPS limiter UI.  "
               "When set to 1, the Steam overlay's frame-rate slider adjusts gamescope's "
               "-r cap in real time without restarting the game.  Set to 0 to manage the "
-              "cap entirely via GAMESCOPE_FRAME_RATE_LIMIT.  "
+              "cap entirely via the CLI --framerate-limit flag below.  "
               "Example: STEAM_GAMESCOPE_LIMITER_RES=1",
               options=["0", "1"]),
 
@@ -4688,12 +4504,10 @@ GAMESCOPE_ENV_VARS: List[EnvVarDef] = [
               "The :DISPLAY number of the XWayland server gamescope started internally.  "
               "Set automatically by gamescope; forwarded to the game process so it can "
               "connect to gamescope's private XWayland rather than the host X server.  "
-              "You normally never set this manually — it appears here so you can inspect "
+              "You normally never set this manually - it appears here so you can inspect "
               "or pin it when debugging multi-compositor scenarios.  "
               "Example: STEAM_GAMESCOPE_XWAYLAND_DISPLAY=:1",
               placeholder="e.g. :1"),
-
-    # ── WSI / session ─────────────────────────────────────────────────────────
 
     EnvVarDef("ENABLE_GAMESCOPE_WSI", "Gamescope", "enum", "",
               "Toggles gamescope's Vulkan WSI (VK_layer) integration for the wrapped game. "
@@ -4702,28 +4516,224 @@ GAMESCOPE_ENV_VARS: List[EnvVarDef] = [
               "low-latency compositing path. Native (non-Proton) titles launched directly "
               "under gamescope do NOT get this set automatically, so setting it manually "
               "can improve latency for native Linux games. Conversely, some games show "
-              "black/corrupted video playback or cutscenes with the WSI layer active — set "
-              "to 0 as a workaround in that case. "
+              "black/corrupted video playback or cutscenes with the WSI layer active - set "
+              "to 0 as a workaround in that case. Community-sourced (gamescope issue "
+              "#1958 / #1537), not in gamescope --help. "
               "Example: ENABLE_GAMESCOPE_WSI=0 gamescope -- %command%",
               options=["0", "1"]),
 
     EnvVarDef("STEAM_MULTIPLE_XWAYLANDS", "Gamescope", "enum", "",
-              "Requests a second, dedicated XWayland server from gamescope (--xwayland-count 2 "
-              "equivalent at the session level) so overlay windows (Steam overlay, some "
-              "anti-cheat/launcher UIs) run in their own XWayland instance separate from the "
-              "game's. Reduces overlay-related stutter/input issues in embedded gamescope "
-              "sessions. Mainly relevant when running a full gamescope session rather than a "
-              "single windowed game launch. "
-              "Example: STEAM_MULTIPLE_XWAYLANDS=1 gamescope -e -- steam -gamepadui",
+              "Requests a second, dedicated XWayland server from gamescope so overlay "
+              "windows (Steam overlay, some anti-cheat/launcher UIs) run in their own "
+              "XWayland instance separate from the game's - pair with the CLI "
+              "--xwayland-count 2 flag below. Reduces overlay-related stutter/input "
+              "issues in embedded gamescope sessions. Community-sourced session-script "
+              "convention, not in gamescope --help. "
+              "Example: STEAM_MULTIPLE_XWAYLANDS=1 gamescope --xwayland-count 2 -e -- steam -gamepadui",
               options=["0", "1"]),
 
     EnvVarDef("STEAM_GAMESCOPE_VRR_SUPPORTED", "Gamescope", "enum", "",
               "Advertises to the Steam client that the current gamescope session is capable "
               "of VRR at all (distinct from STEAM_GAMESCOPE_VRR_ENABLED, which is the "
               "per-game on/off toggle). Needed on some desktop setups for Steam's VRR "
-              "toggle to appear/function in per-game display settings. "
+              "toggle to appear/function in per-game display settings. Community-sourced, "
+              "not in gamescope --help. "
               "Example: STEAM_GAMESCOPE_VRR_SUPPORTED=1",
               options=["0", "1"]),
+]
+
+# ============================================================================
+# Gamescope — Command-Line Flags (real, from `gamescope --help`)
+# gamescope has NO config-file or env-var input for these; they are argv-only.
+# Rendered by GamescopeFlagsWidget as a CLI-flag builder gated behind a master
+# "Enable Gamescope" toggle, producing:  gamescope <flags...> -- %command%
+# ============================================================================
+
+GAMESCOPE_FLAGS: List[GamescopeFlagDef] = [
+
+    # ── Output / window geometry ────────────────────────────────────────────
+    GamescopeFlagDef("Output Width", "--output-width", "Geometry", "int",
+                      "Output width in pixels presented to the display/host compositor.",
+                      short="-W", placeholder="e.g. 2560"),
+    GamescopeFlagDef("Output Height", "--output-height", "Geometry", "int",
+                      "Output height in pixels presented to the display/host compositor.",
+                      short="-H", placeholder="e.g. 1440"),
+    GamescopeFlagDef("Game Width", "--nested-width", "Geometry", "int",
+                      "Render width presented to the game itself; gamescope up/downscales "
+                      "from this to the output resolution.",
+                      short="-w", placeholder="e.g. 1920"),
+    GamescopeFlagDef("Game Height", "--nested-height", "Geometry", "int",
+                      "Render height presented to the game itself.",
+                      short="-h", placeholder="e.g. 1080"),
+    GamescopeFlagDef("Game Refresh Rate", "--nested-refresh", "Geometry", "int",
+                      "Game refresh rate in frames per second.",
+                      short="-r", placeholder="e.g. 165"),
+    GamescopeFlagDef("Unfocused Refresh Rate", "--nested-unfocused-refresh", "Geometry", "int",
+                      "Game refresh rate to use only while the gamescope window is "
+                      "unfocused (nested mode). Lets you drop clocks/power when alt-tabbed.",
+                      short="-o", placeholder="e.g. 30"),
+    GamescopeFlagDef("Max Scale", "--max-scale", "Geometry", "int",
+                      "Maximum scale factor gamescope will apply.",
+                      short="-m", placeholder="e.g. 2"),
+    GamescopeFlagDef("Force Windows Fullscreen", "--force-windows-fullscreen", "Geometry", "toggle",
+                      "Force windows inside gamescope to always be the size of the nested "
+                      "display (fullscreen)."),
+    GamescopeFlagDef("Cursor Scale Height", "--cursor-scale-height", "Geometry", "int",
+                      "Base output height to linearly scale the cursor image against.",
+                      placeholder="e.g. 1080"),
+    GamescopeFlagDef("Force Orientation", "--force-orientation", "Geometry", "enum",
+                      "Rotate the internal display.",
+                      options=["left", "right", "normal", "upsidedown"]),
+
+    # ── Upscaling ────────────────────────────────────────────────────────────
+    GamescopeFlagDef("Scaler", "--scaler", "Upscaling", "enum",
+                      "Upscaler type. 'integer' restricts scaling to integer multiples only "
+                      "(best for pixel-art with the pixel/nearest filter).",
+                      short="-S", options=["auto", "integer", "fit", "fill", "stretch"]),
+    GamescopeFlagDef("Upscale Filter", "--filter", "Upscaling", "enum",
+                      "Upscaler filter. fsr = AMD FidelityFX Super Resolution 1.0. "
+                      "nis = NVIDIA Image Scaling v1.0.3.",
+                      short="-F", options=["linear", "nearest", "fsr", "nis", "pixel"]),
+    GamescopeFlagDef("Sharpness", "--sharpness", "Upscaling", "int",
+                      "Upscaler sharpness, 0 (max) to 20 (min). Alias: --fsr-sharpness.",
+                      placeholder="0-20"),
+
+    # ── HDR ──────────────────────────────────────────────────────────────────
+    GamescopeFlagDef("HDR Enabled", "--hdr-enabled", "HDR", "toggle",
+                      "Enable HDR output. Needs the Gamescope WSI layer enabled on the "
+                      "client side for HDR clients to be supported."),
+    GamescopeFlagDef("SDR Gamut Wideness", "--sdr-gamut-wideness", "HDR", "string",
+                      "Wideness of the gamut for SDR content, 0-1.", placeholder="0.0-1.0"),
+    GamescopeFlagDef("SDR Content Nits", "--hdr-sdr-content-nits", "HDR", "int",
+                      "Luminance of SDR content in nits. Default: 400.", placeholder="e.g. 400"),
+    GamescopeFlagDef("Inverse Tonemap SDR->HDR", "--hdr-itm-enabled", "HDR", "toggle",
+                      "Enable SDR->HDR inverse tone mapping. Only affects SDR input."),
+    GamescopeFlagDef("ITM Input Nits", "--hdr-itm-sdr-nits", "HDR", "int",
+                      "Luminance of SDR content used as input for inverse tone mapping. "
+                      "Default 100, max 1000.", placeholder="e.g. 100"),
+    GamescopeFlagDef("ITM Target Nits", "--hdr-itm-target-nits", "HDR", "int",
+                      "Target luminance of the inverse tone mapping process. "
+                      "Default 1000, max 10000.", placeholder="e.g. 1000"),
+
+    # ── Frame limiting / VRR / tearing ──────────────────────────────────────
+    GamescopeFlagDef("Frame-rate Limit", "--framerate-limit", "Frame Pacing", "int",
+                      "Simple frame-rate limit, used as a divisor of the refresh rate "
+                      "(rounds down): 60/59->60fps, 60/25->30fps. 0 = disabled.",
+                      placeholder="e.g. 60"),
+    GamescopeFlagDef("Adaptive Sync (VRR)", "--adaptive-sync", "Frame Pacing", "toggle",
+                      "Enable adaptive sync / VRR if the display and driver support it."),
+    GamescopeFlagDef("Immediate Flips", "--immediate-flips", "Frame Pacing", "toggle",
+                      "Allow immediate (tearing) flips instead of FIFO presentation - "
+                      "trades a compositor frame of latency for possible tear lines."),
+    GamescopeFlagDef("Realtime Scheduling", "--rt", "Frame Pacing", "toggle",
+                      "Use realtime scheduling for gamescope's own threads."),
+
+    # ── Input / window behaviour ─────────────────────────────────────────────
+    GamescopeFlagDef("Mouse Sensitivity", "-s", "Input", "string",
+                      "Multiply mouse movement by the given decimal factor.",
+                      placeholder="e.g. 1.2"),
+    GamescopeFlagDef("Force Grab Cursor", "--force-grab-cursor", "Input", "toggle",
+                      "Always use relative mouse mode instead of flipping depending on "
+                      "cursor visibility."),
+    GamescopeFlagDef("Hide Cursor Delay", "--hide-cursor-delay", "Input", "int",
+                      "Hide the cursor image after this many milliseconds of inactivity.",
+                      short="-C", placeholder="e.g. 3000"),
+    GamescopeFlagDef("Cursor Image", "--cursor", "Input", "string",
+                      "Path to a default cursor image."),
+    GamescopeFlagDef("Grab Keyboard (nested)", "--grab", "Input", "toggle",
+                      "Grab the keyboard (nested mode only).", short="-g"),
+    GamescopeFlagDef("Default Touch Mode", "--default-touch-mode", "Input", "enum",
+                      "0: hover, 1: left, 2: right, 3: middle, 4: passthrough.",
+                      options=["0", "1", "2", "3", "4"]),
+
+    # ── Session / integration ────────────────────────────────────────────────
+    GamescopeFlagDef("Steam Integration", "--steam", "Session", "toggle",
+                      "Enable Steam integration.", short="-e"),
+    GamescopeFlagDef("XWayland Count", "--xwayland-count", "Session", "int",
+                      "Create N XWayland servers (2 lets overlay windows run isolated "
+                      "from the game's own XWayland instance - see STEAM_MULTIPLE_XWAYLANDS "
+                      "in the env-var list above).", placeholder="e.g. 2"),
+    GamescopeFlagDef("Expose Wayland (xdg-shell)", "--expose-wayland", "Session", "toggle",
+                      "Support Wayland clients using xdg-shell."),
+    GamescopeFlagDef("Backend", "--backend", "Session", "enum",
+                      "Rendering backend. auto autodetects (default).",
+                      options=["auto", "drm", "sdl", "headless", "wayland"]),
+    GamescopeFlagDef("Prefer VK Device", "--prefer-vk-device", "Session", "string",
+                      "Prefer this Vulkan device for compositing.",
+                      placeholder="e.g. 10de:2820 (RTX 4080 Mobile)"),
+    GamescopeFlagDef("Prefer Output (embedded)", "--prefer-output", "Session", "string",
+                      "List of connectors in order of preference (embedded mode only).",
+                      short="-O", placeholder="e.g. DP-1,DP-2,HDMI-A-1"),
+    GamescopeFlagDef("Display Index (nested)", "--display-index", "Session", "int",
+                      "Force a specific display index in nested mode.", placeholder="e.g. 0"),
+    GamescopeFlagDef("Generate DRM Mode", "--generate-drm-mode", "Session", "enum",
+                      "DRM mode generation algorithm (embedded mode).",
+                      options=["cvt", "fixed"]),
+    GamescopeFlagDef("Virtual Connector Strategy", "--virtual-connector-strategy", "Session", "string",
+                      "Specifies how virtual connectors are created."),
+    GamescopeFlagDef("Ready FD", "--ready-fd", "Session", "int",
+                      "Notify this FD when gamescope is ready.", short="-R", placeholder="e.g. 3"),
+    GamescopeFlagDef("Stats Path", "--stats-path", "Session", "string",
+                      "Write statistics to this path.", short="-T"),
+    GamescopeFlagDef("Allow Deferred Backend", "--allow-deferred-backend", "Session", "toggle",
+                      "Allow initting the backend in a deferred way if it doesn't work "
+                      "immediately (minor correctness trade-off with modifiers etc)."),
+    GamescopeFlagDef("Keep Alive", "--keep-alive", "Session", "toggle",
+                      "Keep gamescope alive even after the primary process has died."),
+    GamescopeFlagDef("Fullscreen (nested)", "--fullscreen", "Session", "toggle",
+                      "Make the nested window fullscreen.", short="-f"),
+    GamescopeFlagDef("Borderless (nested)", "--borderless", "Session", "toggle",
+                      "Make the nested window borderless.", short="-b"),
+
+    # ── Reshade ──────────────────────────────────────────────────────────────
+    GamescopeFlagDef("ReShade Effect", "--reshade-effect", "ReShade", "string",
+                      "Name of a ReShade shader to use, looked up in "
+                      "/usr/share/gamescope/reshade/Shaders or "
+                      "~/.local/share/gamescope/reshade/Shaders. Requires a gamescope "
+                      "build with ReShade support compiled in.",
+                      placeholder="e.g. CRT-Royale"),
+    GamescopeFlagDef("ReShade Technique Index", "--reshade-technique-idx", "ReShade", "int",
+                      "Technique index to use from the selected ReShade effect.",
+                      placeholder="e.g. 0"),
+
+    # ── Steam Deck ───────────────────────────────────────────────────────────
+    GamescopeFlagDef("Mura Map", "--mura-map", "Steam Deck", "string",
+                      "Path to the mura compensation map to use for the display "
+                      "(Steam Deck panel calibration)."),
+
+    # ── Debug / diagnostics ──────────────────────────────────────────────────
+    GamescopeFlagDef("Disable Hardware Planes", "--disable-layers", "Debug", "toggle",
+                      "Disable libliftoff (hardware plane) usage - forces full "
+                      "compositing. Useful to rule out plane-assignment issues."),
+    GamescopeFlagDef("Debug Layers", "--debug-layers", "Debug", "toggle",
+                      "Debug libliftoff plane assignment."),
+    GamescopeFlagDef("Debug Focus", "--debug-focus", "Debug", "toggle",
+                      "Debug XWM focus handling."),
+    GamescopeFlagDef("Synchronous X11", "--synchronous-x11", "Debug", "toggle",
+                      "Force synchronous X11 connection (slower, deterministic ordering "
+                      "for debugging)."),
+    GamescopeFlagDef("Debug HUD", "--debug-hud", "Debug", "toggle",
+                      "Paint a HUD with gamescope's own debug info."),
+    GamescopeFlagDef("Debug Events", "--debug-events", "Debug", "toggle",
+                      "Log X11 events."),
+    GamescopeFlagDef("Force Composition", "--force-composition", "Debug", "toggle",
+                      "Disable direct scan-out; always composite through gamescope's "
+                      "Vulkan renderer. Useful to isolate whether an artifact comes from "
+                      "the direct-scanout path or the compositor itself."),
+    GamescopeFlagDef("Composite Debug", "--composite-debug", "Debug", "toggle",
+                      "Draw frame markers on alternating screen corners while compositing."),
+    GamescopeFlagDef("Disable Color Management", "--disable-color-management", "Debug", "toggle",
+                      "Disable gamescope's color management pipeline."),
+    GamescopeFlagDef("Disable XRes", "--disable-xres", "Debug", "toggle",
+                      "Disable XRes-based PID lookup."),
+    GamescopeFlagDef("Force HDR Support", "--hdr-debug-force-support", "Debug", "toggle",
+                      "Force HDR support even if the display doesn't advertise it. HDR "
+                      "clients are still tone-mapped to SDR output in that case."),
+    GamescopeFlagDef("Force HDR Output", "--hdr-debug-force-output", "Debug", "toggle",
+                      "Force HDR10 PQ output even if the display doesn't support it - "
+                      "looks very wrong if the display genuinely can't do it."),
+    GamescopeFlagDef("HDR Debug Heatmap", "--hdr-debug-heatmap", "Debug", "toggle",
+                      "Display a heatmap-style debug view of HDR luminance across the scene."),
 ]
 
 ALL_ENV_VARS = (DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS + NVIDIA_PRIME_ENV_VARS +
@@ -5838,55 +5848,52 @@ class LutrisSyncWidget(QWidget):
     """Discovers Lutris per-game YAML configs and writes whatever DRSTool
     currently has configured into the game's YAML.
 
-    Gamescope env vars set on the DXVK/VKD3D/FLM tab are split into two
-    destinations depending on whether Lutris has a native system.* key for
-    them:
+    Gamescope settings come from two different places and are merged here:
 
-      Mapped to system.* (Lutris native keys):
-        GAMESCOPE_WIDTH + GAMESCOPE_HEIGHT   → gamescope_output_res  "WxH"
-        GAMESCOPE_GAME_WIDTH + _HEIGHT       → gamescope_game_res    "WxH"
-        GAMESCOPE_FRAME_RATE_LIMIT           → gamescope_fps_limiter
-        GAMESCOPE_FRAME_RATE_LIMIT_UNFOCUS   → gamescope_fps_limiter_no_focus
-        GAMESCOPE_UPSCALE_FILTER             → gamescope_upscale_mode
-        GAMESCOPE_UPSCALE_SHARPNESS          → gamescope_fsr_sharpness
-        GAMESCOPE_HDR_ENABLED                → gamescope_hdr_enabled  (bool)
-        GAMESCOPE_VRR_ENABLED                → gamescope_vrr_enabled  (bool)
-        GAMESCOPE_FORCE_GRAB_CURSOR          → gamescope_grab         (bool)
+      From the Gamescope CLI flag builder (Extra Tools -> Gamescope), mapped
+      to system.* (Lutris native keys) when Lutris has an equivalent:
+        --output-width + --output-height     -> gamescope_output_res  "WxH"
+        --nested-width + --nested-height     -> gamescope_game_res    "WxH"
+        --framerate-limit                    -> gamescope_fps_limiter
+        --nested-unfocused-refresh           -> gamescope_fps_limiter_no_focus
+        --filter                             -> gamescope_upscale_mode
+        --sharpness                          -> gamescope_fsr_sharpness
+        --hdr-enabled                        -> gamescope_hdr_enabled  (bool)
+        --adaptive-sync                      -> gamescope_vrr_enabled  (bool)
+        --force-grab-cursor                  -> gamescope_grab         (bool)
+      (only used while the Gamescope wrapper's master toggle is enabled)
 
-      Everything else (GAMESCOPE_ALLOW_TEARING, STEAM_GAMESCOPE_*, ENABLE_GAMESCOPE_WSI,
-      remaining GAMESCOPE_* vars, ...) goes into system.env as plain env vars.
+      From the Env Vars tab (Gamescope category — genuine env vars only:
+      STEAM_GAMESCOPE_*, ENABLE_GAMESCOPE_WSI, STEAM_MULTIPLE_XWAYLANDS, ...)
+      goes straight into system.env, same as every other env var category.
     """
 
-    # ── Env var → Lutris system.* key mappings ────────────────────────────────
-    # Single env var → single Lutris key (string value, passed through as-is)
-    _ENV_TO_LUTRIS: Dict[str, str] = {
-        "GAMESCOPE_FRAME_RATE_LIMIT":        "gamescope_fps_limiter",
-        "GAMESCOPE_FRAME_RATE_LIMIT_UNFOCUS":"gamescope_fps_limiter_no_focus",
-        "GAMESCOPE_UPSCALE_FILTER":          "gamescope_upscale_mode",
-        "GAMESCOPE_UPSCALE_SHARPNESS":       "gamescope_fsr_sharpness",
+    # ── Gamescope CLI flag → Lutris system.* key mappings ─────────────────────
+    # Single flag → single Lutris key (string value, passed through as-is)
+    _FLAG_TO_LUTRIS: Dict[str, str] = {
+        "--framerate-limit":            "gamescope_fps_limiter",
+        "--nested-unfocused-refresh":   "gamescope_fps_limiter_no_focus",
+        "--filter":                     "gamescope_upscale_mode",
+        "--sharpness":                  "gamescope_fsr_sharpness",
     }
-    # Single env var → single Lutris key (value converted to Python bool)
-    _ENV_TO_LUTRIS_BOOL: Dict[str, str] = {
-        "GAMESCOPE_HDR_ENABLED":   "gamescope_hdr_enabled",
-        "GAMESCOPE_VRR_ENABLED":   "gamescope_vrr_enabled",
-        "GAMESCOPE_FORCE_GRAB_CURSOR": "gamescope_grab",
+    # Single flag → single Lutris key (bare toggle -> Python bool)
+    _FLAG_TO_LUTRIS_BOOL: Dict[str, str] = {
+        "--hdr-enabled":       "gamescope_hdr_enabled",
+        "--adaptive-sync":     "gamescope_vrr_enabled",
+        "--force-grab-cursor": "gamescope_grab",
     }
-    # Two env vars (W, H) → one Lutris key as "WxH" string
-    _ENV_PAIR_TO_LUTRIS: Dict[str, tuple] = {
-        "gamescope_output_res": ("GAMESCOPE_WIDTH",     "GAMESCOPE_HEIGHT"),
-        "gamescope_game_res":   ("GAMESCOPE_GAME_WIDTH","GAMESCOPE_GAME_HEIGHT"),
+    # Two flags (W, H) → one Lutris key as "WxH" string
+    _FLAG_PAIR_TO_LUTRIS: Dict[str, tuple] = {
+        "gamescope_output_res": ("--output-width",  "--output-height"),
+        "gamescope_game_res":   ("--nested-width",   "--nested-height"),
     }
-    # All env var names consumed by the mappings above (skip from system.env)
-    _MAPPED_ENV_VARS: frozenset = frozenset(
-        list(_ENV_TO_LUTRIS) + list(_ENV_TO_LUTRIS_BOOL) +
-        ["GAMESCOPE_WIDTH","GAMESCOPE_HEIGHT","GAMESCOPE_GAME_WIDTH","GAMESCOPE_GAME_HEIGHT"]
-    )
 
     def __init__(self, settings_manager: SettingsManager, parent=None):
         super().__init__(parent)
         self.settings_manager = settings_manager
         self._games: List[LutrisGameEntry] = []
         self._current_yaml_text: Optional[str] = None
+        self._gamescope_widget: Optional["GamescopeFlagsWidget"] = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -6118,41 +6125,51 @@ class LutrisSyncWidget(QWidget):
                 result.update(win._env_widget.get_env_dict())
         return result
 
+    def set_gamescope_widget(self, widget: "GamescopeFlagsWidget"):
+        """Wire up the CLI-flag builder (Extra Tools -> Gamescope) so its
+        settings can be folded into Lutris system.* keys alongside env vars."""
+        self._gamescope_widget = widget
+
     def _split_gamescope(self, env: Dict[str, str]):
-        """Split env vars into (system_keys, remaining_env).
+        """Split settings into (system_keys, remaining_env).
 
         system_keys: {lutris_key: value} — goes into system.*
         remaining_env: {var: value}       — goes into system.env
+
+        `env` here is genuine env vars only (Gamescope's real STEAM_GAMESCOPE_*
+        / ENABLE_GAMESCOPE_WSI vars included) — they all pass straight through
+        to system.env. Gamescope's CLI flags (resolution, HDR, VRR, ...) come
+        from self._gamescope_widget separately and are the only things mapped
+        into system.* here.
         """
         system_keys: Dict[str, object] = {}
-        remaining: Dict[str, str] = {}
+        remaining: Dict[str, str] = dict(env)
 
-        for k, v in env.items():
-            if k in self._MAPPED_ENV_VARS:
-                # This var participates in a mapping — handled below
-                continue
-            remaining[k] = v
+        flags: Dict[str, str] = {}
+        if self._gamescope_widget is not None:
+            flags = self._gamescope_widget.get_flag_values()
 
         # Single → single string mappings
-        for env_var, lutris_key in self._ENV_TO_LUTRIS.items():
-            if env_var in env and env[env_var]:
-                system_keys[lutris_key] = str(env[env_var])
+        for flag, lutris_key in self._FLAG_TO_LUTRIS.items():
+            if flag in flags and flags[flag]:
+                system_keys[lutris_key] = str(flags[flag])
 
-        # Single → single bool mappings
-        for env_var, lutris_key in self._ENV_TO_LUTRIS_BOOL.items():
-            if env_var in env and env[env_var]:
-                system_keys[lutris_key] = env[env_var] not in ("0", "false", "")
+        # Single → single bool mappings (bare toggle present = True)
+        for flag, lutris_key in self._FLAG_TO_LUTRIS_BOOL.items():
+            if flag in flags:
+                system_keys[lutris_key] = True
 
         # Pair → "WxH" string mappings
-        for lutris_key, (ev_w, ev_h) in self._ENV_PAIR_TO_LUTRIS.items():
-            w_val = env.get(ev_w, "")
-            h_val = env.get(ev_h, "")
+        for lutris_key, (flag_w, flag_h) in self._FLAG_PAIR_TO_LUTRIS.items():
+            w_val = flags.get(flag_w, "")
+            h_val = flags.get(flag_h, "")
             try:
                 w_int, h_int = int(w_val), int(h_val)
                 if w_int > 0 and h_int > 0:
                     system_keys[lutris_key] = f"{w_int}x{h_int}"
             except (ValueError, TypeError):
                 pass
+
 
         return system_keys, remaining
 
@@ -7614,6 +7631,213 @@ QPlainTextEdit{
 # ExtraToolsWidget — QTabWidget wrapping vk_flip_meter + lutris-game-tune
 # ============================================================================
 
+class GamescopeFlagsWidget(QWidget):
+    """
+    CLI-flag builder for `gamescope` itself (see GAMESCOPE_FLAGS).
+    A master 'Enable Gamescope' checkbox gates every control below it; while
+    unchecked, the whole form is disabled and the preview/output is empty.
+    Produces a real invocation, e.g.:
+        gamescope -W 2560 -H 1440 --hdr-enabled --adaptive-sync -- %command%
+    Genuine Gamescope *env vars* (Steam-side) stay in the Env Vars tab under
+    the "Gamescope" category — this widget only deals with argv flags.
+    """
+    changed = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._controls: Dict[str, QWidget] = {}   # flag -> control widget
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(6)
+
+        header = QLabel("Gamescope Command Builder")
+        header.setStyleSheet("color:#e8eaf0; font-size:11px; font-weight:700;")
+        outer.addWidget(header)
+
+        desc = QLabel(
+            "These are real `gamescope` command-line arguments (per `gamescope --help`), "
+            "not environment variables — gamescope only reads them from argv. Enable the "
+            "wrapper below to build a launch command; Steam-side Gamescope env vars "
+            "(STEAM_GAMESCOPE_*, ENABLE_GAMESCOPE_WSI, ...) are still in the Env Vars tab."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color:#8a8f9c; font-size:9px;")
+        outer.addWidget(desc)
+
+        self._enable_chk = QCheckBox("Enable Gamescope wrapper")
+        self._enable_chk.setStyleSheet(
+            "QCheckBox{color:#e8eaf0; font-size:10px; font-weight:600;} "
+            "QCheckBox::indicator{width:14px; height:14px;}"
+        )
+        self._enable_chk.toggled.connect(self._on_master_toggled)
+        outer.addWidget(self._enable_chk)
+
+        self._form_container = QWidget()
+        self._form_container.setEnabled(False)
+        form_outer = QVBoxLayout(self._form_container)
+        form_outer.setContentsMargins(0, 0, 0, 0)
+        form_outer.setSpacing(8)
+
+        by_cat: Dict[str, List[GamescopeFlagDef]] = {}
+        for gf in GAMESCOPE_FLAGS:
+            by_cat.setdefault(gf.cat, []).append(gf)
+
+        for cat, flags in by_cat.items():
+            box = QGroupBox(cat)
+            box.setStyleSheet(
+                "QGroupBox{color:#b93b3b; font-size:9px; font-weight:700; "
+                "border:1px solid #1e2535; border-radius:3px; margin-top:8px; padding-top:8px;} "
+                "QGroupBox::title{subcontrol-origin:margin; left:8px; padding:0 4px;}"
+            )
+            grid = QFormLayout(box)
+            grid.setSpacing(4)
+            grid.setLabelAlignment(Qt.AlignRight)
+
+            for gf in flags:
+                label_txt = gf.name + (f"  ({gf.short})" if gf.short else "")
+                lbl = QLabel(label_txt)
+                lbl.setStyleSheet("color:#c8cdd8; font-size:9px;")
+                lbl.setToolTip(gf.desc)
+
+                if gf.kind == "toggle":
+                    ctrl = QCheckBox()
+                    ctrl.toggled.connect(lambda _=None: self._emit_changed())
+                elif gf.kind == "enum":
+                    ctrl = QComboBox()
+                    ctrl.addItem("")  # unset
+                    ctrl.addItems(gf.options)
+                    ctrl.currentTextChanged.connect(lambda _=None: self._emit_changed())
+                else:  # "int" / "string"
+                    ctrl = QLineEdit()
+                    if gf.placeholder:
+                        ctrl.setPlaceholderText(gf.placeholder)
+                    ctrl.textChanged.connect(lambda _=None: self._emit_changed())
+
+                ctrl.setToolTip(gf.desc)
+                ctrl.setStyleSheet(
+                    "QLineEdit,QComboBox{background:#141720; border:1px solid #1e2535; "
+                    "color:#e8eaf0; font-size:9px; padding:2px 4px; min-height:18px;} "
+                    "QCheckBox::indicator{width:13px; height:13px;}"
+                )
+                self._controls[gf.flag] = ctrl
+                grid.addRow(lbl, ctrl)
+
+            form_outer.addWidget(box)
+
+        outer.addWidget(self._form_container)
+
+        # ── Live command preview ────────────────────────────────────────────
+        preview_lbl = QLabel("Preview")
+        preview_lbl.setStyleSheet("color:#8a8f9c; font-size:9px; font-weight:700;")
+        outer.addWidget(preview_lbl)
+
+        self._preview = QLineEdit()
+        self._preview.setReadOnly(True)
+        self._preview.setStyleSheet(
+            "QLineEdit{background:#0d0f12; border:1px solid #1e2535; color:#76b900; "
+            "font-family:monospace; font-size:9px; padding:4px 6px;}"
+        )
+        outer.addWidget(self._preview)
+
+        copy_row = QHBoxLayout()
+        copy_row.addStretch()
+        copy_btn = QPushButton("Copy Command")
+        copy_btn.setStyleSheet(
+            "QPushButton{background:#141720; border:1px solid #1e2535; color:#e8eaf0; "
+            "font-size:9px; padding:4px 10px; border-radius:3px;} "
+            "QPushButton:hover{border-color:#4a7300;}"
+        )
+        copy_btn.clicked.connect(self._copy_command)
+        copy_row.addWidget(copy_btn)
+        outer.addLayout(copy_row)
+
+        self.changed.connect(self._update_preview)
+        self._update_preview()
+
+    # ── internals ────────────────────────────────────────────────────────────
+
+    def _on_master_toggled(self, checked: bool):
+        self._form_container.setEnabled(checked)
+        self._emit_changed()
+
+    def _emit_changed(self):
+        self.changed.emit()
+
+    def _copy_command(self):
+        QApplication.clipboard().setText(self._preview.text())
+
+    def is_enabled(self) -> bool:
+        return self._enable_chk.isChecked()
+
+    def get_flag_values(self) -> Dict[str, str]:
+        """
+        { flag: value } for every flag currently set.
+        Bare toggles map to "" (present, no argument); everything else maps
+        to its string value. Empty dict if the master toggle is off.
+        """
+        if not self.is_enabled():
+            return {}
+        values: Dict[str, str] = {}
+        for gf in GAMESCOPE_FLAGS:
+            ctrl = self._controls[gf.flag]
+            if gf.kind == "toggle":
+                if ctrl.isChecked():
+                    values[gf.flag] = ""
+            elif gf.kind == "enum":
+                v = ctrl.currentText().strip()
+                if v:
+                    values[gf.flag] = v
+            else:
+                v = ctrl.text().strip()
+                if v:
+                    values[gf.flag] = v
+        return values
+
+    def build_command(self, inner: str = "%command%") -> str:
+        """Full `gamescope <flags> -- <inner>` string, or '' if disabled."""
+        if not self.is_enabled():
+            return ""
+        parts = ["gamescope"]
+        for flag, val in self.get_flag_values().items():
+            if val == "":
+                parts.append(flag)
+            else:
+                parts.append(f"{flag} {shlex.quote(val)}")
+        parts.append("--")
+        parts.append(inner)
+        return " ".join(parts)
+
+    def _update_preview(self):
+        self._preview.setText(self.build_command())
+
+    def reset_all_values(self):
+        self._enable_chk.setChecked(False)
+        for gf in GAMESCOPE_FLAGS:
+            ctrl = self._controls[gf.flag]
+            if gf.kind == "toggle":
+                ctrl.setChecked(False)
+            elif gf.kind == "enum":
+                ctrl.setCurrentIndex(0)
+            else:
+                ctrl.clear()
+        self._emit_changed()
+
+    def load_flag_values(self, enabled: bool, values: Dict[str, str]):
+        """Restore state, e.g. from a saved profile."""
+        self._enable_chk.setChecked(enabled)
+        for gf in GAMESCOPE_FLAGS:
+            ctrl = self._controls[gf.flag]
+            v = values.get(gf.flag)
+            if gf.kind == "toggle":
+                ctrl.setChecked(gf.flag in values)
+            elif gf.kind == "enum":
+                ctrl.setCurrentText(v or "")
+            else:
+                ctrl.setText(v or "")
+        self._emit_changed()
+
+
 class ExtraToolsWidget(QWidget):
     """
     Container that holds both sub-tools (vk_flip_meter build panel and
@@ -7652,6 +7876,14 @@ QTabBar::tab:hover { color: #c8cdd8; }
         # ── lutris-game-tune sub-tab ─────────────────────────────────────────
         self._lgtune = LgtuneWidget()
         tabs.addTab(self._lgtune, "lutris-game-tune")
+
+        # ── Gamescope sub-tab (CLI flag builder, not env vars) ───────────────
+        self._gamescope = GamescopeFlagsWidget()
+        gamescope_scroll = QScrollArea()
+        gamescope_scroll.setWidgetResizable(True)
+        gamescope_scroll.setWidget(self._gamescope)
+        gamescope_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+        tabs.addTab(gamescope_scroll, "Gamescope")
 
         layout.addWidget(tabs)
 
@@ -7855,9 +8087,13 @@ class MainWindow(QMainWindow):
         self._env_editor.set_list_widget(self._env_widget)
         self._right_stack.addWidget(self._env_editor)
 
-        # Page 4: Extra Tools panel (vk_flip_meter + lutris-game-tune sub-tabs)
+        # Page 4: Extra Tools panel (vk_flip_meter + lutris-game-tune + Gamescope sub-tabs)
         self._extra_tools = ExtraToolsWidget()
         self._right_stack.addWidget(self._extra_tools)
+
+        # Wire the Gamescope CLI-flag builder into the Lutris sync mapping
+        self._lutris_sync_widget.set_gamescope_widget(self._extra_tools._gamescope)
+        self._extra_tools._gamescope.changed.connect(self._lutris_sync_widget._update_preview)
 
         # Show placeholder initially
         self._right_stack.setCurrentIndex(0)
