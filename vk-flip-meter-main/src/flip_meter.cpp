@@ -1,5 +1,5 @@
 // ============================================================================
-// FLM — Vulkan Flip Meter / Frame Pacing Layer  (v2.5 — "steady state")
+// FLM — Vulkan Flip Meter / Frame Pacing Layer  (v2.6 — "observability")
 //
 // DESIGN SUMMARY
 // --------------
@@ -219,6 +219,31 @@
 //            step (on consecutive held real frames) scales with (m-1)
 //            instead of a fixed -4, so it clears a high-m backlog in one
 //            correction instead of several cycles of repeated hitching.
+//
+// v2.6 fixes (observability + robustness — full-code architectural review):
+//   [FIX-57] CSV PATH REGISTRY. Every SwapchainState fopen'd FLM_CSV with
+//            "w" → every swapchain RECREATION (resolution change, fullscreen
+//            toggle, alt-tab OUT_OF_DATE loop) silently TRUNCATED the CSV
+//            mid-session, destroying the A/B run being recorded. First open
+//            per path truncates + writes the header; re-opens append with no
+//            header (one continuous file across recreations); a concurrent
+//            second swapchain on the same path gets "<path>.2" instead of
+//            interleaving torn rows into one stream.
+//   [FIX-58] STATS now answers the tuning question directly: fake and hitch
+//            counted SEPARATELY (FIX-27's combined counter hid a 5.50%
+//            hitch-rate regression behind m=4's dominant fake count), and a
+//            p99 over all presented intervals in the window is reported —
+//            the live equivalent of the offline CSV percentile workflow.
+//            Ring capped at 4096 samples/window; nth_element once per window.
+//   [FIX-59] FLM_MEASURE_CPU accepts comma lists of ranges/cores
+//            ("0-3,8,10-11"). The documented list form was a silent parse
+//            error; non-contiguous pin sets (CCD minus SMT siblings) were
+//            inexpressible.
+//   [FIX-60] SIGUSR1 reload log prints the full effective floor/pacing state
+//            (ratio, adapt, autotune, pace_fifo, ...) so a live retune is
+//            verifiable at INFO level — typo'd keys are silently ignored by
+//            apply_dynamic_kv, and the old 4-field line couldn't confirm the
+//            floor knobs landed.
 // ============================================================================
 
 #include <vulkan/vulkan.h>
@@ -308,6 +333,11 @@ namespace FlmConst {
     constexpr int      MIN_SC_HEIGHT       = 480;
     constexpr int      CSV_BUFFER          = 256;  // [item 12]
     constexpr int64_t  STATS_INTERVAL_NS   = 5'000'000'000LL;  // [FIX-32]
+    constexpr int      STAT_RING           = 4096; // [FIX-58] interval samples kept per
+                                                   // stats window for percentiles; at
+                                                   // >819 FPS a 5s window overflows and
+                                                   // p99 covers the first 4096 samples —
+                                                   // acceptable for a health readout
     constexpr int64_t  MEAS_FRESH_NS       = 250'000'000LL;    // [FIX-43] measurement freshness window
     constexpr size_t   CSV_STDIO_BUF       = 1u << 20;         // [FIX-30]
     constexpr size_t   LOG_STDIO_BUF       = 64u << 10;        // [FIX-29]
@@ -480,9 +510,20 @@ static inline void maybe_reload() {
     if (g_reload_flag.load(std::memory_order_relaxed) &&
         g_reload_flag.exchange(false, std::memory_order_relaxed)) {
         reload_dynamic_config();
-        FLM_LOG(LogLevel::INFO, "Config reload: mode=%d fps=%d spin=%lld lead=%lld",
+        // [FIX-60] Log the FULL effective state. The old 4-field line meant
+        // that after a floor-ratio / autotune / pace_fifo live retune the only
+        // way to confirm the value actually landed (typo'd key names are
+        // silently ignored by apply_dynamic_kv) was DEBUG-level spelunking.
+        FLM_LOG(LogLevel::INFO,
+                "Config reload: mode=%d fps=%d spin=%lld lead=%lld "
+                "floor=%d ratio=%d mfg_adapt=%d step=%d autotune=%d "
+                "spin_adapt=%d pace_fifo=%d",
                 g_config.mode.load(), g_config.target_fps.load(),
-                (long long)g_config.spin_ns.load(), (long long)g_config.lead_ns.load());
+                (long long)g_config.spin_ns.load(), (long long)g_config.lead_ns.load(),
+                (int)g_config.floor_pacing.load(), g_config.floor_ratio.load(),
+                (int)g_config.floor_mfg_adapt.load(), g_config.floor_mfg_step.load(),
+                (int)g_config.floor_autotune.load(),
+                (int)g_config.spin_adapt.load(), (int)g_config.pace_fifo.load());
     }
 }
 
@@ -682,6 +723,9 @@ struct DeviceDispatch {
     bool                              has_present_wait            = false;
 };
 
+// [FIX-57] fwd decl — registry lives below, near the measurement thread.
+static void csv_release_registered(const std::string& reg_key);
+
 // ============================================================================
 // SWAPCHAIN STATE
 // ============================================================================
@@ -769,9 +813,22 @@ struct SwapchainState {
     int64_t stat_sum_ns     = 0;
     int64_t stat_max_ns     = 0;
     int     stat_frames     = 0;
-    int     stat_fake_hitch = 0;   // [FIX-27] fake + hitch combined (old name stat_fake was misleading)
+    // [FIX-58] fake and hitch tracked SEPARATELY. FIX-27's combined counter
+    // made the one number that matters for MFG tuning — the hitch rate —
+    // unreadable from STATS: at m=4 fakes dominate the sum, so a hitch-rate
+    // regression (the RE Requiem 5.50% case) was invisible without a full
+    // CSV round-trip. Now the STATS line answers it directly.
+    int     stat_fake       = 0;
+    int     stat_hitch      = 0;
+    // [FIX-58] Interval samples for percentiles (ALL presented intervals,
+    // fake included — the panel sees the mixed stream, so p99 must too).
+    // Written only when FLM_STATS=1; nth_element runs once per stats window
+    // in the measurement thread (32 KB copy per 5s — negligible).
+    int64_t stat_ring[FlmConst::STAT_RING];
+    int     stat_ring_n     = 0;
     // [item 12] CSV — [FIX-31] telemetry columns added
     FILE*   csv_fp = nullptr;
+    std::string csv_reg_key;   // [FIX-57] registry key to release on destroy
     struct CsvRow {
         int64_t  flip_ns, interval_ns;
         int      is_fake, is_hitch;
@@ -789,6 +846,7 @@ struct SwapchainState {
     ~SwapchainState() {
         if (csv_n && csv_fp) csv_flush();
         if (csv_fp) fclose(csv_fp);
+        csv_release_registered(csv_reg_key);   // [FIX-57]
     }
 
     int64_t get_hitch_threshold(int64_t avg_ns) const {
@@ -907,6 +965,62 @@ static void stop_and_join(std::shared_ptr<SwapchainState>& st) {
 }
 
 // ============================================================================
+// [FIX-57] CSV PATH REGISTRY. Each SwapchainState fopen()'d FLM_CSV with "w":
+// every swapchain RECREATION (resolution change, fullscreen toggle, the
+// OUT_OF_DATE loop after alt-tab) silently TRUNCATED the CSV mid-session —
+// exactly the runs used for A/B hitch analysis lost everything before the
+// recreate. The registry remembers which paths this process has already
+// written: first open truncates + writes the header, later opens append
+// without a header (one continuous file across recreations). If a SECOND
+// swapchain opens the same path while the first is still live (rare:
+// multi-swapchain engines), it gets "<path>.2" etc. instead — two FILE*
+// streams appending to one file would interleave torn rows.
+// Function-local static avoids init-order issues; leaked at exit by design
+// (games routinely _exit()).
+// ============================================================================
+struct CsvPathInfo { int active = 0; bool seen = false; };
+static std::mutex& csv_registry_lock() { static std::mutex m; return m; }
+static std::unordered_map<std::string, CsvPathInfo>& csv_registry() {
+    static std::unordered_map<std::string, CsvPathInfo> r; return r;
+}
+
+// Returns the FILE* (nullptr on failure) and stores the registry key the
+// state must release in its destructor.
+static FILE* csv_open_registered(const std::string& base_path, std::string& reg_key_out) {
+    std::lock_guard lk(csv_registry_lock());
+    CsvPathInfo& info = csv_registry()[base_path];
+    std::string path = base_path;
+    bool append = false;
+    if (info.active > 0) {
+        path += "." + std::to_string(info.active + 1);   // concurrent open → own file
+    } else if (info.seen) {
+        append = true;                                    // recreation → continue file
+    }
+    FILE* f = fopen(path.c_str(), append ? "a" : "w");
+    if (!f) return nullptr;
+    setvbuf(f, nullptr, _IOFBF, FlmConst::CSV_STDIO_BUF);   // [FIX-30]
+    if (!append)
+        fprintf(f, "flip_ns,interval_ns,is_fake,is_hitch,slot,mfg,slot_mean_ns,pacing\n");
+    info.active++;
+    info.seen = true;
+    reg_key_out = base_path;
+    if (path != base_path)
+        FLM_LOG(LogLevel::WARN, "FLM_CSV '%s' already in use by a live swapchain — "
+                "writing to '%s' instead", base_path.c_str(), path.c_str());
+    else if (append)
+        FLM_LOG(LogLevel::INFO, "FLM_CSV '%s': swapchain recreated — appending "
+                "(no header repeat)", base_path.c_str());
+    return f;
+}
+
+static void csv_release_registered(const std::string& reg_key) {
+    if (reg_key.empty()) return;
+    std::lock_guard lk(csv_registry_lock());
+    auto it = csv_registry().find(reg_key);
+    if (it != csv_registry().end() && it->second.active > 0) it->second.active--;
+}
+
+// ============================================================================
 // MEASUREMENT THREAD
 // ----------------------------------------------------------------------------
 // PURPOSE: measure real flip intervals, publish the natural cadence
@@ -914,6 +1028,39 @@ static void stop_and_join(std::shared_ptr<SwapchainState>& st) {
 // runs in the present thread against a local timeline (passing absolute targets
 // across threads was the source of v1's stutter; removed).
 // ============================================================================
+// [FIX-59] Parse a cpu list: comma-separated ranges/cores ("0-3", "5",
+// "4,5,6", "0-3,8,10-11"). Returns true and fills `set` only if the WHOLE
+// spec is valid and selects at least one cpu. Split out of
+// apply_thread_policies so the accept/reject behaviour is unit-testable.
+static bool parse_cpu_list(const std::string& s, cpu_set_t& set) {
+    CPU_ZERO(&set);
+    bool any = false;
+    size_t pos = 0;
+    try {
+        while (pos <= s.size()) {
+            size_t comma = s.find(',', pos);
+            std::string tok = s.substr(pos, (comma == std::string::npos)
+                                            ? std::string::npos : comma - pos);
+            pos = (comma == std::string::npos) ? s.size() + 1 : comma + 1;
+            if (tok.empty()) return false;   // ",," / trailing ","
+            size_t dash = tok.find('-');
+            if (dash != std::string::npos) {
+                int a = std::stoi(tok.substr(0, dash));
+                int b = std::stoi(tok.substr(dash + 1));
+                if (a < 0 || b < a || b >= CPU_SETSIZE) return false;
+                for (int c = a; c <= b; c++) CPU_SET(c, &set);
+                any = true;
+            } else {
+                int c = std::stoi(tok);
+                if (c < 0 || c >= CPU_SETSIZE) return false;
+                CPU_SET(c, &set);
+                any = true;
+            }
+        }
+    } catch (...) { return false; }
+    return any;
+}
+
 static void apply_thread_policies() {
     if (g_config.rt_priority > 0) {
         sched_param sp{};
@@ -921,30 +1068,19 @@ static void apply_thread_policies() {
         if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) != 0)
             FLM_LOG(LogLevel::WARN, "SCHED_FIFO failed (CAP_SYS_NICE?)");
     }
-    // [item 13] measurement thread affinity: "0-3" or "5"
+    // [item 13][FIX-59] measurement thread affinity. The old parser only
+    // understood ONE range or ONE core — the documented (and DRSTool-
+    // suggested) list form "4,5,6" was silently a parse error, so CCD-
+    // isolation setups that pin to a non-contiguous core set (e.g. CCD1
+    // minus its SMT siblings) could not be expressed at all.
     if (!g_config.measure_cpu.empty()) {
-        cpu_set_t set; CPU_ZERO(&set);
-        const std::string& s = g_config.measure_cpu;
-        size_t dash = s.find('-');
-        bool ok = false;
-        try {
-            if (dash != std::string::npos) {
-                int a = std::stoi(s.substr(0, dash));
-                int b = std::stoi(s.substr(dash + 1));
-                if (a >= 0 && b >= a && b < CPU_SETSIZE) {
-                    for (int c = a; c <= b; c++) CPU_SET(c, &set);
-                    ok = true;
-                }
-            } else {
-                int c = std::stoi(s);
-                if (c >= 0 && c < CPU_SETSIZE) { CPU_SET(c, &set); ok = true; }
-            }
-        } catch (...) { ok = false; }
-        if (ok) {
+        cpu_set_t set;
+        if (parse_cpu_list(g_config.measure_cpu, set)) {
             if (pthread_setaffinity_np(pthread_self(), sizeof(set), &set) != 0)
                 FLM_LOG(LogLevel::WARN, "FLM_MEASURE_CPU affinity failed");
         } else {
-            FLM_LOG(LogLevel::WARN, "FLM_MEASURE_CPU parse error: %s", s.c_str());
+            FLM_LOG(LogLevel::WARN, "FLM_MEASURE_CPU parse error: %s",
+                    g_config.measure_cpu.c_str());
         }
     }
     pthread_setname_np(pthread_self(), "flm-measure");
@@ -955,13 +1091,11 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
 
     // [item 12] Open CSV
     if (!g_config.csv_path.empty()) {
-        st->csv_fp = fopen(g_config.csv_path.c_str(), "w");
-        if (st->csv_fp) {
-            // [FIX-30] Large stdio buffer: csv_flush never touches disk.
-            setvbuf(st->csv_fp, nullptr, _IOFBF, FlmConst::CSV_STDIO_BUF);
-            fprintf(st->csv_fp,
-                    "flip_ns,interval_ns,is_fake,is_hitch,slot,mfg,slot_mean_ns,pacing\n");
-        } else {
+        // [FIX-57] Registry-backed open: append (headerless) across swapchain
+        // recreations, suffixed file if another live swapchain already owns
+        // the path. Buffering + header handled inside.
+        st->csv_fp = csv_open_registered(g_config.csv_path, st->csv_reg_key);
+        if (!st->csv_fp) {
             // [FIX-54] v2.5 silently dropped CSV logging on fopen failure —
             // no way to tell "CSV disabled" from "CSV path unwritable" (wrong
             // dir, missing perms, or a container/sandbox mount namespace that
@@ -1229,10 +1363,15 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
                 st->stat_sum_ns   += interval_ns;
                 st->stat_max_ns    = std::max(st->stat_max_ns, interval_ns);
                 st->stat_frames++;
-                if (is_hitch) st->stat_fake_hitch++;
+                if (is_hitch) st->stat_hitch++;   // [FIX-58] separate counter
             } else {
-                st->stat_fake_hitch++;
+                st->stat_fake++;                  // [FIX-58]
             }
+            // [FIX-58] Percentile sample (only when stats are on — the ring
+            // is dead weight otherwise). Overflow past STAT_RING is dropped;
+            // see the constant's comment.
+            if (g_config.stats && st->stat_ring_n < FlmConst::STAT_RING)
+                st->stat_ring[st->stat_ring_n++] = interval_ns;
             st->csv_push(tnow, interval_ns, is_fake, is_hitch,
                          st->present_seq.load(std::memory_order_relaxed),
                          m, st->slot_mean_ns,
@@ -1244,13 +1383,26 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
                 st->stat_frames > 0) {
                 double avg_ms = ((double)st->stat_sum_ns / (double)st->stat_frames) / 1e6;
                 double max_ms = (double)st->stat_max_ns / 1e6;
+                // [FIX-58] p99 over ALL presented intervals in the window —
+                // the live equivalent of the offline CSV p99 workflow.
+                double p99_ms = 0.0;
+                if (st->stat_ring_n > 0) {
+                    int64_t tmp[FlmConst::STAT_RING];
+                    const int n = st->stat_ring_n;
+                    std::copy(st->stat_ring, st->stat_ring + n, tmp);
+                    const int k = (n * 99) / 100;
+                    std::nth_element(tmp, tmp + k, tmp + n);
+                    p99_ms = (double)tmp[k] / 1e6;
+                }
                 FLM_LOG(LogLevel::INFO,
-                    "STATS %llds: n=%d avg=%.2fms max=%.2fms fake/hitch=%d mfg=%d pacing=%d",
+                    "STATS %llds: n=%d avg=%.2fms p99=%.2fms max=%.2fms "
+                    "fake=%d hitch=%d mfg=%d pacing=%d",
                     (long long)(stats_iv / 1'000'000'000LL), st->stat_frames,
-                    avg_ms, max_ms, st->stat_fake_hitch,
+                    avg_ms, p99_ms, max_ms, st->stat_fake, st->stat_hitch,
                     st->eff_mfg.load(), (int)st->pacing_enabled.load());
                 st->stat_sum_ns = st->stat_max_ns = 0;
-                st->stat_frames = st->stat_fake_hitch = 0;
+                st->stat_frames = st->stat_fake = st->stat_hitch = 0;
+                st->stat_ring_n = 0;
                 st->stat_last_ns = tnow;
             }
         }
@@ -2095,8 +2247,10 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(
 //  FLM_DRIFT_TOLERANCE_NS=0    0 = auto (iv/4)
 //  FLM_MFG_MULTIPLIER=0        0 = auto-detect, 1-4 = force
 //  FLM_RT_PRIORITY=0           measurement thread SCHED_FIFO priority (CAP_SYS_NICE)
-//  FLM_MEASURE_CPU=0-3         measurement thread affinity
-//  FLM_STATS=1                 periodic summary log (INFO)
+//  FLM_MEASURE_CPU=0-3         measurement thread affinity; comma lists of
+//                              ranges/cores accepted, e.g. "0-3,8,10-11" [FIX-59]
+//  FLM_STATS=1                 periodic summary log (INFO) — n, avg, p99,
+//                              max, fake, hitch, mfg, pacing [FIX-58]
 //  FLM_STATS_INTERVAL=5        summary period, seconds (1-3600; hot-reload) [FIX-32]
 //  FLM_CSV=/tmp/flm.csv        per-frame measurement dump — columns [FIX-31]:
 //                              flip_ns,interval_ns,is_fake,is_hitch,slot,

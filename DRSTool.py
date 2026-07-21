@@ -15,7 +15,9 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import Qt, Signal, QObject, QTimer, QProcess
-from PySide6.QtGui import QColor, QPalette, QFont, QIcon
+from datetime import datetime
+
+from PySide6.QtGui import QColor, QPalette, QFont, QIcon, QIntValidator
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QListWidget, QListWidgetItem, QStackedWidget,
@@ -2029,6 +2031,13 @@ class SettingsManager(QObject):
         if name not in self._profiles:
             return
         profile = self._profiles[name]
+        if not isinstance(profile, dict):
+            # Hand-edited/corrupt entry — refuse to load rather than crash
+            # on profile.get(...) below.
+            self.profile_save_error.emit(
+                f'Profile "{name}" is malformed in profiles.json and cannot be loaded.'
+            )
+            return
         self._settings = profile.get("settings", {}).copy()
         arch_code = profile.get("arch")
         if arch_code:
@@ -2072,12 +2081,20 @@ class SettingsManager(QObject):
                 data_file.parent.mkdir(parents=True, exist_ok=True)
                 with open(self._OLD_PROFILES_PATH, "r", encoding="utf-8") as f:
                     legacy = json.load(f)
+                # A top-level non-dict (e.g. a list from a truncated/edited
+                # file) would crash every `for name in profiles` later —
+                # validate before adopting it.
+                if not isinstance(legacy, dict):
+                    raise ValueError("legacy profiles file is not a JSON object")
                 self._profiles = legacy
                 self._save_profiles()
                 return
             if data_file.exists():
                 with open(data_file, "r", encoding="utf-8") as f:
-                    self._profiles = json.load(f)
+                    loaded = json.load(f)
+                if not isinstance(loaded, dict):
+                    raise ValueError("profiles file is not a JSON object")
+                self._profiles = loaded
         except Exception:
             # Corrupt or unreadable file: don't silently discard the user's
             # profiles by overwriting it — just start this session with an
@@ -2165,7 +2182,9 @@ class OutputBarWidget(QWidget):
         row2.setSpacing(6)
         row2.setContentsMargins(0, 0, 0, 0)
 
-        lbl_env = QLabel("DXVK | VKD3D | __GL=")
+        # Was "DXVK | VKD3D | __GL=" — the row now carries all 10 env
+        # categories (Proton, Wine, PRIME, FLM, ...), not just those three.
+        lbl_env = QLabel("ENV VARS=")
         lbl_env.setStyleSheet(lbl_ss)
         row2.addWidget(lbl_env)
 
@@ -3840,10 +3859,23 @@ FLM_ENV_VARS: List[EnvVarDef] = [
               "Syntax: FLM_FLOOR_MFG_ADAPT=1 FLM_FLOOR_MFG_STEP=25 %command%",
               placeholder="e.g. 25 (0-200)"),
 
+    EnvVarDef("FLM_FLOOR_AUTOTUNE", "vk_flip_meter", "enum", "1",
+              "FIX-44: closed-loop floor-ratio adjustment. Tightens the ratio slowly when "
+              "headroom is ample (flattens intervals), loosens it quickly on consecutive "
+              "holds / thin headroom (prevents braking). The autotune delta [-150,+150] "
+              "stacks on top of the base FLM_FLOOR_RATIO and the MFG-adapt offset. On by "
+              "default; set to 0 for the old fixed-ratio behaviour (the ratio then stays "
+              "exactly at FLM_FLOOR_RATIO / its MFG-adapted value). Hot-reloadable via "
+              "FLM_CONFIG + SIGUSR1. "
+              "Syntax: FLM_FLOOR_PACING=1 FLM_FLOOR_AUTOTUNE=0 FLM_FLOOR_RATIO=850 %command%",
+              options=["0", "1"]),
+
     EnvVarDef("FLM_MEASURE_CPU", "vk_flip_meter", "string", "",
-              "CPU core range the measurement thread (std::jthread) is pinned to — useful "
-              "for CCD isolation (e.g. keeping rendering on one CCD and measurement on the "
-              "other). Defaults to cores-2 if left empty. "
+              "CPU cores the measurement thread (std::jthread) is pinned to — useful for "
+              "CCD isolation (e.g. keeping rendering on one CCD and measurement on the "
+              "other). Accepts a single core, a range, or a comma list of both "
+              "(v2.6/FIX-59): 5, 0-3, 4,5,6, 0-3,8,10-11. Defaults to cores-2 if left "
+              "empty. "
               "Syntax: FLM_MEASURE_CPU=0-3 %command%",
               placeholder="e.g. 0-3 or 4,5,6"),
 
@@ -3876,16 +3908,19 @@ FLM_ENV_VARS: List[EnvVarDef] = [
               placeholder="e.g. /tmp/flm.log"),
 
     EnvVarDef("FLM_STATS", "vk_flip_meter", "enum", "0",
-              "If set to 1, a summary statistic (mean/range/stddev) is logged at INFO level "
-              "every 5 seconds. Useful for a general health check without a continuous log "
-              "stream. "
+              "If set to 1, a summary line is logged at INFO level every FLM_STATS_INTERVAL "
+              "seconds (default 5): frame count, mean, p99, max interval, and separate "
+              "fake / hitch counts (v2.6/FIX-58) — a live readout of the hitch rate and "
+              "p99 that previously required an offline FLM_CSV analysis pass. "
               "Syntax: FLM_LOG_LEVEL=INFO FLM_STATS=1 %command%",
               options=["0", "1"]),
 
     EnvVarDef("FLM_CSV", "vk_flip_meter", "string", "",
               "CSV file path where raw per-frame measurements (present interval/latency etc.) "
               "are dumped. Used to produce objective evidence in A/B tests (e.g. comparing "
-              "FLM_MODE=off against FLM_MODE=present). "
+              "FLM_MODE=off against FLM_MODE=present). Since v2.6 (FIX-57) the file "
+              "survives swapchain recreation (resolution change, alt-tab) — data is "
+              "appended instead of the file being truncated mid-run. "
               "Syntax: FLM_MODE=present FLM_CSV=/tmp/on.csv %command%",
               placeholder="e.g. /tmp/flm.csv"),
 
@@ -3893,9 +3928,9 @@ FLM_ENV_VARS: List[EnvVarDef] = [
               "Path to a KEY=VALUE config file that enables live tuning without closing the "
               "game. The file is re-read via an async-signal-safe flag when a SIGUSR1 signal "
               "is sent (FLM_TARGET_FPS, FLM_STATS_INTERVAL, FLM_SPIN_NS, FLM_PRESENT_LEAD_NS, "
-              "FLM_DRIFT_TOLERANCE_NS, FLM_MODE, FLM_PACE_POINT, FLM_LOG_LEVEL, "
+              "FLM_DRIFT_TOLERANCE_NS, FLM_MODE, FLM_PACE_POINT, FLM_PACE_FIFO, FLM_LOG_LEVEL, "
               "FLM_FLOOR_PACING, FLM_FLOOR_RATIO, FLM_FLOOR_MFG_ADAPT, FLM_FLOOR_MFG_STEP, "
-              "FLM_SPIN_ADAPT are supported). "
+              "FLM_FLOOR_AUTOTUNE, FLM_SPIN_ADAPT are supported). "
               "Syntax: FLM_CONFIG=/tmp/flm.conf %command%  →  then: "
               "echo 'FLM_TARGET_FPS=90' > /tmp/flm.conf && kill -SIGUSR1 $(pgrep -f game)",
               placeholder="e.g. /tmp/flm.conf"),
@@ -4966,6 +5001,13 @@ QPushButton:checked{
         edit.setStyleSheet(self._EDIT_SS)
         edit.setPlaceholderText(ev.placeholder or ev.default or "")
         edit.setFixedHeight(28)
+        if ev.vtype == "int":
+            # Vars declared as "int" (FLM_TARGET_FPS, FLM_SPIN_NS, ...) only
+            # ever hold a non-negative integer — flip_meter.cpp atoi/atoll's
+            # them and clamps. Reject non-numeric keystrokes here so a typo
+            # like "6o" can't be committed and silently parsed as 6 (or 0)
+            # by the layer. String-typed vars (paths, CPU ranges) untouched.
+            edit.setValidator(QIntValidator(0, 2_000_000_000, edit))
         edit.textChanged.connect(self._on_text_changed)
         self._control_layout.addWidget(edit)
 
@@ -5732,7 +5774,12 @@ class LutrisSyncWidget(QWidget):
             return
 
         try:
-            backup_path = entry.path.with_suffix(entry.path.suffix + ".bak")
+            # Timestamped, as documented in the module header — a single
+            # fixed .bak silently destroyed the previous backup on every
+            # save, so two consecutive writes left no way back to the
+            # pre-first-write state.
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup_path = entry.path.with_suffix(entry.path.suffix + f".{stamp}.bak")
             shutil.copy2(entry.path, backup_path)
 
             tmp_path = entry.path.with_suffix(entry.path.suffix + ".tmp")
@@ -5752,6 +5799,20 @@ class LutrisSyncWidget(QWidget):
         )
         self._update_preview()
 
+
+# Keys the layer accepts through the FLM_CONFIG file + SIGUSR1 hot-reload.
+# Mirrors snapshot_dynamic_env() / apply_dynamic_kv() in flip_meter.cpp —
+# keep in sync when the layer gains/loses reloadable knobs.
+FLM_RELOADABLE_KEYS = (
+    "FLM_TARGET_FPS", "FLM_STATS_INTERVAL", "FLM_SPIN_NS",
+    "FLM_PRESENT_LEAD_NS", "FLM_DRIFT_TOLERANCE_NS",
+    "FLM_MODE", "FLM_PACE_POINT", "FLM_LOG_LEVEL",
+    "FLM_PACE_FIFO",                          # [FIX-53]
+    "FLM_FLOOR_PACING", "FLM_FLOOR_RATIO",    # [FIX-36]
+    "FLM_FLOOR_MFG_ADAPT", "FLM_FLOOR_MFG_STEP",   # [FIX-41]
+    "FLM_FLOOR_AUTOTUNE",                     # [FIX-44]
+    "FLM_SPIN_ADAPT",                         # [FIX-39]
+)
 
 # ============================================================================
 # vk_flip_meter — Install/Build tab
@@ -5808,7 +5869,11 @@ class FlmSidebarWidget(QWidget):
             "FLM_MFG_MULTIPLIER aren't configured here — they live under the "
             "\"vk_flip_meter\" category on the \"DXVK / VKD3D / NV\" tab, one "
             "click away, using the same button-grid editor, and are added to "
-            "the Copy All output automatically."
+            "the Copy All output automatically.\n\n"
+            "The Live Tuning section on the right writes the currently-set "
+            "FLM_* vars into an FLM_CONFIG file and sends SIGUSR1 to the "
+            "game, so hot-reloadable knobs (floor ratio, spin, lead, ...) "
+            "can be retuned without restarting the game."
         )
         info.setWordWrap(True)
         info.setStyleSheet("color:#a7afbc; font-size:10px; line-height:145%;")
@@ -5915,6 +5980,56 @@ QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
         self._status_lbl.setStyleSheet("color:#5a6070; font-size:9px;")
         layout.addWidget(self._status_lbl)
 
+        # ── Live tuning: FLM_CONFIG file + SIGUSR1 ───────────────────────────
+        # The layer's env is snapshotted once at init [FIX-26]; the ONLY way
+        # to retune a running game is FLM_CONFIG file + SIGUSR1. This section
+        # turns the manual `echo KEY=VAL > /tmp/flm.conf && kill -USR1 ...`
+        # dance into two buttons: dump the currently-set hot-reloadable FLM_*
+        # vars (from the Env Vars tab) into the .conf, then signal the game.
+        live_group = QGroupBox("Live Tuning  (FLM_CONFIG + SIGUSR1)")
+        live_group.setStyleSheet("""
+QGroupBox{ color:#8ea0ba; font-size:10px; font-weight:700;
+    border:1px solid #1e2535; border-radius:6px;
+    margin-top:8px; padding-top:12px; }
+QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
+""")
+        live_layout = QGridLayout(live_group)
+        live_layout.setSpacing(6)
+
+        conf_lbl = QLabel("Config file:")
+        conf_lbl.setStyleSheet("color:#8ea0ba; font-size:9px; font-weight:600;")
+        self._conf_edit = QLineEdit("/tmp/flm.conf")
+        self._conf_edit.setStyleSheet(FLM_FIELD_SS)
+        self._write_conf_btn = QPushButton("Write .conf")
+        self._write_conf_btn.clicked.connect(self._on_write_conf)
+        self._write_conf_btn.setStyleSheet(self._btn_style("#1a1f28", "#323c4b", "#d8d8d8"))
+        live_layout.addWidget(conf_lbl, 0, 0)
+        live_layout.addWidget(self._conf_edit, 0, 1)
+        live_layout.addWidget(self._write_conf_btn, 0, 2)
+
+        proc_lbl = QLabel("Process match:")
+        proc_lbl.setStyleSheet("color:#8ea0ba; font-size:9px; font-weight:600;")
+        self._proc_edit = QLineEdit()
+        self._proc_edit.setStyleSheet(FLM_FIELD_SS)
+        self._proc_edit.setPlaceholderText("pkill -f pattern, e.g. GameName.exe")
+        self._sigusr1_btn = QPushButton("Send SIGUSR1")
+        self._sigusr1_btn.clicked.connect(self._on_send_sigusr1)
+        self._sigusr1_btn.setStyleSheet(self._btn_style("#1a1f28", "#323c4b", "#d8d8d8"))
+        live_layout.addWidget(proc_lbl, 1, 0)
+        live_layout.addWidget(self._proc_edit, 1, 1)
+        live_layout.addWidget(self._sigusr1_btn, 1, 2)
+
+        live_hint = QLabel(
+            "Only works if the game was launched with FLM_CONFIG pointing at "
+            "this file. Init-only vars (FLM_CSV, FLM_RT_PRIORITY, ...) are "
+            "written as comments — the layer can't change them at runtime."
+        )
+        live_hint.setWordWrap(True)
+        live_hint.setStyleSheet("color:#5a6070; font-size:8px; font-style:italic;")
+        live_layout.addWidget(live_hint, 2, 0, 1, 3)
+
+        layout.addWidget(live_group)
+
         self._console = QPlainTextEdit()
         self._console.setReadOnly(True)
         self._console.setStyleSheet("""
@@ -5991,6 +6106,78 @@ QPushButton:disabled{{ color:#3a4250; border:1px solid #232a36; background:#1215
         self._verify_btn.setEnabled(not busy)
         self._status_lbl.setText(status or ("Working..." if busy else "Ready."))
 
+    # ── live tuning (FLM_CONFIG + SIGUSR1) ───────────────────────────────────
+
+    def _collect_flm_values(self) -> Dict[str, str]:
+        """Currently-set FLM_* env vars from the shared Env Vars tab."""
+        win = self.window()
+        if win and hasattr(win, "_env_widget"):
+            return {k: v for k, v in win._env_widget.get_env_dict().items()
+                    if k.startswith("FLM_")}
+        return {}
+
+    def _on_write_conf(self):
+        path_str = self._conf_edit.text().strip()
+        if not path_str:
+            self._log("ERROR: config file path is empty.")
+            return
+        values = self._collect_flm_values()
+        if not values:
+            self._log("Nothing to write — no FLM_* vars are set on the Env Vars tab.")
+            return
+
+        reloadable = {k: v for k, v in values.items() if k in FLM_RELOADABLE_KEYS}
+        init_only  = {k: v for k, v in values.items()
+                      if k not in FLM_RELOADABLE_KEYS and k != "FLM_CONFIG"}
+
+        lines = [
+            "# vk_flip_meter live config — written by DRSTool",
+            f"# {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "# Apply with: kill -USR1 <game pid>  (or the Send SIGUSR1 button)",
+            "",
+        ]
+        lines += [f"{k}={v}" for k, v in reloadable.items()]
+        if init_only:
+            lines.append("")
+            lines.append("# init-only (not hot-reloadable — set in the launch env instead):")
+            lines += [f"# {k}={v}" for k, v in init_only.items()]
+
+        try:
+            path = Path(path_str)
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)  # atomic: SIGUSR1 mid-write can't see a torn file
+        except Exception as e:
+            self._log(f"ERROR: could not write {path_str}: {e}")
+            return
+
+        self._log(f"Wrote {len(reloadable)} reloadable key(s) to {path_str}"
+                  + (f" ({len(init_only)} init-only key(s) as comments)" if init_only else ""))
+        # If the game env doesn't point FLM_CONFIG at this exact path, the
+        # reload will read a different file (or nothing) — warn early.
+        cfg = values.get("FLM_CONFIG", "")
+        if not cfg:
+            self._log("NOTE: FLM_CONFIG isn't set on the Env Vars tab — the game must be "
+                      f"launched with FLM_CONFIG={path_str} for SIGUSR1 to pick this up.")
+        elif cfg != path_str:
+            self._log(f"WARNING: Env Vars tab has FLM_CONFIG={cfg}, but this file was "
+                      f"written to {path_str} — the running game will reload the former.")
+
+    def _on_send_sigusr1(self):
+        pattern = self._proc_edit.text().strip()
+        if not pattern:
+            self._log("ERROR: enter a process match pattern first (pkill -f syntax).")
+            return
+        self._log(f"==> pkill -USR1 -f -- {pattern}")
+        self._set_busy(True, "Signalling...")
+        self._phase = "sigusr1"
+        # Unprivileged: the game runs as the same user. `--` guards against a
+        # pattern starting with a dash being parsed as a pkill option.
+        self._run_process("pkill", ["-USR1", "-f", "--", pattern], use_pkexec=False)
+
     # ── build / install pipeline ─────────────────────────────────────────────
 
     def _on_build_clicked(self):
@@ -6038,6 +6225,11 @@ QPushButton:disabled{{ color:#3a4250; border:1px solid #232a36; background:#1215
         proc.setProcessChannelMode(QProcess.MergedChannels)
         proc.readyReadStandardOutput.connect(lambda p=proc: self._on_output(p))
         proc.finished.connect(self._on_proc_finished)
+        # QProcess.finished NEVER fires on FailedToStart (binary not found /
+        # not executable) — without this handler a missing cmake, ninja, or
+        # pkexec left the whole widget stuck on "Working..." with both
+        # buttons disabled until app restart.
+        proc.errorOccurred.connect(lambda err, p=proc: self._on_proc_error(err, p))
         self._proc = proc
         if use_pkexec:
             proc.start("pkexec", [program] + args)
@@ -6049,8 +6241,38 @@ QPushButton:disabled{{ color:#3a4250; border:1px solid #232a36; background:#1215
         if data:
             self._log(data.rstrip("\n"))
 
+    def _on_proc_error(self, error, proc: QProcess):
+        if error == QProcess.FailedToStart:
+            self._log(f"ERROR: could not start '{proc.program()}' — is it installed and in PATH?")
+            self._set_busy(False, f"Error: '{proc.program()}' failed to start.")
+        # Crashed is followed by finished(CrashExit) — handled there.
+
     def _on_proc_finished(self, exit_code: int, exit_status):
+        if exit_status == QProcess.CrashExit:
+            self._log(f"ERROR: step '{self._phase}' crashed (killed by a signal).")
+            self._set_busy(False, f"Error: step '{self._phase}' crashed.")
+            return
+        if self._phase == "sigusr1":
+            # pkill: 0 = at least one process signalled, 1 = no match.
+            if exit_code == 0:
+                self._log("SIGUSR1 sent — the layer will re-read FLM_CONFIG on its next frame.")
+                self._set_busy(False, "SIGUSR1 sent.")
+            elif exit_code == 1:
+                self._log("No matching process found — is the game running, and does the pattern match?")
+                self._set_busy(False, "No process matched.")
+            else:
+                self._log(f"pkill failed (exit code {exit_code}).")
+                self._set_busy(False, "pkill failed.")
+            return
+
         if exit_code != 0:
+            # pkexec's own exit codes: 126 = user dismissed the auth dialog,
+            # 127 = not authorized / auth failure. Both are "you cancelled",
+            # not a build failure — say so instead of a generic error.
+            if self._phase in ("install", "manifest") and exit_code in (126, 127):
+                self._log("Authorization cancelled/denied — installation aborted (build output kept).")
+                self._set_busy(False, "Install cancelled (pkexec authorization).")
+                return
             self._log(f"ERROR: step '{self._phase}' failed (exit code {exit_code}).")
             self._set_busy(False, f"Error: step '{self._phase}' failed.")
             return

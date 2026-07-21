@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 # [FIX-52] SINGLE source of truth for the version: the manifest is generated
 # from here via configure_file (v2.4 had drifted: CMake=2.1, manifest=2.1/impl 3,
 # code=2.4).
-project(FlipMeterLayer VERSION 2.5 LANGUAGES CXX)
+project(FlipMeterLayer VERSION 2.6 LANGUAGES CXX)
 math(EXPR FLM_IMPL_VERSION "${PROJECT_VERSION_MAJOR} * 10 + ${PROJECT_VERSION_MINOR}")
 
 set(CMAKE_CXX_STANDARD 20)
