@@ -1,255 +1,14 @@
 // ============================================================================
 // FLM — Vulkan Flip Meter / Frame Pacing Layer  (v2.6 — "observability")
 //
-// DESIGN SUMMARY
-// --------------
-// Two independent paths:
-//
-//   1) LIMITER  — does NOT require presentWait. Pure local-clock
-//      absolute-timeline FPS cap at QueuePresent (libstrangle logic). Always
-//      active, shows as an instant flat line in MangoHud. Visible, safe,
-//      deterministic. Requires FLM_TARGET_FPS.
-//
-//   2) PACER    — requires presentWait. Measurement thread reads real flip
-//      timestamps and builds a timeline estimate; if an MFG (frame-gen)
-//      multiplier is detected, generated frames are distributed EVENLY across
-//      the flip interval (slot pacing). For smooth frametimes on a VRR panel.
-//
-// ANTI-STUTTER RULES (fixes for v1 placebo/stutter causes):
-//   * SINGLE GATE: pacing only at ONE point (default: Present). v1 stalled at
-//     both Acquire and Present → double latency.
-//   * GPU-BOUND GUARD: stalling on the CPU when the game is GPU-limited drains
-//     the queue and makes things worse. Pacing disables automatically when
-//     consecutive frames exceed the target.
-//   * FIFO/vsync BYPASS: FIFO is already locked to vsync; pacing on top fights
-//     the compositor. Only MAILBOX/IMMEDIATE (VRR) is paced. Small auxiliary
-//     swapchains are never paced.
-//   * SOFT SLEW: timeline drift is corrected gradually instead of hard-rebasing.
-//   * LEAD-BASED PRESENT: present is submitted FLM_PRESENT_LEAD_NS before the
-//     predicted flip (v1's wrong "+1 frame" formula removed).
-//
-// Permanent fixes (from v1):
-//   [FIX-1]  Hot-path shared_ptr copy (UAF).
-//   [FIX-2]  DestroyDevice stops+joins all state.
-//   [FIX-13] Loader chain restore on CreateDevice fallback (MangoHud crash).
-//   [FIX-14] Features already in pNext are not re-injected.
-//   [FIX-15] App's own presentIds are tracked (DXVK compatibility).
-//
-// v2.1 fixes (performance / latency / smoothness):
-//   [FIX-16] SLOT INTERVAL = sliding mean of ALL intervals. m frames take T
-//            total → average interval = T/m; correct slot width in both paced
-//            and unpaced modes. v2 used a fake-filtered EMA (≈T) → in MFG the
-//            pacer DIVIDED FPS by m. Removed.
-//   [FIX-17] MFG autodetect: threshold now relative to slot-EMA
-//            (interval < 0.7*ema). v2's accept-median threshold was
-//            mathematically never triggered (p≈0 → mhat=1). Detection is
-//            FROZEN while the gate is active (paced uniform intervals poison
-//            detection → oscillation guard).
-//   [FIX-18] GPU-bound guard only when FLM_TARGET_FPS>0, and uses slot-EMA
-//            rather than raw intervals. In v2 MFG's bimodal intervals
-//            immediately triggered the guard and killed pacing. At fps=0 the
-//            target is derived from measurements anyway, so the guard is
-//            meaningless there.
-//   [FIX-19] "interval > 2.5*avg → is_fake" branch removed: large HITCHes
-//            were classified as fake and escaped hitch detection → pacing
-//            continued during a hitch (visible stutter).
-//   [FIX-20] Gate wait cap is now interval-relative (max(20ms, 1.5*iv)).
-//            The fixed 20ms cap made the limiter a complete NO-OP at FPS<=50.
-//   [FIX-21] Live config is REAL: FLM_CONFIG=<file> (KEY=VALUE) + SIGUSR1.
-//            v2 read getenv in the handler — the running process's environment
-//            can't be changed externally (no-op) and getenv is not
-//            async-signal-safe (UB). Handler now only sets an atomic flag;
-//            reload happens in the measurement/present thread context.
-//   [FIX-22] vkAcquireNextImage2KHR is now intercepted (engines using this
-//            path never advanced the warmup counter → gate never opened).
-//   [FIX-23] Dead state cleanup (gate_target_ns / base_flip_ns).
-//
-// v2.2 fixes (distilled from three independent code reviews):
-//   [FIX-24] PACER lead clamp: when lead >= iv/2 the target fell into the past
-//            and the gate silently became a no-op (e.g. high FPS + default
-//            1ms lead). Now lead = min(FLM_PRESENT_LEAD_NS, iv/2).
-//   [FIX-25] Leading whitespace in config file values was not trimmed:
-//            "FLM_MODE= present" could not be parsed (string comparison).
-//   [FIX-26] Reload no longer calls getenv: env is snapshotted once at init
-//            (POSIX getenv has a theoretical data race in reload threads, and
-//            the running process's env can't change externally anyway). Same
-//            semantics: snapshot + file, file wins; if a line is removed the
-//            env value is restored.
-//   [FIX-27] Dead state cleanup: timeline_target_ns, app_owns_present_id,
-//            filtered_interval_ns EMA (only read in di_count==0 fallback —
-//            never updated at that point = constant). stat_fake →
-//            stat_fake_hitch (was accumulating both fake and hitch, misleading
-//            name).
-//   [FIX-28] Hot-path false sharing: limiter_next_ns (present thread) and
-//            fields written every frame by the measurement thread shared a
-//            cache line. Separated with alignas(64).
-//   [FIX-29] Log: fflush only at INFO+. DEBUG is fully buffered (64 KB) —
-//            per-frame flush overhead eliminated while DEBUG is on. Note: on
-//            crash the last DEBUG lines may remain in the buffer (flushed on
-//            normal exit).
-//   [FIX-30] CSV: 1 MB stdio buffer + no fflush in csv_flush → csv_flush is
-//            now pure in-memory formatting; disk write() only when the buffer
-//            fills (~26k rows). Measurement thread timing is protected from I/O.
-//   [FIX-31] CSV telemetry columns: eff_mfg, slot_mean_ns, pacing —
-//            for regression analysis of MFG detection and GPU-bound guard.
-//   [FIX-32] FLM_STATS_INTERVAL=<sec> (hot-reloadable, default 5).
-//   [FIX-33] FLM_TARGET_FPS [0,1000] clamp (atoi overflow / iv=0 guard) and
-//            initial reserve() on maps.
-//
-// v2.3 fixes (smoothness + input lag):
-//   [FIX-37] FLOOR-PACING FREEZE/BRAKE LOOP. real_win was fed only NON-FAKE
-//            intervals; with floor active and m>1 ALL intervals (uniform ≈T/m
-//            and the real frame's remainder) fall BELOW the fake threshold
-//            (≈0.75T) → real_win + accept-median fully FREEZE → slot_iv locks
-//            on the old T₀. On VRR, when FPS rises the floor becomes stale and
-//            brakes every present; braked intervals also stay in the fake class
-//            so the estimate can never self-correct (positive lock) — the
-//            "absolute grid brake" that FIX-36 tried to eliminate came back
-//            permanently. FIX: T estimation is now fake-filter-independent and
-//            phase-insensitive via CYCLE SUM: the sum of the last m RAW
-//            intervals ≈ T (in paced/unpaced/bimodal cases alike; ε+(T-ε)=T).
-//            Updated every flip → tracks FPS changes without braking; if a
-//            brake forms, negative feedback releases it. Fake class kept for
-//            stats/CSV only. display_intervals median (its sole consumer)
-//            removed; hitch threshold and fake split now tied to this live T
-//            estimate (hitches that escaped with the stale median).
-//   [FIX-38] FIX-36 false-sharing regression: real_win/real_idx/real_count
-//            had been placed on the present-thread cache line (next to
-//            limiter_next_ns) but the MEASUREMENT thread writes them every
-//            frame → the cache-line ping-pong fixed by FIX-28 came back.
-//            Moved to the measurement block; only present-thread fields remain
-//            on the present line.
-//   [FIX-39] ADAPTIVE SPIN: the kernel sleep's actual wakeup latency
-//            (oversleep) is tracked with a damped maximum; spin margin is
-//            adjusted accordingly. On a loaded system the fixed 150 µs margin
-//            caused the gate to MISS its target (floor missed → jitter spike);
-//            on a quiescent/RT system it burned ~120 µs of pointless spin every
-//            frame (≈3% of core time at 240 FPS). FLM_SPIN_ADAPT=0 → old fixed
-//            behaviour; FLM_SPIN_NS=0 → pure sleep (unchanged).
-//   [FIX-40] Low-FPS warmup lock: hitch threshold starts at the 16.6 ms
-//            default, so at ~30 FPS the FIRST frames are classified as hitches
-//            and the estimation window never warms up, leaving pacing
-//            permanently disabled. Hitch classification is suppressed until the
-//            window is warm (4 samples).
-//
-// v2.4 fixes (smoothness — concept-validation review):
-//   [FIX-42] With fps>0 the floor path was BYPASSING the LIMITER: the floor
-//            branch only checked !limiter_mode. AUTO + presentWait +
-//            FLM_TARGET_FPS=120 → slot=8.33ms, floor=7.08ms → game could run
-//            up to 117% of the target (≈141 FPS); no hard lock → wavy
-//            frametime. Floor is now ONLY for fps==0 (natural cadence); at
-//            fps>0 the classic lead-based timeline pacer is used (full lock).
-//            Consistent with the README.
-//   [FIX-43] MEASUREMENT FRESHNESS GUARD. If presentWait measurement never
-//            produces samples (game sends id=0 → continuous TIMEOUT)
-//            slot_interval_ns stays at the 16.6ms default → floor≈14.2ms →
-//            a 240Hz game gets CAPPED at ~70 FPS. Same class of problem after
-//            alt-tab / OUT_OF_DATE. Measurement thread publishes last_flip_ns
-//            on every successful flip; pacer and floor gates (NOT the limiter)
-//            shut themselves off and reset anchors if there are no samples or
-//            the last flip is older than MEAS_FRESH_NS (250ms). No measurement
-//            flow → no pacing.
-//   [FIX-44] FLOOR RATIO AUTOTUNE (closed loop). At ratio=850, m=2 the
-//            steady-state intervals ALTERNATE 0.425T / 0.575T (CoV ≈15%) —
-//            the structural cause of "better but not quite smooth". The ideal
-//            ratio is usually close to 1000 but a fixed high ratio brakes
-//            early-arriving real frames. Fix: if recent presents have abundant
-//            headroom (since-floor), ratio is tightened SLOWLY (+1/frame); if
-//            headroom narrows or consecutive >= max(2,m) presents are held
-//            (brake sign), it is QUICKLY loosened. Delta [-150,+150] stacks on
-//            top of the base ratio and MFG-adapt; [500,1000] clamp preserved.
-//            FLM_FLOOR_AUTOTUNE=0 → old fixed-ratio behaviour.
-//   [FIX-45] Cleanup: dead cap in floor path (left < floor*2 — since>=0 means
-//            left<=floor, cap was never reachable) simplified; hitch and
-//            GPU-bound branches now explicitly reset the floor anchor
-//            (last_present_ns) and autotune brake counter (explicit re-anchor
-//            instead of implicit).
-//
-// v2.5 fixes (steady-state robustness + hot-path cost):
-//   [FIX-46] ADAPTIVE SPIN OUTLIER STICKINESS. The damped maximum
-//            (est = max(os, est - est/256)) let a single 2ms oversleep (page
-//            fault / P-state / SMI) pin the spin margin near ~3ms for ≈256
-//            samples — >1s of ~3ms-per-frame spinning at 240 FPS, burning
-//            ≈70% of a core and feeding boost-clock backpressure into
-//            frametime. Estimator replaced with a 16-sample ring + p75
-//            (isolated spikes cannot move it; genuine load converges in 4-5
-//            samples); margin cap lowered 2ms → 500µs.
-//   [FIX-47] MFG DETECTION FREEZE/HOT-GATE DEADLOCK. Floor pacing holds ≥1
-//            present per cycle at m>1 → gate_hot never cooled → the FIX-17
-//            detection freeze became PERMANENT: an in-game multiplier change
-//            (2→3, or MFG off) was never picked up; 3x content ran with a 2x
-//            distribution forever. Every 10s the gate now stands down for 24
-//            flips (invisible on VRR) and m is re-measured from the raw
-//            stream (probe). m→1 was already self-correcting via cycle sums;
-//            this closes the upward path.
-//   [FIX-48] MFG detect window 64 → 32: halves the mixed-sample transient
-//            real_win ingests during a multiplier transition (~0.3-0.5s →
-//            ~0.15-0.25s); p=(m-1)/m is still cleanly resolved at 32 samples.
-//   [FIX-49] present_seq incremented only inside the gate condition → with
-//            FLM_PACE_POINT=acquire the CSV slot column froze at 0. Telemetry
-//            decoupled from gating; every primary-swapchain present counts.
-//   [FIX-50] Hot-path cost: (a) thread_local generation-validated swapchain
-//            state cache — shared_mutex + hash + shared_ptr copy no longer
-//            paid twice per frame; (b) single now_ns() per gate entry (was up
-//            to 3 on the floor path); (c) real_win median cached and
-//            recomputed once per PUSH instead of copy+sort twice per flip.
-//   [FIX-51] Cache-line layout: atomics regrouped BY WRITER THREAD (present-
-//            written line + measurement-written line) instead of one line per
-//            atomic — same writer-isolation guarantee, 9 lines → 2.
-//   [FIX-52] resolve_gate PRESENT/AUTO byte-identical branches merged; CMake/
-//            manifest version now generated from one place (configure_file),
-//            build.sh sed patching removed.
-//   [FIX-53] FLM_PACE_FIFO=1: opt-in to allow PACER (and floor-pacing) on
-//            FIFO/FIFO_RELAXED swapchains. Previously resolve_gate excluded
-//            FIFO unconditionally with no override — the only path was
-//            LIMITER. Default stays off (0): FIFO is already vsync-locked,
-//            layering PACER on top can fight the compositor's own pacing on
-//            most content. For engines that only expose FIFO but still
-//            benefit from PACER/floor smoothing (e.g. MFG), the filter can
-//            now be lifted explicitly.
-//   [FIX-56] FLOOR_MFG_ADAPT was relaxing floor_ratio LINEARLY in (m-1), on
-//            the assumption that each extra generated frame adds a fixed
-//            variance increment. Same-scene A/B data (identical GPU load)
-//            showed 4x producing a 5.50% hitch rate against 2x's 0.02% — a
-//            ~275x gap a linear step cannot explain. The three interpolated
-//            frames in 4x share optical-flow cost variance from the same
-//            motion-vector pass, so the needed slack grows faster than
-//            linearly. Ratio relax now scales with (m-1)*m/2 (1/3/6 at
-//            m=2/3/4) instead of (m-1) (1/2/3); the autotune brake's loosen
-//            step (on consecutive held real frames) scales with (m-1)
-//            instead of a fixed -4, so it clears a high-m backlog in one
-//            correction instead of several cycles of repeated hitching.
-//
-// v2.6 fixes (observability + robustness — full-code architectural review):
-//   [FIX-57] CSV PATH REGISTRY. Every SwapchainState fopen'd FLM_CSV with
-//            "w" → every swapchain RECREATION (resolution change, fullscreen
-//            toggle, alt-tab OUT_OF_DATE loop) silently TRUNCATED the CSV
-//            mid-session, destroying the A/B run being recorded. First open
-//            per path truncates + writes the header; re-opens append with no
-//            header (one continuous file across recreations); a concurrent
-//            second swapchain on the same path gets "<path>.2" instead of
-//            interleaving torn rows into one stream.
-//   [FIX-58] STATS now answers the tuning question directly: fake and hitch
-//            counted SEPARATELY (FIX-27's combined counter hid a 5.50%
-//            hitch-rate regression behind m=4's dominant fake count), and a
-//            p99 over all presented intervals in the window is reported —
-//            the live equivalent of the offline CSV percentile workflow.
-//            Ring capped at 4096 samples/window; nth_element once per window.
-//   [FIX-59] FLM_MEASURE_CPU accepts comma lists of ranges/cores
-//            ("0-3,8,10-11"). The documented list form was a silent parse
-//            error; non-contiguous pin sets (CCD minus SMT siblings) were
-//            inexpressible.
-//   [FIX-60] SIGUSR1 reload log prints the full effective floor/pacing state
-//            (ratio, adapt, autotune, pace_fifo, ...) so a live retune is
-//            verifiable at INFO level — typo'd keys are silently ignored by
-//            apply_dynamic_kv, and the old 4-field line couldn't confirm the
-//            floor knobs landed.
-//   [FIX-61] FLM_LIB_PATH in CMakeLists now overridable via -D (CACHE STRING).
-//            A plain set() always wins over -D args; the old form silently
-//            ignored Portage get_libdir, writing the wrong path into the
-//            installed manifest on multilib Gentoo.
+// [STYLE-03/STYLE-05] Design summary + anti-stutter rules → ALGORITHM.md.
+// Fix-by-fix history (FIX-1..FIX-61, v1 through v2.6) → CHANGELOG.md. Per-fix
+// rationale that still matters for reading a specific block of code below
+// stays as an inline comment right next to that code (e.g. FIX-51's cache-
+// line grouping note is above the fields it explains) — this file is the
+// implementation; ALGORITHM.md is "how it works", CHANGELOG.md is "what
+// changed and why".
 // ============================================================================
-
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
 
@@ -259,9 +18,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdarg>
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
@@ -291,15 +52,30 @@ enum class LogLevel { DEBUG = 0, INFO, WARN, ERR };
 static std::atomic<int> g_log_level{(int)LogLevel::ERR};   // [item 15] atomic
 static FILE*            g_log_file = stderr;
 
-// [FIX-29] fflush only at INFO+ — DEBUG spam stays buffered (stderr is already
-// unbuffered; this only matters for FLM_LOG_FILE).
-#define FLM_LOG(level, ...) do { \
-    if ((int)(level) >= g_log_level.load(std::memory_order_relaxed)) { \
-        fprintf(g_log_file, "[FLM] " __VA_ARGS__); \
-        fputc('\n', g_log_file); \
-        if ((int)(level) >= (int)LogLevel::INFO) fflush(g_log_file); \
-    } \
-} while (0)
+// [PERF-14] The logic used to live entirely inside the FLM_LOG macro body.
+// A real function is debugger-friendly (breakpoint/step into it, which you
+// can't meaningfully do inside a macro expansion) and — with the printf
+// format attribute — gets compile-time type checking of the format string
+// against its arguments, which a macro can't provide either. FLM_LOG stays a
+// thin macro so the ~50 call sites below don't need to change; the side
+// effects (the level check, the actual write) now live in one ordinary
+// function instead of being re-expanded at every call site.
+#if defined(__GNUC__) || defined(__clang__)
+static inline void flm_log_impl(LogLevel level, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
+#endif
+static inline void flm_log_impl(LogLevel level, const char* fmt, ...) {
+    if ((int)level < g_log_level.load(std::memory_order_relaxed)) return;
+    fprintf(g_log_file, "[FLM] ");
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(g_log_file, fmt, args);
+    va_end(args);
+    fputc('\n', g_log_file);
+    // [FIX-29] fflush only at INFO+ — DEBUG spam stays buffered (stderr is
+    // already unbuffered; this only matters for FLM_LOG_FILE).
+    if ((int)level >= (int)LogLevel::INFO) fflush(g_log_file);
+}
+#define FLM_LOG(level, ...) flm_log_impl(level, __VA_ARGS__)
 
 // ============================================================================
 // CONSTANTS
@@ -345,6 +121,34 @@ namespace FlmConst {
     constexpr int64_t  MEAS_FRESH_NS       = 250'000'000LL;    // [FIX-43] measurement freshness window
     constexpr size_t   CSV_STDIO_BUF       = 1u << 20;         // [FIX-30]
     constexpr size_t   LOG_STDIO_BUF       = 64u << 10;        // [FIX-29]
+
+    // [ROBUST-04] Named thresholds for values that were inline literals in
+    // the algorithm below — same numbers, same behaviour, just findable in
+    // one place instead of buried in a comparison.
+    // [FIX-17-class] MFG "fake" (generated) frame test: interval below 0.7x
+    // the slot mean is classified as a generated/interpolated frame.
+    constexpr int64_t  MFG_FAKE_RATIO_NUM  = 7;
+    constexpr int64_t  MFG_FAKE_RATIO_DEN  = 10;
+    constexpr int      MFG_PROBE_MIN_SAMPLES = 16;   // below this, a probe/detect window is too thin to trust
+    // [item 8] GPU-bound guard hysteresis band: >105% of target = over
+    // (game can't keep up, back off pacing); <=102% = under (safely pacing).
+    // The 3-point gap between them is the hysteresis — avoids flapping
+    // right at 100%.
+    constexpr int64_t  GPU_BOUND_OVER_PCT  = 105;
+    constexpr int64_t  GPU_BOUND_UNDER_PCT = 102;
+    // [FIX-44] Floor-ratio autotune headroom bands: tighten (small step) when
+    // headroom exceeds 1/12 of the slot interval, loosen (bigger step, see
+    // FIX-56) when it drops below 1/50 — asymmetric on purpose, loosen reacts
+    // faster than tighten.
+    constexpr int64_t  AUTOTUNE_TIGHTEN_HEADROOM_DIV = 12;
+    constexpr int64_t  AUTOTUNE_LOOSEN_HEADROOM_DIV  = 50;
+    // Hitch threshold formula (get_hitch_threshold): 1.5x average, floored at
+    // average+2ms, capped at average+30ms — keeps the threshold sane at both
+    // very low and very high frame rates.
+    constexpr int64_t  HITCH_MULT_NUM      = 3;
+    constexpr int64_t  HITCH_MULT_DEN      = 2;
+    constexpr int64_t  HITCH_MIN_ADD_NS    = 2'000'000LL;
+    constexpr int64_t  HITCH_MAX_ADD_NS    = 30'000'000LL;
 }
 
 enum class PaceMode  { AUTO = 0, PRESENT, LIMITER, OFF };
@@ -363,6 +167,13 @@ struct FLMConfig {
     std::string config_path;        // [FIX-21] FLM_CONFIG live config file
 
     // Hot-reloadable
+    // [THREAD-04] relaxed everywhere: writer is a single reload path
+    // (init / SIGUSR1 / config-file poll, never concurrent with itself —
+    // maybe_reload() gates on an exchange), readers are present/measurement
+    // threads that are DESIGNED to tolerate picking up a live-tuned value
+    // up to one reload cycle late (these are user-facing tuning knobs, not
+    // synchronization signals gating other memory). No field here is read
+    // to decide whether some other piece of state is safe to access.
     std::atomic<int>     target_fps {0};
     std::atomic<int64_t> spin_ns    {FlmConst::DEFAULT_SPIN_NS};
     std::atomic<int64_t> lead_ns    {FlmConst::DEFAULT_LEAD_NS};
@@ -416,40 +227,119 @@ static PaceMode parse_mode(const char* s) {
     if (!strcmp(s, "present")) return PaceMode::PRESENT;
     if (!strcmp(s, "limiter")) return PaceMode::LIMITER;
     if (!strcmp(s, "off"))     return PaceMode::OFF;
+    if (strcmp(s, "auto"))   // [ROBUST-03] anything but a recognized value or "auto" is a typo
+        FLM_LOG(LogLevel::WARN, "FLM_MODE: unrecognized value '%s', using auto", s);
     return PaceMode::AUTO;
 }
 static PacePoint parse_pace_point(const char* s) {
     if (!s) return PacePoint::PRESENT;
     if (!strcmp(s, "acquire")) return PacePoint::ACQUIRE;
     if (!strcmp(s, "both"))    return PacePoint::BOTH;
+    if (strcmp(s, "present"))
+        FLM_LOG(LogLevel::WARN, "FLM_PACE_POINT: unrecognized value '%s', using present", s);
     return PacePoint::PRESENT;
 }
+
+// [API-03][ROBUST-03] atoi/atoll accept garbage silently: atoi("abc") == 0,
+// indistinguishable from an explicit "0", and out-of-range values were
+// clamped with no way to notice the clamp happened short of comparing
+// FLM_STATS-dump output against what you typed. from_chars parses without
+// locale/allocation overhead AND reports (a) whether it consumed the WHOLE
+// string, so "abc" and "120garbage" are both caught instead of becoming
+// 0 / 120, and (b) lets us log when clamping actually changes the value.
+// On a bad parse the existing atomic is left untouched (a live-reloadable
+// knob shouldn't get silently zeroed by a typo) rather than falling back to 0.
+template <typename T>
+static bool parse_num(const char* key, const char* val, T& out) {
+    const char* end = val + strlen(val);
+    auto [ptr, ec] = std::from_chars(val, end, out);
+    if (ec != std::errc() || ptr != end) {
+        FLM_LOG(LogLevel::WARN, "%s: invalid value '%s' (ignored, keeping previous)", key, val);
+        return false;
+    }
+    return true;
+}
+
+template <typename T>
+static void store_clamped(std::atomic<T>& field, const char* key, const char* val, T lo, T hi) {
+    T v;
+    if (!parse_num(key, val, v)) return;
+    T c = std::clamp(v, lo, hi);
+    if (c != v)
+        FLM_LOG(LogLevel::WARN, "%s: %lld out of range [%lld,%lld], clamped to %lld",
+                key, (long long)v, (long long)lo, (long long)hi, (long long)c);
+    field.store(c);
+}
+
+// [API-02] Table-driven KV dispatch. Each entry is {key, setter}; a new
+// hot-reloadable key is one table row instead of another strcmp/else-if link
+// in a chain that was already ~15 deep. apply_dynamic_kv itself becomes a
+// linear scan + one function-pointer call — same cost class as the old
+// chain (both are O(#keys) string compares), but the mapping from key name
+// to behaviour is data, not control flow, so it's readable and diffable at
+// 40-50 keys the way the else-if chain would not have been.
+static void set_target_fps(const char* v)        { store_clamped(g_config.target_fps, "FLM_TARGET_FPS", v, 0, 1000); }   // [FIX-33]
+static void set_stats_interval(const char* v) {   // [FIX-32] seconds → ns
+    int64_t sec;
+    if (!parse_num("FLM_STATS_INTERVAL", v, sec)) return;
+    int64_t c = std::clamp<int64_t>(sec, 1, 3600);
+    if (c != sec)
+        FLM_LOG(LogLevel::WARN, "FLM_STATS_INTERVAL: %lld out of range [1,3600]s, clamped to %lld",
+                (long long)sec, (long long)c);
+    g_config.stats_interval_ns.store(c * 1'000'000'000LL);
+}
+static void set_spin_ns(const char* v)            { store_clamped<int64_t>(g_config.spin_ns, "FLM_SPIN_NS", v, 0, 2'000'000LL); }
+static void set_present_lead_ns(const char* v)    { store_clamped<int64_t>(g_config.lead_ns, "FLM_PRESENT_LEAD_NS", v, 0, 8'000'000LL); }
+static void set_drift_tolerance_ns(const char* v) {
+    int64_t tol;
+    if (!parse_num("FLM_DRIFT_TOLERANCE_NS", v, tol)) return;
+    if (tol < 0) { FLM_LOG(LogLevel::WARN, "FLM_DRIFT_TOLERANCE_NS: negative value clamped to 0"); tol = 0; }
+    g_config.drift_tol.store(tol);
+}
+static void set_mode(const char* v)               { g_config.mode.store((int)parse_mode(v)); }
+static void set_pace_point(const char* v)         { g_config.pace_point.store((int)parse_pace_point(v)); }
+static void set_pace_fifo(const char* v)          { g_config.pace_fifo.store(atoi(v) != 0); }         // [FIX-53]
+static void set_floor_pacing(const char* v)       { g_config.floor_pacing.store(atoi(v) != 0); }       // [FIX-36]
+static void set_floor_ratio(const char* v)        { store_clamped(g_config.floor_ratio, "FLM_FLOOR_RATIO", v, 500, 1000); }   // [FIX-36]
+static void set_floor_mfg_adapt(const char* v)    { g_config.floor_mfg_adapt.store(atoi(v) != 0); }    // [FIX-41]
+static void set_floor_mfg_step(const char* v)     { store_clamped(g_config.floor_mfg_step, "FLM_FLOOR_MFG_STEP", v, 0, 200); }   // [FIX-41]
+static void set_floor_autotune(const char* v)     { g_config.floor_autotune.store(atoi(v) != 0); }     // [FIX-44]
+static void set_spin_adapt(const char* v)         { g_config.spin_adapt.store(atoi(v) != 0); }         // [FIX-39]
+static void set_log_level(const char* v) {
+    if      (!strcmp(v, "DEBUG")) g_log_level.store((int)LogLevel::DEBUG);
+    else if (!strcmp(v, "INFO"))  g_log_level.store((int)LogLevel::INFO);
+    else if (!strcmp(v, "WARN"))  g_log_level.store((int)LogLevel::WARN);
+    else if (!strcmp(v, "ERROR")) g_log_level.store((int)LogLevel::ERR);
+    else FLM_LOG(LogLevel::WARN, "FLM_LOG_LEVEL: unrecognized value '%s' (ignored)", v);   // [ROBUST-03]
+}
+
+struct ConfigKey { const char* name; void (*apply)(const char*); };
+static constexpr ConfigKey g_config_keys[] = {
+    { "FLM_TARGET_FPS",         set_target_fps },
+    { "FLM_STATS_INTERVAL",     set_stats_interval },
+    { "FLM_SPIN_NS",            set_spin_ns },
+    { "FLM_PRESENT_LEAD_NS",    set_present_lead_ns },
+    { "FLM_DRIFT_TOLERANCE_NS", set_drift_tolerance_ns },
+    { "FLM_MODE",               set_mode },
+    { "FLM_PACE_POINT",         set_pace_point },
+    { "FLM_PACE_FIFO",          set_pace_fifo },
+    { "FLM_FLOOR_PACING",       set_floor_pacing },
+    { "FLM_FLOOR_RATIO",        set_floor_ratio },
+    { "FLM_FLOOR_MFG_ADAPT",    set_floor_mfg_adapt },
+    { "FLM_FLOOR_MFG_STEP",     set_floor_mfg_step },
+    { "FLM_FLOOR_AUTOTUNE",     set_floor_autotune },
+    { "FLM_SPIN_ADAPT",         set_spin_adapt },
+    { "FLM_LOG_LEVEL",          set_log_level },
+};
 
 // [FIX-21] Single KV applier — both env and config file go through here.
 static void apply_dynamic_kv(const char* key, const char* val) {
     if (!key || !val || !*val) return;
-    // [FIX-33] fps clamp: guards against iv=0 and atoi overflow in iv=1e9/fps.
-    if      (!strcmp(key, "FLM_TARGET_FPS"))         g_config.target_fps.store(std::clamp(atoi(val), 0, 1000));
-    else if (!strcmp(key, "FLM_STATS_INTERVAL"))     g_config.stats_interval_ns.store(   // [FIX-32] seconds
-                                                         std::clamp<int64_t>(atoll(val), 1, 3600) * 1'000'000'000LL);
-    else if (!strcmp(key, "FLM_SPIN_NS"))            g_config.spin_ns.store(std::clamp<int64_t>(atoll(val), 0, 2'000'000LL));
-    else if (!strcmp(key, "FLM_PRESENT_LEAD_NS"))    g_config.lead_ns.store(std::clamp<int64_t>(atoll(val), 0, 8'000'000LL));
-    else if (!strcmp(key, "FLM_DRIFT_TOLERANCE_NS")) g_config.drift_tol.store(std::max<int64_t>(0, atoll(val)));
-    else if (!strcmp(key, "FLM_MODE"))               g_config.mode.store((int)parse_mode(val));
-    else if (!strcmp(key, "FLM_PACE_POINT"))         g_config.pace_point.store((int)parse_pace_point(val));
-    else if (!strcmp(key, "FLM_PACE_FIFO"))          g_config.pace_fifo.store(atoi(val) != 0);   // [FIX-53]
-    else if (!strcmp(key, "FLM_FLOOR_PACING"))       g_config.floor_pacing.store(atoi(val) != 0);   // [FIX-36]
-    else if (!strcmp(key, "FLM_FLOOR_RATIO"))        g_config.floor_ratio.store(std::clamp(atoi(val), 500, 1000)); // [FIX-36]
-    else if (!strcmp(key, "FLM_FLOOR_MFG_ADAPT"))    g_config.floor_mfg_adapt.store(atoi(val) != 0);   // [FIX-41]
-    else if (!strcmp(key, "FLM_FLOOR_MFG_STEP"))     g_config.floor_mfg_step.store(std::clamp(atoi(val), 0, 200)); // [FIX-41]
-    else if (!strcmp(key, "FLM_FLOOR_AUTOTUNE"))     g_config.floor_autotune.store(atoi(val) != 0);   // [FIX-44]
-    else if (!strcmp(key, "FLM_SPIN_ADAPT"))         g_config.spin_adapt.store(atoi(val) != 0);   // [FIX-39]
-    else if (!strcmp(key, "FLM_LOG_LEVEL")) {
-        if      (!strcmp(val, "DEBUG")) g_log_level.store((int)LogLevel::DEBUG);
-        else if (!strcmp(val, "INFO"))  g_log_level.store((int)LogLevel::INFO);
-        else if (!strcmp(val, "WARN"))  g_log_level.store((int)LogLevel::WARN);
-        else if (!strcmp(val, "ERROR")) g_log_level.store((int)LogLevel::ERR);
+    for (const auto& k : g_config_keys) {
+        if (!strcmp(key, k.name)) { k.apply(val); return; }
     }
+    // Unknown key: silently ignored, same as before (see FIX-60's note that
+    // typo'd keys need the SIGUSR1 state dump to catch).
 }
 
 // [FIX-21] FLM_CONFIG file: '#' comments, KEY=VALUE lines.
@@ -518,16 +408,28 @@ static inline void maybe_reload() {
         // that after a floor-ratio / autotune / pace_fifo live retune the only
         // way to confirm the value actually landed (typo'd key names are
         // silently ignored by apply_dynamic_kv) was DEBUG-level spelunking.
+        // [PERF-09] Not hot-path (SIGUSR1 is rare), but one load per field
+        // into a local reads better than re-touching the same atomic once
+        // per printf argument, and guarantees the logged line is a single
+        // consistent snapshot rather than N independent reads.
+        const int     mode        = g_config.mode.load(std::memory_order_relaxed);
+        const int     fps         = g_config.target_fps.load(std::memory_order_relaxed);
+        const int64_t spin        = g_config.spin_ns.load(std::memory_order_relaxed);
+        const int64_t lead        = g_config.lead_ns.load(std::memory_order_relaxed);
+        const bool    floor       = g_config.floor_pacing.load(std::memory_order_relaxed);
+        const int     ratio       = g_config.floor_ratio.load(std::memory_order_relaxed);
+        const bool    mfg_adapt   = g_config.floor_mfg_adapt.load(std::memory_order_relaxed);
+        const int     mfg_step    = g_config.floor_mfg_step.load(std::memory_order_relaxed);
+        const bool    autotune    = g_config.floor_autotune.load(std::memory_order_relaxed);
+        const bool    spin_adapt  = g_config.spin_adapt.load(std::memory_order_relaxed);
+        const bool    pace_fifo   = g_config.pace_fifo.load(std::memory_order_relaxed);
         FLM_LOG(LogLevel::INFO,
                 "Config reload: mode=%d fps=%d spin=%lld lead=%lld "
                 "floor=%d ratio=%d mfg_adapt=%d step=%d autotune=%d "
                 "spin_adapt=%d pace_fifo=%d",
-                g_config.mode.load(), g_config.target_fps.load(),
-                (long long)g_config.spin_ns.load(), (long long)g_config.lead_ns.load(),
-                (int)g_config.floor_pacing.load(), g_config.floor_ratio.load(),
-                (int)g_config.floor_mfg_adapt.load(), g_config.floor_mfg_step.load(),
-                (int)g_config.floor_autotune.load(),
-                (int)g_config.spin_adapt.load(), (int)g_config.pace_fifo.load());
+                mode, fps, (long long)spin, (long long)lead,
+                (int)floor, ratio, (int)mfg_adapt, mfg_step,
+                (int)autotune, (int)spin_adapt, (int)pace_fifo);
     }
 }
 
@@ -730,6 +632,155 @@ struct DeviceDispatch {
 // [FIX-57] fwd decl — registry lives below, near the measurement thread.
 static void csv_release_registered(const std::string& reg_key);
 
+// [PERF-08] std::sort's introsort machinery (partition/heapsort fallback) is
+// pure overhead below ~16-ish elements. REAL_WINDOW is 8: insertion sort does
+// O(n^2) comparisons/swaps but for n<=8 that is at most 28 compares with no
+// branching for pivot selection or recursion — measurably cheaper here, and
+// it's already sorted-ish frame-to-frame (one value changes per push), which
+// is insertion sort's best case (near O(n)).
+static constexpr inline void insertion_sort_i64(int64_t* a, int n) {
+    for (int i = 1; i < n; i++) {
+        int64_t key = a[i];
+        int j = i - 1;
+        while (j >= 0 && a[j] > key) { a[j + 1] = a[j]; j--; }
+        a[j + 1] = key;
+    }
+}
+
+// [ARCH-03] Measurement-thread-only state groups, split out of what had
+// become a flat, ~30-field SwapchainState. None of this changes behaviour or
+// layout intent — same fields, same thread ownership — it just gives each
+// group a name instead of only a comment above a block of loose fields.
+struct TimelineEstimate {
+    // [FIX-37] Cycle ring: last CYC_RING raw intervals. Sum of the last m
+    // entries ≈ T (real period) regardless of pacing mode.
+    int64_t cyc_win[FlmConst::CYC_RING] = {};
+    int     cyc_idx     = 0;
+    int     cyc_count   = 0;
+    // [FIX-36/37] T (real-frame period) estimation window — median is the
+    // floor-pacing base. Fed by cycle sums every flip.
+    int64_t real_win[FlmConst::REAL_WINDOW] = {};
+    int     real_idx    = 0;
+    int     real_count  = 0;
+    // [FIX-50] Cached median — recomputed once per push instead of copy+sort
+    // twice per flip (T_prev read + slot_iv publish both hit it).
+    int64_t median_cache = FlmConst::DEFAULT_INTERVAL_NS;
+
+    // [FIX-37] Replaces the old display_intervals median: identical
+    // semantics at m=1 (cycle sum = raw interval), fake-filter-free and
+    // phase-insensitive at m>1. [FIX-50] median() is a cache hit; the sort
+    // runs once per recompute(), not once per read.
+    constexpr int64_t median() const { return median_cache; }
+
+    constexpr void recompute() {
+        int n = std::min(real_count, FlmConst::REAL_WINDOW);
+        if (n == 0) { median_cache = FlmConst::DEFAULT_INTERVAL_NS; return; }
+        int64_t tmp[FlmConst::REAL_WINDOW];
+        std::copy(real_win, real_win + n, tmp);
+        insertion_sort_i64(tmp, n);   // [PERF-08] n<=8: cheaper than std::sort here
+        median_cache = tmp[n / 2];
+    }
+};
+
+// [FIX-16] Slot window: sliding mean over ALL intervals (correctly centres
+// MFG's bimodal ε/T pattern, unlike per-sample EMA which is phase-dependent).
+struct SlotWindow {
+    int64_t win[FlmConst::SLOT_WINDOW] = {};
+    int     idx     = 0;
+    int     count   = 0;
+    int64_t sum     = 0;
+    int64_t mean_ns = FlmConst::DEFAULT_INTERVAL_NS;
+};
+
+struct GpuBoundGuard {   // [item 8]
+    int over_run  = 0;
+    int under_run = 0;
+};
+
+struct MfgDetect {   // [item 7]
+    int small_cnt = 0;
+    int total_cnt = 0;
+};
+
+struct ProbeState {   // [FIX-47] MFG re-sample probe bookkeeping
+    int64_t last_ns = 0;
+    int     left    = 0;
+};
+
+// [PERF-11] Split out of SwapchainState: see the comment on SwapchainState's
+// csv/stats members for why these are separate, lazily-allocated objects
+// instead of inline arrays.
+struct CsvState {
+    FILE*       fp = nullptr;
+    std::string reg_key;   // [FIX-57] registry key to release on destroy
+    struct Row {
+        int64_t  flip_ns, interval_ns;
+        int      is_fake, is_hitch;
+        uint32_t slot;
+        int      mfg;            // effective MFG multiplier
+        int64_t  slot_mean_ns;   // published slot mean
+        int      pacing;         // GPU-bound guard state
+    };
+    Row  buf[FlmConst::CSV_BUFFER];
+    int  n = 0;
+
+    ~CsvState() {
+        if (n && fp) flush();
+        if (fp) fclose(fp);
+        csv_release_registered(reg_key);   // [FIX-57]
+    }
+
+    // [FIX-30] No fflush here: 1 MB _IOFBF buffer set after fopen. [PERF-07]
+    // fprintf still pays for glibc's format-string reparse AND an implicit
+    // flockfile/funlockfile pair on EVERY row, even though the underlying
+    // write() is already batched by the stdio buffer. Formatting the whole
+    // batch into a local buffer with snprintf and handing it to fwrite() in
+    // one call collapses that per-row lock/parse cost to once per
+    // CSV_BUFFER rows. 128 B/row is a generous bound for this row shape
+    // (two int64 fields at 20 digits worst case + separators); measurement
+    // thread only, so a ~32 KB stack buffer here is fine.
+    void flush() {
+        if (!fp) return;
+        char out[FlmConst::CSV_BUFFER * 128];
+        size_t off = 0;
+        for (int i = 0; i < n; i++) {
+            int w = snprintf(out + off, sizeof(out) - off,
+                    "%lld,%lld,%d,%d,%u,%d,%lld,%d\n",
+                    (long long)buf[i].flip_ns, (long long)buf[i].interval_ns,
+                    buf[i].is_fake, buf[i].is_hitch, buf[i].slot,
+                    buf[i].mfg, (long long)buf[i].slot_mean_ns, buf[i].pacing);
+            if (w < 0 || (size_t)w >= sizeof(out) - off) break;   // bound guard, should never trip
+            off += (size_t)w;
+        }
+        if (off) fwrite(out, 1, off, fp);
+        n = 0;
+    }
+    void push(int64_t flip, int64_t interval, bool fake, bool hitch, uint32_t slot,
+              int mfg, int64_t slot_mean, bool pacing) {
+        if (!fp) return;
+        buf[n++] = {flip, interval, fake ? 1 : 0, hitch ? 1 : 0, slot,
+                    mfg, slot_mean, pacing ? 1 : 0};
+        if (n >= FlmConst::CSV_BUFFER) flush();
+    }
+};
+
+struct StatsState {
+    int64_t last_ns = 0, sum_ns = 0, max_ns = 0;
+    int     frames  = 0;
+    // [FIX-58] fake and hitch tracked SEPARATELY. FIX-27's combined counter
+    // made the one number that matters for MFG tuning — the hitch rate —
+    // unreadable from STATS: at m=4 fakes dominate the sum, so a hitch-rate
+    // regression (the RE Requiem 5.50% case) was invisible without a full
+    // CSV round-trip. Now the STATS line answers it directly.
+    int     fake = 0, hitch = 0;
+    // [FIX-58] Interval samples for percentiles (ALL presented intervals,
+    // fake included — the panel sees the mixed stream, so p99 must too).
+    // nth_element runs once per stats window in the measurement thread
+    // (32 KB copy per 5s — negligible). Only exists when FLM_STATS=1.
+    int64_t ring[FlmConst::STAT_RING];
+    int     ring_n = 0;
+};
+
 // ============================================================================
 // SWAPCHAIN STATE
 // ============================================================================
@@ -751,6 +802,23 @@ struct SwapchainState {
     // the actual requirement — fields written by the SAME thread can share a
     // line freely (a reader-only thread never dirties it). Two lines total:
     //
+    // [THREAD-04] All loads/stores below are memory_order_relaxed. Why that's
+    // enough for every field in both groups, not just "it's the fast one":
+    //   * Each field has exactly one writer thread (this is the whole point
+    //     of the P/M split above) — no field is ever the target of two
+    //     concurrent stores, so there's no read-modify-write race to guard.
+    //   * None of these fields gate access to OTHER memory on the reading
+    //     side (no "if flag, then dereference pointer set before the flag" —
+    //     that pattern is what would need acquire/release). Each is read and
+    //     used standalone (a timestamp compared to now(), a counter compared
+    //     to a threshold, a bool branched on) — the consumer tolerates
+    //     reading last-frame's value and self-corrects next frame regardless
+    //     (that tolerance is the basis of the whole pacing design: see the
+    //     "no-stutter guarantee" comment above apply_gate).
+    //   * Producer publishes monotonically increasing/replacing values
+    //     (slot_interval_ns, present_seq, ...); a stale read is a one-frame-
+    //     old but still-valid value, never a torn or nonsensical one, because
+    //     each individual atomic op is itself indivisible regardless of order.
     // Line P — written by the PRESENT/ACQUIRE thread, read by measurement:
     alignas(64) std::atomic<uint64_t> next_present_id{1};
                 std::atomic<int64_t>  last_gate_wait_ns{0};     // [FIX-17] detection freeze
@@ -759,6 +827,12 @@ struct SwapchainState {
     //
     // Line M — written by the MEASUREMENT thread, read by present:
     alignas(64) std::atomic<int64_t>  slot_interval_ns{FlmConst::DEFAULT_INTERVAL_NS};
+                // relaxed: producer (measurement) publishes a new estimate
+                // once per flip and only ever replaces it wholesale; consumer
+                // (present/apply_gate) reads it once per gate call and is
+                // designed to tolerate a one-frame-stale value (next flip
+                // corrects it) — there's no second piece of state that needs
+                // to be seen "at least as new as" this one.
                 std::atomic<int64_t>  last_flip_ns{0};   // [FIX-43] last successful flip ts
                 std::atomic<int>      eff_mfg{1};               // [item 7] effective multiplier
                 std::atomic<int>      hitch_recovery_frames{0};
@@ -778,123 +852,43 @@ struct SwapchainState {
     int                 ratio_auto         = 0;   // [FIX-44] learned ratio delta [-150,150]
     int                 held_run           = 0;   // [FIX-44] consecutive held presents
 
-    // [FIX-28][FIX-38] Only the measurement thread touches these → lock-free;
-    // starts on a separate cache line from the present-thread fields. (FIX-36
-    // had mistakenly placed real_win on the present line; the measurement
-    // thread writes these every frame, so FIX-28's fix regressed — moved here.)
-    // [FIX-37] Cycle ring: last CYC_RING raw intervals. Sum of the last m
-    // entries ≈ T (real period) regardless of pacing mode.
-    alignas(64) int64_t cyc_win[FlmConst::CYC_RING] = {};
-    int     cyc_idx     = 0;
-    int     cyc_count   = 0;
-    // [FIX-36/37] T (real-frame period) estimation window — median is the
-    // floor-pacing base. Now fed by cycle sums every flip.
-    int64_t real_win[FlmConst::REAL_WINDOW] = {};
-    int     real_idx    = 0;
-    int     real_count  = 0;
-    // [FIX-50] Cached median of real_win — recomputed once per push instead of
-    // copy+sort twice per flip (T_prev read + slot_iv publish both hit it).
-    int64_t real_median_cache = FlmConst::DEFAULT_INTERVAL_NS;
-    // [FIX-47] MFG re-sample probe bookkeeping (measurement thread only).
-    int64_t probe_last_ns = 0;
-    int     probe_left    = 0;
-    // [FIX-16] Slot window: sliding mean over ALL intervals (correctly centres
-    // MFG's bimodal ε/T pattern, unlike per-sample EMA which is phase-dependent).
-    // 4x hitch-poisoning clamp.
-    int64_t slot_win[FlmConst::SLOT_WINDOW] = {};
-    int     slot_idx    = 0;
-    int     slot_count  = 0;
-    int64_t slot_sum    = 0;
-    int64_t slot_mean_ns = FlmConst::DEFAULT_INTERVAL_NS;
-    // [item 8] GPU-bound window
-    int     over_target_run  = 0;
-    int     under_target_run = 0;
-    // [item 7] MFG detection
-    int     mfg_small_cnt = 0;
-    int     mfg_total_cnt = 0;
-    // [item 12] stats
-    int64_t stat_last_ns    = 0;
-    int64_t stat_sum_ns     = 0;
-    int64_t stat_max_ns     = 0;
-    int     stat_frames     = 0;
-    // [FIX-58] fake and hitch tracked SEPARATELY. FIX-27's combined counter
-    // made the one number that matters for MFG tuning — the hitch rate —
-    // unreadable from STATS: at m=4 fakes dominate the sum, so a hitch-rate
-    // regression (the RE Requiem 5.50% case) was invisible without a full
-    // CSV round-trip. Now the STATS line answers it directly.
-    int     stat_fake       = 0;
-    int     stat_hitch      = 0;
-    // [FIX-58] Interval samples for percentiles (ALL presented intervals,
-    // fake included — the panel sees the mixed stream, so p99 must too).
-    // Written only when FLM_STATS=1; nth_element runs once per stats window
-    // in the measurement thread (32 KB copy per 5s — negligible).
-    int64_t stat_ring[FlmConst::STAT_RING];
-    int     stat_ring_n     = 0;
-    // [item 12] CSV — [FIX-31] telemetry columns added
-    FILE*   csv_fp = nullptr;
-    std::string csv_reg_key;   // [FIX-57] registry key to release on destroy
-    struct CsvRow {
-        int64_t  flip_ns, interval_ns;
-        int      is_fake, is_hitch;
-        uint32_t slot;
-        int      mfg;            // effective MFG multiplier
-        int64_t  slot_mean_ns;   // published slot mean
-        int      pacing;         // GPU-bound guard state
-    };
-    CsvRow  csv_buf[FlmConst::CSV_BUFFER];
-    int     csv_n = 0;
+    // [ARCH-03] Grouped measurement-thread-only state. FIX-37/FIX-16/FIX-47
+    // originally left these as flat SwapchainState fields; only the
+    // measurement thread ever touches any of them (present/acquire never
+    // reach in), so grouping changes nothing about the FIX-28/38/51 cross-
+    // thread cache-line guarantees on the fields above — it just answers
+    // "what is this group for" at the type level instead of only in
+    // comments. alignas(64) moves with the first group so the measurement
+    // cache line still starts in the same place.
+    alignas(64) TimelineEstimate timeline;   // [FIX-37] cycle ring + T-period median
+    SlotWindow    slot;         // [FIX-16] sliding mean over ALL intervals
+    GpuBoundGuard gpu_guard;    // [item 8]
+    MfgDetect     mfg_detect;   // [item 7]
+    ProbeState    probe;        // [FIX-47] MFG re-sample probe bookkeeping
+
+    // [PERF-11] Both are cache-cold relative to the per-frame timeline/slot/
+    // probe state above: CSV only writes when FLM_CSV is set (normally a
+    // short diagnostic capture, not left on), and STAT_RING alone is 32 KB.
+    // Keeping them inline meant every swapchain paid that memory whether or
+    // not either feature was ever turned on. Heap-allocated, allocated once
+    // on first actual use, measurement-thread-only same as before — nullptr
+    // costs nothing beyond the pointer itself when the feature is off.
+    std::unique_ptr<CsvState>   csv;
+    std::unique_ptr<StatsState> stats;
 
     SwapchainState(VkDevice dev, VkSwapchainKHR sc, DeviceDispatch* d)
         : device(dev), swapchain(sc), disp(d) {}
 
-    ~SwapchainState() {
-        if (csv_n && csv_fp) csv_flush();
-        if (csv_fp) fclose(csv_fp);
-        csv_release_registered(csv_reg_key);   // [FIX-57]
+    // csv/stats clean themselves up via unique_ptr (CsvState's destructor
+    // flushes + closes + releases the registry key, same as before).
+    ~SwapchainState() = default;
+
+    constexpr int64_t get_hitch_threshold(int64_t avg_ns) const {
+        int64_t adaptive = std::max<int64_t>((avg_ns * FlmConst::HITCH_MULT_NUM) / FlmConst::HITCH_MULT_DEN,
+                                              avg_ns + FlmConst::HITCH_MIN_ADD_NS);
+        return std::min<int64_t>(adaptive, avg_ns + FlmConst::HITCH_MAX_ADD_NS);
     }
 
-    int64_t get_hitch_threshold(int64_t avg_ns) const {
-        int64_t adaptive = std::max<int64_t>((avg_ns * 3) / 2, avg_ns + 2'000'000LL);
-        return std::min<int64_t>(adaptive, avg_ns + 30'000'000LL);
-    }
-
-    // [FIX-37] Real-frame period (T) median — from cycle-sum estimates.
-    // Replaces display_intervals median: identical semantics at m=1 (cycle
-    // sum = raw interval), and at m>1 it is fake-filter-free and phase-insensitive.
-    // [FIX-50] Reads are now a cache hit; the sort runs once per PUSH (in
-    // real_median_recompute), not once per read — v2.4 sorted twice per flip.
-    int64_t real_period_median() const { return real_median_cache; }
-
-    void real_median_recompute() {
-        int n = std::min(real_count, FlmConst::REAL_WINDOW);
-        if (n == 0) { real_median_cache = FlmConst::DEFAULT_INTERVAL_NS; return; }
-        int64_t tmp[FlmConst::REAL_WINDOW];
-        std::copy(real_win, real_win + n, tmp);
-        std::sort(tmp, tmp + n);
-        real_median_cache = tmp[n / 2];
-    }
-
-    // [FIX-30] No fflush here: 1 MB _IOFBF buffer set after fopen; fprintf
-    // calls are pure in-memory formatting. Actual write() only when the stdio
-    // buffer fills (≈20k+ rows) — measurement thread timing is protected.
-    void csv_flush() {
-        if (!csv_fp) return;
-        for (int i = 0; i < csv_n; i++) {
-            fprintf(csv_fp, "%lld,%lld,%d,%d,%u,%d,%lld,%d\n",
-                    (long long)csv_buf[i].flip_ns, (long long)csv_buf[i].interval_ns,
-                    csv_buf[i].is_fake, csv_buf[i].is_hitch, csv_buf[i].slot,
-                    csv_buf[i].mfg, (long long)csv_buf[i].slot_mean_ns,
-                    csv_buf[i].pacing);
-        }
-        csv_n = 0;
-    }
-    void csv_push(int64_t flip, int64_t interval, bool fake, bool hitch, uint32_t slot,
-                  int mfg, int64_t slot_mean, bool pacing) {
-        if (!csv_fp) return;
-        csv_buf[csv_n++] = {flip, interval, fake ? 1 : 0, hitch ? 1 : 0, slot,
-                            mfg, slot_mean, pacing ? 1 : 0};
-        if (csv_n >= FlmConst::CSV_BUFFER) csv_flush();
-    }
 };
 
 // ============================================================================
@@ -921,11 +915,22 @@ static std::unordered_map<VkSwapchainKHR, std::shared_ptr<SwapchainState>> g_sc_
 static inline void* dispatch_key(void* handle) { return *(void**)handle; }
 
 // [FIX-33] Reserve once at init to avoid rehash on first inserts.
+// [MEM-02] max_load_factor(0.5) forces a bigger bucket array for a given
+// element count → shorter average probe chains on find(). These maps are all
+// tiny (4-16 elements) and sit on hot paths (dispatch_key, find_sc_state's
+// slow path), so a few dozen extra bytes buys a real per-lookup win. Set
+// before reserve() so reserve sizes against the lower load factor instead of
+// rehashing again on first insert.
 static void reserve_global_maps() {
-    { std::unique_lock lk(g_inst_lock);  g_inst_map.reserve(4);  g_instkey_map.reserve(4); }
-    { std::unique_lock lk(g_dev_lock);   g_dev_map.reserve(4); }
-    { std::unique_lock lk(g_queue_lock); g_queue_map.reserve(16); }
-    { std::unique_lock lk(g_sc_lock);    g_sc_map.reserve(8); }
+    { std::unique_lock lk(g_inst_lock);
+      g_inst_map.max_load_factor(0.5f);    g_instkey_map.max_load_factor(0.5f);
+      g_inst_map.reserve(4);               g_instkey_map.reserve(4); }
+    { std::unique_lock lk(g_dev_lock);
+      g_dev_map.max_load_factor(0.5f);     g_dev_map.reserve(4); }
+    { std::unique_lock lk(g_queue_lock);
+      g_queue_map.max_load_factor(0.5f);   g_queue_map.reserve(16); }
+    { std::unique_lock lk(g_sc_lock);
+      g_sc_map.max_load_factor(0.5f);      g_sc_map.reserve(8); }
 }
 
 static DeviceDispatch* find_device_dispatch(VkDevice device) {
@@ -1098,8 +1103,9 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
         // [FIX-57] Registry-backed open: append (headerless) across swapchain
         // recreations, suffixed file if another live swapchain already owns
         // the path. Buffering + header handled inside.
-        st->csv_fp = csv_open_registered(g_config.csv_path, st->csv_reg_key);
-        if (!st->csv_fp) {
+        st->csv = std::make_unique<CsvState>();
+        st->csv->fp = csv_open_registered(g_config.csv_path, st->csv->reg_key);
+        if (!st->csv->fp) {
             // [FIX-54] v2.5 silently dropped CSV logging on fopen failure —
             // no way to tell "CSV disabled" from "CSV path unwritable" (wrong
             // dir, missing perms, or a container/sandbox mount namespace that
@@ -1107,14 +1113,18 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
             // Runtime / Pressure Vessel). Now logged loudly with errno.
             FLM_LOG(LogLevel::WARN, "FLM_CSV fopen('%s') failed: %s",
                     g_config.csv_path.c_str(), strerror(errno));
+            st->csv.reset();   // [PERF-11] no FILE*, no point keeping the object
         }
     }
+    // [PERF-11] g_config.stats is structural (set once at init, not hot-
+    // reloadable) — safe to gate the allocation on it here, once.
+    if (g_config.stats) st->stats = std::make_unique<StatsState>();
 
     uint64_t wait_id         = st->next_present_id.load(std::memory_order_relaxed);
     if (wait_id == 0) wait_id = 1;
     int64_t  last_display_ns = 0;
     bool     last_valid      = false;
-    st->stat_last_ns = now_ns();
+    if (st->stats) st->stats->last_ns = now_ns();
 
     while (!stoken.stop_requested()) {
         maybe_reload();   // [FIX-21] SIGUSR1 → applied here (AS-safe)
@@ -1161,11 +1171,11 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
             // [FIX-37] Previous T estimate (cycle-sum median). Fake split and
             // hitch threshold are now tied to this — not to the stale
             // accept-median that froze under pacing.
-            const int64_t T_prev = st->real_period_median();
+            const int64_t T_prev = st->timeline.median();
             // [FIX-40] No hitch/fake classification until the window is warm
             // (4 estimates): at ~30 FPS with T_prev still at 16.6ms every
             // first frame counted as a hitch and the window never warmed up.
-            const bool warm = st->real_count >= 4;
+            const bool warm = st->timeline.real_count >= 4;
 
             // [FIX-37] HITCH FIRST, from the raw interval. Hitch intervals are
             // long and cannot fall into the fake (short) class → [FIX-19]
@@ -1177,8 +1187,8 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
                 st->hitch_recovery_frames.store(FlmConst::HITCH_RECOVERY,
                                                 std::memory_order_relaxed);
                 // Cycle sums covering the hitch would poison T → reset the ring.
-                st->cyc_count = 0;
-                st->cyc_idx   = 0;
+                st->timeline.cyc_count = 0;
+                st->timeline.cyc_idx   = 0;
             } else {
                 if (st->hitch_active.load(std::memory_order_relaxed)) {
                     if (st->hitch_recovery_frames.fetch_sub(1, std::memory_order_relaxed) <= 1)
@@ -1193,25 +1203,25 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
                 //   uniform paced   : m * (T/m)             = T
                 // Estimate is BLIND to pacing's own effect — the freeze/brake
                 // lock of the v2.2 non-fake feed is structurally eliminated.
-                st->cyc_win[st->cyc_idx] = interval_ns;
-                st->cyc_idx = (st->cyc_idx + 1) % FlmConst::CYC_RING;
-                if (st->cyc_count < FlmConst::CYC_RING) st->cyc_count++;
+                st->timeline.cyc_win[st->timeline.cyc_idx] = interval_ns;
+                st->timeline.cyc_idx = (st->timeline.cyc_idx + 1) % FlmConst::CYC_RING;
+                if (st->timeline.cyc_count < FlmConst::CYC_RING) st->timeline.cyc_count++;
 
                 const int mm = std::clamp(m, 1, FlmConst::CYC_RING);
-                if (st->cyc_count >= mm) {
+                if (st->timeline.cyc_count >= mm) {
                     int64_t T_est = 0;
                     for (int k = 0; k < mm; k++)
-                        T_est += st->cyc_win[(st->cyc_idx - 1 - k +
+                        T_est += st->timeline.cyc_win[(st->timeline.cyc_idx - 1 - k +
                                               FlmConst::CYC_RING) % FlmConst::CYC_RING];
                     // After warmup, clamp single-sample estimate to 2x/0.25x
                     // (anomaly/clock protection outside of hitches; still
                     // catches FPS jumps within ≈2-3 flips).
                     if (warm)
                         T_est = std::clamp(T_est, T_prev / 4, T_prev * 2);
-                    st->real_win[st->real_idx] = T_est;
-                    st->real_idx = (st->real_idx + 1) % FlmConst::REAL_WINDOW;
-                    if (st->real_count < FlmConst::REAL_WINDOW) st->real_count++;
-                    st->real_median_recompute();   // [FIX-50] once per push
+                    st->timeline.real_win[st->timeline.real_idx] = T_est;
+                    st->timeline.real_idx = (st->timeline.real_idx + 1) % FlmConst::REAL_WINDOW;
+                    if (st->timeline.real_count < FlmConst::REAL_WINDOW) st->timeline.real_count++;
+                    st->timeline.recompute();   // [FIX-50] once per push
                 }
             }
 
@@ -1232,12 +1242,12 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
             // 4x clamp against hitch poisoning.
             {
                 int64_t safe_iv = std::clamp<int64_t>(interval_ns, 100'000LL,
-                                                      st->slot_mean_ns * 4);
-                st->slot_sum += safe_iv - st->slot_win[st->slot_idx];
-                st->slot_win[st->slot_idx] = safe_iv;
-                st->slot_idx = (st->slot_idx + 1) % FlmConst::SLOT_WINDOW;
-                if (st->slot_count < FlmConst::SLOT_WINDOW) st->slot_count++;
-                st->slot_mean_ns = st->slot_sum / st->slot_count;
+                                                      st->slot.mean_ns * 4);
+                st->slot.sum += safe_iv - st->slot.win[st->slot.idx];
+                st->slot.win[st->slot.idx] = safe_iv;
+                st->slot.idx = (st->slot.idx + 1) % FlmConst::SLOT_WINDOW;
+                if (st->slot.count < FlmConst::SLOT_WINDOW) st->slot.count++;
+                st->slot.mean_ns = st->slot.sum / st->slot.count;
             }
 
             // [FIX-17] MFG detection: threshold relative to slot-EMA (ema ≈ T/m).
@@ -1249,18 +1259,18 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
             if (g_config.mfg_mult_env > 0) {
                 if (m != g_config.mfg_mult_env)
                     st->eff_mfg.store(g_config.mfg_mult_env, std::memory_order_relaxed);
-            } else if (st->probe_left > 0) {
+            } else if (st->probe.left > 0) {
                 // ============================================================
                 // [FIX-47] PROBE ACTIVE — gate is standing down (apply_gate
                 // sees probe_active and passes everything through), so the
                 // intervals arriving here are RAW. Detection runs UNFROZEN
                 // on exactly these samples.
                 // ============================================================
-                if (interval_ns * 10 < st->slot_mean_ns * 7) st->mfg_small_cnt++;
-                st->mfg_total_cnt++;
-                if (--st->probe_left == 0) {
-                    if (st->mfg_total_cnt >= 16) {
-                        double p = (double)st->mfg_small_cnt / (double)st->mfg_total_cnt;
+                if (interval_ns * FlmConst::MFG_FAKE_RATIO_DEN < st->slot.mean_ns * FlmConst::MFG_FAKE_RATIO_NUM) st->mfg_detect.small_cnt++;
+                st->mfg_detect.total_cnt++;
+                if (--st->probe.left == 0) {
+                    if (st->mfg_detect.total_cnt >= FlmConst::MFG_PROBE_MIN_SAMPLES) {
+                        double p = (double)st->mfg_detect.small_cnt / (double)st->mfg_detect.total_cnt;
                         int mhat = (p < 0.99) ? (int)std::lround(1.0 / (1.0 - p)) : 4;
                         mhat = std::clamp(mhat, 1, 4);
                         if (mhat != m) {
@@ -1268,17 +1278,17 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
                             st->eff_mfg.store(mhat, std::memory_order_relaxed);
                         }
                     }
-                    st->mfg_small_cnt = 0;
-                    st->mfg_total_cnt = 0;
-                    st->probe_last_ns = tnow;
+                    st->mfg_detect.small_cnt = 0;
+                    st->mfg_detect.total_cnt = 0;
+                    st->probe.last_ns = tnow;
                     st->probe_active.store(false, std::memory_order_relaxed);
                 }
             } else {
                 bool gate_hot = (tnow - st->last_gate_wait_ns.load(std::memory_order_relaxed))
                                 < 1'000'000'000LL;
                 if (gate_hot && m > 1) {
-                    st->mfg_small_cnt = 0;   // frozen window: start clean
-                    st->mfg_total_cnt = 0;
+                    st->mfg_detect.small_cnt = 0;   // frozen window: start clean
+                    st->mfg_detect.total_cnt = 0;
                     // ========================================================
                     // [FIX-47] FREEZE + ALWAYS-HOT GATE DEADLOCK. Floor pacing
                     // holds at least one present per cycle at m>1, so gate_hot
@@ -1291,26 +1301,26 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
                     // raw stream. m→1 transitions were already self-correcting
                     // via cycle-sum; this closes the upward path too.
                     // ========================================================
-                    if (st->probe_last_ns == 0) {
-                        st->probe_last_ns = tnow;   // anchor on first frozen flip
-                    } else if (tnow - st->probe_last_ns >= FlmConst::PROBE_PERIOD_NS) {
-                        st->probe_left = FlmConst::PROBE_FLIPS;
+                    if (st->probe.last_ns == 0) {
+                        st->probe.last_ns = tnow;   // anchor on first frozen flip
+                    } else if (tnow - st->probe.last_ns >= FlmConst::PROBE_PERIOD_NS) {
+                        st->probe.left = FlmConst::PROBE_FLIPS;
                         st->probe_active.store(true, std::memory_order_relaxed);
                         FLM_LOG(LogLevel::DEBUG, "MFG probe: gate suspended for %d flips",
                                 FlmConst::PROBE_FLIPS);
                     }
                 } else {
-                    if (interval_ns * 10 < st->slot_mean_ns * 7) st->mfg_small_cnt++;
-                    st->mfg_total_cnt++;
-                    if (st->mfg_total_cnt >= FlmConst::MFG_DETECT_WINDOW) {
-                        double p = (double)st->mfg_small_cnt / (double)st->mfg_total_cnt;
+                    if (interval_ns * FlmConst::MFG_FAKE_RATIO_DEN < st->slot.mean_ns * FlmConst::MFG_FAKE_RATIO_NUM) st->mfg_detect.small_cnt++;
+                    st->mfg_detect.total_cnt++;
+                    if (st->mfg_detect.total_cnt >= FlmConst::MFG_DETECT_WINDOW) {
+                        double p = (double)st->mfg_detect.small_cnt / (double)st->mfg_detect.total_cnt;
                         int mhat = (p < 0.99) ? (int)std::lround(1.0 / (1.0 - p)) : 4;
                         mhat = std::clamp(mhat, 1, 4);
                         if (mhat != m)
                             FLM_LOG(LogLevel::INFO, "MFG multiplier: %d -> %d", m, mhat);
                         st->eff_mfg.store(mhat, std::memory_order_relaxed);
-                        st->mfg_small_cnt = 0;
-                        st->mfg_total_cnt = 0;
+                        st->mfg_detect.small_cnt = 0;
+                        st->mfg_detect.total_cnt = 0;
                     }
                 }
             }
@@ -1329,10 +1339,10 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
                 slot_iv = 1'000'000'000LL / fps;
             } else if (g_config.floor_pacing.load(std::memory_order_relaxed)) {
                 int mm2 = std::max(1, m);
-                slot_iv = std::max<int64_t>(st->real_period_median() / mm2,
+                slot_iv = std::max<int64_t>(st->timeline.median() / mm2,
                                             FlmConst::MIN_FLOOR_NS);
             } else {
-                slot_iv = st->slot_mean_ns;
+                slot_iv = st->slot.mean_ns;
             }
             st->slot_interval_ns.store(slot_iv, std::memory_order_relaxed);
 
@@ -1342,58 +1352,61 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
             // (in v2 MFG's bimodal raw intervals immediately triggered it and
             // killed pacing).
             if (fps > 0) {
-                if (st->slot_mean_ns > (slot_iv * 105) / 100) {
-                    st->over_target_run++; st->under_target_run = 0;
-                } else if (st->slot_mean_ns <= (slot_iv * 102) / 100) {
-                    st->under_target_run++; st->over_target_run = 0;
+                if (st->slot.mean_ns > (slot_iv * FlmConst::GPU_BOUND_OVER_PCT) / 100) {
+                    st->gpu_guard.over_run++; st->gpu_guard.under_run = 0;
+                } else if (st->slot.mean_ns <= (slot_iv * FlmConst::GPU_BOUND_UNDER_PCT) / 100) {
+                    st->gpu_guard.under_run++; st->gpu_guard.over_run = 0;
                 }
-                if (st->over_target_run >= FlmConst::GPU_BOUND_WINDOW) {
+                if (st->gpu_guard.over_run >= FlmConst::GPU_BOUND_WINDOW) {
                     if (st->pacing_enabled.exchange(false, std::memory_order_relaxed))
                         FLM_LOG(LogLevel::DEBUG, "GPU-bound: pacing OFF");
-                    st->over_target_run = FlmConst::GPU_BOUND_WINDOW;
-                } else if (st->under_target_run >= FlmConst::GPU_BOUND_WINDOW) {
+                    st->gpu_guard.over_run = FlmConst::GPU_BOUND_WINDOW;
+                } else if (st->gpu_guard.under_run >= FlmConst::GPU_BOUND_WINDOW) {
                     if (!st->pacing_enabled.exchange(true, std::memory_order_relaxed))
                         FLM_LOG(LogLevel::DEBUG, "GPU-bound: pacing ON");
-                    st->under_target_run = FlmConst::GPU_BOUND_WINDOW;
+                    st->gpu_guard.under_run = FlmConst::GPU_BOUND_WINDOW;
                 }
             } else {
-                st->over_target_run = st->under_target_run = 0;
+                st->gpu_guard.over_run = st->gpu_guard.under_run = 0;
                 if (!st->pacing_enabled.load(std::memory_order_relaxed))
                     st->pacing_enabled.store(true, std::memory_order_relaxed);
             }
 
-            // [item 12] stats + CSV
-            if (!is_fake) {
-                st->stat_sum_ns   += interval_ns;
-                st->stat_max_ns    = std::max(st->stat_max_ns, interval_ns);
-                st->stat_frames++;
-                if (is_hitch) st->stat_hitch++;   // [FIX-58] separate counter
-            } else {
-                st->stat_fake++;                  // [FIX-58]
+            // [item 12] stats + CSV — both objects are null unless the
+            // corresponding feature is actually on ([PERF-11]).
+            if (st->stats) {
+                if (!is_fake) {
+                    st->stats->sum_ns += interval_ns;
+                    st->stats->max_ns  = std::max(st->stats->max_ns, interval_ns);
+                    st->stats->frames++;
+                    if (is_hitch) st->stats->hitch++;   // [FIX-58] separate counter
+                } else {
+                    st->stats->fake++;                  // [FIX-58]
+                }
+                // [FIX-58] Percentile sample. Overflow past STAT_RING is
+                // dropped; see the constant's comment.
+                if (st->stats->ring_n < FlmConst::STAT_RING)
+                    st->stats->ring[st->stats->ring_n++] = interval_ns;
             }
-            // [FIX-58] Percentile sample (only when stats are on — the ring
-            // is dead weight otherwise). Overflow past STAT_RING is dropped;
-            // see the constant's comment.
-            if (g_config.stats && st->stat_ring_n < FlmConst::STAT_RING)
-                st->stat_ring[st->stat_ring_n++] = interval_ns;
-            st->csv_push(tnow, interval_ns, is_fake, is_hitch,
-                         st->present_seq.load(std::memory_order_relaxed),
-                         m, st->slot_mean_ns,
-                         st->pacing_enabled.load(std::memory_order_relaxed)); // [FIX-31]
+            if (st->csv)
+                st->csv->push(tnow, interval_ns, is_fake, is_hitch,
+                             st->present_seq.load(std::memory_order_relaxed),
+                             m, st->slot.mean_ns,
+                             st->pacing_enabled.load(std::memory_order_relaxed)); // [FIX-31]
 
             // [FIX-32] Interval configurable via FLM_STATS_INTERVAL (seconds).
             int64_t stats_iv = g_config.stats_interval_ns.load(std::memory_order_relaxed);
-            if (g_config.stats && tnow - st->stat_last_ns >= stats_iv &&
-                st->stat_frames > 0) {
-                double avg_ms = ((double)st->stat_sum_ns / (double)st->stat_frames) / 1e6;
-                double max_ms = (double)st->stat_max_ns / 1e6;
+            if (st->stats && tnow - st->stats->last_ns >= stats_iv &&
+                st->stats->frames > 0) {
+                double avg_ms = ((double)st->stats->sum_ns / (double)st->stats->frames) / 1e6;
+                double max_ms = (double)st->stats->max_ns / 1e6;
                 // [FIX-58] p99 over ALL presented intervals in the window —
                 // the live equivalent of the offline CSV p99 workflow.
                 double p99_ms = 0.0;
-                if (st->stat_ring_n > 0) {
+                if (st->stats->ring_n > 0) {
                     int64_t tmp[FlmConst::STAT_RING];
-                    const int n = st->stat_ring_n;
-                    std::copy(st->stat_ring, st->stat_ring + n, tmp);
+                    const int n = st->stats->ring_n;
+                    std::copy(st->stats->ring, st->stats->ring + n, tmp);
                     const int k = (n * 99) / 100;
                     std::nth_element(tmp, tmp + k, tmp + n);
                     p99_ms = (double)tmp[k] / 1e6;
@@ -1401,13 +1414,13 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
                 FLM_LOG(LogLevel::INFO,
                     "STATS %llds: n=%d avg=%.2fms p99=%.2fms max=%.2fms "
                     "fake=%d hitch=%d mfg=%d pacing=%d",
-                    (long long)(stats_iv / 1'000'000'000LL), st->stat_frames,
-                    avg_ms, p99_ms, max_ms, st->stat_fake, st->stat_hitch,
+                    (long long)(stats_iv / 1'000'000'000LL), st->stats->frames,
+                    avg_ms, p99_ms, max_ms, st->stats->fake, st->stats->hitch,
                     st->eff_mfg.load(), (int)st->pacing_enabled.load());
-                st->stat_sum_ns = st->stat_max_ns = 0;
-                st->stat_frames = st->stat_fake = st->stat_hitch = 0;
-                st->stat_ring_n = 0;
-                st->stat_last_ns = tnow;
+                st->stats->sum_ns = st->stats->max_ns = 0;
+                st->stats->frames = st->stats->fake = st->stats->hitch = 0;
+                st->stats->ring_n = 0;
+                st->stats->last_ns = tnow;
             }
         }
 
@@ -1416,7 +1429,7 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
         wait_id++;
     }
 
-    if (st->csv_n) st->csv_flush();
+    if (st->csv) st->csv->flush();
     FLM_LOG(LogLevel::DEBUG, "Measurement thread stopped");
 }
 
@@ -1811,22 +1824,24 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
         g_config.floor_pacing.load(std::memory_order_relaxed)) {
         int64_t slot_iv = st->slot_interval_ns.load(std::memory_order_relaxed);
         if (slot_iv <= 0) return;
-        int     ratio   = g_config.floor_ratio.load(std::memory_order_relaxed);
+        // [ARCH-04] floor_ratio and floor_autotune are both read
+        // unconditionally on this path (unlike floor_mfg_adapt/step just
+        // below, which stay individual .load()s behind their own "only if
+        // m>1" branch) — bundled here so they read as one named group.
+        struct { int ratio; bool autotune; } floor_cfg = {
+            g_config.floor_ratio.load(std::memory_order_relaxed),
+            g_config.floor_autotune.load(std::memory_order_relaxed),
+        };
+        int ratio = floor_cfg.ratio;
         // [FIX-41] Relax ratio as m grows. On Ada (40-series) GPU with no HW
         // flip metering the generated-frame production time has higher variance
         // at m=3/4; a fixed tight ratio can hold real frames inside the floor
         // unnecessarily, causing stalls and hitches. Only active when m>1;
         // no effect at m=1.
-        // [FIX-56] Linear step was insufficient: A/B data (same scene, same
-        // GPU load) showed 4x producing a 5.50% hitch rate against 2x's 0.02%
-        // — a ~275x gap, not the ~3x a linear (m-1)*step would predict. Each
-        // additional generated frame doesn't add a fixed variance increment;
-        // the THREE interpolated frames in 4x each inherit optical-flow cost
-        // variance from the same motion-vector pass, so the ratio needs to
-        // open up faster than linearly as m climbs past 2. Step now scales
-        // with (m-1)^2 instead of (m-1): unchanged at m=2 (one factor of
-        // step), triple at m=3, and six-fold at m=4 — matching the observed
-        // cliff rather than a straight line through it.
+        // [FIX-56] Step scales with (m-1)*m/2 (1,3,6 at m=2,3,4), not linearly
+        // in (m-1) — each extra generated frame's variance compounds rather
+        // than adding a fixed increment (A/B data + full reasoning: CHANGELOG
+        // FIX-56).
         int m_now = st->eff_mfg.load(std::memory_order_relaxed);
         if (g_config.floor_mfg_adapt.load(std::memory_order_relaxed)) {
             if (m_now > 1) {
@@ -1836,7 +1851,7 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
             }
         }
         // [FIX-44] Learned delta stacks on top of base + adapt; clamp preserved.
-        const bool autotune = g_config.floor_autotune.load(std::memory_order_relaxed);
+        const bool autotune = floor_cfg.autotune;
         if (autotune)
             ratio = std::clamp(ratio + st->ratio_auto, 500, 1000);
         int64_t floor   = std::max<int64_t>((slot_iv * ratio) / 1000, FlmConst::MIN_FLOOR_NS);
@@ -1866,20 +1881,17 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
         if (autotune && advance) {
             if (since < floor) {
                 if (++st->held_run >= std::max(2, m_now)) {
-                    // [FIX-56] Loosen step scales with m: at m=4 a held real
-                    // frame means the floor is fighting THREE stacked
-                    // interpolated-frame variances at once, not one — a fixed
-                    // -4 took several cycles to recover at high m, during
-                    // which the held run kept re-triggering hitches. -4*max(1,m-1)
-                    // clears the backlog in one shot at higher multipliers.
+                    // [FIX-56] Loosen step scales with m (-4*max(1,m-1)):
+                    // at high m the floor fights several stacked interpolated-
+                    // frame variances at once, not one (CHANGELOG FIX-56).
                     st->ratio_auto -= 4 * std::max(1, m_now - 1);
                     st->held_run = 0;
                 }
             } else {
                 st->held_run = 0;
                 int64_t head = since - floor;
-                if      (head > slot_iv / 12) st->ratio_auto += 1;
-                else if (head < slot_iv / 50) st->ratio_auto -= 2;
+                if      (head > slot_iv / FlmConst::AUTOTUNE_TIGHTEN_HEADROOM_DIV) st->ratio_auto += 1;
+                else if (head < slot_iv / FlmConst::AUTOTUNE_LOOSEN_HEADROOM_DIV) st->ratio_auto -= 2;
             }
             st->ratio_auto = std::clamp(st->ratio_auto, -150, 150);
         }
@@ -1953,12 +1965,31 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
     }
 }
 
+// [ARCH-04] Named snapshot of the config fields resolve_gate always reads
+// together, taken once at the top instead of three independent .load()
+// calls with no visible relationship between them. All three were already
+// unconditional here (no branch skips any of them), so this changes
+// grouping/readability only — same number of atomic loads as before, and
+// the three values are now guaranteed to describe one consistent instant
+// instead of three independently-timed reads.
+struct GateModeConfig {
+    PaceMode mode;
+    int      fps;
+    bool     pace_fifo;
+};
+static GateModeConfig snapshot_gate_mode_config() {
+    return {
+        (PaceMode)g_config.mode.load(std::memory_order_relaxed),
+        g_config.target_fps.load(std::memory_order_relaxed),
+        g_config.pace_fifo.load(std::memory_order_relaxed),
+    };
+}
+
 // Resolve the active mode. limiter_mode output: whether gate uses limiter logic.
 // Return: whether to pace at all.
 static bool resolve_gate(const SwapchainState* st, bool has_wait, bool& limiter_mode) {
     if (!st->pace_allowed) return false;
-    PaceMode mode = (PaceMode)g_config.mode.load(std::memory_order_relaxed);
-    int      fps  = g_config.target_fps.load(std::memory_order_relaxed);
+    const GateModeConfig cfg = snapshot_gate_mode_config();
 
     // [item 11] FIFO/FIFO_RELAXED already locked to vsync → PACER (uniform
     // cadence estimate) is unnecessary and normally fights the compositor.
@@ -1972,16 +2003,16 @@ static bool resolve_gate(const SwapchainState* st, bool has_wait, bool& limiter_
     // or A/B'ing PACER's smoothing against the driver's native FIFO cadence.
     bool is_fifo = (st->present_mode == VK_PRESENT_MODE_FIFO_KHR ||
                     st->present_mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR) &&
-                   !g_config.pace_fifo.load(std::memory_order_relaxed);
+                   !cfg.pace_fifo;
 
-    switch (mode) {
+    switch (cfg.mode) {
         case PaceMode::OFF:     return false;
-        case PaceMode::LIMITER: limiter_mode = true;  return fps > 0;
+        case PaceMode::LIMITER: limiter_mode = true;  return cfg.fps > 0;
         case PaceMode::PRESENT:  // [FIX-52] PRESENT and AUTO were byte-identical — merged
         case PaceMode::AUTO:
         default:
             if (has_wait && !is_fifo) { limiter_mode = false; return true; }
-            limiter_mode = true; return fps > 0;   // FIFO or no wait → limiter
+            limiter_mode = true; return cfg.fps > 0;   // FIFO or no wait → limiter
     }
 }
 
