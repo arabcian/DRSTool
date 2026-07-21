@@ -5747,44 +5747,52 @@ class LutrisGameEntry:
 
 
 class LutrisSyncWidget(QWidget):
-    """Discovers Lutris per-game YAML configs and merges the tool's current
-    env vars + gamescope system settings into the game's YAML file.
+    """Discovers Lutris per-game YAML configs and writes whatever DRSTool
+    currently has configured into the game's YAML.
 
-    Lutris stores gamescope configuration in two distinct places:
-      • system.gamescope_*  — native Lutris system keys (bool/string), which
-        Lutris translates to gamescope CLI flags (-W/-H/-r/-F/--sharpness/…)
-      • system.env.*        — plain environment variables passed to the game
-        process (ENABLE_GAMESCOPE_WSI, GAMESCOPE_HDR_ENABLED, …)
+    Gamescope env vars set on the DXVK/VKD3D/FLM tab are split into two
+    destinations depending on whether Lutris has a native system.* key for
+    them:
 
-    This widget handles both:
-      ─ The "Gamescope system settings" section reads/writes system.gamescope_*
-        keys directly (bidirectional: loading a game pre-fills the controls).
-      ─ The existing env-var checkboxes write system.env.* as before, which
-        covers the remaining GAMESCOPE_* env vars configured on the Env Vars tab.
+      Mapped to system.* (Lutris native keys):
+        GAMESCOPE_WIDTH + GAMESCOPE_HEIGHT   → gamescope_output_res  "WxH"
+        GAMESCOPE_GAME_WIDTH + _HEIGHT       → gamescope_game_res    "WxH"
+        GAMESCOPE_FRAME_RATE_LIMIT           → gamescope_fps_limiter
+        GAMESCOPE_FRAME_RATE_LIMIT_UNFOCUS   → gamescope_fps_limiter_no_focus
+        GAMESCOPE_UPSCALE_FILTER             → gamescope_upscale_mode
+        GAMESCOPE_UPSCALE_SHARPNESS          → gamescope_fsr_sharpness
+        GAMESCOPE_HDR_ENABLED                → gamescope_hdr_enabled  (bool)
+        GAMESCOPE_VRR_ENABLED                → gamescope_vrr_enabled  (bool)
+        GAMESCOPE_FORCE_GRAB_CURSOR          → gamescope_grab         (bool)
+
+      Everything else (GAMESCOPE_ALLOW_TEARING, STEAM_GAMESCOPE_*, ENABLE_GAMESCOPE_WSI,
+      remaining GAMESCOPE_* vars, ...) goes into system.env as plain env vars.
     """
 
-    # ── Lutris system.* gamescope key definitions ─────────────────────────────
-    # Each entry: (lutris_key, widget_type, description, options_or_none)
-    #   widget_type: "bool" | "string" | "res" | "combo"
-    #   "res"  = WxH string (e.g. "2560x1600") — two spin boxes shown as WxH
-    #   "combo"= string with fixed option list
-    _GAMESCOPE_SYSTEM_KEYS = [
-        ("gamescope",               "bool",   "Enable gamescope compositor",                      None),
-        ("gamescope_output_res",    "res",    "Output resolution (display, -W/-H)",               None),
-        ("gamescope_game_res",      "res",    "Game/render resolution (upscale source, -w/-h)",   None),
-        ("gamescope_fps_limiter",   "string", "FPS cap while focused (-r)",                       None),
-        ("gamescope_fps_limiter_no_focus", "string", "FPS cap when unfocused (-o)",               None),
-        ("gamescope_upscale_mode",  "combo",  "Upscale filter (-F)",
-         ["", "fsr", "nis", "pixel", "integer", "linear", "nearest"]),
-        ("gamescope_fsr_sharpness", "string", "FSR/NIS sharpness 0–20 (0=sharpest, --sharpness)",None),
-        ("gamescope_hdr_enabled",   "bool",   "HDR output (--hdr-enabled)",                       None),
-        ("gamescope_vrr_enabled",   "bool",   "VRR / Adaptive-Sync (--adaptive-sync)",            None),
-        ("gamescope_window_type",   "combo",  "Window mode",
-         ["", "fullscreen", "borderless", "windowed"]),
-        ("gamescope_grab",          "bool",   "Grab keyboard and mouse (--grab)",                 None),
-        ("gamescope_steam",         "bool",   "Steam integration mode (--steam)",                 None),
-        ("mangohud",                "bool",   "Enable MangoHud overlay",                          None),
-    ]
+    # ── Env var → Lutris system.* key mappings ────────────────────────────────
+    # Single env var → single Lutris key (string value, passed through as-is)
+    _ENV_TO_LUTRIS: Dict[str, str] = {
+        "GAMESCOPE_FRAME_RATE_LIMIT":        "gamescope_fps_limiter",
+        "GAMESCOPE_FRAME_RATE_LIMIT_UNFOCUS":"gamescope_fps_limiter_no_focus",
+        "GAMESCOPE_UPSCALE_FILTER":          "gamescope_upscale_mode",
+        "GAMESCOPE_UPSCALE_SHARPNESS":       "gamescope_fsr_sharpness",
+    }
+    # Single env var → single Lutris key (value converted to Python bool)
+    _ENV_TO_LUTRIS_BOOL: Dict[str, str] = {
+        "GAMESCOPE_HDR_ENABLED":   "gamescope_hdr_enabled",
+        "GAMESCOPE_VRR_ENABLED":   "gamescope_vrr_enabled",
+        "GAMESCOPE_FORCE_GRAB_CURSOR": "gamescope_grab",
+    }
+    # Two env vars (W, H) → one Lutris key as "WxH" string
+    _ENV_PAIR_TO_LUTRIS: Dict[str, tuple] = {
+        "gamescope_output_res": ("GAMESCOPE_WIDTH",     "GAMESCOPE_HEIGHT"),
+        "gamescope_game_res":   ("GAMESCOPE_GAME_WIDTH","GAMESCOPE_GAME_HEIGHT"),
+    }
+    # All env var names consumed by the mappings above (skip from system.env)
+    _MAPPED_ENV_VARS: frozenset = frozenset(
+        list(_ENV_TO_LUTRIS) + list(_ENV_TO_LUTRIS_BOOL) +
+        ["GAMESCOPE_WIDTH","GAMESCOPE_HEIGHT","GAMESCOPE_GAME_WIDTH","GAMESCOPE_GAME_HEIGHT"]
+    )
 
     def __init__(self, settings_manager: SettingsManager, parent=None):
         super().__init__(parent)
@@ -5813,10 +5821,11 @@ class LutrisSyncWidget(QWidget):
             return
 
         desc = QLabel(
-            "Scans your Lutris games folder and writes DRS settings, env vars, "
-            "and gamescope system settings directly into a game's YAML config — "
-            "no manual copy/paste needed.  Loading a game pre-fills the gamescope "
-            "controls below from the existing YAML."
+            "Scans your Lutris games folder and writes whatever is currently "
+            "configured in DRSTool directly into the game's YAML.  Gamescope env "
+            "vars are automatically routed: those with a Lutris native key "
+            "(output res, game res, fps limit, upscale filter, HDR, VRR, …) go "
+            "into system.* — the rest go into system.env as plain env vars."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color:#8a8f9c; font-size:9px;")
@@ -5868,18 +5877,7 @@ class LutrisSyncWidget(QWidget):
         self._game_combo.currentIndexChanged.connect(self._on_game_selected)
         layout.addWidget(self._game_combo)
 
-        # ── Scrollable content area ───────────────────────────────────────────
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
-        scroll_inner = QWidget()
-        scroll_layout = QVBoxLayout(scroll_inner)
-        scroll_layout.setContentsMargins(0, 0, 4, 0)
-        scroll_layout.setSpacing(6)
-        scroll.setWidget(scroll_inner)
-        layout.addWidget(scroll, stretch=1)
-
-        # ── What env vars to write ────────────────────────────────────────────
+        # ── What will be written ──────────────────────────────────────────────
         _grp_ss = """
             QGroupBox {
                 color: #8a8f9c; font-size: 9px; font-weight: 700;
@@ -5888,158 +5886,35 @@ class LutrisSyncWidget(QWidget):
             }
             QGroupBox::title { subcontrol-origin: margin; left: 6px; padding: 0 4px; }
         """
-        _chk_ss = "QCheckBox{ color:#c8cdd8; font-size:9px; spacing:6px; }" \
-                  "QCheckBox::indicator{ width:12px; height:12px; border:1px solid #323c4b; " \
-                  "border-radius:2px; background:#1a1f28; }" \
-                  "QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }"
-
-        which_group = QGroupBox("Env vars to write into system.env")
+        _chk_ss = "QCheckBox{ color:#c8cdd8; font-size:9px; }"
+        which_group = QGroupBox("What to write")
         which_group.setStyleSheet(_grp_ss)
         which_layout = QVBoxLayout(which_group)
         which_layout.setSpacing(2)
         self._chk_drs = QCheckBox("DXVK_NVAPI_DRS_SETTINGS + DXVK_NVAPI_GPU_ARCH")
         self._chk_drs.setChecked(True)
-        self._chk_env = QCheckBox("DXVK / VKD3D / NVIDIA / Proton / vk_flip_meter / Gamescope env vars")
+        self._chk_env = QCheckBox(
+            "All env vars  (DXVK / VKD3D / Proton / FLM / Gamescope / …)\n"
+            "  → Gamescope vars with a Lutris key go to system.*\n"
+            "  → all others go to system.env"
+        )
         self._chk_env.setChecked(True)
         for c in (self._chk_drs, self._chk_env):
             c.setStyleSheet(_chk_ss)
             which_layout.addWidget(c)
-        scroll_layout.addWidget(which_group)
-
-        # ── Gamescope system settings ─────────────────────────────────────────
-        gs_group = QGroupBox("Gamescope system settings  (system.* keys — loaded from / written to YAML)")
-        gs_group.setStyleSheet(_grp_ss)
-        gs_outer = QVBoxLayout(gs_group)
-        gs_outer.setSpacing(4)
-
-        self._chk_gamescope = QCheckBox("Write gamescope system settings to YAML")
-        self._chk_gamescope.setChecked(True)
-        self._chk_gamescope.setStyleSheet(_chk_ss)
-        self._chk_gamescope.stateChanged.connect(self._update_preview)
-        gs_outer.addWidget(self._chk_gamescope)
-
-        gs_note = QLabel(
-            "These are Lutris's native gamescope keys (system.gamescope, "
-            "system.gamescope_output_res, etc.) — separate from the "
-            "GAMESCOPE_* env vars above.  When you select a game, these "
-            "controls are pre-filled from the existing YAML."
-        )
-        gs_note.setWordWrap(True)
-        gs_note.setStyleSheet("color:#5a6070; font-size:8px; font-style:italic;")
-        gs_outer.addWidget(gs_note)
-
-        # Build per-key controls
-        self._gs_widgets: Dict[str, QWidget] = {}  # lutris_key → control
-        _field_ss = """
-QLineEdit{ background:#1a1f28; border:1px solid #323c4b; border-radius:4px;
-           color:#d8d8d8; font-size:9px; padding:2px 6px; }
-QLineEdit:focus{ border:1px solid #76b900; }
-QComboBox{ background:#1a1f28; border:1px solid #323c4b; border-radius:4px;
-           color:#d8d8d8; font-size:9px; padding:2px 6px; min-height:20px; }
-QComboBox:hover{ border:1px solid #76b900; }
-QComboBox QAbstractItemView{ background:#141720; color:#d8d8d8;
-                              selection-background-color:#1e2535; }
-QSpinBox{ background:#1a1f28; border:1px solid #323c4b; border-radius:4px;
-          color:#d8d8d8; font-size:9px; padding:2px 4px; }
-QSpinBox:hover{ border:1px solid #76b900; }
-"""
-        gs_grid = QGridLayout()
-        gs_grid.setSpacing(4)
-        gs_grid.setColumnStretch(1, 1)
-
-        for row_i, (lkey, wtype, desc_text, opts) in enumerate(self._GAMESCOPE_SYSTEM_KEYS):
-            lbl = QLabel(f"<b>{lkey}</b>")
-            lbl.setStyleSheet("color:#c8cdd8; font-size:9px;")
-            lbl.setToolTip(desc_text)
-            gs_grid.addWidget(lbl, row_i, 0, Qt.AlignTop | Qt.AlignRight)
-
-            desc_lbl = QLabel(desc_text)
-            desc_lbl.setStyleSheet("color:#5a6070; font-size:8px;")
-
-            if wtype == "bool":
-                ctrl = QCheckBox()
-                ctrl.setStyleSheet(_chk_ss)
-                ctrl.stateChanged.connect(self._update_preview)
-                # Put checkbox + desc on same row
-                row_w = QWidget()
-                row_l = QHBoxLayout(row_w)
-                row_l.setContentsMargins(0, 0, 0, 0)
-                row_l.setSpacing(4)
-                row_l.addWidget(ctrl)
-                row_l.addWidget(desc_lbl, 1)
-                gs_grid.addWidget(row_w, row_i, 1)
-                self._gs_widgets[lkey] = ctrl
-
-            elif wtype == "res":
-                # Two QSpinBox widgets stored as a tuple under the key
-                row_w = QWidget()
-                row_l = QHBoxLayout(row_w)
-                row_l.setContentsMargins(0, 0, 0, 0)
-                row_l.setSpacing(4)
-                sp_w = QSpinBox()
-                sp_h = QSpinBox()
-                for sp in (sp_w, sp_h):
-                    sp.setRange(0, 9999)
-                    sp.setValue(0)
-                    sp.setStyleSheet(_field_ss)
-                    sp.setSpecialValueText("—")
-                    sp.valueChanged.connect(self._update_preview)
-                    sp.installEventFilter(_NO_SCROLL_FILTER)
-                sp_sep = QLabel("×")
-                sp_sep.setStyleSheet("color:#5a6070; font-size:9px;")
-                row_l.addWidget(sp_w)
-                row_l.addWidget(sp_sep)
-                row_l.addWidget(sp_h)
-                row_l.addWidget(desc_lbl, 1)
-                gs_grid.addWidget(row_w, row_i, 1)
-                # Store as tuple — referenced by (key+"_w", key+"_h") internally
-                self._gs_widgets[lkey + "_w"] = sp_w
-                self._gs_widgets[lkey + "_h"] = sp_h
-
-            elif wtype == "combo":
-                row_w = QWidget()
-                row_l = QHBoxLayout(row_w)
-                row_l.setContentsMargins(0, 0, 0, 0)
-                row_l.setSpacing(4)
-                ctrl = QComboBox()
-                ctrl.addItems(opts or [])
-                ctrl.setStyleSheet(_field_ss)
-                ctrl.currentIndexChanged.connect(self._update_preview)
-                ctrl.installEventFilter(_NO_SCROLL_FILTER)
-                row_l.addWidget(ctrl)
-                row_l.addWidget(desc_lbl, 1)
-                gs_grid.addWidget(row_w, row_i, 1)
-                self._gs_widgets[lkey] = ctrl
-
-            else:  # "string"
-                row_w = QWidget()
-                row_l = QHBoxLayout(row_w)
-                row_l.setContentsMargins(0, 0, 0, 0)
-                row_l.setSpacing(4)
-                ctrl = QLineEdit()
-                ctrl.setStyleSheet(_field_ss)
-                ctrl.setPlaceholderText("(leave blank to skip)")
-                ctrl.textChanged.connect(self._update_preview)
-                row_l.addWidget(ctrl)
-                row_l.addWidget(desc_lbl, 1)
-                gs_grid.addWidget(row_w, row_i, 1)
-                self._gs_widgets[lkey] = ctrl
-
-        gs_outer.addLayout(gs_grid)
-        scroll_layout.addWidget(gs_group)
+        layout.addWidget(which_group)
 
         # ── Preview ───────────────────────────────────────────────────────────
         self._preview = QPlainTextEdit()
         self._preview.setReadOnly(True)
-        self._preview.setFixedHeight(140)
         self._preview.setStyleSheet("""
             QPlainTextEdit {
                 background: #0d0f12; border: 1px solid #1e2535;
                 color: #9fd63a; font-family: monospace; font-size: 9px; border-radius: 3px;
             }
         """)
-        self._preview.setPlaceholderText("Select a game to preview the changes...")
-        layout.addWidget(self._preview)
+        self._preview.setPlaceholderText("Select a game to preview the resulting YAML changes...")
+        layout.addWidget(self._preview, stretch=1)
 
         # ── Actions ───────────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
@@ -6064,7 +5939,6 @@ QSpinBox:hover{ border:1px solid #76b900; }
         self._status_label.setStyleSheet("color:#8a8f9c; font-size:9px;")
         layout.addWidget(self._status_label)
 
-        # Wire signals
         for w in (self._chk_drs, self._chk_env):
             w.stateChanged.connect(self._update_preview)
         self.settings_manager.settings_changed.connect(self._update_preview)
@@ -6110,144 +5984,22 @@ QSpinBox:hover{ border:1px solid #76b900; }
             exe = game_section.get("exe", "")
             slug = path.stem
             display_name = Path(exe).stem if exe else slug
-            runner = data.get("system", {}).get("runner", "") if isinstance(data.get("system"), dict) else ""
+            runner = data.get("system", {}).get("runner", "") \
+                if isinstance(data.get("system"), dict) else ""
             self._games.append(LutrisGameEntry(path, slug, display_name, runner))
             self._game_combo.addItem(f"{display_name}  ({slug})")
 
         self._game_combo.blockSignals(False)
         if self._games:
-            self._status_label.setText(f"Found {len(self._games)} game config(s) in {self._games_dir}")
+            self._status_label.setText(
+                f"Found {len(self._games)} game config(s) in {self._games_dir}"
+            )
             self._game_combo.setCurrentIndex(0)
             self._on_game_selected(0)
         else:
             self._status_label.setText(f"No .yml files found in {self._games_dir}")
             self._apply_btn.setEnabled(False)
             self._preview.clear()
-
-    # ── Gamescope control helpers ──────────────────────────────────────────────
-
-    def _gs_get_value(self, lkey: str, wtype: str):
-        """Read current UI value for a gamescope system key.
-        Returns the value to write to YAML, or None if the field is blank/zero."""
-        if wtype == "bool":
-            w = self._gs_widgets.get(lkey)
-            if w is None:
-                return None
-            return w.isChecked()  # bool: always write (True/False)
-
-        elif wtype == "res":
-            sw = self._gs_widgets.get(lkey + "_w")
-            sh = self._gs_widgets.get(lkey + "_h")
-            if sw is None or sh is None:
-                return None
-            w_val, h_val = sw.value(), sh.value()
-            if w_val == 0 and h_val == 0:
-                return None  # blank — skip
-            return f"{w_val}x{h_val}"
-
-        elif wtype == "combo":
-            w = self._gs_widgets.get(lkey)
-            if w is None:
-                return None
-            val = w.currentText()
-            return val if val else None  # empty string → skip
-
-        else:  # string
-            w = self._gs_widgets.get(lkey)
-            if w is None:
-                return None
-            val = w.text().strip()
-            return val if val else None
-
-    def _gs_set_value(self, lkey: str, wtype: str, raw_val):
-        """Populate a gamescope control from a YAML value (bidirectional load)."""
-        if wtype == "bool":
-            w = self._gs_widgets.get(lkey)
-            if w is None:
-                return
-            w.blockSignals(True)
-            w.setChecked(bool(raw_val))
-            w.blockSignals(False)
-
-        elif wtype == "res":
-            sw = self._gs_widgets.get(lkey + "_w")
-            sh = self._gs_widgets.get(lkey + "_h")
-            if sw is None or sh is None:
-                return
-            sw.blockSignals(True)
-            sh.blockSignals(True)
-            try:
-                parts = str(raw_val).lower().split("x")
-                sw.setValue(int(parts[0]))
-                sh.setValue(int(parts[1]))
-            except Exception:
-                sw.setValue(0)
-                sh.setValue(0)
-            sw.blockSignals(False)
-            sh.blockSignals(False)
-
-        elif wtype == "combo":
-            w = self._gs_widgets.get(lkey)
-            if w is None:
-                return
-            w.blockSignals(True)
-            idx = w.findText(str(raw_val), Qt.MatchFixedString)
-            w.setCurrentIndex(max(0, idx))
-            w.blockSignals(False)
-
-        else:  # string
-            w = self._gs_widgets.get(lkey)
-            if w is None:
-                return
-            w.blockSignals(True)
-            w.setText(str(raw_val) if raw_val is not None else "")
-            w.blockSignals(False)
-
-    def _gs_clear_all(self):
-        """Reset all gamescope controls to blank/false/zero."""
-        for lkey, wtype, _, opts in self._GAMESCOPE_SYSTEM_KEYS:
-            if wtype == "bool":
-                w = self._gs_widgets.get(lkey)
-                if w:
-                    w.blockSignals(True)
-                    w.setChecked(False)
-                    w.blockSignals(False)
-            elif wtype == "res":
-                for suffix in ("_w", "_h"):
-                    w = self._gs_widgets.get(lkey + suffix)
-                    if w:
-                        w.blockSignals(True)
-                        w.setValue(0)
-                        w.blockSignals(False)
-            elif wtype == "combo":
-                w = self._gs_widgets.get(lkey)
-                if w:
-                    w.blockSignals(True)
-                    w.setCurrentIndex(0)
-                    w.blockSignals(False)
-            else:
-                w = self._gs_widgets.get(lkey)
-                if w:
-                    w.blockSignals(True)
-                    w.setText("")
-                    w.blockSignals(False)
-
-    def _load_gs_from_yaml(self, data: dict):
-        """Pre-fill gamescope controls from the loaded YAML's system.* section."""
-        sys_section = data.get("system") or {}
-        self._gs_clear_all()
-        for lkey, wtype, _, opts in self._GAMESCOPE_SYSTEM_KEYS:
-            if lkey in sys_section:
-                self._gs_set_value(lkey, wtype, sys_section[lkey])
-
-    def _collect_gs_to_write(self) -> Dict[str, object]:
-        """Return {lutris_key: value} for all non-blank gamescope controls."""
-        result = {}
-        for lkey, wtype, _, opts in self._GAMESCOPE_SYSTEM_KEYS:
-            val = self._gs_get_value(lkey, wtype)
-            if val is not None:
-                result[lkey] = val
-        return result
 
     # ── Selection / preview ───────────────────────────────────────────────────
 
@@ -6258,14 +6010,12 @@ QSpinBox:hover{ border:1px solid #76b900; }
             try:
                 with open(entry.path, "r", encoding="utf-8") as f:
                     self._current_yaml_text = f.read()
-                data = yaml.safe_load(self._current_yaml_text) or {}
-                self._load_gs_from_yaml(data)
             except Exception as e:
                 self._status_label.setText(f"Could not read {entry.path}: {e}")
         self._update_preview()
 
-    def _collect_env_to_write(self) -> Dict[str, str]:
-        """Env vars to merge into system.env, respecting the two checkboxes."""
+    def _collect_all_env(self) -> Dict[str, str]:
+        """All env vars currently set in DRSTool, respecting the checkboxes."""
         result: Dict[str, str] = {}
         if self._chk_drs.isChecked():
             arch = self.settings_manager.get_arch()
@@ -6280,26 +6030,64 @@ QSpinBox:hover{ border:1px solid #76b900; }
                 result.update(win._env_widget.get_env_dict())
         return result
 
+    def _split_gamescope(self, env: Dict[str, str]):
+        """Split env vars into (system_keys, remaining_env).
+
+        system_keys: {lutris_key: value} — goes into system.*
+        remaining_env: {var: value}       — goes into system.env
+        """
+        system_keys: Dict[str, object] = {}
+        remaining: Dict[str, str] = {}
+
+        for k, v in env.items():
+            if k in self._MAPPED_ENV_VARS:
+                # This var participates in a mapping — handled below
+                continue
+            remaining[k] = v
+
+        # Single → single string mappings
+        for env_var, lutris_key in self._ENV_TO_LUTRIS.items():
+            if env_var in env and env[env_var]:
+                system_keys[lutris_key] = str(env[env_var])
+
+        # Single → single bool mappings
+        for env_var, lutris_key in self._ENV_TO_LUTRIS_BOOL.items():
+            if env_var in env and env[env_var]:
+                system_keys[lutris_key] = env[env_var] not in ("0", "false", "")
+
+        # Pair → "WxH" string mappings
+        for lutris_key, (ev_w, ev_h) in self._ENV_PAIR_TO_LUTRIS.items():
+            w_val = env.get(ev_w, "")
+            h_val = env.get(ev_h, "")
+            try:
+                w_int, h_int = int(w_val), int(h_val)
+                if w_int > 0 and h_int > 0:
+                    system_keys[lutris_key] = f"{w_int}x{h_int}"
+            except (ValueError, TypeError):
+                pass
+
+        return system_keys, remaining
+
     def _update_preview(self):
         if not self._games or self._current_yaml_text is None:
             self._preview.clear()
             self._apply_btn.setEnabled(False)
             return
 
-        env_to_write = self._collect_env_to_write()
-        gs_to_write = self._collect_gs_to_write() if self._chk_gamescope.isChecked() else {}
-
-        if not env_to_write and not gs_to_write:
+        all_env = self._collect_all_env()
+        if not all_env:
             self._preview.setPlainText(
-                "(Nothing configured to write yet — set DRS settings, "
-                "env vars, or gamescope settings first.)"
+                "(Nothing configured yet — set DRS settings and/or env vars "
+                "in the other tabs first.)"
             )
             self._apply_btn.setEnabled(False)
             return
 
+        system_keys, env_vars = self._split_gamescope(all_env)
+
         try:
-            merged_text, env_changed, gs_changed = self._merge_yaml(
-                self._current_yaml_text, env_to_write, gs_to_write
+            new_text, sys_changed, env_changed = self._merge_yaml(
+                self._current_yaml_text, system_keys, env_vars
             )
         except Exception as e:
             self._preview.setPlainText(f"(Could not parse this game's YAML: {e})")
@@ -6307,20 +6095,20 @@ QSpinBox:hover{ border:1px solid #76b900; }
             return
 
         lines = []
+        if sys_changed:
+            lines.append(f"# {len(sys_changed)} key(s) → system.* (Lutris native):")
+            for k in sorted(sys_changed):
+                lines.append(f"#   {k}: {system_keys[k]!r}")
         if env_changed:
-            lines.append(f"# {len(env_changed)} env var(s) → system.env:")
-            for k in sorted(env_changed):
-                lines.append(f"#   {k} = {env_to_write[k]!r}")
-        if gs_changed:
             if lines:
                 lines.append("")
-            lines.append(f"# {len(gs_changed)} gamescope key(s) → system.*:")
-            for k in sorted(gs_changed):
-                lines.append(f"#   {k} = {gs_to_write[k]!r}")
+            lines.append(f"# {len(env_changed)} key(s) → system.env:")
+            for k in sorted(env_changed):
+                lines.append(f"#   {k}={env_vars[k]!r}")
         lines.append("")
         lines.append("─── resulting system section ───")
         try:
-            data = yaml.safe_load(merged_text) or {}
+            data = yaml.safe_load(new_text) or {}
             sys_sec = data.get("system") or {}
             for k in sorted(sys_sec):
                 if k == "env":
@@ -6341,66 +6129,61 @@ QSpinBox:hover{ border:1px solid #76b900; }
     @staticmethod
     def _merge_yaml(
         original_text: str,
-        env_to_write: Dict[str, str],
-        gs_to_write: Dict[str, object],
+        system_keys: Dict[str, object],
+        env_vars: Dict[str, str],
     ):
-        """Parse original_text, merge env vars into system.env and gamescope
-        keys into system.*, return (new_yaml_text, env_changed_keys, gs_changed_keys).
-
-        Both dictionaries may be empty — the method handles either or both.
-        Comments in the original file are not preserved (PyYAML safe_load/dump
-        limitation), but all key/value structure is round-tripped correctly.
-        """
+        """Parse original_text, write system_keys into system.* and env_vars
+        into system.env.  Returns (new_yaml_text, sys_changed_keys, env_changed_keys).
+        Comments are not preserved (PyYAML limitation); all other structure is."""
         data = yaml.safe_load(original_text) or {}
         if "system" not in data or not isinstance(data.get("system"), dict):
             data["system"] = {}
 
-        # ── system.env ────────────────────────────────────────────────────────
-        if env_to_write:
+        for k, v in system_keys.items():
+            data["system"][k] = v
+        sys_changed = set(system_keys)
+
+        if env_vars:
             if "env" not in data["system"] or not isinstance(data["system"].get("env"), dict):
                 data["system"]["env"] = {}
-            for k, v in env_to_write.items():
+            for k, v in env_vars.items():
                 data["system"]["env"][k] = str(v)
-        env_changed = set(env_to_write.keys())
-
-        # ── system.gamescope_* / system.gamescope / system.mangohud ──────────
-        for k, v in gs_to_write.items():
-            data["system"][k] = v
-        gs_changed = set(gs_to_write.keys())
+        env_changed = set(env_vars)
 
         new_text = yaml.dump(
             data, default_flow_style=False, sort_keys=False, allow_unicode=True
         )
-        return new_text, env_changed, gs_changed
+        return new_text, sys_changed, env_changed
 
     def _apply_to_game(self):
         index = self._game_combo.currentIndex()
         if not (0 <= index < len(self._games)):
             return
         entry = self._games[index]
-        env_to_write = self._collect_env_to_write()
-        gs_to_write = self._collect_gs_to_write() if self._chk_gamescope.isChecked() else {}
-        if not env_to_write and not gs_to_write:
+        all_env = self._collect_all_env()
+        if not all_env:
             return
+
+        system_keys, env_vars = self._split_gamescope(all_env)
 
         try:
             with open(entry.path, "r", encoding="utf-8") as f:
                 original_text = f.read()
-            new_text, env_changed, gs_changed = self._merge_yaml(
-                original_text, env_to_write, gs_to_write
+            new_text, sys_changed, env_changed = self._merge_yaml(
+                original_text, system_keys, env_vars
             )
         except Exception as e:
             QMessageBox.critical(self, "Merge failed", f"Could not merge: {e}")
             return
 
-        total = len(env_changed) + len(gs_changed)
-        env_line = f"\n  • {len(env_changed)} env var(s) into system.env" if env_changed else ""
-        gs_line = f"\n  • {len(gs_changed)} gamescope key(s) into system.*" if gs_changed else ""
+        total = len(sys_changed) + len(env_changed)
+        sys_line = f"\n  • {len(sys_changed)} key(s) into system.*" if sys_changed else ""
+        env_line = f"\n  • {len(env_changed)} var(s) into system.env" if env_changed else ""
         reply = QMessageBox.question(
             self, "Write Lutris config",
             f"Write {total} change(s) into:\n{entry.path}"
-            f"{env_line}{gs_line}\n\n"
-            "A timestamped backup of the current file will be created first.",
+            f"{sys_line}{env_line}\n\n"
+            "A timestamped backup will be created first.",
             QMessageBox.Yes | QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
