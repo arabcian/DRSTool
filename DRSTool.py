@@ -5720,14 +5720,50 @@ class LutrisGameEntry:
 
 
 class LutrisSyncWidget(QWidget):
-    """Discovers Lutris per-game YAML configs and merges the tool's
-    current env vars into their system.env block."""
+    """Discovers Lutris per-game YAML configs and merges the tool's current
+    env vars + gamescope system settings into the game's YAML file.
+
+    Lutris stores gamescope configuration in two distinct places:
+      • system.gamescope_*  — native Lutris system keys (bool/string), which
+        Lutris translates to gamescope CLI flags (-W/-H/-r/-F/--sharpness/…)
+      • system.env.*        — plain environment variables passed to the game
+        process (ENABLE_GAMESCOPE_WSI, GAMESCOPE_HDR_ENABLED, …)
+
+    This widget handles both:
+      ─ The "Gamescope system settings" section reads/writes system.gamescope_*
+        keys directly (bidirectional: loading a game pre-fills the controls).
+      ─ The existing env-var checkboxes write system.env.* as before, which
+        covers the remaining GAMESCOPE_* env vars configured on the Env Vars tab.
+    """
+
+    # ── Lutris system.* gamescope key definitions ─────────────────────────────
+    # Each entry: (lutris_key, widget_type, description, options_or_none)
+    #   widget_type: "bool" | "string" | "res" | "combo"
+    #   "res"  = WxH string (e.g. "2560x1600") — two spin boxes shown as WxH
+    #   "combo"= string with fixed option list
+    _GAMESCOPE_SYSTEM_KEYS = [
+        ("gamescope",               "bool",   "Enable gamescope compositor",                      None),
+        ("gamescope_output_res",    "res",    "Output resolution (display, -W/-H)",               None),
+        ("gamescope_game_res",      "res",    "Game/render resolution (upscale source, -w/-h)",   None),
+        ("gamescope_fps_limiter",   "string", "FPS cap while focused (-r)",                       None),
+        ("gamescope_fps_limiter_no_focus", "string", "FPS cap when unfocused (-o)",               None),
+        ("gamescope_upscale_mode",  "combo",  "Upscale filter (-F)",
+         ["", "fsr", "nis", "pixel", "integer", "linear", "nearest"]),
+        ("gamescope_fsr_sharpness", "string", "FSR/NIS sharpness 0–20 (0=sharpest, --sharpness)",None),
+        ("gamescope_hdr_enabled",   "bool",   "HDR output (--hdr-enabled)",                       None),
+        ("gamescope_vrr_enabled",   "bool",   "VRR / Adaptive-Sync (--adaptive-sync)",            None),
+        ("gamescope_window_type",   "combo",  "Window mode",
+         ["", "fullscreen", "borderless", "windowed"]),
+        ("gamescope_grab",          "bool",   "Grab keyboard and mouse (--grab)",                 None),
+        ("gamescope_steam",         "bool",   "Steam integration mode (--steam)",                 None),
+        ("mangohud",                "bool",   "Enable MangoHud overlay",                          None),
+    ]
 
     def __init__(self, settings_manager: SettingsManager, parent=None):
         super().__init__(parent)
         self.settings_manager = settings_manager
         self._games: List[LutrisGameEntry] = []
-        self._current_yaml_text: Optional[str] = None  # raw text of selected game's file, for round-tripping
+        self._current_yaml_text: Optional[str] = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -5750,125 +5786,242 @@ class LutrisSyncWidget(QWidget):
             return
 
         desc = QLabel(
-            "Scans your Lutris games folder and writes the env vars "
-            "configured in this tool directly into a game's system.env — "
-            "no manual copy/paste into Lutris' own config screen."
+            "Scans your Lutris games folder and writes DRS settings, env vars, "
+            "and gamescope system settings directly into a game's YAML config — "
+            "no manual copy/paste needed.  Loading a game pre-fills the gamescope "
+            "controls below from the existing YAML."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color:#8a8f9c; font-size:9px;")
         layout.addWidget(desc)
 
-        # ── Games folder + rescan ────────────────────────────────────
+        # ── Games folder + rescan ─────────────────────────────────────────────
         scan_row = QHBoxLayout()
         scan_row.setSpacing(4)
-
         self._path_label = QLineEdit()
         self._path_label.setReadOnly(True)
         self._path_label.setStyleSheet("""
             QLineEdit {
-                background: #141720;
-                border: 1px solid #1e2535;
-                color: #8a8f9c;
-                font-size: 9px;
-                font-family: monospace;
-                padding: 3px 8px;
-                border-radius: 3px;
-                min-height: 22px;
+                background: #141720; border: 1px solid #1e2535;
+                color: #8a8f9c; font-size: 9px; font-family: monospace;
+                padding: 3px 8px; border-radius: 3px; min-height: 22px;
             }
         """)
         scan_row.addWidget(self._path_label, stretch=1)
-
+        _btn_ss = """
+            QPushButton {
+                border: 1px solid #1e2535; border-radius: 3px; padding: 3px 8px;
+                background: #141720; color: #c8cdd8; font-size: 9px; min-height: 22px;
+            }
+            QPushButton:hover { border-color: #4a7300; }
+        """
         browse_btn = QPushButton("...")
         browse_btn.setFixedWidth(28)
         browse_btn.clicked.connect(self._browse_games_dir)
+        browse_btn.setStyleSheet(_btn_ss)
         rescan_btn = QPushButton("Rescan")
         rescan_btn.clicked.connect(self._scan_games)
-        for b in (browse_btn, rescan_btn):
-            b.setStyleSheet("""
-                QPushButton {
-                    border: 1px solid #1e2535;
-                    border-radius: 3px;
-                    padding: 3px 8px;
-                    background: #141720;
-                    color: #c8cdd8;
-                    font-size: 9px;
-                    min-height: 22px;
-                }
-                QPushButton:hover { border-color: #4a7300; }
-            """)
-            scan_row.addWidget(b)
+        rescan_btn.setStyleSheet(_btn_ss)
+        scan_row.addWidget(browse_btn)
+        scan_row.addWidget(rescan_btn)
         layout.addLayout(scan_row)
 
         self._games_dir: Path = self._default_games_dir()
         self._path_label.setText(str(self._games_dir))
 
-        # ── Game picker ───────────────────────────────────────────────
+        # ── Game picker ───────────────────────────────────────────────────────
         self._game_combo = QComboBox()
         self._game_combo.setStyleSheet("""
             QComboBox {
-                background: #141720;
-                border: 1px solid #1e2535;
-                color: #e8eaf0;
-                font-size: 10px;
-                padding: 3px 8px;
-                border-radius: 3px;
-                min-height: 24px;
+                background: #141720; border: 1px solid #1e2535; color: #e8eaf0;
+                font-size: 10px; padding: 3px 8px; border-radius: 3px; min-height: 24px;
             }
             QComboBox:hover { border-color: #4a7300; }
         """)
         self._game_combo.currentIndexChanged.connect(self._on_game_selected)
         layout.addWidget(self._game_combo)
 
-        # ── What will be written ─────────────────────────────────────
-        which_group = QGroupBox("Env vars to write")
-        which_group.setStyleSheet("""
+        # ── Scrollable content area ───────────────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+        scroll_inner = QWidget()
+        scroll_layout = QVBoxLayout(scroll_inner)
+        scroll_layout.setContentsMargins(0, 0, 4, 0)
+        scroll_layout.setSpacing(6)
+        scroll.setWidget(scroll_inner)
+        layout.addWidget(scroll, stretch=1)
+
+        # ── What env vars to write ────────────────────────────────────────────
+        _grp_ss = """
             QGroupBox {
                 color: #8a8f9c; font-size: 9px; font-weight: 700;
                 border: 1px solid #1e2535; border-radius: 3px;
                 margin-top: 6px; padding-top: 10px;
             }
             QGroupBox::title { subcontrol-origin: margin; left: 6px; padding: 0 4px; }
-        """)
+        """
+        _chk_ss = "QCheckBox{ color:#c8cdd8; font-size:9px; spacing:6px; }" \
+                  "QCheckBox::indicator{ width:12px; height:12px; border:1px solid #323c4b; " \
+                  "border-radius:2px; background:#1a1f28; }" \
+                  "QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }"
+
+        which_group = QGroupBox("Env vars to write into system.env")
+        which_group.setStyleSheet(_grp_ss)
         which_layout = QVBoxLayout(which_group)
         which_layout.setSpacing(2)
-
         self._chk_drs = QCheckBox("DXVK_NVAPI_DRS_SETTINGS + DXVK_NVAPI_GPU_ARCH")
         self._chk_drs.setChecked(True)
-        self._chk_env = QCheckBox("DXVK / VKD3D / NVIDIA / vk_flip_meter env vars")
+        self._chk_env = QCheckBox("DXVK / VKD3D / NVIDIA / Proton / vk_flip_meter / Gamescope env vars")
         self._chk_env.setChecked(True)
         for c in (self._chk_drs, self._chk_env):
-            c.setStyleSheet("QCheckBox{ color:#c8cdd8; font-size:9px; }")
+            c.setStyleSheet(_chk_ss)
             which_layout.addWidget(c)
-        layout.addWidget(which_group)
+        scroll_layout.addWidget(which_group)
 
-        # ── Preview ───────────────────────────────────────────────────
+        # ── Gamescope system settings ─────────────────────────────────────────
+        gs_group = QGroupBox("Gamescope system settings  (system.* keys — loaded from / written to YAML)")
+        gs_group.setStyleSheet(_grp_ss)
+        gs_outer = QVBoxLayout(gs_group)
+        gs_outer.setSpacing(4)
+
+        self._chk_gamescope = QCheckBox("Write gamescope system settings to YAML")
+        self._chk_gamescope.setChecked(True)
+        self._chk_gamescope.setStyleSheet(_chk_ss)
+        self._chk_gamescope.stateChanged.connect(self._update_preview)
+        gs_outer.addWidget(self._chk_gamescope)
+
+        gs_note = QLabel(
+            "These are Lutris's native gamescope keys (system.gamescope, "
+            "system.gamescope_output_res, etc.) — separate from the "
+            "GAMESCOPE_* env vars above.  When you select a game, these "
+            "controls are pre-filled from the existing YAML."
+        )
+        gs_note.setWordWrap(True)
+        gs_note.setStyleSheet("color:#5a6070; font-size:8px; font-style:italic;")
+        gs_outer.addWidget(gs_note)
+
+        # Build per-key controls
+        self._gs_widgets: Dict[str, QWidget] = {}  # lutris_key → control
+        _field_ss = """
+QLineEdit{ background:#1a1f28; border:1px solid #323c4b; border-radius:4px;
+           color:#d8d8d8; font-size:9px; padding:2px 6px; }
+QLineEdit:focus{ border:1px solid #76b900; }
+QComboBox{ background:#1a1f28; border:1px solid #323c4b; border-radius:4px;
+           color:#d8d8d8; font-size:9px; padding:2px 6px; min-height:20px; }
+QComboBox:hover{ border:1px solid #76b900; }
+QComboBox QAbstractItemView{ background:#141720; color:#d8d8d8;
+                              selection-background-color:#1e2535; }
+QSpinBox{ background:#1a1f28; border:1px solid #323c4b; border-radius:4px;
+          color:#d8d8d8; font-size:9px; padding:2px 4px; }
+QSpinBox:hover{ border:1px solid #76b900; }
+"""
+        gs_grid = QGridLayout()
+        gs_grid.setSpacing(4)
+        gs_grid.setColumnStretch(1, 1)
+
+        for row_i, (lkey, wtype, desc_text, opts) in enumerate(self._GAMESCOPE_SYSTEM_KEYS):
+            lbl = QLabel(f"<b>{lkey}</b>")
+            lbl.setStyleSheet("color:#c8cdd8; font-size:9px;")
+            lbl.setToolTip(desc_text)
+            gs_grid.addWidget(lbl, row_i, 0, Qt.AlignTop | Qt.AlignRight)
+
+            desc_lbl = QLabel(desc_text)
+            desc_lbl.setStyleSheet("color:#5a6070; font-size:8px;")
+
+            if wtype == "bool":
+                ctrl = QCheckBox()
+                ctrl.setStyleSheet(_chk_ss)
+                ctrl.stateChanged.connect(self._update_preview)
+                # Put checkbox + desc on same row
+                row_w = QWidget()
+                row_l = QHBoxLayout(row_w)
+                row_l.setContentsMargins(0, 0, 0, 0)
+                row_l.setSpacing(4)
+                row_l.addWidget(ctrl)
+                row_l.addWidget(desc_lbl, 1)
+                gs_grid.addWidget(row_w, row_i, 1)
+                self._gs_widgets[lkey] = ctrl
+
+            elif wtype == "res":
+                # Two QSpinBox widgets stored as a tuple under the key
+                row_w = QWidget()
+                row_l = QHBoxLayout(row_w)
+                row_l.setContentsMargins(0, 0, 0, 0)
+                row_l.setSpacing(4)
+                sp_w = QSpinBox()
+                sp_h = QSpinBox()
+                for sp in (sp_w, sp_h):
+                    sp.setRange(0, 9999)
+                    sp.setValue(0)
+                    sp.setStyleSheet(_field_ss)
+                    sp.setSpecialValueText("—")
+                    sp.valueChanged.connect(self._update_preview)
+                sp_sep = QLabel("×")
+                sp_sep.setStyleSheet("color:#5a6070; font-size:9px;")
+                row_l.addWidget(sp_w)
+                row_l.addWidget(sp_sep)
+                row_l.addWidget(sp_h)
+                row_l.addWidget(desc_lbl, 1)
+                gs_grid.addWidget(row_w, row_i, 1)
+                # Store as tuple — referenced by (key+"_w", key+"_h") internally
+                self._gs_widgets[lkey + "_w"] = sp_w
+                self._gs_widgets[lkey + "_h"] = sp_h
+
+            elif wtype == "combo":
+                row_w = QWidget()
+                row_l = QHBoxLayout(row_w)
+                row_l.setContentsMargins(0, 0, 0, 0)
+                row_l.setSpacing(4)
+                ctrl = QComboBox()
+                ctrl.addItems(opts or [])
+                ctrl.setStyleSheet(_field_ss)
+                ctrl.currentIndexChanged.connect(self._update_preview)
+                row_l.addWidget(ctrl)
+                row_l.addWidget(desc_lbl, 1)
+                gs_grid.addWidget(row_w, row_i, 1)
+                self._gs_widgets[lkey] = ctrl
+
+            else:  # "string"
+                row_w = QWidget()
+                row_l = QHBoxLayout(row_w)
+                row_l.setContentsMargins(0, 0, 0, 0)
+                row_l.setSpacing(4)
+                ctrl = QLineEdit()
+                ctrl.setStyleSheet(_field_ss)
+                ctrl.setPlaceholderText("(leave blank to skip)")
+                ctrl.textChanged.connect(self._update_preview)
+                row_l.addWidget(ctrl)
+                row_l.addWidget(desc_lbl, 1)
+                gs_grid.addWidget(row_w, row_i, 1)
+                self._gs_widgets[lkey] = ctrl
+
+        gs_outer.addLayout(gs_grid)
+        scroll_layout.addWidget(gs_group)
+
+        # ── Preview ───────────────────────────────────────────────────────────
         self._preview = QPlainTextEdit()
         self._preview.setReadOnly(True)
+        self._preview.setFixedHeight(140)
         self._preview.setStyleSheet("""
             QPlainTextEdit {
-                background: #0d0f12;
-                border: 1px solid #1e2535;
-                color: #9fd63a;
-                font-family: monospace;
-                font-size: 9px;
-                border-radius: 3px;
+                background: #0d0f12; border: 1px solid #1e2535;
+                color: #9fd63a; font-family: monospace; font-size: 9px; border-radius: 3px;
             }
         """)
-        self._preview.setPlaceholderText("Select a game to preview the resulting system.env block...")
-        layout.addWidget(self._preview, stretch=1)
+        self._preview.setPlaceholderText("Select a game to preview the changes...")
+        layout.addWidget(self._preview)
 
-        # ── Actions ───────────────────────────────────────────────────
+        # ── Actions ───────────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
         btn_row.setSpacing(4)
-
         self._apply_btn = QPushButton("Write to Lutris config")
         self._apply_btn.clicked.connect(self._apply_to_game)
         self._apply_btn.setStyleSheet("""
             QPushButton {
-                background: #76b900; color: #000;
-                border: 1px solid #76b900; border-radius: 3px;
-                padding: 4px 12px; font-size: 10px; font-weight: 700;
-                min-height: 24px;
+                background: #76b900; color: #000; border: 1px solid #76b900;
+                border-radius: 3px; padding: 4px 12px; font-size: 10px;
+                font-weight: 700; min-height: 24px;
             }
             QPushButton:hover { background: #8fd400; }
             QPushButton:disabled { background: #2a2f38; color: #5a6070; border-color: #1e2535; }
@@ -5882,21 +6035,15 @@ class LutrisSyncWidget(QWidget):
         self._status_label.setStyleSheet("color:#8a8f9c; font-size:9px;")
         layout.addWidget(self._status_label)
 
+        # Wire signals
         for w in (self._chk_drs, self._chk_env):
             w.stateChanged.connect(self._update_preview)
-
-        # Keep the preview (and therefore the apply button's enabled state)
-        # in sync with the *live* configuration, not just with game
-        # selection / checkbox toggles. Without this, changing a DRS
-        # setting or env var after a game was already selected left the
-        # button stuck in whatever state it was in before the edit — the
-        # user had to reselect the game from the combo to "wake it up".
         self.settings_manager.settings_changed.connect(self._update_preview)
         self.settings_manager.arch_changed.connect(self._update_preview)
 
         self._scan_games()
 
-    # ── Discovery ─────────────────────────────────────────────────────
+    # ── Discovery ─────────────────────────────────────────────────────────────
 
     @staticmethod
     def _default_games_dir() -> Path:
@@ -5929,14 +6076,13 @@ class LutrisSyncWidget(QWidget):
                 with open(path, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f) or {}
             except Exception:
-                continue  # skip unreadable/corrupt files rather than aborting the whole scan
+                continue
             game_section = data.get("game") or {}
             exe = game_section.get("exe", "")
             slug = path.stem
             display_name = Path(exe).stem if exe else slug
             runner = data.get("system", {}).get("runner", "") if isinstance(data.get("system"), dict) else ""
-            entry = LutrisGameEntry(path, slug, display_name, runner)
-            self._games.append(entry)
+            self._games.append(LutrisGameEntry(path, slug, display_name, runner))
             self._game_combo.addItem(f"{display_name}  ({slug})")
 
         self._game_combo.blockSignals(False)
@@ -5949,7 +6095,132 @@ class LutrisSyncWidget(QWidget):
             self._apply_btn.setEnabled(False)
             self._preview.clear()
 
-    # ── Selection / preview ───────────────────────────────────────────
+    # ── Gamescope control helpers ──────────────────────────────────────────────
+
+    def _gs_get_value(self, lkey: str, wtype: str):
+        """Read current UI value for a gamescope system key.
+        Returns the value to write to YAML, or None if the field is blank/zero."""
+        if wtype == "bool":
+            w = self._gs_widgets.get(lkey)
+            if w is None:
+                return None
+            return w.isChecked()  # bool: always write (True/False)
+
+        elif wtype == "res":
+            sw = self._gs_widgets.get(lkey + "_w")
+            sh = self._gs_widgets.get(lkey + "_h")
+            if sw is None or sh is None:
+                return None
+            w_val, h_val = sw.value(), sh.value()
+            if w_val == 0 and h_val == 0:
+                return None  # blank — skip
+            return f"{w_val}x{h_val}"
+
+        elif wtype == "combo":
+            w = self._gs_widgets.get(lkey)
+            if w is None:
+                return None
+            val = w.currentText()
+            return val if val else None  # empty string → skip
+
+        else:  # string
+            w = self._gs_widgets.get(lkey)
+            if w is None:
+                return None
+            val = w.text().strip()
+            return val if val else None
+
+    def _gs_set_value(self, lkey: str, wtype: str, raw_val):
+        """Populate a gamescope control from a YAML value (bidirectional load)."""
+        if wtype == "bool":
+            w = self._gs_widgets.get(lkey)
+            if w is None:
+                return
+            w.blockSignals(True)
+            w.setChecked(bool(raw_val))
+            w.blockSignals(False)
+
+        elif wtype == "res":
+            sw = self._gs_widgets.get(lkey + "_w")
+            sh = self._gs_widgets.get(lkey + "_h")
+            if sw is None or sh is None:
+                return
+            sw.blockSignals(True)
+            sh.blockSignals(True)
+            try:
+                parts = str(raw_val).lower().split("x")
+                sw.setValue(int(parts[0]))
+                sh.setValue(int(parts[1]))
+            except Exception:
+                sw.setValue(0)
+                sh.setValue(0)
+            sw.blockSignals(False)
+            sh.blockSignals(False)
+
+        elif wtype == "combo":
+            w = self._gs_widgets.get(lkey)
+            if w is None:
+                return
+            w.blockSignals(True)
+            idx = w.findText(str(raw_val), Qt.MatchFixedString)
+            w.setCurrentIndex(max(0, idx))
+            w.blockSignals(False)
+
+        else:  # string
+            w = self._gs_widgets.get(lkey)
+            if w is None:
+                return
+            w.blockSignals(True)
+            w.setText(str(raw_val) if raw_val is not None else "")
+            w.blockSignals(False)
+
+    def _gs_clear_all(self):
+        """Reset all gamescope controls to blank/false/zero."""
+        for lkey, wtype, _, opts in self._GAMESCOPE_SYSTEM_KEYS:
+            if wtype == "bool":
+                w = self._gs_widgets.get(lkey)
+                if w:
+                    w.blockSignals(True)
+                    w.setChecked(False)
+                    w.blockSignals(False)
+            elif wtype == "res":
+                for suffix in ("_w", "_h"):
+                    w = self._gs_widgets.get(lkey + suffix)
+                    if w:
+                        w.blockSignals(True)
+                        w.setValue(0)
+                        w.blockSignals(False)
+            elif wtype == "combo":
+                w = self._gs_widgets.get(lkey)
+                if w:
+                    w.blockSignals(True)
+                    w.setCurrentIndex(0)
+                    w.blockSignals(False)
+            else:
+                w = self._gs_widgets.get(lkey)
+                if w:
+                    w.blockSignals(True)
+                    w.setText("")
+                    w.blockSignals(False)
+
+    def _load_gs_from_yaml(self, data: dict):
+        """Pre-fill gamescope controls from the loaded YAML's system.* section."""
+        sys_section = data.get("system") or {}
+        self._gs_clear_all()
+        for lkey, wtype, _, opts in self._GAMESCOPE_SYSTEM_KEYS:
+            if lkey in sys_section:
+                self._gs_set_value(lkey, wtype, sys_section[lkey])
+
+    def _collect_gs_to_write(self) -> Dict[str, object]:
+        """Return {lutris_key: value} for all non-blank gamescope controls."""
+        result = {}
+        for lkey, wtype, _, opts in self._GAMESCOPE_SYSTEM_KEYS:
+            val = self._gs_get_value(lkey, wtype)
+            if val is not None:
+                result[lkey] = val
+        return result
+
+    # ── Selection / preview ───────────────────────────────────────────────────
 
     def _on_game_selected(self, index: int):
         self._current_yaml_text = None
@@ -5958,13 +6229,14 @@ class LutrisSyncWidget(QWidget):
             try:
                 with open(entry.path, "r", encoding="utf-8") as f:
                     self._current_yaml_text = f.read()
+                data = yaml.safe_load(self._current_yaml_text) or {}
+                self._load_gs_from_yaml(data)
             except Exception as e:
                 self._status_label.setText(f"Could not read {entry.path}: {e}")
         self._update_preview()
 
     def _collect_env_to_write(self) -> Dict[str, str]:
-        """Gathers the env vars this tool currently has configured,
-        respecting the two checkboxes."""
+        """Env vars to merge into system.env, respecting the two checkboxes."""
         result: Dict[str, str] = {}
         if self._chk_drs.isChecked():
             arch = self.settings_manager.get_arch()
@@ -5985,94 +6257,130 @@ class LutrisSyncWidget(QWidget):
             self._apply_btn.setEnabled(False)
             return
 
-        to_write = self._collect_env_to_write()
-        if not to_write:
-            self._preview.setPlainText("(Nothing configured to write yet — set DRS "
-                                        "settings and/or env vars in the other tabs first.)")
+        env_to_write = self._collect_env_to_write()
+        gs_to_write = self._collect_gs_to_write() if self._chk_gamescope.isChecked() else {}
+
+        if not env_to_write and not gs_to_write:
+            self._preview.setPlainText(
+                "(Nothing configured to write yet — set DRS settings, "
+                "env vars, or gamescope settings first.)"
+            )
             self._apply_btn.setEnabled(False)
             return
 
         try:
-            merged_yaml_text, changed_keys = self._merge_env(self._current_yaml_text, to_write)
+            merged_text, env_changed, gs_changed = self._merge_yaml(
+                self._current_yaml_text, env_to_write, gs_to_write
+            )
         except Exception as e:
             self._preview.setPlainText(f"(Could not parse this game's YAML: {e})")
             self._apply_btn.setEnabled(False)
             return
 
-        lines = [f"# {len(changed_keys)} key(s) will be set in system.env:"]
-        for k in sorted(changed_keys):
-            lines.append(f"#   {k}={to_write[k]}")
+        lines = []
+        if env_changed:
+            lines.append(f"# {len(env_changed)} env var(s) → system.env:")
+            for k in sorted(env_changed):
+                lines.append(f"#   {k} = {env_to_write[k]!r}")
+        if gs_changed:
+            if lines:
+                lines.append("")
+            lines.append(f"# {len(gs_changed)} gamescope key(s) → system.*:")
+            for k in sorted(gs_changed):
+                lines.append(f"#   {k} = {gs_to_write[k]!r}")
         lines.append("")
-        lines.append("--- resulting system.env ---")
+        lines.append("─── resulting system section ───")
         try:
-            data = yaml.safe_load(merged_yaml_text) or {}
-            env = (data.get("system") or {}).get("env") or {}
-            for k in sorted(env):
-                lines.append(f"{k}: {env[k]!r}")
+            data = yaml.safe_load(merged_text) or {}
+            sys_sec = data.get("system") or {}
+            for k in sorted(sys_sec):
+                if k == "env":
+                    continue
+                lines.append(f"  {k}: {sys_sec[k]!r}")
+            env_sec = sys_sec.get("env") or {}
+            if env_sec:
+                lines.append("  env:")
+                for k in sorted(env_sec):
+                    lines.append(f"    {k}: {env_sec[k]!r}")
         except Exception:
             pass
         self._preview.setPlainText("\n".join(lines))
         self._apply_btn.setEnabled(True)
 
-    # ── Merge / write ─────────────────────────────────────────────────
+    # ── Merge / write ─────────────────────────────────────────────────────────
 
     @staticmethod
-    def _merge_env(original_text: str, to_write: Dict[str, str]):
-        """Parses original_text, merges to_write into system.env (creating
-        system/env if absent), and returns (new_yaml_text, changed_keys).
-        Everything else in the document is preserved as-is via ruamel-free
-        safe_load + dump — comments in the original file are not
-        preserved (PyYAML's safe round-trip doesn't keep them), but every
-        key/value and the rest of the document structure is."""
+    def _merge_yaml(
+        original_text: str,
+        env_to_write: Dict[str, str],
+        gs_to_write: Dict[str, object],
+    ):
+        """Parse original_text, merge env vars into system.env and gamescope
+        keys into system.*, return (new_yaml_text, env_changed_keys, gs_changed_keys).
+
+        Both dictionaries may be empty — the method handles either or both.
+        Comments in the original file are not preserved (PyYAML safe_load/dump
+        limitation), but all key/value structure is round-tripped correctly.
+        """
         data = yaml.safe_load(original_text) or {}
         if "system" not in data or not isinstance(data.get("system"), dict):
             data["system"] = {}
-        if "env" not in data["system"] or not isinstance(data["system"].get("env"), dict):
-            data["system"]["env"] = {}
 
-        env = data["system"]["env"]
-        changed_keys = set(to_write.keys())
-        for k, v in to_write.items():
-            env[k] = str(v)
+        # ── system.env ────────────────────────────────────────────────────────
+        if env_to_write:
+            if "env" not in data["system"] or not isinstance(data["system"].get("env"), dict):
+                data["system"]["env"] = {}
+            for k, v in env_to_write.items():
+                data["system"]["env"][k] = str(v)
+        env_changed = set(env_to_write.keys())
 
-        new_text = yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True)
-        return new_text, changed_keys
+        # ── system.gamescope_* / system.gamescope / system.mangohud ──────────
+        for k, v in gs_to_write.items():
+            data["system"][k] = v
+        gs_changed = set(gs_to_write.keys())
+
+        new_text = yaml.dump(
+            data, default_flow_style=False, sort_keys=False, allow_unicode=True
+        )
+        return new_text, env_changed, gs_changed
 
     def _apply_to_game(self):
         index = self._game_combo.currentIndex()
         if not (0 <= index < len(self._games)):
             return
         entry = self._games[index]
-        to_write = self._collect_env_to_write()
-        if not to_write:
+        env_to_write = self._collect_env_to_write()
+        gs_to_write = self._collect_gs_to_write() if self._chk_gamescope.isChecked() else {}
+        if not env_to_write and not gs_to_write:
             return
 
         try:
             with open(entry.path, "r", encoding="utf-8") as f:
                 original_text = f.read()
-            new_text, changed_keys = self._merge_env(original_text, to_write)
+            new_text, env_changed, gs_changed = self._merge_yaml(
+                original_text, env_to_write, gs_to_write
+            )
         except Exception as e:
-            QMessageBox.critical(self, "Merge failed", f"Could not merge env vars: {e}")
+            QMessageBox.critical(self, "Merge failed", f"Could not merge: {e}")
             return
 
+        total = len(env_changed) + len(gs_changed)
+        env_line = f"\n  • {len(env_changed)} env var(s) into system.env" if env_changed else ""
+        gs_line = f"\n  • {len(gs_changed)} gamescope key(s) into system.*" if gs_changed else ""
         reply = QMessageBox.question(
             self, "Write Lutris config",
-            f"Write {len(changed_keys)} env var(s) into:\n{entry.path}\n\n"
-            f"A backup (.bak) of the current file will be created first.",
+            f"Write {total} change(s) into:\n{entry.path}"
+            f"{env_line}{gs_line}\n\n"
+            "A timestamped backup of the current file will be created first.",
             QMessageBox.Yes | QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return
 
         try:
-            # Timestamped, as documented in the module header — a single
-            # fixed .bak silently destroyed the previous backup on every
-            # save, so two consecutive writes left no way back to the
-            # pre-first-write state.
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             backup_path = entry.path.with_suffix(entry.path.suffix + f".{stamp}.bak")
             shutil.copy2(entry.path, backup_path)
-
             tmp_path = entry.path.with_suffix(entry.path.suffix + ".tmp")
             with open(tmp_path, "w", encoding="utf-8") as f:
                 f.write(new_text)
@@ -6085,8 +6393,7 @@ class LutrisSyncWidget(QWidget):
 
         self._current_yaml_text = new_text
         self._status_label.setText(
-            f"Wrote {len(changed_keys)} env var(s) to {entry.path.name} "
-            f"(backup: {backup_path.name})"
+            f"Wrote {total} change(s) to {entry.path.name}  (backup: {backup_path.name})"
         )
         self._update_preview()
 
@@ -6236,12 +6543,15 @@ class ExtraToolsSidebarWidget(QWidget):
 class FlmInstallWidget(QWidget):
     """
     Right-panel build/install widget for vk_flip_meter.
+    Source is bundled at _SCRIPT_DIR/vk-flip-meter-main — no picker needed.
     Unprivileged: cmake configure, cmake --build.
-    Privileged (pkexec, graphical password prompt): cmake --install,
-    manifest library-path fixup.
+    Privileged (pkexec, graphical password prompt): cmake --install.
     """
 
-    _STEPS = ("configure", "build", "install", "manifest", "verify")
+    _STEPS = ("configure", "build", "install", "verify")
+
+    # Bundled source path (repo layout: DRSTool/vk-flip-meter-main/)
+    _BUNDLED_SRC = _SCRIPT_DIR / "vk-flip-meter-main"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -6259,35 +6569,46 @@ class FlmInstallWidget(QWidget):
         layout.addWidget(header)
 
         desc = QLabel(
-            "The build (cmake configure + build) runs as a normal user. Only "
-            "\"cmake --install\" and the manifest path fixup — the two steps "
-            "that actually need root — run through pkexec, with a graphical "
-            "password prompt."
+            "Source is bundled in the repository at <code>vk-flip-meter-main/</code>.  "
+            "The build (cmake configure + build) runs as a normal user.  Only "
+            "<code>cmake --install</code> — the step that writes to <code>/usr/local</code> — "
+            "runs through pkexec with a graphical password prompt."
         )
         desc.setWordWrap(True)
+        desc.setTextFormat(Qt.RichText)
         desc.setStyleSheet("color:#a7afbc; font-size:11px; line-height:140%;")
         layout.addWidget(desc)
+
+        # Source path banner (read-only, bundled)
+        src_row = QHBoxLayout()
+        src_row.setSpacing(6)
+        src_icon = QLabel("📁")
+        src_lbl = QLabel("Source:")
+        src_lbl.setStyleSheet("color:#8ea0ba; font-size:10px; font-weight:600;")
+        self._src_path_lbl = QLabel(str(self._BUNDLED_SRC))
+        self._src_path_lbl.setStyleSheet(
+            "color:#76b900; font-size:10px; font-family:monospace;"
+        )
+        src_ok = (self._BUNDLED_SRC / "CMakeLists.txt").is_file()
+        self._src_status = QLabel("✔ found" if src_ok else "✘ not found")
+        self._src_status.setStyleSheet(
+            f"color:{'#76b900' if src_ok else '#c04040'}; font-size:10px; font-weight:700;"
+        )
+        src_row.addWidget(src_icon)
+        src_row.addWidget(src_lbl)
+        src_row.addWidget(self._src_path_lbl, 1)
+        src_row.addWidget(self._src_status)
+        layout.addLayout(src_row)
 
         form = QGridLayout()
         form.setSpacing(8)
 
-        src_lbl = QLabel("Source directory (vk-flip-meter):")
-        src_lbl.setStyleSheet("color:#8ea0ba; font-size:10px; font-weight:600;")
-        self._src_edit = QLineEdit()
-        self._src_edit.setStyleSheet(FLM_FIELD_SS)
-        self._src_edit.setPlaceholderText("e.g. /home/cihan/src/vk-flip-meter-main")
-        browse_btn = _tool_btn("Browse")
-        browse_btn.clicked.connect(self._on_browse)
-        form.addWidget(src_lbl, 0, 0)
-        form.addWidget(self._src_edit, 0, 1)
-        form.addWidget(browse_btn, 0, 2)
-
-        prefix_lbl = QLabel("INSTALL_PREFIX:")
+        prefix_lbl = QLabel("Install prefix:")
         prefix_lbl.setStyleSheet("color:#8ea0ba; font-size:10px; font-weight:600;")
         self._prefix_edit = QLineEdit("/usr/local")
         self._prefix_edit.setStyleSheet(FLM_FIELD_SS)
-        form.addWidget(prefix_lbl, 1, 0)
-        form.addWidget(self._prefix_edit, 1, 1, 1, 2)
+        form.addWidget(prefix_lbl, 0, 0)
+        form.addWidget(self._prefix_edit, 0, 1)
 
         layout.addLayout(form)
 
@@ -6390,37 +6711,17 @@ QPlainTextEdit{
 """)
         layout.addWidget(self._console, 1)
 
-        self._autodetect_src()
+        self._autocheck_src()
 
-    # ── source dir autodetect ────────────────────────────────────────────────
+    # ── bundled source check ─────────────────────────────────────────────────
 
-    def _autodetect_src(self):
-        """Look for a sibling vk-flip-meter*/CMakeLists.txt near this script
-        and near the current working directory, so the field is pre-filled
-        when both projects are unpacked side by side."""
-        candidates = []
-        try:
-            script_dir = Path(__file__).resolve().parent
-            candidates.append(script_dir)
-        except Exception:
-            pass
-        candidates.append(Path.cwd())
-        candidates.append(Path.home())
-
-        for base in candidates:
-            try:
-                for entry in base.glob("vk*flip*meter*"):
-                    if (entry / "CMakeLists.txt").is_file():
-                        self._src_edit.setText(str(entry))
-                        return
-            except Exception:
-                continue
-
-    def _on_browse(self):
-        start = self._src_edit.text().strip() or str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(self, "Select the vk_flip_meter source directory", start)
-        if chosen:
-            self._src_edit.setText(chosen)
+    def _autocheck_src(self):
+        """Update the source status banner for the bundled path."""
+        src_ok = (self._BUNDLED_SRC / "CMakeLists.txt").is_file()
+        self._src_status.setText("✔ found" if src_ok else "✘ not found")
+        self._src_status.setStyleSheet(
+            f"color:{'#76b900' if src_ok else '#c04040'}; font-size:10px; font-weight:700;"
+        )
 
     # ── console ──────────────────────────────────────────────────────────────
 
@@ -6508,33 +6809,40 @@ QPlainTextEdit{
     # ── build / install pipeline ─────────────────────────────────────────────
 
     def _on_build_clicked(self):
-        src = self._src_edit.text().strip()
+        src = str(self._BUNDLED_SRC)
         prefix = self._prefix_edit.text().strip() or "/usr/local"
 
-        if not src or not (Path(src) / "CMakeLists.txt").is_file():
+        if not (Path(src) / "CMakeLists.txt").is_file():
             QMessageBox.warning(
-                self, "Invalid source directory",
-                "No CMakeLists.txt found in the selected directory.\n"
-                "Select the folder the vk_flip_meter source was extracted into."
+                self, "Bundled source not found",
+                f"CMakeLists.txt not found at:\n  {src}\n\n"
+                "Make sure the vk-flip-meter-main/ directory is present "
+                "next to DRSTool.py (it is part of the DRSTool repository)."
             )
             return
 
         self._prefix_used = prefix
-        self._build_dir = str(Path(src) / "build")
+        self._build_dir = str(self._BUNDLED_SRC / "build")
         native = "ON" if self._native_chk.isChecked() else "OFF"
         generator = "Ninja" if shutil.which("ninja") else "Unix Makefiles"
 
         self._console.clear()
+        self._log(f"==> Source: {src}")
         self._log(f"==> Configuring  (generator={generator}, FLM_NATIVE_BUILD={native}, prefix={prefix})")
         self._set_busy(True, "Configuring (cmake configure)...")
         self._phase = "configure"
 
+        # FLM_LIB_PATH is injected so the manifest template gets the correct
+        # lib64 path; CMake's configure_file handles the manifest (FIX-52/61).
+        libdir = "lib64"
+        flm_lib_path = f"{prefix}/{libdir}/libvk_flip_meter.so"
         args = [
             "-S", src, "-B", self._build_dir,
             "-DCMAKE_BUILD_TYPE=Release",
             f"-DCMAKE_INSTALL_PREFIX={prefix}",
-            "-DCMAKE_INSTALL_LIBDIR=lib64",
+            f"-DCMAKE_INSTALL_LIBDIR={libdir}",
             f"-DFLM_NATIVE_BUILD={native}",
+            f"-DFLM_LIB_PATH={flm_lib_path}",
             "-G", generator,
         ]
         self._run_process("cmake", args, use_pkexec=False)
@@ -6594,9 +6902,8 @@ QPlainTextEdit{
 
         if exit_code != 0:
             # pkexec's own exit codes: 126 = user dismissed the auth dialog,
-            # 127 = not authorized / auth failure. Both are "you cancelled",
-            # not a build failure — say so instead of a generic error.
-            if self._phase in ("install", "manifest") and exit_code in (126, 127):
+            # 127 = not authorized / auth failure. Both are "you cancelled".
+            if self._phase == "install" and exit_code in (126, 127):
                 self._log("Authorization cancelled/denied — installation aborted (build output kept).")
                 self._set_busy(False, "Install cancelled (pkexec authorization).")
                 return
@@ -6615,24 +6922,14 @@ QPlainTextEdit{
             self._log("==> Requesting pkexec authorization for install (root required)...")
             self._set_busy(True, "Waiting for pkexec password...")
             self._phase = "install"
+            # cmake --install writes the manifest with the correct FLM_LIB_PATH
+            # baked in at configure time (FIX-52/61) — no post-install sed needed.
             self._run_process("cmake", ["--install", self._build_dir], use_pkexec=True)
 
         elif self._phase == "install":
-            self._log("==> Updating manifest library path...")
-            self._set_busy(True, "Updating manifest (pkexec)...")
-            self._phase = "manifest"
-            manifest = f"{self._prefix_used}/share/vulkan/implicit_layer.d/VkLayer_cpu_flip_meter.json"
-            libpath = f"{self._prefix_used}/lib64/libvk_flip_meter.so"
-            shell_cmd = (
-                f"if [ -f '{manifest}' ]; then "
-                f"sed -i 's|/usr/local/lib64/libvk_flip_meter.so|{libpath}|g' '{manifest}' && "
-                f"echo 'Manifest updated: {manifest}'; "
-                f"else echo 'WARNING: manifest not found: {manifest}'; fi"
-            )
-            self._run_process("bash", ["-c", shell_cmd], use_pkexec=True)
-
-        elif self._phase == "manifest":
             self._log("==> Installation complete.")
+            self._log(f"    Layer installed to: {self._prefix_used}/lib64/libvk_flip_meter.so")
+            self._log("    Manifest: share/vulkan/implicit_layer.d/VkLayer_cpu_flip_meter.json")
             self._log("    Verify: vulkaninfo --summary | grep -i flip_meter")
             self._set_busy(False, "Installation complete.")
 
@@ -6855,13 +7152,14 @@ LGTUNE_KEYS: List[tuple] = [
 class LgtuneWidget(QWidget):
     """
     Right-panel widget for the lutris-game-tune sub-tab inside Extra Tools.
+    Source is bundled at _SCRIPT_DIR/lutris-game-tune-main/ — no zip needed.
 
     Layout (scrollable):
       ┌─ How lutris-game-tune works ─────────────────────────────────────────┐
       │  Usage explanation: PRE / POST / RUN / STATUS, Lutris wiring        │
       └──────────────────────────────────────────────────────────────────────┘
       ┌─ Installation ───────────────────────────────────────────────────────┐
-      │  [detected / not detected]  source zip picker + Install button       │
+      │  [detected / not detected]  Install / Uninstall (pkexec) buttons    │
       └──────────────────────────────────────────────────────────────────────┘
       ┌─ System-wide Settings  (/etc/lutris-game-tune.conf) ─────────────────┐
       │  [per-key rows: label + description + control]                       │
@@ -6870,10 +7168,12 @@ class LgtuneWidget(QWidget):
       console (QPlainTextEdit — install/status/log output)
     """
 
+    # Bundled source path (repo layout: DRSTool/lutris-game-tune-main/)
+    _BUNDLED_SRC = _SCRIPT_DIR / "lutris-game-tune-main"
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._proc: Optional[QProcess] = None
-        self._src_zip: str = ""
 
         # Master layout (no margins — scroll area provides padding)
         root = QVBoxLayout(self)
@@ -6964,24 +7264,25 @@ class LgtuneWidget(QWidget):
         self._status_banner.setStyleSheet("font-size:10px; font-weight:700; padding:4px;")
         install_layout.addWidget(self._status_banner)
 
-        # Source zip row (shown when not installed)
-        self._src_row = QWidget()
-        src_row_layout = QHBoxLayout(self._src_row)
-        src_row_layout.setContentsMargins(0, 0, 0, 0)
-        src_row_layout.setSpacing(6)
-
-        src_lbl = QLabel("Source zip:")
+        # Bundled source path banner (read-only)
+        src_row = QHBoxLayout()
+        src_row.setSpacing(6)
+        src_lbl = QLabel("📁 Source:")
         src_lbl.setStyleSheet("color:#8ea0ba; font-size:10px; font-weight:600;")
-        self._zip_edit = QLineEdit()
-        self._zip_edit.setStyleSheet(FLM_FIELD_SS)
-        self._zip_edit.setPlaceholderText("e.g. /home/cihan/lutris-game-tune-main.zip")
-        zip_browse = _tool_btn("Browse…")
-        zip_browse.clicked.connect(self._on_browse_zip)
-
-        src_row_layout.addWidget(src_lbl)
-        src_row_layout.addWidget(self._zip_edit, 1)
-        src_row_layout.addWidget(zip_browse)
-        install_layout.addWidget(self._src_row)
+        self._lgt_src_lbl = QLabel(str(self._BUNDLED_SRC))
+        self._lgt_src_lbl.setStyleSheet(
+            "color:#76b900; font-size:10px; font-family:monospace;"
+        )
+        lgt_src_ok = (self._BUNDLED_SRC / "install.sh").is_file()
+        self._lgt_src_status = QLabel("✔ found" if lgt_src_ok else "✘ not found")
+        self._lgt_src_status.setStyleSheet(
+            f"color:{'#76b900' if lgt_src_ok else '#c04040'}; "
+            "font-size:10px; font-weight:700;"
+        )
+        src_row.addWidget(src_lbl)
+        src_row.addWidget(self._lgt_src_lbl, 1)
+        src_row.addWidget(self._lgt_src_status)
+        install_layout.addLayout(src_row)
 
         # Action buttons row
         btn_row = QHBoxLayout()
@@ -6998,8 +7299,9 @@ class LgtuneWidget(QWidget):
         install_layout.addLayout(btn_row)
 
         install_note = QLabel(
-            "Install runs <code>sudo install.sh</code> from the extracted zip via pkexec.  "
-            "Uninstall runs <code>uninstall.sh</code> via pkexec.  "
+            "Install runs <code>lutris-game-tune-main/install.sh</code> (bundled in "
+            "the DRSTool repository) via pkexec.  "
+            "Uninstall runs <code>uninstall.sh</code> from the installed lib dir via pkexec.  "
             "The config file at <code>/etc/lutris-game-tune.conf</code> is "
             "<b>not removed</b> on uninstall — your settings are preserved."
         )
@@ -7158,6 +7460,12 @@ QPlainTextEdit{
         return LGTUNE_WRAPPER.exists() and os.access(str(LGTUNE_WRAPPER), os.X_OK)
 
     def _refresh_install_state(self):
+        src_ok = (self._BUNDLED_SRC / "install.sh").is_file()
+        self._lgt_src_status.setText("✔ found" if src_ok else "✘ not found")
+        self._lgt_src_status.setStyleSheet(
+            f"color:{'#76b900' if src_ok else '#c04040'}; "
+            "font-size:10px; font-weight:700;"
+        )
         if self._is_installed():
             self._status_banner.setText(
                 f"✔  Installed  —  {LGTUNE_WRAPPER}"
@@ -7165,7 +7473,6 @@ QPlainTextEdit{
             self._status_banner.setStyleSheet(
                 "color:#76b900; font-size:10px; font-weight:700; padding:4px;"
             )
-            self._src_row.hide()
             self._install_btn.hide()
             self._uninstall_btn.show()
             self._settings_group.setEnabled(True)
@@ -7173,12 +7480,11 @@ QPlainTextEdit{
             self._status_banner.setText(
                 "✘  Not installed  —  wrapper not found at "
                 f"{LGTUNE_WRAPPER}.  "
-                "Select the source zip and click Install."
+                "Click Install to build and install from the bundled source."
             )
             self._status_banner.setStyleSheet(
                 "color:#c04040; font-size:10px; font-weight:700; padding:4px;"
             )
-            self._src_row.show()
             self._install_btn.show()
             self._uninstall_btn.hide()
             self._settings_group.setEnabled(False)
@@ -7285,45 +7591,18 @@ QPlainTextEdit{
 
     # ── action handlers ───────────────────────────────────────────────────────
 
-    def _on_browse_zip(self):
-        start = self._zip_edit.text().strip() or str(Path.home())
-        chosen, _ = QFileDialog.getOpenFileName(
-            self, "Select lutris-game-tune source zip", start,
-            "ZIP archives (*.zip);;All files (*)"
-        )
-        if chosen:
-            self._zip_edit.setText(chosen)
-
     def _on_install(self):
-        zip_path = self._zip_edit.text().strip()
-        if not zip_path or not Path(zip_path).is_file():
+        install_sh = self._BUNDLED_SRC / "install.sh"
+        if not install_sh.is_file():
             QMessageBox.warning(
-                self, "No zip selected",
-                "Select the lutris-game-tune-main.zip source archive first."
+                self, "Bundled source not found",
+                f"install.sh not found at:\n  {install_sh}\n\n"
+                "Make sure the lutris-game-tune-main/ directory is present "
+                "next to DRSTool.py (it is part of the DRSTool repository)."
             )
             return
-        # Extract to a temp dir, then run install.sh as root via pkexec
-        import tempfile, zipfile
-        try:
-            tmp = tempfile.mkdtemp(prefix="lgtune-install-")
-            with zipfile.ZipFile(zip_path) as zf:
-                zf.extractall(tmp)
-        except Exception as e:
-            self._log(f"ERROR: could not extract zip: {e}")
-            return
-
-        # Find install.sh inside the extracted tree
-        install_sh = None
-        for p in Path(tmp).rglob("install.sh"):
-            install_sh = str(p)
-            break
-        if not install_sh:
-            self._log("ERROR: install.sh not found inside the zip.")
-            return
-
-        self._log(f"==> Extracted to {tmp}")
         self._log(f"==> Running pkexec bash {install_sh}")
-        self._run_proc("pkexec", ["bash", install_sh], tag="install")
+        self._run_proc("pkexec", ["bash", str(install_sh)], tag="install")
 
     def _on_uninstall(self):
         reply = QMessageBox.question(
