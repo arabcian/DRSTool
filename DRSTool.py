@@ -2608,8 +2608,6 @@ QPushButton:pressed{
             self._build_preset_control(s, cur)
         elif s.type == "numeric":
             self._build_numeric_control(s, cur)
-        elif s.type == "dec-hex":
-            self._build_dec_hex_control(s, cur)
         elif s.type == "bitfield":
             self._build_bitfield_control(s, cur)
         else:
@@ -2788,75 +2786,6 @@ QSpinBox:hover{
         hbox.addStretch()
         self._control_layout.addLayout(hbox)
 
-    def _build_dec_hex_control(self, s: Setting, cur: Optional[str]):
-        grid = QGridLayout()
-        grid.setSpacing(6)
-
-        dec_label = QLabel("Decimal:")
-        dec_label.setStyleSheet("font-size: 9px; color: #8a92a5;")
-        grid.addWidget(dec_label, 0, 0)
-
-        dec_spin = QSpinBox()
-        # NOTE: QSpinBox uses a 32-bit *signed* int internally, so the true
-        # unsigned 32-bit max (0xFFFFFFFF) overflows and raises OverflowError.
-        # No current setting uses type="dec-hex"; if one ever does and needs
-        # the full unsigned range, this control needs a QLineEdit + validator
-        # instead of QSpinBox.
-        dec_spin.setRange(0, 0x7FFFFFFF)
-        if cur is not None:
-            dec_spin.setValue(int(cur, 16))
-        dec_spin.setFixedHeight(26)
-        dec_spin.setStyleSheet("""
-QSpinBox{
-    background:#1a1f28;
-    border:1px solid #323c4b;
-    border-radius:6px;
-    color:#d8d8d8;
-    padding:3px 8px;
-    font-size:10px;
-}
-QSpinBox:focus{
-    border:1px solid #76b900;
-}
-QSpinBox:hover{
-    background:#252c37;
-}
-""")
-        dec_spin.valueChanged.connect(lambda v: self._set_dec_hex(s.id, v))
-        grid.addWidget(dec_spin, 0, 1)
-
-        hex_label = QLabel("Hex: 0x")
-        hex_label.setStyleSheet("font-size: 9px; color: #8a92a5;")
-        grid.addWidget(hex_label, 0, 2)
-
-        hex_edit = QLineEdit()
-        if cur is not None:
-            hex_edit.setText(cur.replace("0x", "").upper())
-        else:
-            hex_edit.setText("0")
-        hex_edit.setFixedHeight(26)
-        hex_edit.setStyleSheet("""
-QLineEdit{
-    background:#1a1f28;
-    border:1px solid #323c4b;
-    border-radius:6px;
-    color:#9be238;
-    font-family:monospace;
-    font-size:10px;
-    padding:3px 8px;
-}
-QLineEdit:focus{
-    border:1px solid #76b900;
-}
-QLineEdit:hover{
-    background:#252c37;
-}
-""")
-        hex_edit.textChanged.connect(lambda t: self._set_hex_from_edit(s.id, t))
-        grid.addWidget(hex_edit, 0, 3)
-
-        self._control_layout.addLayout(grid)
-
     def _build_bitfield_control(self, s: Setting, cur: Optional[str]):
         cur_val = int(cur, 16) if cur else 0
 
@@ -2999,10 +2928,6 @@ QLineEdit:hover{
         self.settings_manager.set_setting(setting_id, value)
 
     def _set_numeric(self, setting_id: str, value: int):
-        hex_val = f"0x{value:X}"
-        self.settings_manager.set_setting(setting_id, hex_val)
-
-    def _set_dec_hex(self, setting_id: str, value: int):
         hex_val = f"0x{value:X}"
         self.settings_manager.set_setting(setting_id, hex_val)
 
@@ -7779,13 +7704,12 @@ QPlainTextEdit{
             self._log(f"Log file not found: {LGTUNE_LOG}")
             return
         self._log(f"==> tail -80 {LGTUNE_LOG}")
-        self._run_proc("bash", ["-c", f"tail -80 {LGTUNE_LOG}"], tag="log",
-                       use_pkexec=False)
+        self._run_proc("bash", ["-c", f"tail -80 {LGTUNE_LOG}"], tag="log")
 
     # ── QProcess plumbing ─────────────────────────────────────────────────────
 
     def _run_proc(self, program: str, args: List[str], tag: str,
-                  stdin_data: Optional[bytes] = None, use_pkexec: bool = True):
+                  stdin_data: Optional[bytes] = None):
         if self._proc and self._proc.state() != QProcess.NotRunning:
             self._log("A process is already running — please wait.")
             return
@@ -7797,12 +7721,6 @@ QPlainTextEdit{
             lambda err, p=proc: self._on_proc_error(err, p)
         )
         self._proc = proc
-        # `use_pkexec` no longer branches here — pkexec vs. direct invocation
-        # is fully determined by `program`/`args` at the call site (e.g.
-        # ["pkexec", "bash", ...] vs. ["bash", ...]). Both branches called
-        # proc.start(program, args) identically, so the parameter was dead
-        # weight. Kept as a parameter (not removed from the signature) since
-        # call sites still pass it and this avoids touching every call site.
         proc.start(program, args)
         if stdin_data is not None:
             proc.write(stdin_data)
@@ -8301,7 +8219,6 @@ class MainWindow(QMainWindow):
         # a duplicate of settings_manager.settings_changed, connected below,
         # and doubled every sidebar/editor rebuild on each click)
         self._setting_editor = SettingEditorWidget(self.settings_manager)
-        self._setting_editor.cleared.connect(self._on_setting_cleared)
         self._right_stack.addWidget(self._setting_editor)
 
         # Page 2: Architecture detail
@@ -8449,14 +8366,6 @@ class MainWindow(QMainWindow):
             if self._sidebar_stack.currentIndex() == 0:
                 self._right_stack.setCurrentIndex(1)
 
-    def _on_setting_cleared(self):
-        # Fired when the currently-open setting's value is removed (via the
-        # Remove Setting button). The editor panel should stay visible,
-        # showing the setting with nothing selected yet (SettingEditorWidget
-        # already rebuilds itself for this) - it must NOT fall back to the
-        # placeholder page, which used to hide the whole right-hand panel.
-        pass
-
     def _open_env_var(self, var_name: str):
         if var_name == "__GAMESCOPE_FLAGS__":
             # Gamescope's settings are real argv flags, not KEY=VALUE env
@@ -8540,7 +8449,6 @@ class MainWindow(QMainWindow):
         self._env_widget.load_values(saved_env)
         # 2. Hide env editor right panel (stale data)
         self._env_editor.discard_pending_edit()
-        self._env_editor.hide()
         # 3. Clear per-tab right-panel memory so tabs start fresh
         self._tab_right_memory = {}
         # 4. Repopulate lists
