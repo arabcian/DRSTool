@@ -116,7 +116,8 @@ class GamescopeFlagDef:
     """
     Definition of a real `gamescope` command-line argument (per `gamescope --help`).
     NOT an environment variable — gamescope reads these from argv only, e.g.:
-        gamescope -W 2560 -H 1440 --hdr-enabled --adaptive-sync -- %command%
+        gamescope -W 2560 -H 1440 --hdr-enabled --adaptive-sync --
+    (nothing is assumed after `--`; the launcher/shell appends its own command)
     kind:
       "toggle" — bare flag, included with no value when enabled (e.g. --rt)
       "int"    — flag takes a numeric argument (e.g. -r 165)
@@ -2154,9 +2155,10 @@ class OutputBarWidget(QWidget):
         super().__init__(parent)
         self.settings_manager = settings_manager
         self._env_widget: Optional['EnvVarsWidget'] = None  # set after construction
+        self._gamescope_widget: Optional['GamescopeFlagsWidget'] = None  # set after construction
 
         # Three rows: row1 NVAPI vars, row2 DXVK|VKD3D vars, row3 buttons
-        self.setFixedHeight(92)
+        self.setFixedHeight(114)
         self.setStyleSheet("background: #141720; border-bottom: 1px solid #1e2535;")
 
         root = QVBoxLayout(self)
@@ -2218,6 +2220,23 @@ class OutputBarWidget(QWidget):
         row2.addWidget(self._env_value, 1)
 
         root.addLayout(row2)
+
+        # ── Row 2b: GAMESCOPE= <gamescope command, ending in '--'> ───────────
+        row2b = QHBoxLayout()
+        row2b.setSpacing(6)
+        row2b.setContentsMargins(0, 0, 0, 0)
+
+        lbl_gs = QLabel("GAMESCOPE=")
+        lbl_gs.setStyleSheet(lbl_ss)
+        row2b.addWidget(lbl_gs)
+
+        self._gamescope_value = QLabel("disabled")
+        self._gamescope_value.setStyleSheet(box_ss)
+        self._gamescope_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._gamescope_value.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        row2b.addWidget(self._gamescope_value, 1)
+
+        root.addLayout(row2b)
 
         # ── Row 3: stretch + Copy All | Save | Reset ──────────────────────────
         row3 = QHBoxLayout()
@@ -2299,6 +2318,19 @@ QPushButton:pressed{background:#a13232;}"""
         self._env_value.setText(env_str if env_str else "none")
         self._env_value.setToolTip(env_str if env_str else "No DXVK/VKD3D-Proton env vars set")
 
+        # Row 2b: gamescope command (CLI flags, ends in '--' — no %command%
+        # or launcher assumed; the person appends their own launch command)
+        if self._gamescope_widget is not None and self._gamescope_widget.is_enabled():
+            gs_str = self._gamescope_widget.build_command()
+            self._gamescope_value.setText(gs_str)
+            self._gamescope_value.setToolTip(gs_str)
+        else:
+            self._gamescope_value.setText("disabled")
+            self._gamescope_value.setToolTip(
+                "Gamescope wrapper is disabled — enable it from the "
+                "\"Gamescope Launch Flags\" item in the Env Vars sidebar."
+            )
+
         current = self.settings_manager.get_current_profile()
         self._save_profile_btn.setEnabled(current is not None)
         if current:
@@ -2314,6 +2346,12 @@ QPushButton:pressed{background:#a13232;}"""
             text = self._env_widget.get_full_combined_string()
         else:
             text = self.settings_manager.get_full_env_string()
+
+        if self._gamescope_widget is not None and self._gamescope_widget.is_enabled():
+            gs_str = self._gamescope_widget.build_command()
+            if gs_str:
+                text = f"{text} {gs_str}" if text else gs_str
+
         if text:
             QApplication.clipboard().setText(text)
             self._show_feedback("All copied!")
@@ -2342,6 +2380,9 @@ QPushButton:pressed{background:#a13232;}"""
                 # Clear env widget
                 if hasattr(win, '_env_widget'):
                     win._env_widget.reset_all_values()
+                # Clear Gamescope CLI-flag builder
+                if hasattr(win, '_gamescope'):
+                    win._gamescope.reset_all_values()
                 # Clear env editor right panel
                 if hasattr(win, '_env_editor'):
                     win._env_editor.discard_pending_edit()
@@ -4546,7 +4587,8 @@ GAMESCOPE_ENV_VARS: List[EnvVarDef] = [
 # Gamescope — Command-Line Flags (real, from `gamescope --help`)
 # gamescope has NO config-file or env-var input for these; they are argv-only.
 # Rendered by GamescopeFlagsWidget as a CLI-flag builder gated behind a master
-# "Enable Gamescope" toggle, producing:  gamescope <flags...> -- %command%
+# "Enable Gamescope" toggle, producing:  gamescope <flags...> --
+# (ends in a bare "--" — not Steam-specific, no %command% assumed)
 # ============================================================================
 
 GAMESCOPE_FLAGS: List[GamescopeFlagDef] = [
@@ -7660,8 +7702,11 @@ class GamescopeFlagsWidget(QWidget):
     CLI-flag builder for `gamescope` itself (see GAMESCOPE_FLAGS).
     A master 'Enable Gamescope' checkbox gates every control below it; while
     unchecked, the whole form is disabled and the preview/output is empty.
-    Produces a real invocation, e.g.:
-        gamescope -W 2560 -H 1440 --hdr-enabled --adaptive-sync -- %command%
+    Produces a real invocation ending in a bare `--`, e.g.:
+        gamescope -W 2560 -H 1440 --hdr-enabled --adaptive-sync --
+    This tool isn't Steam-specific, so nothing after `--` is assumed —
+    whoever launches this (Steam, Lutris, a shell script, ...) appends their
+    own command themselves.
     Genuine Gamescope *env vars* (Steam-side) stay in the Env Vars tab under
     the "Gamescope" category — this widget only deals with argv flags.
     """
@@ -7835,8 +7880,13 @@ class GamescopeFlagsWidget(QWidget):
                     values[gf.flag] = v
         return values
 
-    def build_command(self, inner: str = "%command%") -> str:
-        """Full `gamescope <flags> -- <inner>` string, or '' if disabled."""
+    def build_command(self, inner: str = "") -> str:
+        """
+        `gamescope <flags> -- [inner]` string, or '' if disabled.
+        `inner` is left empty by default: this isn't a Steam-only tool, so
+        we don't presume %command% — whoever launches this (Steam, Lutris,
+        a raw shell script, ...) appends their own command after `--`.
+        """
         if not self.is_enabled():
             return ""
         parts = ["gamescope"]
@@ -7846,7 +7896,8 @@ class GamescopeFlagsWidget(QWidget):
             else:
                 parts.append(f"{flag} {shlex.quote(val)}")
         parts.append("--")
-        parts.append(inner)
+        if inner:
+            parts.append(inner)
         return " ".join(parts)
 
     def _update_preview(self):
@@ -8171,6 +8222,8 @@ class MainWindow(QMainWindow):
 
         # Wire env_widget into output_bar so Copy All includes env vars
         self._output_bar._env_widget = self._env_widget
+        self._output_bar._gamescope_widget = self._gamescope
+        self._gamescope.changed.connect(self._output_bar._update)
         # Per-tab right-panel memory
         self._tab_right_memory: Dict[int, int] = {}
 
