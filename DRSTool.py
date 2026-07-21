@@ -5908,42 +5908,53 @@ class LutrisSyncWidget(QWidget):
           (Lutris's own native "launch this game through gamescope" switch —
           Lutris builds the actual gamescope invocation itself; we never
           write a raw "gamescope ..." command string into the YAML)
-        --output-width + --output-height     -> gamescope_output_res  "WxH"
-        --nested-width + --nested-height     -> gamescope_game_res    "WxH"
+        --output-width + --output-height     -> gamescope_output_res        "WxH"
+        --nested-width + --nested-height     -> gamescope_game_res          "WxH"
         --framerate-limit                    -> gamescope_fps_limiter
-        --nested-unfocused-refresh           -> gamescope_fps_limiter_no_focus
-        --filter                             -> gamescope_upscale_mode
         --sharpness                          -> gamescope_fsr_sharpness
-        --hdr-enabled                        -> gamescope_hdr_enabled  (bool)
-        --adaptive-sync                      -> gamescope_vrr_enabled  (bool)
-        --force-grab-cursor                  -> gamescope_grab         (bool)
+        --hdr-enabled                        -> gamescope_hdr              (bool)
+        --force-grab-cursor                  -> gamescope_force_grab_cursor (bool)
       (the per-flag mappings above are only written while the master toggle
-      is enabled — get_flag_values() returns {} otherwise)
+      is enabled — get_flag_values() returns {} otherwise; this key set
+      matches Cihan's confirmed working Lutris YAML layout — no
+      gamescope_hdr_enabled / gamescope_grab / gamescope_vrr_enabled /
+      gamescope_upscale_mode / gamescope_fps_limiter_no_focus keys exist)
+
+      Every other gamescope flag that's currently set (--filter, --scaler,
+      --adaptive-sync, --rt, --nested-unfocused-refresh, ...) has no native
+      Lutris key, so it's packed into a single raw CLI-flag string and
+      written to gamescope_flags, e.g.:
+        gamescope_flags: --scaler integer --filter nearest --adaptive-sync --rt
 
       From the Env Vars tab (Gamescope category — genuine env vars only:
       STEAM_GAMESCOPE_*, ENABLE_GAMESCOPE_WSI, STEAM_MULTIPLE_XWAYLANDS, ...)
       goes straight into system.env, same as every other env var category.
+
+      Lutris Game Tune (optional, own group below): when enabled, writes
+      prelaunch_command / postexit_command / prefix_command pointing at
+      lutris-game-tune-wrapper PRE / POST / RUN <nice>, plus
+      prefer_system_libs, straight into system.* — no extra confirmation
+      beyond the normal "Write to Lutris config" dialog.
     """
 
     # ── Gamescope CLI flag → Lutris system.* key mappings ─────────────────────
     # Single flag → single Lutris key (string value, passed through as-is)
     _FLAG_TO_LUTRIS: Dict[str, str] = {
         "--framerate-limit":            "gamescope_fps_limiter",
-        "--nested-unfocused-refresh":   "gamescope_fps_limiter_no_focus",
-        "--filter":                     "gamescope_upscale_mode",
         "--sharpness":                  "gamescope_fsr_sharpness",
     }
     # Single flag → single Lutris key (bare toggle -> Python bool)
     _FLAG_TO_LUTRIS_BOOL: Dict[str, str] = {
-        "--hdr-enabled":       "gamescope_hdr_enabled",
-        "--adaptive-sync":     "gamescope_vrr_enabled",
-        "--force-grab-cursor": "gamescope_grab",
+        "--hdr-enabled":       "gamescope_hdr",
+        "--force-grab-cursor": "gamescope_force_grab_cursor",
     }
     # Two flags (W, H) → one Lutris key as "WxH" string
     _FLAG_PAIR_TO_LUTRIS: Dict[str, tuple] = {
         "gamescope_output_res": ("--output-width",  "--output-height"),
         "gamescope_game_res":   ("--nested-width",   "--nested-height"),
     }
+    # lutris-game-tune-wrapper install path (kept in sync with LGTUNE_WRAPPER)
+    _LGTUNE_WRAPPER_PATH = "/usr/local/bin/lutris-game-tune-wrapper"
 
     def __init__(self, settings_manager: SettingsManager, parent=None):
         super().__init__(parent)
@@ -6051,10 +6062,60 @@ class LutrisSyncWidget(QWidget):
             "  → all others go to system.env"
         )
         self._chk_env.setChecked(True)
-        for c in (self._chk_drs, self._chk_env):
+        self._chk_prefer_libs = QCheckBox("prefer_system_libs")
+        for c in (self._chk_drs, self._chk_env, self._chk_prefer_libs):
             c.setStyleSheet(_chk_ss)
             which_layout.addWidget(c)
         layout.addWidget(which_group)
+
+        # ── Lutris Game Tune (PRE/POST/RUN wrapper commands) ──────────────────
+        lgtune_group = QGroupBox("Lutris Game Tune")
+        lgtune_group.setStyleSheet(_grp_ss)
+        lgtune_layout = QVBoxLayout(lgtune_group)
+        lgtune_layout.setSpacing(4)
+
+        self._chk_lgtune = QCheckBox(
+            "Wire lutris-game-tune (prelaunch_command / postexit_command / "
+            "prefix_command)"
+        )
+        self._chk_lgtune.setStyleSheet(_chk_ss)
+        lgtune_layout.addWidget(self._chk_lgtune)
+
+        nice_row = QHBoxLayout()
+        nice_row.setSpacing(6)
+        nice_lbl = QLabel("RUN nice value:")
+        nice_lbl.setStyleSheet("color:#c8cdd8; font-size:9px;")
+        self._lgtune_nice = QSpinBox()
+        self._lgtune_nice.setRange(-20, 19)
+        self._lgtune_nice.setValue(-10)
+        self._lgtune_nice.setStyleSheet("""
+            QSpinBox {
+                background: #141720; border: 1px solid #1e2535; color: #e8eaf0;
+                font-size: 9px; font-family: monospace; padding: 2px 4px;
+                border-radius: 3px; min-height: 20px;
+            }
+            QSpinBox:hover { border-color: #4a7300; }
+        """)
+        nice_row.addWidget(nice_lbl)
+        nice_row.addWidget(self._lgtune_nice)
+        nice_row.addStretch()
+        lgtune_layout.addLayout(nice_row)
+
+        lgtune_note = QLabel(
+            f"When enabled, writes:\n"
+            f"  prelaunch_command: {self._LGTUNE_WRAPPER_PATH} PRE\n"
+            f"  postexit_command:  {self._LGTUNE_WRAPPER_PATH} POST\n"
+            f"  prefix_command:    {self._LGTUNE_WRAPPER_PATH} RUN <nice>\n"
+            "directly into system.* — no separate prompt, same "
+            "'Write to Lutris config' confirmation as everything else."
+        )
+        lgtune_note.setWordWrap(True)
+        lgtune_note.setStyleSheet(
+            "color:#8a92a5; font-size:9px; font-family:monospace;"
+        )
+        lgtune_layout.addWidget(lgtune_note)
+
+        layout.addWidget(lgtune_group)
 
         # ── Preview ───────────────────────────────────────────────────────────
         self._preview = QPlainTextEdit()
@@ -6091,8 +6152,9 @@ class LutrisSyncWidget(QWidget):
         self._status_label.setStyleSheet("color:#a8adb8; font-size:9px;")
         layout.addWidget(self._status_label)
 
-        for w in (self._chk_drs, self._chk_env):
+        for w in (self._chk_drs, self._chk_env, self._chk_prefer_libs, self._chk_lgtune):
             w.stateChanged.connect(self._update_preview)
+        self._lgtune_nice.valueChanged.connect(self._update_preview)
         self.settings_manager.settings_changed.connect(self._update_preview)
         self.settings_manager.arch_changed.connect(self._update_preview)
 
@@ -6215,6 +6277,13 @@ class LutrisSyncWidget(QWidget):
         if gamescope_on:
             system_keys["gamescope"] = True
 
+        # Flags consumed by an explicit native-key mapping below — anything
+        # left over falls through to the gamescope_flags catch-all string.
+        consumed_flags = set(self._FLAG_TO_LUTRIS) | set(self._FLAG_TO_LUTRIS_BOOL)
+        for flag_w, flag_h in self._FLAG_PAIR_TO_LUTRIS.values():
+            consumed_flags.add(flag_w)
+            consumed_flags.add(flag_h)
+
         # Single → single string mappings
         for flag, lutris_key in self._FLAG_TO_LUTRIS.items():
             if flag in flags and flags[flag]:
@@ -6236,6 +6305,33 @@ class LutrisSyncWidget(QWidget):
             except (ValueError, TypeError):
                 pass
 
+        # Everything else currently set (--filter, --scaler, --adaptive-sync,
+        # --rt, --nested-unfocused-refresh, ...) has no native Lutris key —
+        # pack it into one raw CLI-flag string, e.g.:
+        #   gamescope_flags: --scaler integer --filter nearest --adaptive-sync --rt
+        if gamescope_on:
+            leftover_parts: List[str] = []
+            for gf in GAMESCOPE_FLAGS:
+                flag = gf.flag
+                if flag in consumed_flags or flag not in flags:
+                    continue
+                val = flags[flag]
+                leftover_parts.append(flag if val == "" else f"{flag} {shlex.quote(val)}")
+            if leftover_parts:
+                system_keys["gamescope_flags"] = " ".join(leftover_parts)
+
+        # prefer_system_libs — plain Lutris system.* boolean, independent of
+        # gamescope.
+        if self._chk_prefer_libs.isChecked():
+            system_keys["prefer_system_libs"] = True
+
+        # lutris-game-tune wiring — written straight into system.* like
+        # everything else here; no separate confirmation prompt.
+        if self._chk_lgtune.isChecked():
+            nice = self._lgtune_nice.value()
+            system_keys["prelaunch_command"] = f"{self._LGTUNE_WRAPPER_PATH} PRE"
+            system_keys["postexit_command"] = f"{self._LGTUNE_WRAPPER_PATH} POST"
+            system_keys["prefix_command"] = f"{self._LGTUNE_WRAPPER_PATH} RUN {nice}"
 
         return system_keys, remaining
 
@@ -6246,15 +6342,15 @@ class LutrisSyncWidget(QWidget):
             return
 
         all_env = self._collect_all_env()
-        if not all_env:
+        system_keys, env_vars = self._split_gamescope(all_env)
+        if not system_keys and not env_vars:
             self._preview.setPlainText(
-                "(Nothing configured yet — set DRS settings and/or env vars "
-                "in the other tabs first.)"
+                "(Nothing configured yet — set DRS settings, env vars, "
+                "gamescope flags, prefer_system_libs, or lutris-game-tune "
+                "in the other tabs/groups first.)"
             )
             self._apply_btn.setEnabled(False)
             return
-
-        system_keys, env_vars = self._split_gamescope(all_env)
 
         try:
             new_text, sys_changed, env_changed = self._merge_yaml(
@@ -6332,10 +6428,9 @@ class LutrisSyncWidget(QWidget):
             return
         entry = self._games[index]
         all_env = self._collect_all_env()
-        if not all_env:
-            return
-
         system_keys, env_vars = self._split_gamescope(all_env)
+        if not system_keys and not env_vars:
+            return
 
         try:
             with open(entry.path, "r", encoding="utf-8") as f:
