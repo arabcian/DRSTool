@@ -6040,39 +6040,39 @@ class LutrisSyncWidget(QWidget):
         self._game_combo.currentIndexChanged.connect(self._on_game_selected)
         layout.addWidget(self._game_combo)
 
-        # ── What will be written ──────────────────────────────────────────────
+        # ── Lutris Game Tune (PRE/POST/RUN wrapper commands) ──────────────────
+        # Everything DRSTool currently has configured (DRS settings + all
+        # env vars from whichever tabs/profile are active) is always synced —
+        # there's no opt-out here anymore. This box only holds the handful of
+        # settings that aren't already tracked elsewhere in the GUI.
         _grp_ss = """
             QGroupBox {
                 color: #a8adb8; font-size: 9px; font-weight: 700;
                 border: 1px solid #1e2535; border-radius: 3px;
-                margin-top: 6px; padding-top: 10px;
+                margin-top: 8px; padding-top: 14px;
             }
             QGroupBox::title { subcontrol-origin: margin; left: 6px; padding: 0 4px; }
         """
-        _chk_ss = "QCheckBox{ color:#c8cdd8; font-size:9px; }"
-        which_group = QGroupBox("What to write")
-        which_group.setStyleSheet(_grp_ss)
-        which_layout = QVBoxLayout(which_group)
-        which_layout.setSpacing(2)
-        self._chk_drs = QCheckBox("DXVK_NVAPI_DRS_SETTINGS + DXVK_NVAPI_GPU_ARCH")
-        self._chk_drs.setChecked(True)
-        self._chk_env = QCheckBox(
-            "All env vars  (DXVK / VKD3D / Proton / FLM / Gamescope / …)\n"
-            "  → Gamescope vars with a Lutris key go to system.*\n"
-            "  → all others go to system.env"
-        )
-        self._chk_env.setChecked(True)
-        self._chk_prefer_libs = QCheckBox("prefer_system_libs")
-        for c in (self._chk_drs, self._chk_env, self._chk_prefer_libs):
-            c.setStyleSheet(_chk_ss)
-            which_layout.addWidget(c)
-        layout.addWidget(which_group)
-
-        # ── Lutris Game Tune (PRE/POST/RUN wrapper commands) ──────────────────
+        # Explicit indicator styling — the default Qt checkbox indicator is
+        # nearly invisible against this dark theme, so give it a real
+        # border + a bright checked state.
+        _chk_ss = """
+            QCheckBox { color:#c8cdd8; font-size:11px; }
+            QCheckBox::indicator {
+                width:15px; height:15px; border:1px solid #5a6478;
+                border-radius:3px; background:#1a1f28;
+            }
+            QCheckBox::indicator:hover { border-color:#76b900; }
+            QCheckBox::indicator:checked { background:#76b900; border:1px solid #76b900; }
+        """
         lgtune_group = QGroupBox("Lutris Game Tune")
         lgtune_group.setStyleSheet(_grp_ss)
         lgtune_layout = QVBoxLayout(lgtune_group)
-        lgtune_layout.setSpacing(4)
+        lgtune_layout.setSpacing(10)
+
+        self._chk_prefer_libs = QCheckBox("prefer_system_libs")
+        self._chk_prefer_libs.setStyleSheet(_chk_ss)
+        lgtune_layout.addWidget(self._chk_prefer_libs)
 
         self._chk_lgtune = QCheckBox(
             "Wire lutris-game-tune (prelaunch_command / postexit_command / "
@@ -6084,14 +6084,14 @@ class LutrisSyncWidget(QWidget):
         nice_row = QHBoxLayout()
         nice_row.setSpacing(6)
         nice_lbl = QLabel("RUN nice value:")
-        nice_lbl.setStyleSheet("color:#c8cdd8; font-size:9px;")
+        nice_lbl.setStyleSheet("color:#c8cdd8; font-size:11px;")
         self._lgtune_nice = QSpinBox()
         self._lgtune_nice.setRange(-20, 19)
         self._lgtune_nice.setValue(-10)
         self._lgtune_nice.setStyleSheet("""
             QSpinBox {
                 background: #141720; border: 1px solid #1e2535; color: #e8eaf0;
-                font-size: 9px; font-family: monospace; padding: 2px 4px;
+                font-size: 11px; font-family: monospace; padding: 2px 4px;
                 border-radius: 3px; min-height: 20px;
             }
             QSpinBox:hover { border-color: #4a7300; }
@@ -6111,11 +6111,12 @@ class LutrisSyncWidget(QWidget):
         )
         lgtune_note.setWordWrap(True)
         lgtune_note.setStyleSheet(
-            "color:#8a92a5; font-size:9px; font-family:monospace;"
+            "color:#8a92a5; font-size:11px; font-family:monospace;"
         )
         lgtune_layout.addWidget(lgtune_note)
+        lgtune_layout.addStretch()
 
-        layout.addWidget(lgtune_group)
+        layout.addWidget(lgtune_group, 1)
 
         # ── Preview ───────────────────────────────────────────────────────────
         self._preview = QPlainTextEdit()
@@ -6152,7 +6153,7 @@ class LutrisSyncWidget(QWidget):
         self._status_label.setStyleSheet("color:#a8adb8; font-size:9px;")
         layout.addWidget(self._status_label)
 
-        for w in (self._chk_drs, self._chk_env, self._chk_prefer_libs, self._chk_lgtune):
+        for w in (self._chk_prefer_libs, self._chk_lgtune):
             w.stateChanged.connect(self._update_preview)
         self._lgtune_nice.valueChanged.connect(self._update_preview)
         self.settings_manager.settings_changed.connect(self._update_preview)
@@ -6229,19 +6230,19 @@ class LutrisSyncWidget(QWidget):
         self._update_preview()
 
     def _collect_all_env(self) -> Dict[str, str]:
-        """All env vars currently set in DRSTool, respecting the checkboxes."""
+        """All env vars currently set in DRSTool (DRS settings + every env
+        var from whichever tabs/profile are active) — always synced, no
+        opt-out checkboxes."""
         result: Dict[str, str] = {}
-        if self._chk_drs.isChecked():
-            arch = self.settings_manager.get_arch()
-            if arch:
-                result["DXVK_NVAPI_GPU_ARCH"] = arch.code
-            settings_str = self.settings_manager.get_settings_string()
-            if settings_str:
-                result["DXVK_NVAPI_DRS_SETTINGS"] = settings_str
-        if self._chk_env.isChecked():
-            win = self.window()
-            if win and hasattr(win, "_env_widget"):
-                result.update(win._env_widget.get_env_dict())
+        arch = self.settings_manager.get_arch()
+        if arch:
+            result["DXVK_NVAPI_GPU_ARCH"] = arch.code
+        settings_str = self.settings_manager.get_settings_string()
+        if settings_str:
+            result["DXVK_NVAPI_DRS_SETTINGS"] = settings_str
+        win = self.window()
+        if win and hasattr(win, "_env_widget"):
+            result.update(win._env_widget.get_env_dict())
         return result
 
     def set_gamescope_widget(self, widget: "GamescopeFlagsWidget"):
