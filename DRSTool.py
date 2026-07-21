@@ -2741,7 +2741,7 @@ QSpinBox:hover{
         hbox.addWidget(spin)
 
         range_label = QLabel(f"Range: {s.min}–{s.max}")
-        range_label.setStyleSheet("font-family: monospace; font-size: 9px; color: #5a6070;")
+        range_label.setStyleSheet("font-family: monospace; font-size: 9px; color: #8a92a5;")
         hbox.addWidget(range_label)
 
         hbox.addStretch()
@@ -2752,7 +2752,7 @@ QSpinBox:hover{
         grid.setSpacing(6)
 
         dec_label = QLabel("Decimal:")
-        dec_label.setStyleSheet("font-size: 9px; color: #5a6070;")
+        dec_label.setStyleSheet("font-size: 9px; color: #8a92a5;")
         grid.addWidget(dec_label, 0, 0)
 
         dec_spin = QSpinBox()
@@ -2785,7 +2785,7 @@ QSpinBox:hover{
         grid.addWidget(dec_spin, 0, 1)
 
         hex_label = QLabel("Hex: 0x")
-        hex_label.setStyleSheet("font-size: 9px; color: #5a6070;")
+        hex_label.setStyleSheet("font-size: 9px; color: #8a92a5;")
         grid.addWidget(hex_label, 0, 2)
 
         hex_edit = QLineEdit()
@@ -2893,7 +2893,7 @@ QPushButton:hover{
         val_layout.setSpacing(8)
 
         calc_label = QLabel("Combined Value:")
-        calc_label.setStyleSheet("font-size: 9px; color: #5a6070; font-family: monospace;")
+        calc_label.setStyleSheet("font-size: 9px; color: #8a92a5; font-family: monospace;")
         val_layout.addWidget(calc_label)
 
         calc_value = QLabel(f"0x{cur_val:08X}" if cur_val else "0x0")
@@ -2909,7 +2909,7 @@ QPushButton:hover{
         hbox.setSpacing(8)
 
         hex_label = QLabel("0x")
-        hex_label.setStyleSheet("font-size: 9px; color: #5a6070;")
+        hex_label.setStyleSheet("font-size: 9px; color: #8a92a5;")
         hbox.addWidget(hex_label)
 
         hex_edit = QLineEdit()
@@ -5265,9 +5265,9 @@ QPushButton:checked{
 
         # Column headers
         hdr_flag = QLabel("Flag")
-        hdr_flag.setStyleSheet("color:#5a6070; font-size:8px; font-weight:600;")
+        hdr_flag.setStyleSheet("color:#8a92a5; font-size:8px; font-weight:600;")
         hdr_desc = QLabel("Description")
-        hdr_desc.setStyleSheet("color:#5a6070; font-size:8px; font-weight:600;")
+        hdr_desc.setStyleSheet("color:#8a92a5; font-size:8px; font-weight:600;")
         grid.addWidget(hdr_flag, 0, 0)
         grid.addWidget(hdr_desc, 0, 1)
 
@@ -5938,7 +5938,7 @@ class LutrisSyncWidget(QWidget):
             "into system.* — the rest go into system.env as plain env vars."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color:#8a8f9c; font-size:9px;")
+        desc.setStyleSheet("color:#a8adb8; font-size:9px;")
         layout.addWidget(desc)
 
         # ── Games folder + rescan ─────────────────────────────────────────────
@@ -5949,7 +5949,7 @@ class LutrisSyncWidget(QWidget):
         self._path_label.setStyleSheet("""
             QLineEdit {
                 background: #141720; border: 1px solid #1e2535;
-                color: #8a8f9c; font-size: 9px; font-family: monospace;
+                color: #a8adb8; font-size: 9px; font-family: monospace;
                 padding: 3px 8px; border-radius: 3px; min-height: 22px;
             }
         """)
@@ -5990,7 +5990,7 @@ class LutrisSyncWidget(QWidget):
         # ── What will be written ──────────────────────────────────────────────
         _grp_ss = """
             QGroupBox {
-                color: #8a8f9c; font-size: 9px; font-weight: 700;
+                color: #a8adb8; font-size: 9px; font-weight: 700;
                 border: 1px solid #1e2535; border-radius: 3px;
                 margin-top: 6px; padding-top: 10px;
             }
@@ -6038,7 +6038,7 @@ class LutrisSyncWidget(QWidget):
                 font-weight: 700; min-height: 24px;
             }
             QPushButton:hover { background: #8fd400; }
-            QPushButton:disabled { background: #2a2f38; color: #5a6070; border-color: #1e2535; }
+            QPushButton:disabled { background: #2a2f38; color: #8a92a5; border-color: #1e2535; }
         """)
         btn_row.addWidget(self._apply_btn)
         btn_row.addStretch()
@@ -6046,7 +6046,7 @@ class LutrisSyncWidget(QWidget):
 
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
-        self._status_label.setStyleSheet("color:#8a8f9c; font-size:9px;")
+        self._status_label.setStyleSheet("color:#a8adb8; font-size:9px;")
         layout.addWidget(self._status_label)
 
         for w in (self._chk_drs, self._chk_env):
@@ -6438,7 +6438,7 @@ class ExtraToolsSidebarWidget(QWidget):
 
         vkfm_sub = QLabel("Frame Pacing / Cadence Modulation Vulkan Layer")
         vkfm_sub.setWordWrap(True)
-        vkfm_sub.setStyleSheet("color:#5a6070; font-size:9px;")
+        vkfm_sub.setStyleSheet("color:#8a92a5; font-size:9px;")
         layout.addWidget(vkfm_sub)
 
         vkfm_info = QLabel(
@@ -6464,7 +6464,7 @@ class ExtraToolsSidebarWidget(QWidget):
 
         lgt_sub = QLabel("System-wide Lutris / Wine performance tuner")
         lgt_sub.setWordWrap(True)
-        lgt_sub.setStyleSheet("color:#5a6070; font-size:9px;")
+        lgt_sub.setStyleSheet("color:#8a92a5; font-size:9px;")
         layout.addWidget(lgt_sub)
 
         lgt_info = QLabel(
@@ -6566,7 +6566,7 @@ QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
         native_warn = QLabel(
             "If enabled: the .so built for the 7845HX may not run on a different CPU (a different machine)."
         )
-        native_warn.setStyleSheet("color:#5a6070; font-size:9px; font-style:italic;")
+        native_warn.setStyleSheet("color:#8a92a5; font-size:9px; font-style:italic;")
         layout.addWidget(native_warn)
 
         btn_row = QHBoxLayout()
@@ -6586,7 +6586,7 @@ QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
         layout.addLayout(btn_row)
 
         self._status_lbl = QLabel("Ready.")
-        self._status_lbl.setStyleSheet("color:#5a6070; font-size:9px;")
+        self._status_lbl.setStyleSheet("color:#8a92a5; font-size:9px;")
         layout.addWidget(self._status_lbl)
 
         # ── Live tuning: FLM_CONFIG file + SIGUSR1 ───────────────────────────
@@ -6632,7 +6632,7 @@ QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
             "written as comments — the layer can't change them at runtime."
         )
         live_hint.setWordWrap(True)
-        live_hint.setStyleSheet("color:#5a6070; font-size:8px; font-style:italic;")
+        live_hint.setStyleSheet("color:#8a92a5; font-size:8px; font-style:italic;")
         live_layout.addWidget(live_hint, 2, 0, 1, 3)
 
         layout.addWidget(live_group)
@@ -7248,7 +7248,7 @@ class LgtuneWidget(QWidget):
         )
         install_note.setWordWrap(True)
         install_note.setTextFormat(Qt.RichText)
-        install_note.setStyleSheet("color:#5a6070; font-size:9px; font-style:italic;")
+        install_note.setStyleSheet("color:#8a92a5; font-size:9px; font-style:italic;")
         install_layout.addWidget(install_note)
 
         layout.addWidget(install_group)
@@ -7331,7 +7331,7 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
             # Description (smaller, muted, spans full row)
             desc_lbl = QLabel(desc)
             desc_lbl.setWordWrap(True)
-            desc_lbl.setStyleSheet("color:#5a6070; font-size:9px; font-style:italic;")
+            desc_lbl.setStyleSheet("color:#8a92a5; font-size:9px; font-style:italic;")
             grid.addWidget(desc_lbl, row_idx * 2 + 1, 0, 1, 2)
 
         settings_layout.addLayout(grid)
@@ -7359,7 +7359,7 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
         )
         save_note.setWordWrap(True)
         save_note.setTextFormat(Qt.RichText)
-        save_note.setStyleSheet("color:#5a6070; font-size:9px; font-style:italic;")
+        save_note.setStyleSheet("color:#8a92a5; font-size:9px; font-style:italic;")
         settings_layout.addWidget(save_note)
 
         layout.addWidget(self._settings_group)
@@ -7686,13 +7686,16 @@ class GamescopeFlagsWidget(QWidget):
             "(STEAM_GAMESCOPE_*, ENABLE_GAMESCOPE_WSI, ...) are still in the Env Vars tab."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color:#8a8f9c; font-size:10px;")
+        desc.setStyleSheet("color:#a8adb8; font-size:10px;")
         outer.addWidget(desc)
 
         self._enable_chk = QCheckBox("Enable Gamescope wrapper")
         self._enable_chk.setStyleSheet(
             "QCheckBox{color:#e8eaf0; font-size:11px; font-weight:600;} "
-            "QCheckBox::indicator{width:14px; height:14px;}"
+            "QCheckBox::indicator{width:16px; height:16px; border:1px solid #4a5468; "
+            "border-radius:3px; background:#1a1f28;} "
+            "QCheckBox::indicator:hover{border-color:#76b900;} "
+            "QCheckBox::indicator:checked{background:#76b900; border:1px solid #76b900;}"
         )
         self._enable_chk.toggled.connect(self._on_master_toggled)
         outer.addWidget(self._enable_chk)
@@ -7710,8 +7713,8 @@ class GamescopeFlagsWidget(QWidget):
         for cat, flags in by_cat.items():
             box = QGroupBox(cat)
             box.setStyleSheet(
-                "QGroupBox{color:#b93b3b; font-size:10px; font-weight:700; "
-                "border:1px solid #1e2535; border-radius:3px; margin-top:8px; padding-top:8px;} "
+                "QGroupBox{color:#d46a6a; font-size:10px; font-weight:700; "
+                "border:1px solid #2a3244; border-radius:3px; margin-top:8px; padding-top:8px;} "
                 "QGroupBox::title{subcontrol-origin:margin; left:8px; padding:0 4px;}"
             )
             grid = QFormLayout(box)
@@ -7721,11 +7724,18 @@ class GamescopeFlagsWidget(QWidget):
             for gf in flags:
                 label_txt = gf.name + (f"  ({gf.short})" if gf.short else "")
                 lbl = QLabel(label_txt)
-                lbl.setStyleSheet("color:#c8cdd8; font-size:10px;")
+                lbl.setStyleSheet("color:#dde1e8; font-size:10px;")
                 lbl.setToolTip(gf.desc)
 
                 if gf.kind == "toggle":
                     ctrl = QCheckBox()
+                    ctrl.setStyleSheet(
+                        "QCheckBox::indicator{width:15px; height:15px; border:1px solid #4a5468; "
+                        "border-radius:3px; background:#1a1f28;} "
+                        "QCheckBox::indicator:hover{border-color:#76b900;} "
+                        "QCheckBox::indicator:checked{background:#76b900; border:1px solid #76b900;} "
+                        "QCheckBox::indicator:disabled{background:#14171d; border:1px solid #2a3040;}"
+                    )
                     ctrl.toggled.connect(lambda _=None: self._emit_changed())
                 elif gf.kind == "enum":
                     ctrl = QComboBox()
@@ -7739,11 +7749,18 @@ class GamescopeFlagsWidget(QWidget):
                     ctrl.textChanged.connect(lambda _=None: self._emit_changed())
 
                 ctrl.setToolTip(gf.desc)
-                ctrl.setStyleSheet(
-                    "QLineEdit,QComboBox{background:#141720; border:1px solid #1e2535; "
-                    "color:#e8eaf0; font-size:10px; padding:2px 4px; min-height:18px;} "
-                    "QCheckBox::indicator{width:13px; height:13px;}"
-                )
+                if gf.kind != "toggle":
+                    ctrl.setStyleSheet(
+                        "QLineEdit,QComboBox{background:#181d28; border:1px solid #3a4256; "
+                        "color:#e8eaf0; font-size:10px; padding:2px 4px; min-height:18px; "
+                        "border-radius:3px;} "
+                        "QLineEdit:focus,QComboBox:focus{border-color:#76b900;} "
+                        "QLineEdit:disabled,QComboBox:disabled{color:#6a7284; background:#14171d; "
+                        "border-color:#242a38;} "
+                        "QComboBox::drop-down{border:none; width:16px;} "
+                        "QComboBox QAbstractItemView{background:#181d28; color:#e8eaf0; "
+                        "selection-background-color:#3a4a1a; border:1px solid #3a4256;}"
+                    )
                 self._controls[gf.flag] = ctrl
                 grid.addRow(lbl, ctrl)
 
@@ -7753,7 +7770,7 @@ class GamescopeFlagsWidget(QWidget):
 
         # ── Live command preview ────────────────────────────────────────────
         preview_lbl = QLabel("Preview")
-        preview_lbl.setStyleSheet("color:#8a8f9c; font-size:10px; font-weight:700;")
+        preview_lbl.setStyleSheet("color:#a8adb8; font-size:10px; font-weight:700;")
         outer.addWidget(preview_lbl)
 
         self._preview = QLineEdit()
@@ -7872,7 +7889,7 @@ class ExtraToolsWidget(QWidget):
     _TAB_SS = """
 QTabWidget::pane { border: 1px solid #1e2535; top: -1px; }
 QTabBar::tab {
-    background: #141720; color: #8a8f9c;
+    background: #141720; color: #a8adb8;
     border: 1px solid #1e2535; border-bottom: none;
     padding: 4px 14px; font-size: 9px; font-weight: 600;
 }
@@ -7992,7 +8009,7 @@ class MainWindow(QMainWindow):
                 border-radius: 3px;
                 padding: 3px 5px;
                 background: transparent;
-                color: #5a6070;
+                color: #8a92a5;
                 font-size: 9px;
                 font-weight: 600;
             }
@@ -8054,7 +8071,7 @@ class MainWindow(QMainWindow):
         profiles_subtabs.setStyleSheet("""
             QTabWidget::pane { border: 1px solid #1e2535; top: -1px; }
             QTabBar::tab {
-                background: #141720; color: #8a8f9c;
+                background: #141720; color: #a8adb8;
                 border: 1px solid #1e2535; border-bottom: none;
                 padding: 4px 10px; font-size: 9px; font-weight: 600;
             }
@@ -8082,7 +8099,7 @@ class MainWindow(QMainWindow):
         # Page 0: Placeholder
         self._placeholder = QLabel("Select a setting or an architecture from the sidebar")
         self._placeholder.setAlignment(Qt.AlignCenter)
-        self._placeholder.setStyleSheet("color: #5a6070; font-size: 12px;")
+        self._placeholder.setStyleSheet("color: #8a92a5; font-size: 12px;")
         self._right_stack.addWidget(self._placeholder)
 
         # Page 1: Setting editor
@@ -8134,7 +8151,7 @@ class MainWindow(QMainWindow):
         status_bar.setStyleSheet("""
             QStatusBar {
                 background: #0d0f12;
-                color: #5a6070;
+                color: #8a92a5;
                 font-size: 9px;
                 border-top: 1px solid #1e2535;
                 min-height: 20px;
