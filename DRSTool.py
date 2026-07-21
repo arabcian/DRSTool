@@ -4865,6 +4865,16 @@ QScrollBar::sub-page:vertical{
             hdr.setFont(font)
             hdr.setForeground(QColor(185, 59, 59))
             self.addItem(hdr)
+
+            if cat_label == "Gamescope":
+                gs_item = QListWidgetItem("  ⚙ Gamescope Launch Flags (CLI builder)")
+                gs_item.setData(Qt.UserRole, "__GAMESCOPE_FLAGS__")
+                f = gs_item.font()
+                f.setBold(True)
+                gs_item.setFont(f)
+                gs_item.setForeground(QColor(210, 160, 60))
+                self.addItem(gs_item)
+
             for ev in matching:
                 item = QListWidgetItem(f"  {ev.name}")
                 item.setData(Qt.UserRole, ev.name)
@@ -4890,7 +4900,7 @@ QScrollBar::sub-page:vertical{
         for i in range(self.count()):
             item = self.item(i)
             name = item.data(Qt.UserRole)
-            if not name:
+            if not name or name == "__GAMESCOPE_FLAGS__":
                 continue
             if name in self._values:
                 f = item.font()
@@ -5850,8 +5860,12 @@ class LutrisSyncWidget(QWidget):
 
     Gamescope settings come from two different places and are merged here:
 
-      From the Gamescope CLI flag builder (Extra Tools -> Gamescope), mapped
-      to system.* (Lutris native keys) when Lutris has an equivalent:
+      From the Gamescope CLI-flag builder (DXVK/VKD3D/NV/FLM/Gamescope tab ->
+      "Gamescope Launch Flags" item):
+        Master "Enable Gamescope" toggle -> system.gamescope: true
+          (Lutris's own native "launch this game through gamescope" switch —
+          Lutris builds the actual gamescope invocation itself; we never
+          write a raw "gamescope ..." command string into the YAML)
         --output-width + --output-height     -> gamescope_output_res  "WxH"
         --nested-width + --nested-height     -> gamescope_game_res    "WxH"
         --framerate-limit                    -> gamescope_fps_limiter
@@ -5861,7 +5875,8 @@ class LutrisSyncWidget(QWidget):
         --hdr-enabled                        -> gamescope_hdr_enabled  (bool)
         --adaptive-sync                      -> gamescope_vrr_enabled  (bool)
         --force-grab-cursor                  -> gamescope_grab         (bool)
-      (only used while the Gamescope wrapper's master toggle is enabled)
+      (the per-flag mappings above are only written while the master toggle
+      is enabled — get_flag_values() returns {} otherwise)
 
       From the Env Vars tab (Gamescope category — genuine env vars only:
       STEAM_GAMESCOPE_*, ENABLE_GAMESCOPE_WSI, STEAM_MULTIPLE_XWAYLANDS, ...)
@@ -6146,8 +6161,17 @@ class LutrisSyncWidget(QWidget):
         remaining: Dict[str, str] = dict(env)
 
         flags: Dict[str, str] = {}
+        gamescope_on = False
         if self._gamescope_widget is not None:
+            gamescope_on = self._gamescope_widget.is_enabled()
             flags = self._gamescope_widget.get_flag_values()
+
+        # Master toggle -> Lutris's own native "run this game through
+        # gamescope" boolean. Lutris builds the actual gamescope invocation
+        # itself from this + the gamescope_* keys below; we never write a
+        # raw "gamescope ..." command string into the YAML.
+        if gamescope_on:
+            system_keys["gamescope"] = True
 
         # Single → single string mappings
         for flag, lutris_key in self._FLAG_TO_LUTRIS.items():
@@ -7877,14 +7901,6 @@ QTabBar::tab:hover { color: #c8cdd8; }
         self._lgtune = LgtuneWidget()
         tabs.addTab(self._lgtune, "lutris-game-tune")
 
-        # ── Gamescope sub-tab (CLI flag builder, not env vars) ───────────────
-        self._gamescope = GamescopeFlagsWidget()
-        gamescope_scroll = QScrollArea()
-        gamescope_scroll.setWidgetResizable(True)
-        gamescope_scroll.setWidget(self._gamescope)
-        gamescope_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
-        tabs.addTab(gamescope_scroll, "Gamescope")
-
         layout.addWidget(tabs)
 
 
@@ -7958,7 +7974,7 @@ class MainWindow(QMainWindow):
         self._arch_tab.setCheckable(True)
         self._arch_tab.clicked.connect(lambda: self._switch_tab(1))
 
-        self._env_tab = QPushButton("DXVK / VKD3D / NV / FLM")
+        self._env_tab = QPushButton("DXVK / VKD3D / NV / FLM / Gamescope")
         self._env_tab.setCheckable(True)
         self._env_tab.clicked.connect(lambda: self._switch_tab(2))
 
@@ -8087,13 +8103,24 @@ class MainWindow(QMainWindow):
         self._env_editor.set_list_widget(self._env_widget)
         self._right_stack.addWidget(self._env_editor)
 
-        # Page 4: Extra Tools panel (vk_flip_meter + lutris-game-tune + Gamescope sub-tabs)
+        # Page 4: Gamescope CLI-flag builder (opened from the "Gamescope"
+        # category's sentinel item in the same Env Vars sidebar — gamescope's
+        # settings are real argv flags, not env vars, so they get their own
+        # panel here instead of the per-var KEY=VALUE editor).
+        self._gamescope = GamescopeFlagsWidget()
+        gamescope_scroll = QScrollArea()
+        gamescope_scroll.setWidgetResizable(True)
+        gamescope_scroll.setWidget(self._gamescope)
+        gamescope_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+        self._right_stack.addWidget(gamescope_scroll)
+
+        # Page 5: Extra Tools panel (vk_flip_meter + lutris-game-tune sub-tabs)
         self._extra_tools = ExtraToolsWidget()
         self._right_stack.addWidget(self._extra_tools)
 
         # Wire the Gamescope CLI-flag builder into the Lutris sync mapping
-        self._lutris_sync_widget.set_gamescope_widget(self._extra_tools._gamescope)
-        self._extra_tools._gamescope.changed.connect(self._lutris_sync_widget._update_preview)
+        self._lutris_sync_widget.set_gamescope_widget(self._gamescope)
+        self._gamescope.changed.connect(self._lutris_sync_widget._update_preview)
 
         # Show placeholder initially
         self._right_stack.setCurrentIndex(0)
@@ -8164,7 +8191,7 @@ class MainWindow(QMainWindow):
                 else:
                     self._right_stack.setCurrentIndex(0)
             elif idx == 3:
-                self._right_stack.setCurrentIndex(4)
+                self._right_stack.setCurrentIndex(5)
             else:
                 self._right_stack.setCurrentIndex(0)
 
@@ -8218,6 +8245,12 @@ class MainWindow(QMainWindow):
         pass
 
     def _open_env_var(self, var_name: str):
+        if var_name == "__GAMESCOPE_FLAGS__":
+            # Gamescope's settings are real argv flags, not KEY=VALUE env
+            # vars — show the CLI-flag builder panel instead.
+            if self._sidebar_stack.currentIndex() == 2:
+                self._right_stack.setCurrentIndex(4)
+            return
         ev = next((e for e in ALL_ENV_VARS if e.name == var_name), None)
         if ev:
             self._env_editor.set_var(ev)
