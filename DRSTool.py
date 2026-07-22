@@ -2608,6 +2608,8 @@ QPushButton:pressed{
             self._build_preset_control(s, cur)
         elif s.type == "numeric":
             self._build_numeric_control(s, cur)
+        elif s.type == "dec-hex":
+            self._build_dec_hex_control(s, cur)
         elif s.type == "bitfield":
             self._build_bitfield_control(s, cur)
         else:
@@ -2786,6 +2788,75 @@ QSpinBox:hover{
         hbox.addStretch()
         self._control_layout.addLayout(hbox)
 
+    def _build_dec_hex_control(self, s: Setting, cur: Optional[str]):
+        grid = QGridLayout()
+        grid.setSpacing(6)
+
+        dec_label = QLabel("Decimal:")
+        dec_label.setStyleSheet("font-size: 9px; color: #8a92a5;")
+        grid.addWidget(dec_label, 0, 0)
+
+        dec_spin = QSpinBox()
+        # NOTE: QSpinBox uses a 32-bit *signed* int internally, so the true
+        # unsigned 32-bit max (0xFFFFFFFF) overflows and raises OverflowError.
+        # No current setting uses type="dec-hex"; if one ever does and needs
+        # the full unsigned range, this control needs a QLineEdit + validator
+        # instead of QSpinBox.
+        dec_spin.setRange(0, 0x7FFFFFFF)
+        if cur is not None:
+            dec_spin.setValue(int(cur, 16))
+        dec_spin.setFixedHeight(26)
+        dec_spin.setStyleSheet("""
+QSpinBox{
+    background:#1a1f28;
+    border:1px solid #323c4b;
+    border-radius:6px;
+    color:#d8d8d8;
+    padding:3px 8px;
+    font-size:10px;
+}
+QSpinBox:focus{
+    border:1px solid #76b900;
+}
+QSpinBox:hover{
+    background:#252c37;
+}
+""")
+        dec_spin.valueChanged.connect(lambda v: self._set_dec_hex(s.id, v))
+        grid.addWidget(dec_spin, 0, 1)
+
+        hex_label = QLabel("Hex: 0x")
+        hex_label.setStyleSheet("font-size: 9px; color: #8a92a5;")
+        grid.addWidget(hex_label, 0, 2)
+
+        hex_edit = QLineEdit()
+        if cur is not None:
+            hex_edit.setText(cur.replace("0x", "").upper())
+        else:
+            hex_edit.setText("0")
+        hex_edit.setFixedHeight(26)
+        hex_edit.setStyleSheet("""
+QLineEdit{
+    background:#1a1f28;
+    border:1px solid #323c4b;
+    border-radius:6px;
+    color:#9be238;
+    font-family:monospace;
+    font-size:10px;
+    padding:3px 8px;
+}
+QLineEdit:focus{
+    border:1px solid #76b900;
+}
+QLineEdit:hover{
+    background:#252c37;
+}
+""")
+        hex_edit.textChanged.connect(lambda t: self._set_hex_from_edit(s.id, t))
+        grid.addWidget(hex_edit, 0, 3)
+
+        self._control_layout.addLayout(grid)
+
     def _build_bitfield_control(self, s: Setting, cur: Optional[str]):
         cur_val = int(cur, 16) if cur else 0
 
@@ -2928,6 +2999,10 @@ QLineEdit:hover{
         self.settings_manager.set_setting(setting_id, value)
 
     def _set_numeric(self, setting_id: str, value: int):
+        hex_val = f"0x{value:X}"
+        self.settings_manager.set_setting(setting_id, hex_val)
+
+    def _set_dec_hex(self, setting_id: str, value: int):
         hex_val = f"0x{value:X}"
         self.settings_manager.set_setting(setting_id, hex_val)
 
@@ -5970,15 +6045,37 @@ class LutrisSyncWidget(QWidget):
         # env vars from whichever tabs/profile are active) is always synced —
         # there's no opt-out here anymore. This box only holds the handful of
         # settings that aren't already tracked elsewhere in the GUI.
-        lgtune_group = _tool_groupbox("Lutris Game Tune")
+        _grp_ss = """
+            QGroupBox {
+                color: #a8adb8; font-size: 9px; font-weight: 700;
+                border: 1px solid #1e2535; border-radius: 3px;
+                margin-top: 8px; padding-top: 14px;
+            }
+            QGroupBox::title { subcontrol-origin: margin; left: 6px; padding: 0 4px; }
+        """
+        # Explicit indicator styling — the default Qt checkbox indicator is
+        # nearly invisible against this dark theme, so give it a real
+        # border + a bright checked state.
+        _chk_ss = """
+            QCheckBox { color:#c8cdd8; font-size:11px; }
+            QCheckBox::indicator {
+                width:15px; height:15px; border:1px solid #5a6478;
+                border-radius:3px; background:#1a1f28;
+            }
+            QCheckBox::indicator:hover { border-color:#76b900; }
+            QCheckBox::indicator:checked { background:#76b900; border:1px solid #76b900; }
+        """
+        lgtune_group = QGroupBox("Lutris Game Tune")
+        lgtune_group.setStyleSheet(_grp_ss)
         lgtune_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         lgtune_layout = QVBoxLayout(lgtune_group)
         lgtune_layout.setSpacing(10)
 
-        self._chk_lgtune = _tool_checkbox(
+        self._chk_lgtune = QCheckBox(
             "Wire lutris-game-tune (prelaunch_command / postexit_command / "
             "prefix_command)"
         )
+        self._chk_lgtune.setStyleSheet(_chk_ss)
         lgtune_layout.addWidget(self._chk_lgtune)
 
         nice_row = QHBoxLayout()
@@ -6088,15 +6185,11 @@ class LutrisSyncWidget(QWidget):
             return
 
         found = sorted(self._games_dir.glob("*.yml")) + sorted(self._games_dir.glob("*.yaml"))
-        skipped = 0
         for path in found:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f) or {}
             except Exception:
-                # Previously silent — a malformed/unreadable game YAML just
-                # vanished from the list with no trace. Count and report.
-                skipped += 1
                 continue
             game_section = data.get("game") or {}
             exe = game_section.get("exe", "")
@@ -6109,17 +6202,13 @@ class LutrisSyncWidget(QWidget):
 
         self._game_combo.blockSignals(False)
         if self._games:
-            status = f"Found {len(self._games)} game config(s) in {self._games_dir}"
-            if skipped:
-                status += f"  ({skipped} skipped — unreadable/invalid YAML)"
-            self._status_label.setText(status)
+            self._status_label.setText(
+                f"Found {len(self._games)} game config(s) in {self._games_dir}"
+            )
             self._game_combo.setCurrentIndex(0)
             self._on_game_selected(0)
         else:
-            status = f"No .yml files found in {self._games_dir}"
-            if skipped:
-                status += f"  ({skipped} file(s) skipped — unreadable/invalid YAML)"
-            self._status_label.setText(status)
+            self._status_label.setText(f"No .yml files found in {self._games_dir}")
             self._apply_btn.setEnabled(False)
             self._preview.clear()
 
@@ -6289,12 +6378,8 @@ class LutrisSyncWidget(QWidget):
                 lines.append("  env:")
                 for k in sorted(env_sec):
                     lines.append(f"    {k}: {env_sec[k]!r}")
-        except Exception as e:
-            # The full write already succeeded via _merge_yaml() above; this
-            # second parse only feeds the "resulting system section" preview
-            # text, so a failure here is cosmetic, not data loss. Surface it
-            # instead of leaving the preview silently truncated.
-            lines.append(f"  (could not re-render preview: {e})")
+        except Exception:
+            pass
         self._preview.setPlainText("\n".join(lines))
         self._apply_btn.setEnabled(True)
 
@@ -6380,35 +6465,7 @@ class LutrisSyncWidget(QWidget):
         self._status_label.setText(
             f"Wrote {total} change(s) to {entry.path.name}  (backup: {backup_path.name})"
         )
-        self._prune_old_backups(entry.path)
         self._update_preview()
-
-    def _prune_old_backups(self, yaml_path: Path, keep: int = 5):
-        """Keep the `keep` most recent .bak files for this game's YAML,
-        remove older ones. Never touches the file just written."""
-        pattern = f"{yaml_path.stem}{yaml_path.suffix}.*.bak"
-        try:
-            backups = sorted(
-                yaml_path.parent.glob(pattern),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-        except OSError:
-            return
-        stale = backups[keep:]
-        if not stale:
-            return
-        removed = 0
-        for old in stale:
-            try:
-                old.unlink()
-                removed += 1
-            except OSError:
-                pass
-        if removed:
-            self._status_label.setText(
-                self._status_label.text() + f"  ·  pruned {removed} old backup(s)"
-            )
 
 
 # Keys the layer accepts through the FLM_CONFIG file + SIGUSR1 hot-reload.
@@ -6457,57 +6514,15 @@ QLineEdit:focus{ border:1px solid #76b900; }
 QLineEdit:hover{ background:#252c37; }
 """
 
-# ============================================================================
-# Shared style constants — checkboxes, group boxes, buttons
-# (previously duplicated: LutrisSyncWidget.__init__ had local _grp_ss/_chk_ss;
-# GamescopeFlagsWidget and FlmInstallWidget each hand-rolled their own
-# checkbox QSS inline. Same visual spec, three copies — centralized here.)
-# ============================================================================
-
-_GROUPBOX_SS = """
-QGroupBox {
-    color: #a8adb8; font-size: 9px; font-weight: 700;
-    border: 1px solid #1e2535; border-radius: 3px;
-    margin-top: 8px; padding-top: 14px;
+# Shared stylesheet for group boxes inside the Extra Tools panels
+_TOOL_GROUP_SS = """
+QGroupBox{
+    color:#8ea0ba; font-size:10px; font-weight:700;
+    border:1px solid #1e2535; border-radius:6px;
+    margin-top:8px; padding-top:14px;
 }
-QGroupBox::title { subcontrol-origin: margin; left: 6px; padding: 0 4px; }
+QGroupBox::title{ subcontrol-origin:margin; left:8px; padding:0 4px; }
 """
-
-_CHECKBOX_SS = """
-QCheckBox { color:#c8cdd8; font-size:11px; }
-QCheckBox::indicator {
-    width:15px; height:15px; border:1px solid #5a6478;
-    border-radius:3px; background:#1a1f28;
-}
-QCheckBox::indicator:hover { border-color:#76b900; }
-QCheckBox::indicator:checked { background:#76b900; border:1px solid #76b900; }
-"""
-
-_CHECKBOX_COMPACT_SS = """
-QCheckBox{ color:#d8d8d8; font-size:10px; spacing:8px; }
-QCheckBox::indicator{ width:14px; height:14px; border:1px solid #323c4b; border-radius:3px; background:#1a1f28; }
-QCheckBox::indicator:hover{ border-color:#76b900; }
-QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
-"""
-
-
-def _tool_checkbox(label: str, compact: bool = False) -> QCheckBox:
-    """Shared checkbox factory replacing three independent inline QSS
-    copies. `compact=True` selects the tighter grid variant."""
-    chk = QCheckBox(label)
-    chk.setStyleSheet(_CHECKBOX_COMPACT_SS if compact else _CHECKBOX_SS)
-    return chk
-
-
-def _tool_groupbox(title: str) -> QGroupBox:
-    """Shared group-box factory."""
-    box = QGroupBox(title)
-    box.setStyleSheet(_GROUPBOX_SS)
-    return box
-
-
-# Alias kept so existing direct references to _TOOL_GROUP_SS still work.
-_TOOL_GROUP_SS = _GROUPBOX_SS
 
 # Shared button factory (used by both FlmInstallWidget and LgtuneWidget)
 def _tool_btn(label: str, bg="#1a1f28", border="#323c4b", fg="#d8d8d8",
@@ -6667,10 +6682,14 @@ class FlmInstallWidget(QWidget):
 
         layout.addLayout(form)
 
-        self._native_chk = _tool_checkbox(
-            "FLM_NATIVE_BUILD  (-O3 -march=native -mtune=native -flto — specific to this machine, not portable)",
-            compact=True,
+        self._native_chk = QCheckBox(
+            "FLM_NATIVE_BUILD  (-O3 -march=native -mtune=native -flto — specific to this machine, not portable)"
         )
+        self._native_chk.setStyleSheet("""
+QCheckBox{ color:#d8d8d8; font-size:10px; spacing:8px; }
+QCheckBox::indicator{ width:14px; height:14px; border:1px solid #323c4b; border-radius:3px; background:#1a1f28; }
+QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
+""")
         layout.addWidget(self._native_chk)
 
         native_warn = QLabel(
@@ -6934,7 +6953,6 @@ QPlainTextEdit{
         # Crashed is followed by finished(CrashExit) — handled there.
 
     def _on_proc_finished(self, exit_code: int, exit_status):
-        self._proc = None  # release now that this run is done
         if exit_status == QProcess.CrashExit:
             self._log(f"ERROR: step '{self._phase}' crashed (killed by a signal).")
             self._set_busy(False, f"Error: step '{self._phase}' crashed.")
@@ -7704,12 +7722,13 @@ QPlainTextEdit{
             self._log(f"Log file not found: {LGTUNE_LOG}")
             return
         self._log(f"==> tail -80 {LGTUNE_LOG}")
-        self._run_proc("bash", ["-c", f"tail -80 {LGTUNE_LOG}"], tag="log")
+        self._run_proc("bash", ["-c", f"tail -80 {LGTUNE_LOG}"], tag="log",
+                       use_pkexec=False)
 
     # ── QProcess plumbing ─────────────────────────────────────────────────────
 
     def _run_proc(self, program: str, args: List[str], tag: str,
-                  stdin_data: Optional[bytes] = None):
+                  stdin_data: Optional[bytes] = None, use_pkexec: bool = True):
         if self._proc and self._proc.state() != QProcess.NotRunning:
             self._log("A process is already running — please wait.")
             return
@@ -7721,7 +7740,10 @@ QPlainTextEdit{
             lambda err, p=proc: self._on_proc_error(err, p)
         )
         self._proc = proc
-        proc.start(program, args)
+        if use_pkexec:
+            proc.start(program, args)
+        else:
+            proc.start(program, args)
         if stdin_data is not None:
             proc.write(stdin_data)
             proc.closeWriteChannel()
@@ -7738,7 +7760,6 @@ QPlainTextEdit{
             )
 
     def _on_finished(self, exit_code: int, exit_status, tag: str):
-        self._proc = None  # same reasoning as FlmInstallWidget._on_proc_finished
         if exit_status == QProcess.CrashExit:
             self._log(f"ERROR: '{tag}' process crashed.")
             return
@@ -7800,7 +7821,14 @@ class GamescopeFlagsWidget(QWidget):
         desc.setStyleSheet("color:#a8adb8; font-size:10px;")
         outer.addWidget(desc)
 
-        self._enable_chk = _tool_checkbox("Enable Gamescope wrapper")
+        self._enable_chk = QCheckBox("Enable Gamescope wrapper")
+        self._enable_chk.setStyleSheet(
+            "QCheckBox{color:#e8eaf0; font-size:11px; font-weight:600;} "
+            "QCheckBox::indicator{width:16px; height:16px; border:1px solid #4a5468; "
+            "border-radius:3px; background:#1a1f28;} "
+            "QCheckBox::indicator:hover{border-color:#76b900;} "
+            "QCheckBox::indicator:checked{background:#76b900; border:1px solid #76b900;}"
+        )
         self._enable_chk.toggled.connect(self._on_master_toggled)
         outer.addWidget(self._enable_chk)
 
@@ -7833,7 +7861,14 @@ class GamescopeFlagsWidget(QWidget):
                 lbl.setToolTip(gf.desc)
 
                 if gf.kind == "toggle":
-                    ctrl = _tool_checkbox("", compact=True)
+                    ctrl = QCheckBox()
+                    ctrl.setStyleSheet(
+                        "QCheckBox::indicator{width:15px; height:15px; border:1px solid #4a5468; "
+                        "border-radius:3px; background:#1a1f28;} "
+                        "QCheckBox::indicator:hover{border-color:#76b900;} "
+                        "QCheckBox::indicator:checked{background:#76b900; border:1px solid #76b900;} "
+                        "QCheckBox::indicator:disabled{background:#14171d; border:1px solid #2a3040;}"
+                    )
                     ctrl.toggled.connect(lambda _=None: self._emit_changed())
                 elif gf.kind == "enum":
                     ctrl = QComboBox()
@@ -8219,6 +8254,7 @@ class MainWindow(QMainWindow):
         # a duplicate of settings_manager.settings_changed, connected below,
         # and doubled every sidebar/editor rebuild on each click)
         self._setting_editor = SettingEditorWidget(self.settings_manager)
+        self._setting_editor.cleared.connect(self._on_setting_cleared)
         self._right_stack.addWidget(self._setting_editor)
 
         # Page 2: Architecture detail
@@ -8366,6 +8402,14 @@ class MainWindow(QMainWindow):
             if self._sidebar_stack.currentIndex() == 0:
                 self._right_stack.setCurrentIndex(1)
 
+    def _on_setting_cleared(self):
+        # Fired when the currently-open setting's value is removed (via the
+        # Remove Setting button). The editor panel should stay visible,
+        # showing the setting with nothing selected yet (SettingEditorWidget
+        # already rebuilds itself for this) - it must NOT fall back to the
+        # placeholder page, which used to hide the whole right-hand panel.
+        pass
+
     def _open_env_var(self, var_name: str):
         if var_name == "__GAMESCOPE_FLAGS__":
             # Gamescope's settings are real argv flags, not KEY=VALUE env
@@ -8449,6 +8493,7 @@ class MainWindow(QMainWindow):
         self._env_widget.load_values(saved_env)
         # 2. Hide env editor right panel (stale data)
         self._env_editor.discard_pending_edit()
+        self._env_editor.hide()
         # 3. Clear per-tab right-panel memory so tabs start fresh
         self._tab_right_memory = {}
         # 4. Repopulate lists

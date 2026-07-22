@@ -353,8 +353,12 @@ tune_param() {
 
     if [[ ! -f "${save_file}" ]]; then
         local current_val
-        if ! current_val="$(< "${path}" 2>/dev/null)"; then
+        if ! current_val="$(cat "${path}" 2>/dev/null)"; then
             warn "Read failed, skipped: ${desc}"
+            return 0
+        fi
+        if [[ -z "${current_val}" ]]; then
+            warn "Read empty value, not saving (will retry next run): ${desc}"
             return 0
         fi
         _state_write "${save_file}" "${current_val}" || return 0
@@ -384,11 +388,15 @@ tune_choice_param() {
 
     if [[ ! -f "${save_file}" ]]; then
         local raw current_val
-        raw="$(< "${path}" 2>/dev/null)" || { warn "Read failed: ${desc}"; return 0; }
+        raw="$(cat "${path}" 2>/dev/null)" || { warn "Read failed: ${desc}"; return 0; }
         if [[ "${raw}" =~ \[([^]]+)\] ]]; then
             current_val="${BASH_REMATCH[1]}"
         else
             current_val="${raw}"
+        fi
+        if [[ -z "${current_val}" ]]; then
+            warn "Read empty value, not saving (will retry next run): ${desc}"
+            return 0
         fi
         _state_write "${save_file}" "${current_val}" || return 0
         log_debug "Saved       [${desc}]: '${current_val}'"
@@ -424,7 +432,7 @@ restore_param() {
     fi
 
     local saved_val
-    saved_val="$(< "${save_file}")"
+    saved_val="$(cat "${save_file}")"
 
     if ! printf '%s' "${saved_val}" > "${path}" 2>/dev/null; then
         warn "Restore failed: ${desc} = '${saved_val}'"
@@ -464,7 +472,7 @@ tune_pci_latency() {
 
     for dev in /sys/bus/pci/devices/*; do
         bdf="$(basename "${dev}")"
-        class="$(< "${dev}/class" 2>/dev/null)" || continue
+        class="$(cat "${dev}/class" 2>/dev/null)" || continue
         case "${class}" in
             0x0600*)  target="00" ;;  # host bridge
             0x0604*)  target="80" ;;  # PCI-PCI bridge
@@ -531,7 +539,8 @@ tune_cstates() {
         [[ -f "${st}" ]] || continue
         idx="${st%/disable}"; idx="${idx##*state}"
         (( idx > CSTATE_KEEP_MAX )) || continue
-        tune_param "${st}" "1" "cstate.$(echo "${st}" | grep -o 'cpu[0-9]*').state${idx}"
+        local cpu_name; [[ "${st}" =~ /(cpu[0-9]+)/cpuidle/ ]] && cpu_name="${BASH_REMATCH[1]}" || cpu_name="cpu?"
+        tune_param "${st}" "1" "cstate.${cpu_name}.state${idx}"
     done
 }
 
@@ -540,7 +549,8 @@ restore_cstates() {
     for st in /sys/devices/system/cpu/cpu*/cpuidle/state*/disable; do
         [[ -f "${st}" ]] || continue
         idx="${st%/disable}"; idx="${idx##*state}"
-        restore_param "${st}" "cstate.$(echo "${st}" | grep -o 'cpu[0-9]*').state${idx}"
+        local cpu_name; [[ "${st}" =~ /(cpu[0-9]+)/cpuidle/ ]] && cpu_name="${BASH_REMATCH[1]}" || cpu_name="cpu?"
+        restore_param "${st}" "cstate.${cpu_name}.state${idx}"
     done
 }
 
@@ -570,7 +580,7 @@ detect_mem_node_for_cpus() {
     first_cpu="${cpu_list%%[,-]*}"
     for node_dir in /sys/devices/system/node/node*; do
         [[ -f "${node_dir}/cpulist" ]] || continue
-        node_cpus=$(< "${node_dir}/cpulist")
+        node_cpus=$(cat "${node_dir}/cpulist")
         if [[ ",${node_cpus}," == *",${first_cpu},"* ]]; then
             basename "${node_dir}" | tr -d 'node'
             return 0
@@ -597,7 +607,7 @@ setup_cpuset_group() {
     echo "${partition_type}" > "${dir}/cpuset.cpus.partition" 2>/dev/null || warn "Failed to write cpuset.cpus.partition: ${name}"
 
     if [[ -r "${dir}/cpuset.cpus.effective" ]]; then
-        log "${name} effective cpus: $(< "${dir}/cpuset.cpus.effective")"
+        log "${name} effective cpus: $(cat "${dir}/cpuset.cpus.effective")"
     fi
 }
 
@@ -724,7 +734,7 @@ is_pid_protected_by_name() {
     [[ -n "${CCD_PROTECTED_SESSION_PIDS[$pid]:-}" ]] && return 0
     [[ -z "${CCD_PROTECTED_PROCS:-}" ]] && return 1
     local comm
-    comm="$(< "/proc/${pid}/comm" 2>/dev/null)" || return 1
+    comm="$(cat "/proc/${pid}/comm" 2>/dev/null)" || return 1
     local name
     for name in ${CCD_PROTECTED_PROCS}; do
         [[ "${comm}" == "${name}" ]] && return 0
@@ -906,7 +916,7 @@ constrain_cgroup_cpus() {
     local name saved
     name="$(basename "${dir}")"
     [[ -w "${dir}/cpuset.cpus" ]] || return 1
-    saved="$(< "${dir}/cpuset.cpus" 2>/dev/null)"
+    saved="$(cat "${dir}/cpuset.cpus" 2>/dev/null)"
     # Record original (possibly empty) value: name<TAB>value
     printf '%s\t%s\n' "${name}" "${saved}" >> "${STATE_DIR}/${CPUSET_SAVE_FILE_NAME}"
     if echo "${cpus}" > "${dir}/cpuset.cpus" 2>/dev/null; then
@@ -1192,7 +1202,7 @@ _refcount_read() {
         err "SECURITY: refcount file is a symlink — treating as 0"
         echo 0; return
     fi
-    n="$(< "${REFCOUNT_FILE}" 2>/dev/null)"
+    n="$(cat "${REFCOUNT_FILE}" 2>/dev/null)"
     if [[ "${n}" =~ ^[0-9]+$ ]]; then echo "${n}"; else echo 0; fi
 }
 
@@ -1450,10 +1460,19 @@ load_config
 ACTION="${1:-}"
 case "${ACTION}" in
     PRE|pre|POST|post)
-        # Lock against concurrent PRE/POST runs (Lutris fast-restart scenario)
+        # Lock against concurrent PRE/POST runs (Lutris fast-restart scenario).
+        # PRE can hold this lock for up to CCD_MONITOR_SECONDS while it scans
+        # for newly spawned child processes — if a game is closed quickly
+        # (shorter than that window), a fixed short wait here would make
+        # POST time out and exit BEFORE it ever restores anything, leaving
+        # the system stuck in game-mode settings with no visible error.
+        # Scale the wait with CCD_MONITOR_SECONDS (already loaded from
+        # config above) plus a safety margin.
+        LOCK_WAIT=$(( CCD_MONITOR_SECONDS + 20 ))
+        (( LOCK_WAIT < 15 )) && LOCK_WAIT=15
         exec 9>"${LOCK_FILE}"
-        if ! flock -w 15 9; then
-            err "Could not acquire lock (another instance is running) — exiting"
+        if ! flock -w "${LOCK_WAIT}" 9; then
+            err "Could not acquire lock after ${LOCK_WAIT}s (another instance is running) — exiting"
             exit 1
         fi
         case "${ACTION}" in
