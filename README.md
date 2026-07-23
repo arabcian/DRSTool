@@ -1,3 +1,5 @@
+  -------------------------------------------------------------------------SCREENSHOTS---------------------------------------------------------------------
+
 <img width="1970" height="1467" alt="Screenshot_20260721_125100" src="https://github.com/user-attachments/assets/8e3e741d-17a7-4ce1-818b-3bedc1da8c81" />
 <img width="1970" height="1467" alt="Screenshot_20260721_125043" src="https://github.com/user-attachments/assets/e21120ab-af87-454a-a086-5f3ea99cec29" />
 <img width="1970" height="1467" alt="Screenshot_20260721_125017" src="https://github.com/user-attachments/assets/a29ad67f-4a9b-47f4-a44a-1ac8916d458d" />
