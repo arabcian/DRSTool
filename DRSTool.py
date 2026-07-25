@@ -3971,13 +3971,25 @@ FLM_ENV_VARS: List[EnvVarDef] = [
     EnvVarDef("FLM_FLOOR_AUTOTUNE", "vk_flip_meter", "enum", "1",
               "FIX-44: closed-loop floor-ratio adjustment. Tightens the ratio slowly when "
               "headroom is ample (flattens intervals), loosens it quickly on consecutive "
-              "holds / thin headroom (prevents braking). The autotune delta [-150,+150] "
-              "stacks on top of the base FLM_FLOOR_RATIO and the MFG-adapt offset. On by "
-              "default; set to 0 for the old fixed-ratio behaviour (the ratio then stays "
-              "exactly at FLM_FLOOR_RATIO / its MFG-adapted value). Hot-reloadable via "
-              "FLM_CONFIG + SIGUSR1. "
+              "holds / thin headroom (prevents braking). The autotune delta "
+              "[-150,+FLM_FLOOR_AUTOTUNE_MAX] stacks on top of the base FLM_FLOOR_RATIO "
+              "and the MFG-adapt offset. On by default; set to 0 for the old fixed-ratio "
+              "behaviour (the ratio then stays exactly at FLM_FLOOR_RATIO / its "
+              "MFG-adapted value). Hot-reloadable via FLM_CONFIG + SIGUSR1. "
               "Syntax: FLM_FLOOR_PACING=1 FLM_FLOOR_AUTOTUNE=0 FLM_FLOOR_RATIO=850 %command%",
               options=["0", "1"]),
+
+    EnvVarDef("FLM_FLOOR_AUTOTUNE_MAX", "vk_flip_meter", "int", "300",
+              "v2.7/FIX-63: positive ceiling of the closed-loop autotune delta (0-500). "
+              "At m=4 the FIX-56 static relaxation already spends 240 ratio units, so the "
+              "old fixed +150 ceiling capped the effective floor at 0.19T — below the ideal "
+              "0.25T of a perfectly uniform 4x slot. Raising this lets the closed loop "
+              "actually reach the optimum; the m-scaled loosen brake still fires first if a "
+              "real frame gets held, so headroom is not wasted. "
+              "Main v2.7 smoothness knob: try 400 at m=4 if hitch% stays near zero, "
+              "fall back to 150 for exact v2.6 behaviour. Hot-reloadable. "
+              "Syntax: FLM_FLOOR_AUTOTUNE=1 FLM_FLOOR_AUTOTUNE_MAX=400 %command%",
+              placeholder="e.g. 300 (0-500)"),
 
     EnvVarDef("FLM_MEASURE_CPU", "vk_flip_meter", "string", "",
               "CPU cores the measurement thread (std::jthread) is pinned to — useful for "
@@ -4002,6 +4014,56 @@ FLM_ENV_VARS: List[EnvVarDef] = [
               "need to be hand-tuned for a single steady state. "
               "Syntax: FLM_SPIN_ADAPT=1 FLM_SPIN_NS=20000 %command%",
               options=["0", "1"]),
+
+    EnvVarDef("FLM_WARMUP_FRAMES", "vk_flip_meter", "int", "30",
+              "v2.7/FIX-71: number of frames before the pacing gate opens. During warmup "
+              "the layer measures but does not pace. 30 is enough for most games; increase "
+              "for titles with long engine-init sequences after the loading screen where "
+              "the first frames are wildly uneven. Decrease with caution — too few frames "
+              "gives the T estimator no baseline, which can produce a spurious hitch on "
+              "the very first gated frame. Hot-reloadable. "
+              "Syntax: FLM_WARMUP_FRAMES=60 %command%",
+              placeholder="e.g. 30"),
+
+    EnvVarDef("FLM_HITCH_RECOVERY", "vk_flip_meter", "int", "8",
+              "v2.7/FIX-71: frames of suspended pacing after a hitch is detected. During "
+              "recovery the gate resets its anchor and passes frames through untouched so "
+              "the pipeline can drain cleanly. Lower (e.g. 4) = fewer pacing dropouts if "
+              "hitches are frequent; higher (e.g. 16) = more time for the GPU queue to "
+              "drain after a shader/traversal stall. Hot-reloadable. "
+              "Syntax: FLM_HITCH_RECOVERY=4 %command%",
+              placeholder="e.g. 8"),
+
+    EnvVarDef("FLM_HITCH_THRESHOLD_MS", "vk_flip_meter", "int", "0",
+              "v2.7/FIX-71: hitch detection threshold in milliseconds. 0 = adaptive "
+              "(max(1.5×T, T+2ms), capped at T+30ms — matches frame delivery to engine "
+              "cadence automatically). >0 pins an absolute threshold: useful when a game's "
+              "natural frametime tail is wide (physics ticks, streaming hitches) and the "
+              "adaptive formula keeps firing, causing pacing dropouts that cost more "
+              "smoothness than the hitches they react to. Hot-reloadable. "
+              "Syntax: FLM_HITCH_THRESHOLD_MS=25 %command%",
+              placeholder="e.g. 25 (0=adaptive)"),
+
+    EnvVarDef("FLM_PROBE_PERIOD_S", "vk_flip_meter", "int", "10",
+              "v2.7/FIX-65: how often (seconds) the MFG multiplier re-detection probe runs "
+              "(FIX-47). 0 = disable probing entirely — only safe when FLM_MFG_MULTIPLIER "
+              "is forced, otherwise the FIX-47 detection deadlock comes straight back. "
+              "During a v2.7 probe the floor pacer no longer stands fully down; it applies "
+              "a half floor so the periodic unpaced burst from v2.6 is eliminated. "
+              "Hot-reloadable. "
+              "Syntax: FLM_PROBE_PERIOD_S=30 %command%",
+              placeholder="e.g. 10"),
+
+    EnvVarDef("FLM_PROBE_FLIPS", "vk_flip_meter", "int", "24",
+              "v2.7/FIX-65: length of each MFG re-detection probe in flips. The probe "
+              "collects raw (unforced) intervals to count the fraction of short "
+              "(generated) frames. During the probe the floor gate applies a half floor "
+              "instead of standing down completely, keeping every generated-frame interval "
+              "inside the detector's 0.7×slot_mean class while halving the probe's "
+              "amplitude compared to v2.6. 0 = disable probing (same as "
+              "FLM_PROBE_PERIOD_S=0). Hot-reloadable. "
+              "Syntax: FLM_PROBE_FLIPS=32 %command%",
+              placeholder="e.g. 24"),
 
     EnvVarDef("FLM_LOG_LEVEL", "vk_flip_meter", "enum", "WARN",
               "Log verbosity. DEBUG is the most verbose (close to per-frame), ERROR the "
@@ -4036,10 +4098,13 @@ FLM_ENV_VARS: List[EnvVarDef] = [
     EnvVarDef("FLM_CONFIG", "vk_flip_meter", "string", "",
               "Path to a KEY=VALUE config file that enables live tuning without closing the "
               "game. The file is re-read via an async-signal-safe flag when a SIGUSR1 signal "
-              "is sent (FLM_TARGET_FPS, FLM_STATS_INTERVAL, FLM_SPIN_NS, FLM_PRESENT_LEAD_NS, "
-              "FLM_DRIFT_TOLERANCE_NS, FLM_MODE, FLM_PACE_POINT, FLM_PACE_FIFO, FLM_LOG_LEVEL, "
-              "FLM_FLOOR_PACING, FLM_FLOOR_RATIO, FLM_FLOOR_MFG_ADAPT, FLM_FLOOR_MFG_STEP, "
-              "FLM_FLOOR_AUTOTUNE, FLM_SPIN_ADAPT are supported). "
+              "is sent. Supported keys: FLM_TARGET_FPS, FLM_STATS_INTERVAL, FLM_SPIN_NS, "
+              "FLM_PRESENT_LEAD_NS, FLM_DRIFT_TOLERANCE_NS, FLM_MODE, FLM_PACE_POINT, "
+              "FLM_PACE_FIFO, FLM_LOG_LEVEL, FLM_FLOOR_PACING, FLM_FLOOR_RATIO, "
+              "FLM_FLOOR_MFG_ADAPT, FLM_FLOOR_MFG_STEP, FLM_FLOOR_AUTOTUNE, "
+              "FLM_FLOOR_AUTOTUNE_MAX, FLM_SPIN_ADAPT, FLM_WARMUP_FRAMES, "
+              "FLM_HITCH_RECOVERY, FLM_HITCH_THRESHOLD_MS, FLM_PROBE_PERIOD_S, "
+              "FLM_PROBE_FLIPS (v2.7+). "
               "Syntax: FLM_CONFIG=/tmp/flm.conf %command%  →  then: "
               "echo 'FLM_TARGET_FPS=90' > /tmp/flm.conf && kill -SIGUSR1 $(pgrep -f game)",
               placeholder="e.g. /tmp/flm.conf"),
@@ -6511,7 +6576,11 @@ FLM_RELOADABLE_KEYS = (
     "FLM_FLOOR_PACING", "FLM_FLOOR_RATIO",    # [FIX-36]
     "FLM_FLOOR_MFG_ADAPT", "FLM_FLOOR_MFG_STEP",   # [FIX-41]
     "FLM_FLOOR_AUTOTUNE",                     # [FIX-44]
+    "FLM_FLOOR_AUTOTUNE_MAX",                 # [FIX-63] v2.7
     "FLM_SPIN_ADAPT",                         # [FIX-39]
+    "FLM_WARMUP_FRAMES", "FLM_HITCH_RECOVERY",      # [FIX-71] v2.7
+    "FLM_HITCH_THRESHOLD_MS",                       # [FIX-71] v2.7
+    "FLM_PROBE_PERIOD_S", "FLM_PROBE_FLIPS",        # [FIX-65] v2.7
 )
 
 # ============================================================================
