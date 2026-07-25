@@ -1,3 +1,9 @@
+# ⚠️ DISCLAIMER
+
+This layer is part of a project developed with AI assistance. Use at your own risk. By using FLM, you accept responsibility for any system instability, GPU hangs, or display corruption that may result. See DISCLAIMER.md in the parent project directory for full details.
+
+---
+
 # FLM — Vulkan Flip Meter / Frame Pacing Layer (v2.5 — "steady state")
 
 A Vulkan layer that does frame pacing. Two independent paths:

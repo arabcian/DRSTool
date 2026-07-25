@@ -1,3 +1,9 @@
+# ⚠️ DISCLAIMER
+
+This component is part of a project developed with AI assistance. Use at your own risk. Core isolation and system tuning can cause system instability, process crashes, or CPU/cache coherency issues if misconfigured. You assume all responsibility for any damage or data loss. See DISCLAIMER.md in the parent project directory for full details.
+
+---
+
 # lutris-game-tune (v4)
 
 Pre/post-game system tuning for Lutris, plus CCD/CCX core isolation and

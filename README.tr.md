@@ -1,3 +1,16 @@
+# ⚠️ SORUMLULUK REDDI
+
+**KENDİ RİSKİNİZDE KULLANIN.** Bu yazılım herhangi bir garantı olmaksızın olduğu gibi sunulmaktadır. DRSTool'u kullanarak şunları kabul etmiş olursunuz:
+
+1. **Tüm sorumluluğu kabul etmiş olursunuz** — Bu aracı kullanmanın neden olabileceği herhangi bir hasar, veri kaybı, sistem istikrarsızlığı veya donanım hasarından.
+2. **Sürücü ayarlarını değiştirmek ciddi sorunlara yol açabilir** — Sürücü çökmesi, GPU'nun asılı kalması, sistem donması veya yanlış yapılandırılırsa GPU hasarı.
+3. **Bu proje yapay zeka yardımıyla geliştirilmiştir.** Kod incelense ve test edilse de, yapay zeka destekli geliştirme teste tabi olmayan incelikli hataları veya uç durumları içerebilir.
+4. **Sorumluluk reddedilir.** Geliştirici ve katkıda bulunanlar bu yazılımdan kaynaklanan doğrudan veya dolaylı hasarlardan hiçbir şekilde sorumlu değildir.
+
+**Kullanmadan önce:** Ayarları kritik olmayan sistemlerde test edin, çalışan yapılandırmanızı yedekleyin ve kurtarma yöntemi hazır bulundurun. Sürücü sorunları yaşarsanız tüm ortam değişkenlerini tamamen kaldırın ve görüntü sunucusunu/sistemi yeniden başlatın.
+
+---
+
 # DRSTool
 
 DRSTool, Linux üzerinde DXVK_NVAPI_DRS_SETTINGS dizgileri (strings) oluşturmak için geliştirilmiş PySide6 tabanlı bir masaüstü arayüzüdür (GUI). Windows'taki NVIDIA Profile Inspector'ın DXVK-NVAPI eşdeğeridir. Bu aracın geliştirilme amacı; Linux'ta Proton/DXVK üzerinden çalışan bir oyun için NVIDIA sürücü davranışını ince ayar yapmanın, normalde hafızadan veya dağınık wiki sayfalarından uzun ve hataya açık çevre değişkeni (environment variable) dizgilerini elle yazmayı gerektirmesidir. DRSTool bu süreci aranabilir, belgelendirilmiş, tıkla-seç mantığında çalışan bir editöre dönüştürür ve sonucu oyun başına yeniden kullanılabilir bir profil olarak kaydetmenizi sağlar.

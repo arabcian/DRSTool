@@ -13,65 +13,80 @@
 
                                                               SCREENSHOTS
 
-<img width="1970" height="1467" alt="Screenshot_20260721_124900" src="https://github.com/user-attachments/assets/51dc442c-b37c-4476-95d9-506fd12ffb56" />
-<img width="1970" height="1467" alt="Screenshot_20260721_124937" src="https://github.com/user-attachments/assets/0db5a47d-2f13-4af8-913a-7bdec1d239b1" />
-<img width="1970" height="1467" alt="Screenshot_20260721_124954" src="https://github.com/user-attachments/assets/8a5467e1-75b9-4f8e-ac8a-9cd526e87b30" />
-<img width="1970" height="1467" alt="Screenshot_20260721_125017" src="https://github.com/user-attachments/assets/a29ad67f-4a9b-47f4-a44a-1ac8916d458d" />
-<img width="1970" height="1467" alt="Screenshot_20260721_125043" src="https://github.com/user-attachments/assets/e21120ab-af87-454a-a086-5f3ea99cec29" />
 <img width="1970" height="1467" alt="Screenshot_20260721_125100" src="https://github.com/user-attachments/assets/8e3e741d-17a7-4ce1-818b-3bedc1da8c81" />
+<img width="1970" height="1467" alt="Screenshot_20260721_125043" src="https://github.com/user-attachments/assets/e21120ab-af87-454a-a086-5f3ea99cec29" />
+<img width="1970" height="1467" alt="Screenshot_20260721_125017" src="https://github.com/user-attachments/assets/a29ad67f-4a9b-47f4-a44a-1ac8916d458d" />
+<img width="1970" height="1467" alt="Screenshot_20260721_124954" src="https://github.com/user-attachments/assets/8a5467e1-75b9-4f8e-ac8a-9cd526e87b30" />
+<img width="1970" height="1467" alt="Screenshot_20260721_124937" src="https://github.com/user-attachments/assets/0db5a47d-2f13-4af8-913a-7bdec1d239b1" />
+<img width="1970" height="1467" alt="Screenshot_20260721_124900" src="https://github.com/user-attachments/assets/51dc442c-b37c-4476-95d9-506fd12ffb56" />
 
 
 # DRSTool
 
-**DRSTool** is a PySide6 desktop GUI for building `DXVK_NVAPI_DRS_SETTINGS` strings on Linux — the DXVK-NVAPI equivalent of NVIDIA Profile Inspector on Windows. Tuning NVIDIA driver behavior for a game running through Proton/DXVK on Linux normally means hand-writing long, error-prone environment-variable strings from memory or scattered wiki pages. DRSTool turns that into a searchable, documented, point-and-click editor, and bundles two companion tools (a frame-pacing Vulkan layer and a system-wide game-tuning daemon) so the whole per-game tuning workflow lives in one app.
+**DRSTool** is a PySide6 desktop GUI for building `DXVK_NVAPI_DRS_SETTINGS` strings on Linux — the DXVK-NVAPI equivalent of NVIDIA Profile Inspector on Windows. It exists because tuning NVIDIA driver behavior for a game running through Proton/DXVK on Linux normally means hand-writing long, error-prone environment-variable strings from memory or scattered wiki pages. DRSTool turns that into a searchable, documented, point-and-click editor and lets you save the result as a reusable profile per game.
 
-## Quick start
+## What it does
+
+DRSTool lets you:
+
+- Browse and set **NVIDIA Driver Settings (DRS)** — the same low-level settings NVIDIA Profile Inspector exposes on Windows, reimplemented here for `dxvk-nvapi`'s `DXVK_NVAPI_DRS_SETTINGS` environment variable.
+- Pick a **GPU architecture** so DRSTool generates the correct `DXVK_NVAPI_GPU_ARCH` value for your card.
+- Configure **DXVK**, **VKD3D-Proton**, and NVIDIA `__GL_*` environment variables through the same searchable, documented interface, instead of memorizing variable names and valid values.
+- Configure the **vk_flip_meter (FLM)** frame-pacing layer's runtime variables and build/install the layer itself from source.
+- Save and reload **profiles** (a full snapshot of DRS settings + GPU arch + env vars) per game, and copy the final combined `KEY=VALUE ...` string ready to paste into a launch script, Steam launch options, or a Lutris config.
+
+In short: point, click, describe, copy — instead of writing hex-coded driver settings by hand.
+
+## Why it exists
+
+On Windows, NVIDIA Profile Inspector is the standard tool for tweaking per-game driver behavior beyond what the NVIDIA Control Panel exposes. On Linux there was no equivalent GUI for the `dxvk-nvapi` settings that let you replicate that same fine-grained control for Proton/Wine games — you had to know the hex setting IDs and valid values ahead of time. DRSTool fills that gap with human-readable names, descriptions, and per-setting editors, built specifically for the Linux gaming stack (DXVK, VKD3D-Proton, dxvk-nvapi, vk_flip_meter).
+
+## Requirements
+
+- Python ≥ 3.7
+- PySide6 ≥ 6.10
+- For the vk_flip_meter build/install feature: `cmake`, a C++ compiler, and `pkexec` (PolicyKit) available on the system
+
+## Running
 
 ```bash
 python3 DRSTool.py
 ```
 
-Requirements: Python ≥ 3.7, PySide6 ≥ 6.10, PyYAML (only needed for the Lutris Sync feature). For building/installing vk_flip_meter: `cmake`, a C++ compiler, and `pkexec` (PolicyKit).
+## Interface overview
 
-**Basic workflow:** pick your GPU architecture → browse/search DRS settings and env vars, setting whatever you need → copy the generated string from the top output bar into a launch script / Steam launch options, or use Lutris Sync to write everything straight into a game's Lutris config → optionally save the whole configuration as a named profile to reuse later.
-
-## The 5 tabs, and what each tool does
-
-The window is a sidebar (browse/search) + editor (configure the selected item) layout, with a single combined output string always visible across the top and a "Copy" button next to it.
+The app is a single window split into a left sidebar (list/navigation) and a right editor panel, with a persistent output bar across the top showing the currently generated environment string. Five tabs switch what the sidebar/editor show:
 
 ### 1. DRS Settings
-Browse and set **117 NVIDIA Driver Settings (DRS)** — the same low-level settings NVIDIA Profile Inspector exposes on Windows, reimplemented for `dxvk-nvapi`'s `DXVK_NVAPI_DRS_SETTINGS` variable. Organized into 16 categories: DLSS/NGX, OpenGL, Misc, Texture Filtering, VRR/G-Sync, Anti-Aliasing, Frame Rate, SLI, Stereo, Optimus, Power, VSync/Flip, Shader, FXAA, Ansel, AO. Each setting has a short + detailed description and the correct control type (enum dropdown, numeric spinner, or bitfield checkboxes) for how its value is actually encoded.
+A searchable, categorized list of **117 driver settings** across categories such as OpenGL, Anti-Aliasing, Texture Filtering, VSync/Flip, Frame Rate, Power, SLI, Stereo, VRR/G-Sync, DLSS/NGX, Ansel, FXAA, AO, Optimus, and Misc. Each setting has a short description and a longer detailed description, plus the correct control type — enum dropdown, numeric spinner, or bitfield checkboxes — matching how the underlying value is actually encoded. Selecting a setting opens its editor on the right; setting a value updates the output bar and highlights the setting green in the sidebar list.
 
 ### 2. GPU Arch
-Pick your NVIDIA GPU's architecture family — Maxwell, Pascal, Turing, Ampere, Ada, or Blackwell (GeForce 900-series through RTX 50-series) — to set `DXVK_NVAPI_GPU_ARCH` correctly, since some DRS settings only apply when the driver knows which architecture it's dealing with.
+A list of NVIDIA GPU architecture families (Maxwell through Blackwell, i.e. GeForce 900-series through RTX 50-series) with example cards for each. Selecting one sets `DXVK_NVAPI_GPU_ARCH` in the output string, since some DRS settings only apply correctly when the driver knows which architecture it's dealing with.
 
-### 3. DXVK / VKD3D / NV / FLM / Gamescope
-One combined, searchable list of **192 environment variables** across 11 categories, each with the matching editor control (text field, dropdown, checkbox, or checkbox grid for multi-flag vars like `DXVK_HUD`/`VKD3D_CONFIG`):
-- **NVIDIA `__GL_*`** (39) — driver-level OpenGL/Vulkan tuning variables
-- **Proton** (38) — Proton-specific behavior toggles
-- **vk_flip_meter / FLM** (24) — runtime tuning for the bundled frame-pacing layer (`FLM_MODE`, `FLM_TARGET_FPS`, `FLM_MFG_MULTIPLIER`, `FLM_FLOOR_AUTOTUNE`, etc.)
-- **VKD3D-Proton** (20), including the `VKD3D_CONFIG` flag grid
-- **DXVK** (18), including the `DXVK_HUD` flag grid
-- **Wine** (18)
-- **Gamescope** (11) — genuine `gamescope` environment variables (`STEAM_GAMESCOPE_*`, etc. — not CLI flags)
-- **DXVK-NVAPI** (10)
-- **System / Loader** (6)
-- **NVIDIA PRIME** (4) and **NVIDIA Smooth Motion** (4)
+### 3. DXVK / VKD3D / NV / FLM
+A single combined, categorized, searchable list covering:
+- **DXVK** environment variables (HUD flags, logging, device/frame-related options, etc.) — 15 variables
+- **VKD3D-Proton** environment variables, including the `VKD3D_CONFIG` flag grid — 16 variables
+- **NVIDIA `__GL_*`** variables — 31 variables
+- **vk_flip_meter (FLM)** runtime variables (`FLM_MODE`, `FLM_TARGET_FPS`, `FLM_MFG_MULTIPLIER`, etc.) — 16 variables
 
-The same tab also has a separate **Gamescope Launch Flags** entry with **60 real `gamescope` command-line arguments** (across Geometry, HDR, Input, Frame Pacing, Upscaling, Debug, Session, ReShade, and Steam Deck groups) — these aren't environment variables, so they're built into their own CLI-flag preview string instead of the combined env output, and are what Lutris Sync (below) reads from.
+Each variable is typed (string, enum, bool, integer, or flag-set) and gets the matching editor control — text field, dropdown, checkbox, or a checkbox grid for multi-flag variables like `DXVK_HUD` and `VKD3D_CONFIG`. Values you set here are merged into the same combined output string as the DRS settings.
 
-### 4. Extra Tools
-Two bundled sub-projects, each with its own build/config sub-tab:
-- **vk_flip_meter** — build/install panel for the frame-pacing Vulkan layer. Runs `cmake` configure and build as your normal user, and only escalates to `pkexec` (graphical polkit password prompt) for the two steps that actually need root: `cmake --install` and a manifest library-path fixup.
-- **lutris-game-tune** — install/config panel for a system-wide script + setuid wrapper that handles pre/post-game system tuning for Lutris (plus CCD/CCX core isolation and lower-nice game startup). Lets you install/uninstall it, edit its system-wide settings at `/etc/lutris-game-tune.conf` (written via `pkexec`), run its status check, and view its log — all from the same panel.
+### 4. Profiles
+Save the entire current state — DRS settings, GPU architecture, and all env vars — under a name, then reload or delete it later. Profiles are stored as JSON under `$XDG_CONFIG_HOME/drstool/profiles.json` (falling back to `~/.config/drstool/profiles.json`), written atomically to avoid corruption on crash/power-loss. Existing installs using the old `~/.drs_configurator_profiles.json` location are migrated automatically on first run.
 
-### 5. Profiles
-Two sub-tabs:
-- **Saved Profiles** — save the entire current state (DRS settings + GPU arch + all env vars) under a name, then reload or delete it later. Stored as JSON under `$XDG_CONFIG_HOME/drstool/profiles.json` (falls back to `~/.config/drstool/profiles.json`), written atomically (temp file + `fsync` + `os.replace()`) so a crash mid-save can't corrupt the file. Old installs using `~/.drs_configurator_profiles.json` are migrated automatically on first run.
-- **Lutris Sync** — finds your Lutris per-game YAML configs and writes DRSTool's current configuration straight into a chosen game's config: DRS/env vars go into `system.env`; Gamescope CLI flags are mapped onto Lutris's native `gamescope_*` keys where one exists (resolution, FPS limiter, sharpness, HDR, cursor grab, the master gamescope toggle), and anything without a native key is packed into a single raw `gamescope_flags` string. If Lutris Game Tune is enabled here, it also writes the `prelaunch_command` / `postexit_command` / `prefix_command` hooks pointing at the installed wrapper.
+### 5. vk_flip_meter
+A build/install panel for the vk_flip_meter Vulkan layer, bundled as a subproject in this repository. It locates or lets you browse to the layer's source, then runs an unprivileged `cmake` configure + build, and only escalates to `pkexec` for the two steps that actually need root: `cmake --install` and a manifest library-path fixup. This keeps almost the entire build pipeline running as your normal user, only prompting for a password (via a graphical polkit dialog) at the last possible moment.
+
+Runtime tuning of the layer (`FLM_MODE`, `FLM_TARGET_FPS`, etc.) is not done on this tab — it's one click away on the "DXVK / VKD3D / NV / FLM" tab, using the same editor as everything else, and is folded into the combined output string automatically.
+
+## Output bar
+
+Across the top of the window, DRSTool continuously shows the combined environment string generated from your current DRS settings, GPU arch, and env vars, along with a "Copy" action — ready to drop directly into a Lutris/Steam launch-options field or a shell script.
 
 ## Design notes
 
-- **Signal-driven state**: a central `SettingsManager` (`QObject`) is the single source of truth for DRS settings, GPU arch, and profiles, emitting distinct Qt signals (`settings_changed`, `arch_changed`, `profiles_changed`, `profile_loaded`) so widgets only rebuild what actually changed.
-- **Shell-safe output**: the combined env string is built with `shlex.quote()`, so values with spaces/special characters are quoted correctly instead of silently breaking when pasted into a shell.
-- **Dark, NVIDIA-green-accented UI**, styled consistently across all tabs via shared Qt stylesheets.
+- **Signal-driven state**: a central `SettingsManager` (a `QObject`) is the single source of truth for DRS settings, GPU arch, and profiles, emitting distinct Qt signals (`settings_changed`, `arch_changed`, `profiles_changed`, `profile_loaded`) so UI widgets only rebuild what actually changed — e.g. the profile list only refreshes on `profiles_changed`, not on every single setting edit.
+- **Atomic profile writes**: profiles are written to a temp file and `os.replace()`'d into place, with an `fsync()` beforehand, so a crash mid-save can't corrupt the profiles file.
+- **Shell-safe output**: the combined env string is built with `shlex.quote()`, so values containing spaces or special characters are quoted correctly instead of silently breaking when pasted into a shell.
+- **Dark, NVIDIA-green-accented UI** styled consistently across all tabs (list headers, selection highlighting, scrollbars) via shared Qt stylesheets.

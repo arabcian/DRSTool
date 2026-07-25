@@ -2041,11 +2041,15 @@ class SettingsManager(QObject):
     def get_current_profile(self) -> Optional[str]:
         return self._current_profile
 
-    def save_profile(self, name: str, env_vars: Optional[Dict] = None):
+    def save_profile(self, name: str, env_vars: Optional[Dict] = None,
+                     gamescope_enabled: bool = False,
+                     gamescope_flags: Optional[Dict[str, str]] = None):
         self._profiles[name] = {
             "settings": self._settings.copy(),
             "arch": self._arch.code if self._arch else None,
             "env_vars": env_vars.copy() if env_vars else {},
+            "gamescope_enabled": gamescope_enabled,
+            "gamescope_flags": gamescope_flags.copy() if gamescope_flags else {},
         }
         self._current_profile = name
         self._save_profiles()
@@ -2070,6 +2074,8 @@ class SettingsManager(QObject):
             self._arch = None
         self._current_profile = name
         self._loaded_env_vars = profile.get("env_vars", {}).copy()
+        self._loaded_gamescope_enabled = profile.get("gamescope_enabled", False)
+        self._loaded_gamescope_flags = profile.get("gamescope_flags", {}).copy()
         self.profile_loaded.emit(name)
         self.settings_changed.emit()
         self.arch_changed.emit()
@@ -2077,6 +2083,14 @@ class SettingsManager(QObject):
     def get_loaded_env_vars(self) -> Dict:
         """Returns env vars from the last loaded profile."""
         return self._loaded_env_vars
+
+    def get_loaded_gamescope_enabled(self) -> bool:
+        """Returns gamescope enabled state from the last loaded profile."""
+        return getattr(self, '_loaded_gamescope_enabled', False)
+
+    def get_loaded_gamescope_flags(self) -> Dict[str, str]:
+        """Returns gamescope flag values from the last loaded profile."""
+        return getattr(self, '_loaded_gamescope_flags', {})
 
     def delete_profile(self, name: str):
         if name in self._profiles:
@@ -2360,7 +2374,16 @@ QPushButton:pressed{background:#a13232;}"""
         current = self.settings_manager.get_current_profile()
         if current:
             env_vars = self._env_widget.get_env_dict() if self._env_widget else {}
-            self.settings_manager.save_profile(current, env_vars)
+            gs_enabled = False
+            gs_flags: Dict[str, str] = {}
+            if self._gamescope_widget is not None:
+                gs_enabled = self._gamescope_widget.is_enabled()
+                gs_flags = self._gamescope_widget.get_flag_values()
+            self.settings_manager.save_profile(
+                current, env_vars,
+                gamescope_enabled=gs_enabled,
+                gamescope_flags=gs_flags,
+            )
             self._show_feedback(f"Saved to: {current}")
 
     def _reset_all(self):
@@ -5807,10 +5830,19 @@ class ProfileManagerWidget(QWidget):
         if name:
             # Collect env vars from MainWindow's env_widget if available
             env_vars = {}
+            gs_enabled = False
+            gs_flags: Dict[str, str] = {}
             win = self.window()
             if win and hasattr(win, '_env_widget'):
                 env_vars = win._env_widget.get_env_dict()
-            self.settings_manager.save_profile(name, env_vars)
+            if win and hasattr(win, '_gamescope'):
+                gs_enabled = win._gamescope.is_enabled()
+                gs_flags = win._gamescope.get_flag_values()
+            self.settings_manager.save_profile(
+                name, env_vars,
+                gamescope_enabled=gs_enabled,
+                gamescope_flags=gs_flags,
+            )
             self._profile_name.clear()
             self._refresh()
 
@@ -8491,6 +8523,11 @@ class MainWindow(QMainWindow):
         # 1. Reset and reload env vars from profile
         saved_env = self.settings_manager.get_loaded_env_vars()
         self._env_widget.load_values(saved_env)
+        # 1b. Restore Gamescope CLI-flag builder state from profile
+        self._gamescope.load_flag_values(
+            self.settings_manager.get_loaded_gamescope_enabled(),
+            self.settings_manager.get_loaded_gamescope_flags(),
+        )
         # 2. Hide env editor right panel (stale data)
         self._env_editor.discard_pending_edit()
         self._env_editor.hide()
