@@ -410,6 +410,12 @@ namespace FlmConst {
     constexpr int      REAL_WINDOW         = 8;    // last N T estimates
     constexpr int      CYC_RING            = 4;    // [FIX-37] last raw intervals (max MFG mult)
     constexpr int64_t  MIN_FLOOR_NS        = 500'000LL;   // 2000 FPS ceiling: floor never goes below this
+    // [FIX-74] RATCHET GUARD. Fixed cost charged against the floor on top of
+    // the measured wakeup margin: present-call submit time plus the residual
+    // busy-spin. Together they are the per-frame overshoot delta that closes
+    // the floor -> interval -> slot_iv -> floor loop when the floor is allowed
+    // to reach the full slot width. See apply_gate.
+    constexpr int64_t  RATCHET_MARGIN_NS   = 50'000LL;
     constexpr int      MFG_DETECT_WINDOW   = 32;   // [item 7][FIX-48] 64→32: halves the
                                                    // mixed-sample transient real_win sees
                                                    // during an m transition; at 32 samples
@@ -610,6 +616,7 @@ static std::vector<std::pair<std::string, std::string>> g_env_snapshot;
 
 static void snapshot_dynamic_env() {
     static const char* keys[] = {
+        "FLM_PROFILE",                           // [FIX-76]
         "FLM_TARGET_FPS", "FLM_STATS_INTERVAL", "FLM_SPIN_NS",
         "FLM_PRESENT_LEAD_NS", "FLM_DRIFT_TOLERANCE_NS",
         "FLM_MODE", "FLM_PACE_POINT", "FLM_LOG_LEVEL",
@@ -627,8 +634,132 @@ static void snapshot_dynamic_env() {
         if (const char* e = getenv(k)) g_env_snapshot.emplace_back(k, e);
 }
 
-// Env snapshot first (static), then file (live) — file wins.
+// ============================================================================
+// [FIX-76] FLM_PROFILE — one knob instead of twenty.
+//
+// The tuning surface had grown to the point where the DEFAULTS were no longer
+// the thing most users ran: a working setup meant hand-picking a dozen
+// interacting values, and the interactions are not visible from the outside.
+// Three of them silently no-op each other (FLM_TARGET_FPS>0 kills the whole
+// floor family; FIFO without FLM_PACE_FIFO kills the pacer; a forced
+// multiplier used to kill the re-anchor probe), and at least one combination
+// reaches a state the user cannot diagnose at all (see FIX-74).
+//
+// A profile is a NAMED, TESTED POINT in that space. It is applied FIRST, so
+// any explicit variable still overrides it — the profile sets the baseline,
+// not the ceiling. Per-key tuning is unchanged for anyone who wants it; it is
+// simply no longer the entry cost.
+//
+// Deliberately excluded from profiles: the load-time-only keys
+// (FLM_MFG_MULTIPLIER, FLM_RT_PRIORITY, FLM_MEASURE_CPU, FLM_STATS, FLM_CSV,
+// FLM_LOG_FILE). Putting them here would create a profile whose effect
+// depends on whether it arrived via env or via SIGUSR1.
+// ============================================================================
+static void apply_profile(const char* p) {
+    if (!p || !*p) return;
+
+    // Shared baseline: everything a profile can touch, at its documented
+    // default. Without this a SIGUSR1 profile switch would inherit stray
+    // values from the profile that came before it.
+    apply_dynamic_kv("FLM_TARGET_FPS",         "0");
+    apply_dynamic_kv("FLM_PACE_POINT",         "present");
+    apply_dynamic_kv("FLM_PACE_FIFO",          "0");
+    apply_dynamic_kv("FLM_PRESENT_LEAD_NS",    "1000000");
+    apply_dynamic_kv("FLM_SPIN_NS",            "150000");
+    apply_dynamic_kv("FLM_SPIN_ADAPT",         "1");
+    apply_dynamic_kv("FLM_DRIFT_TOLERANCE_NS", "0");
+    apply_dynamic_kv("FLM_FLOOR_PACING",       "1");
+    apply_dynamic_kv("FLM_FLOOR_RATIO",        "850");
+    apply_dynamic_kv("FLM_FLOOR_MFG_ADAPT",    "1");
+    apply_dynamic_kv("FLM_FLOOR_MFG_STEP",     "40");
+    apply_dynamic_kv("FLM_FLOOR_AUTOTUNE",     "1");
+    apply_dynamic_kv("FLM_FLOOR_AUTOTUNE_MAX", "300");
+    apply_dynamic_kv("FLM_WARMUP_FRAMES",      "30");
+    apply_dynamic_kv("FLM_HITCH_RECOVERY",     "8");
+    apply_dynamic_kv("FLM_HITCH_THRESHOLD_MS", "0");
+    apply_dynamic_kv("FLM_PROBE_PERIOD_S",     "10");
+    apply_dynamic_kv("FLM_PROBE_FLIPS",        "24");
+
+    if (!strcmp(p, "off")) {
+        apply_dynamic_kv("FLM_MODE", "off");
+
+    } else if (!strcmp(p, "vrr")) {
+        // VRR panel, no frame generation. Floor still helps: it evens out the
+        // engine's own present jitter without braking a variable rate.
+        apply_dynamic_kv("FLM_MODE", "present");
+
+    } else if (!strcmp(p, "mfg")) {
+        // VRR + frame generation. The case the floor pacer exists for.
+        // Autotune ceiling raised because the FIX-56 static relaxation spends
+        // most of the budget at m>=3; FIX-74 bounds the top end safely now.
+        apply_dynamic_kv("FLM_MODE", "present");
+        apply_dynamic_kv("FLM_FLOOR_AUTOTUNE_MAX", "400");
+
+    } else if (!strcmp(p, "latency")) {
+        // Input lag first, flatness second: looser floor, shorter lead, fast
+        // hitch recovery so pacing spends less time holding anything back.
+        apply_dynamic_kv("FLM_MODE", "present");
+        apply_dynamic_kv("FLM_FLOOR_RATIO",     "780");
+        apply_dynamic_kv("FLM_PRESENT_LEAD_NS", "500000");
+        apply_dynamic_kv("FLM_HITCH_RECOVERY",  "4");
+
+    } else if (!strcmp(p, "cap")) {
+        // Fixed-refresh panel with an FPS ceiling. The floor family is a
+        // guaranteed no-op on this path (FIX-42), so it is turned off rather
+        // than left looking active. FLM_TARGET_FPS must still be supplied.
+        apply_dynamic_kv("FLM_MODE", "limiter");
+        apply_dynamic_kv("FLM_FLOOR_PACING", "0");
+
+    } else {
+        FLM_LOG(LogLevel::WARN,
+                "FLM_PROFILE='%s' unknown — expected off|vrr|mfg|latency|cap. "
+                "Falling back to built-in defaults.", p);
+        return;
+    }
+    FLM_LOG(LogLevel::INFO, "Profile '%s' applied", p);
+}
+
+// Read a single key out of the config file without applying anything.
+// Needed because the profile has to be resolved BEFORE the general pass, and
+// the file is allowed to select it.
+static bool scan_config_value(const char* path, const char* key, std::string& out) {
+    FILE* f = fopen(path, "r");
+    if (!f) return false;
+    char line[256];
+    bool found = false;
+    while (fgets(line, sizeof line, f)) {
+        char* p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || *p == '\n' || *p == '\0') continue;
+        char* eq = strchr(p, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char* ke = eq;
+        while (ke > p && (ke[-1] == ' ' || ke[-1] == '\t')) *--ke = '\0';
+        if (strcmp(p, key) != 0) continue;
+        char* val = eq + 1;
+        while (*val == ' ' || *val == '\t') val++;
+        size_t n = strlen(val);
+        while (n && (val[n-1] == '\n' || val[n-1] == '\r' ||
+                     val[n-1] == ' '  || val[n-1] == '\t')) val[--n] = '\0';
+        out = val;
+        found = true;   // last occurrence wins, matching load_config_file
+    }
+    fclose(f);
+    return found;
+}
+
+// Profile first (baseline), then env snapshot (static), then file (live).
+// Later stages override earlier ones, so an explicit key always beats the
+// profile that suggested it.
 static void reload_dynamic_config() {
+    std::string profile;
+    for (const auto& [k, v] : g_env_snapshot)
+        if (k == "FLM_PROFILE") profile = v;
+    if (!g_config.config_path.empty())
+        scan_config_value(g_config.config_path.c_str(), "FLM_PROFILE", profile);
+    if (!profile.empty()) apply_profile(profile.c_str());
+
     for (const auto& [k, v] : g_env_snapshot)
         apply_dynamic_kv(k.c_str(), v.c_str());
     if (!g_config.config_path.empty())
@@ -1462,6 +1593,39 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
             if (g_config.mfg_mult_env > 0) {
                 if (m != g_config.mfg_mult_env)
                     st->eff_mfg.store(g_config.mfg_mult_env, std::memory_order_relaxed);
+                // ============================================================
+                // [FIX-75] RE-ANCHOR PROBE UNDER A FORCED MULTIPLIER.
+                // Probe scheduling used to live exclusively on the auto-detect
+                // branch, on the reasoning that a forced m needs no detection.
+                // True for detection — but the probe's OTHER effect was load
+                // bearing and unnoticed: it is the only window in which the
+                // floor stands down (half floor since FIX-65) and the cadence
+                // estimate is measured from intervals the pacer did not
+                // produce. Forcing FLM_MFG_MULTIPLIER therefore removed the
+                // only path by which a drifted slot estimate could ever
+                // re-anchor, which is why the FIX-74 ratchet was permanent
+                // rather than self-limiting in the field report. m stays
+                // forced here; only the re-anchor window is restored.
+                // ============================================================
+                if (st->probe_left > 0) {
+                    if (--st->probe_left == 0) {
+                        st->probe_last_ns = tnow;
+                        st->probe_active.store(false, std::memory_order_relaxed);
+                    }
+                } else {
+                    const int64_t p_per = g_config.probe_period_ns.load(std::memory_order_relaxed);
+                    const int     p_fl  = g_config.probe_flips.load(std::memory_order_relaxed);
+                    if (p_per <= 0 || p_fl <= 0) {
+                        // probing disabled by config
+                    } else if (st->probe_last_ns == 0) {
+                        st->probe_last_ns = tnow;
+                    } else if (tnow - st->probe_last_ns >= p_per) {
+                        st->probe_left = p_fl;
+                        st->probe_active.store(true, std::memory_order_relaxed);
+                        FLM_LOG(LogLevel::DEBUG,
+                                "MFG re-anchor probe (m forced): half-floor for %d flips", p_fl);
+                    }
+                }
             } else if (st->probe_left > 0) {
                 // ============================================================
                 // [FIX-47] PROBE ACTIVE — gate is standing down (apply_gate
@@ -2076,6 +2240,66 @@ static void apply_gate(SwapchainState* st, bool limiter_mode, bool advance) {
             st->held_run = 0;
         }
         int64_t floor   = std::max<int64_t>((slot_iv * ratio) / 1000, FlmConst::MIN_FLOOR_NS);
+
+        // ====================================================================
+        // [FIX-74] RATCHET GUARD — the floor may never reach the slot width.
+        //
+        // FAILURE MODE THIS CLOSES (field report: Alan Wake 2, forced m=3,
+        // ratio saturated at 1000, FPS decayed to a hard 45 and never
+        // recovered; disabling the layer restored it instantly).
+        //
+        //   floor = slot_iv * ratio/1000
+        //   observed interval = floor + delta       (delta = wakeup overshoot
+        //                                            + present submit cost)
+        //   slot_iv = median(cycle-sum of the last m intervals) / m
+        //           = floor + delta                 (those SAME intervals)
+        //   => floor_{n+1} = (floor_n + delta) * ratio/1000
+        //
+        // For ratio/1000 >= 1 - delta/slot_iv this recurrence is MONOTONIC
+        // INCREASING: every cycle the floor absorbs its own overshoot and the
+        // frame rate ratchets down one delta at a time, with no upper bound.
+        // The three brakes that should have caught it all miss:
+        //   * GPU-bound guard  — disabled at fps==0 by design [FIX-18].
+        //   * autotune loosen  — has a DEAD ZONE: it only loosens when
+        //     headroom < slot/50. During the ratchet headroom IS delta, which
+        //     for a typical 150-500us wakeup margin against a 5-8ms slot sits
+        //     above slot/50 and below slot/12, so the loop neither tightens
+        //     nor loosens and ratio parks at its ceiling.
+        //   * probe re-anchor  — scheduled only on the auto-detect branch, so
+        //     a forced FLM_MFG_MULTIPLIER removes the one unpaced window that
+        //     could have re-measured the true cadence [FIX-75 fixes that too].
+        // Equilibrium is therefore set by whatever finally trips the hitch
+        // path — with a FIXED FLM_HITCH_THRESHOLD_MS that is the threshold
+        // itself, which is why the reported cap landed just under 25ms.
+        //
+        // The guard attacks the recurrence rather than any one brake: keep a
+        // headroom under the slot that is strictly larger than the overshoot
+        // it has to absorb, so floor + delta <= slot_iv always holds and the
+        // fixed point is stable. delta is already measured every frame for
+        // the adaptive spin (FIX-46 p75 estimator), so the headroom scales
+        // itself: ~80us on an idle RT-pinned system (floor may reach ~99% of
+        // the slot, full flattening still available), several hundred us on a
+        // loaded one (the pacer backs off precisely when it must).
+        //
+        // This is a HARD invariant, not a tuning knob: it is deliberately not
+        // exposed as an env var, because every configuration that reaches the
+        // ratchet is a configuration the user cannot debug from the outside.
+        // ====================================================================
+        {
+            const int64_t delta = g_spin_margin.load(std::memory_order_relaxed) +
+                                  FlmConst::RATCHET_MARGIN_NS;
+            // Never suppress below half a slot: at that point the floor is
+            // doing nothing useful anyway and clamping further would only
+            // hide a genuinely bad slot estimate.
+            const int64_t cap = std::max<int64_t>(slot_iv - delta, slot_iv / 2);
+            if (floor > cap) {
+                floor = cap;
+                // Pull the learned delta back too, otherwise autotune keeps
+                // asking for a ratio the guard silently refuses to honour and
+                // ratio_auto sits pinned at its ceiling forever.
+                if (autotune && advance && st->ratio_auto > 0) st->ratio_auto -= 1;
+            }
+        }
 
         // [FIX-50] t taken once at gate entry; only re-read after a real wait.
         if (st->last_present_ns == 0) {          // first present: anchor only

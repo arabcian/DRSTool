@@ -3860,6 +3860,24 @@ FLM_ENV_VARS: List[EnvVarDef] = [
               "Syntax: DISABLE_LAYER_cpu_flip_meter=1 %command%",
               options=["1"]),
 
+    EnvVarDef("FLM_PROFILE", "vk_flip_meter", "enum", "",
+              "v2.8/FIX-76: single-knob preset. Selects a named, tested point in the "
+              "tuning space instead of hand-picking a dozen interacting values. "
+              "off: layer inactive (A/B baseline). vrr: VRR panel without frame "
+              "generation. mfg: VRR + frame generation — the case floor-pacing exists "
+              "for (raises FLM_FLOOR_AUTOTUNE_MAX to 400). latency: input lag first — "
+              "looser floor (780), shorter present lead (0.5ms), fast hitch recovery. "
+              "cap: fixed-refresh panel with an FPS ceiling — switches to LIMITER and "
+              "disables the floor family, which is a guaranteed no-op on that path "
+              "(FIX-42); still requires FLM_TARGET_FPS. "
+              "The profile is applied FIRST, so any FLM_* variable you set explicitly "
+              "still overrides it — the profile sets the baseline, not the ceiling. "
+              "Only covers hot-reloadable keys; load-time-only ones "
+              "(FLM_MFG_MULTIPLIER, FLM_RT_PRIORITY, FLM_MEASURE_CPU, FLM_STATS, "
+              "FLM_CSV, FLM_LOG_FILE) are deliberately excluded. Hot-reloadable. "
+              "Syntax: FLM_PROFILE=mfg %command%",
+              options=["off", "vrr", "mfg", "latency", "cap"]),
+
     EnvVarDef("FLM_MODE", "vk_flip_meter", "enum", "auto",
               "Operating mode. auto: uses PACER if presentWait is available, otherwise "
               "LIMITER (if FLM_TARGET_FPS is set). present: forces the PACER, for frametime "
@@ -3986,8 +4004,13 @@ FLM_ENV_VARS: List[EnvVarDef] = [
               "0.25T of a perfectly uniform 4x slot. Raising this lets the closed loop "
               "actually reach the optimum; the m-scaled loosen brake still fires first if a "
               "real frame gets held, so headroom is not wasted. "
-              "Main v2.7 smoothness knob: try 400 at m=4 if hitch% stays near zero, "
-              "fall back to 150 for exact v2.6 behaviour. Hot-reloadable. "
+              "Main smoothness knob: try 400 at m=4 if hitch% stays near zero, "
+              "fall back to 150 for exact v2.6 behaviour. "
+              "Since v2.8 (FIX-74) a high value here is no longer dangerous: the "
+              "ratchet guard bounds the floor at slot_iv minus the measured wakeup "
+              "margin, so the effective ratio can never reach the full slot width and "
+              "close the floor -> interval -> slot_iv -> floor feedback loop that "
+              "used to decay the frame rate monotonically. Hot-reloadable. "
               "Syntax: FLM_FLOOR_AUTOTUNE=1 FLM_FLOOR_AUTOTUNE_MAX=400 %command%",
               placeholder="e.g. 300 (0-500)"),
 
@@ -6052,6 +6075,49 @@ class LutrisSyncWidget(QWidget):
     }
     # lutris-game-tune-wrapper install path (kept in sync with LGTUNE_WRAPPER)
     _LGTUNE_WRAPPER_PATH = "/usr/local/bin/lutris-game-tune-wrapper"
+    # system.* keys wired to the lutris-game-tune checkbox
+    _LGTUNE_KEYS = ("prelaunch_command", "postexit_command", "prefix_command")
+
+    @classmethod
+    def _managed_system_keys(cls) -> set:
+        """Every system.* key DRSTool considers itself the owner of.
+
+        Sync used to be purely ADDITIVE: a key was written when its control was
+        set and simply omitted when it wasn't, and _merge_yaml only ever did
+        `data["system"][k] = v`. That makes every set -> unset transition
+        invisible on disk — the previous value survives and the YAML silently
+        disagrees with the GUI. Declaring ownership up front lets the merge
+        delete what the GUI no longer asks for, so a written file always
+        matches what is on screen.
+        """
+        keys = {"gamescope", "gamescope_flags"}
+        keys |= set(cls._FLAG_TO_LUTRIS.values())
+        keys |= set(cls._FLAG_TO_LUTRIS_BOOL.values())
+        keys |= set(cls._FLAG_PAIR_TO_LUTRIS.keys())
+        keys |= set(cls._LGTUNE_KEYS)
+        return keys
+
+    # Env vars are derived from the DRS grid + arch selector rather than typed
+    # into the Env Vars tab, so they never appear in ALL_ENV_VARS.
+    _DERIVED_ENV_KEYS = ("DXVK_NVAPI_DRS_SETTINGS", "DXVK_NVAPI_GPU_ARCH")
+
+    @classmethod
+    def _managed_env_keys(cls) -> set:
+        """Every system.env variable DRSTool considers itself the owner of.
+
+        Same ownership rule as _managed_system_keys, applied to the env block:
+        without it, dropping a variable in the Env Vars tab left the old value
+        sitting in the YAML forever. That is worse here than in system.*
+        because the env block is where the bulk of the configuration lives —
+        cutting an FLM setup from 28 variables down to a profile plus four
+        would otherwise leave 24 stale ones behind, all still read by the
+        layer at startup and all invisible in the GUI that supposedly wrote
+        the file.
+
+        Ownership is exactly DRSTool's own catalogue. Anything not in it was
+        put there by hand, by Lutris, or by another tool, and is left alone.
+        """
+        return {v.name for v in ALL_ENV_VARS} | set(cls._DERIVED_ENV_KEYS)
 
     def __init__(self, settings_manager: SettingsManager, parent=None):
         super().__init__(parent)
@@ -6238,6 +6304,29 @@ class LutrisSyncWidget(QWidget):
             QPushButton:disabled { background: #2a2f38; color: #8a92a5; border-color: #1e2535; }
         """)
         btn_row.addWidget(self._apply_btn)
+
+        # Read-back. Selecting a game used to load its YAML for the PREVIEW
+        # only — nothing was ever parsed back into the controls, so DRSTool
+        # had no idea what the file already contained and every write was a
+        # blind overlay of the current GUI state onto whatever was there.
+        self._import_btn = QPushButton("Load from selected game")
+        self._import_btn.setToolTip(
+            "Parse the selected game's YAML and populate DRSTool from it: "
+            "gamescope flags, env vars and lutris-game-tune wiring.\n"
+            "Replaces the current GUI state — save a profile first if you "
+            "want to keep it."
+        )
+        self._import_btn.clicked.connect(self._import_from_yaml)
+        self._import_btn.setStyleSheet("""
+            QPushButton {
+                background: #1a1f28; color: #d8d8d8; border: 1px solid #323c4b;
+                border-radius: 3px; padding: 4px 12px; font-size: 10px;
+                font-weight: 600; min-height: 24px;
+            }
+            QPushButton:hover { background: #232a35; border-color: #4a7300; }
+            QPushButton:disabled { background: #14181f; color: #6a7080; }
+        """)
+        btn_row.addWidget(self._import_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
@@ -6343,6 +6432,180 @@ class LutrisSyncWidget(QWidget):
         settings can be folded into Lutris system.* keys alongside env vars."""
         self._gamescope_widget = widget
 
+    # ── Read-back ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _flag_lookup() -> Dict[str, "GamescopeFlagDef"]:
+        """Long flag AND short flag -> definition, for parsing a raw CLI string."""
+        table: Dict[str, GamescopeFlagDef] = {}
+        for gf in GAMESCOPE_FLAGS:
+            table[gf.flag] = gf
+            if gf.short:
+                table[gf.short] = gf
+        return table
+
+    @classmethod
+    def _parse_gamescope_flags_string(cls, raw: str) -> Dict[str, str]:
+        """Turn a gamescope_flags CLI string back into {long_flag: value}.
+
+        Unknown tokens are skipped rather than guessed at: writing them back in
+        a mangled form would be worse than dropping them, and the preview shows
+        exactly what is about to be written either way.
+        """
+        table = cls._flag_lookup()
+        out: Dict[str, str] = {}
+        try:
+            tokens = shlex.split(raw or "")
+        except ValueError:
+            return out
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            gf = table.get(tok)
+            if gf is None:
+                i += 1
+                continue
+            if gf.kind == "toggle":
+                out[gf.flag] = ""
+                i += 1
+            else:
+                if i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+                    out[gf.flag] = tokens[i + 1]
+                    i += 2
+                else:
+                    i += 1
+        return out
+
+    def _unrecognised_env_vars(self) -> set:
+        """Vars in the selected file that carry one of our prefixes but are not
+        in ALL_ENV_VARS — reported, never removed."""
+        if self._current_yaml_text is None:
+            return set()
+        try:
+            data = yaml.safe_load(self._current_yaml_text) or {}
+        except Exception:
+            return set()
+        sysdict = data.get("system") or {}
+        env_sec = (sysdict.get("env") or {}) if isinstance(sysdict, dict) else {}
+        if not isinstance(env_sec, dict):
+            return set()
+        prefixes = ("FLM_", "DXVK_", "VKD3D_", "PROTON_", "NVPRESENT_")
+        known = self._managed_env_keys()
+        return {str(k) for k in env_sec
+                if str(k).startswith(prefixes) and str(k) not in known}
+
+    def _import_from_yaml(self):
+        """Populate DRSTool's controls from the selected game's YAML.
+
+        Counterpart to _apply_to_game. Without it the two directions were
+        asymmetric: DRSTool could write into a file but never learn what was
+        already in it, which is what made stale keys invisible in the first
+        place.
+        """
+        if self._current_yaml_text is None:
+            self._status_label.setText("Select a game first.")
+            return
+        try:
+            data = yaml.safe_load(self._current_yaml_text) or {}
+        except Exception as e:
+            QMessageBox.critical(self, "Parse failed", f"Could not parse YAML: {e}")
+            return
+        sysdict = data.get("system") or {}
+        if not isinstance(sysdict, dict):
+            sysdict = {}
+
+        reply = QMessageBox.question(
+            self, "Load from Lutris config",
+            "This replaces the gamescope flags, env vars and lutris-game-tune "
+            "settings currently in DRSTool with whatever is in this game's YAML.\n\n"
+            "Save a profile first if you want to keep the current state. Continue?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        notes: List[str] = []
+
+        # ── Gamescope: native system.* keys + the raw catch-all string ─────────
+        if self._gamescope_widget is not None:
+            flags: Dict[str, str] = {}
+            enabled = bool(sysdict.get("gamescope", False))
+
+            for flag, key in self._FLAG_TO_LUTRIS.items():
+                val = sysdict.get(key)
+                if val not in (None, ""):
+                    flags[flag] = str(val)
+
+            for flag, key in self._FLAG_TO_LUTRIS_BOOL.items():
+                if sysdict.get(key):
+                    flags[flag] = ""
+
+            for key, (flag_w, flag_h) in self._FLAG_PAIR_TO_LUTRIS.items():
+                raw = str(sysdict.get(key, "") or "").strip().lower()
+                if not raw:
+                    continue
+                parts = raw.split("x")
+                if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                    flags[flag_w] = parts[0].strip()
+                    flags[flag_h] = parts[1].strip()
+                else:
+                    notes.append(f"{key}={raw!r} is not a WxH pair — skipped")
+
+            raw_flags = str(sysdict.get("gamescope_flags", "") or "")
+            if raw_flags:
+                parsed = self._parse_gamescope_flags_string(raw_flags)
+                flags.update(parsed)
+                known = set(parsed)
+                try:
+                    tok_flags = {t for t in shlex.split(raw_flags) if t.startswith("-")}
+                except ValueError:
+                    tok_flags = set()
+                table = self._flag_lookup()
+                unknown = {t for t in tok_flags
+                           if t not in table or table[t].flag not in known}
+                if unknown:
+                    notes.append("gamescope_flags: unrecognised token(s) dropped: "
+                                 + " ".join(sorted(unknown)))
+
+            self._gamescope_widget.load_flag_values(enabled, flags)
+
+        # ── Env vars ────────────────────────────────────────────────
+        env_sec = sysdict.get("env") or {}
+        if isinstance(env_sec, dict):
+            win = self.window()
+            if win is not None and hasattr(win, "_env_widget"):
+                # These two are DERIVED from the DRS settings grid + arch
+                # selector, not free-form env vars — pushing them into the env
+                # widget would create a second, conflicting source of truth.
+                derived = {"DXVK_NVAPI_DRS_SETTINGS", "DXVK_NVAPI_GPU_ARCH"}
+                vals = {str(k): str(v) for k, v in env_sec.items() if str(k) not in derived}
+                skipped = derived & {str(k) for k in env_sec}
+                if skipped:
+                    notes.append("not imported (owned by the DRS settings tab): "
+                                 + ", ".join(sorted(skipped)))
+                win._env_widget.load_values(vals)
+
+        # ── lutris-game-tune ───────────────────────────────────────
+        prefix_cmd = str(sysdict.get("prefix_command", "") or "")
+        lgtune_on = self._LGTUNE_WRAPPER_PATH in prefix_cmd
+        self._chk_lgtune.setChecked(lgtune_on)
+        if lgtune_on:
+            parts = prefix_cmd.split()
+            if "RUN" in parts:
+                idx = parts.index("RUN")
+                if idx + 1 < len(parts):
+                    try:
+                        self._lgtune_nice.setValue(int(parts[idx + 1]))
+                    except ValueError:
+                        notes.append(f"prefix_command: could not read the nice value "
+                                     f"from {prefix_cmd!r}")
+
+        self._update_preview()
+        msg = "Loaded from YAML."
+        if notes:
+            msg += "  " + "  |  ".join(notes)
+        self._status_label.setText(msg)
+
     def _split_gamescope(self, env: Dict[str, str]):
         """Split settings into (system_keys, remaining_env).
 
@@ -6357,6 +6620,7 @@ class LutrisSyncWidget(QWidget):
         """
         system_keys: Dict[str, object] = {}
         remaining: Dict[str, str] = dict(env)
+        warnings: List[str] = []
 
         flags: Dict[str, str] = {}
         gamescope_on = False
@@ -6368,8 +6632,11 @@ class LutrisSyncWidget(QWidget):
         # gamescope" boolean. Lutris builds the actual gamescope invocation
         # itself from this + the gamescope_* keys below; we never write a
         # raw "gamescope ..." command string into the YAML.
-        if gamescope_on:
-            system_keys["gamescope"] = True
+        # Written EITHER WAY. Emitting the key only when the toggle is on made
+        # turning gamescope OFF a no-op: the YAML kept its old `gamescope: true`
+        # and Lutris went on launching the game through gamescope while the GUI
+        # showed it disabled.
+        system_keys["gamescope"] = bool(gamescope_on)
 
         # Flags consumed by an explicit native-key mapping below — anything
         # left over falls through to the gamescope_flags catch-all string.
@@ -6383,21 +6650,44 @@ class LutrisSyncWidget(QWidget):
             if flag in flags and flags[flag]:
                 system_keys[lutris_key] = str(flags[flag])
 
-        # Single → single bool mappings (bare toggle present = True)
+        # Single → single bool mappings. Absent = explicit False, not "skip":
+        # a skipped key left the previous `gamescope_hdr: true` in place, so
+        # unchecking the box in the GUI changed nothing on disk.
         for flag, lutris_key in self._FLAG_TO_LUTRIS_BOOL.items():
-            if flag in flags:
-                system_keys[lutris_key] = True
+            if gamescope_on:
+                system_keys[lutris_key] = flag in flags
 
-        # Pair → "WxH" string mappings
+        # Pair → "WxH" string mappings.
+        # A Lutris resolution key is a single "WxH" string, so it needs BOTH
+        # halves. The old code silently skipped the key whenever either half
+        # was missing or unparseable — which is why filling in only the width
+        # (or clearing only the height) appeared to "not take": the stale
+        # WxH already in the YAML simply survived untouched. Now a partial
+        # pair is surfaced as a warning, and the key is still emitted as a
+        # removal so the file never disagrees with the GUI.
         for lutris_key, (flag_w, flag_h) in self._FLAG_PAIR_TO_LUTRIS.items():
-            w_val = flags.get(flag_w, "")
-            h_val = flags.get(flag_h, "")
+            w_raw = str(flags.get(flag_w, "")).strip()
+            h_raw = str(flags.get(flag_h, "")).strip()
+            if not gamescope_on:
+                continue
+            if not w_raw and not h_raw:
+                continue                      # deliberately unset → managed removal
             try:
-                w_int, h_int = int(w_val), int(h_val)
-                if w_int > 0 and h_int > 0:
-                    system_keys[lutris_key] = f"{w_int}x{h_int}"
+                w_int, h_int = int(w_raw), int(h_raw)
             except (ValueError, TypeError):
-                pass
+                warnings.append(
+                    f"{lutris_key}: needs both {flag_w} and {flag_h} "
+                    f"(got {flag_w}={w_raw or '<empty>'}, {flag_h}={h_raw or '<empty>'}) "
+                    f"— key will be removed instead of written"
+                )
+                continue
+            if w_int > 0 and h_int > 0:
+                system_keys[lutris_key] = f"{w_int}x{h_int}"
+            else:
+                warnings.append(
+                    f"{lutris_key}: {flag_w}/{flag_h} must both be > 0 "
+                    f"(got {w_int}x{h_int}) — key will be removed instead of written"
+                )
 
         # Everything else currently set (--filter, --scaler, --adaptive-sync,
         # --rt, --nested-unfocused-refresh, ...) has no native Lutris key —
@@ -6422,16 +6712,18 @@ class LutrisSyncWidget(QWidget):
             system_keys["postexit_command"] = f"{self._LGTUNE_WRAPPER_PATH} POST"
             system_keys["prefix_command"] = f"{self._LGTUNE_WRAPPER_PATH} RUN {nice}"
 
-        return system_keys, remaining
+        return system_keys, remaining, warnings
 
     def _update_preview(self):
+        # Read-back only needs a parsed file, not a configured GUI.
+        self._import_btn.setEnabled(self._current_yaml_text is not None)
         if not self._games or self._current_yaml_text is None:
             self._preview.clear()
             self._apply_btn.setEnabled(False)
             return
 
         all_env = self._collect_all_env()
-        system_keys, env_vars = self._split_gamescope(all_env)
+        system_keys, env_vars, warnings = self._split_gamescope(all_env)
         if not system_keys and not env_vars:
             self._preview.setPlainText(
                 "(Nothing configured yet — set DRS settings, env vars, "
@@ -6442,7 +6734,7 @@ class LutrisSyncWidget(QWidget):
             return
 
         try:
-            new_text, sys_changed, env_changed = self._merge_yaml(
+            new_text, sys_changed, env_changed, sys_removed, env_removed = self._merge_yaml(
                 self._current_yaml_text, system_keys, env_vars
             )
         except Exception as e:
@@ -6451,6 +6743,33 @@ class LutrisSyncWidget(QWidget):
             return
 
         lines = []
+        if warnings:
+            lines.append("# ⚠ incomplete input — these keys cannot be written:")
+            for w in warnings:
+                lines.append(f"#   {w}")
+            lines.append("")
+        if sys_removed:
+            lines.append(f"# {len(sys_removed)} stale key(s) REMOVED from system.*:")
+            for k in sorted(sys_removed):
+                lines.append(f"#   - {k}")
+            lines.append("")
+        if env_removed:
+            lines.append(f"# {len(env_removed)} stale var(s) REMOVED from system.env:")
+            for k in sorted(env_removed):
+                lines.append(f"#   - {k}")
+            lines.append("")
+        # Advisory only. A variable that looks like one of ours but isn't in
+        # the catalogue is almost always a typo or a flag that was dropped
+        # upstream (FLM_VERBOSE, for instance, is read by nothing). It is NOT
+        # deleted: DRSTool only removes what it can positively identify as its
+        # own, so an unknown name is left for the user to judge.
+        unknown = self._unrecognised_env_vars()
+        if unknown:
+            lines.append(f"# {len(unknown)} unrecognised var(s) left untouched "
+                         f"(typo, or dropped upstream?):")
+            for k in sorted(unknown):
+                lines.append(f"#   ? {k}")
+            lines.append("")
         if sys_changed:
             lines.append(f"# {len(sys_changed)} key(s) → system.* (Lutris native):")
             for k in sorted(sys_changed):
@@ -6482,34 +6801,67 @@ class LutrisSyncWidget(QWidget):
 
     # ── Merge / write ─────────────────────────────────────────────────────────
 
-    @staticmethod
+    @classmethod
     def _merge_yaml(
+        cls,
         original_text: str,
         system_keys: Dict[str, object],
         env_vars: Dict[str, str],
     ):
         """Parse original_text, write system_keys into system.* and env_vars
-        into system.env.  Returns (new_yaml_text, sys_changed_keys, env_changed_keys).
-        Comments are not preserved (PyYAML limitation); all other structure is."""
+        into system.env.  Returns
+        (new_yaml_text, sys_changed, env_changed, sys_removed, env_removed).
+        Comments are not preserved (PyYAML limitation); all other structure is.
+
+        Keys DRSTool owns (see _managed_system_keys) but that are NOT in
+        system_keys this round are REMOVED rather than left behind. Without
+        that step the merge could only ever add or overwrite, so unchecking a
+        box in the GUI had no effect on an existing file.
+        """
         data = yaml.safe_load(original_text) or {}
         if "system" not in data or not isinstance(data.get("system"), dict):
             data["system"] = {}
+        sysdict = data["system"]
+
+        # Drop owned keys the GUI is no longer asking for.
+        sys_removed = set()
+        for k in cls._managed_system_keys() - set(system_keys):
+            if k not in sysdict:
+                continue
+            # lutris-game-tune keys are only ours while they still point at our
+            # wrapper — never clobber a hand-written prelaunch_command.
+            if k in cls._LGTUNE_KEYS and \
+               cls._LGTUNE_WRAPPER_PATH not in str(sysdict.get(k, "")):
+                continue
+            del sysdict[k]
+            sys_removed.add(k)
 
         for k, v in system_keys.items():
-            data["system"][k] = v
+            sysdict[k] = v
         sys_changed = set(system_keys)
 
-        if env_vars:
-            if "env" not in data["system"] or not isinstance(data["system"].get("env"), dict):
-                data["system"]["env"] = {}
-            for k, v in env_vars.items():
-                data["system"]["env"][k] = str(v)
+        if "env" not in sysdict or not isinstance(sysdict.get("env"), dict):
+            sysdict["env"] = {}
+        envdict = sysdict["env"]
+
+        env_removed = set()
+        for k in cls._managed_env_keys() - set(env_vars):
+            if k in envdict:
+                del envdict[k]
+                env_removed.add(k)
+
+        for k, v in env_vars.items():
+            envdict[k] = str(v)
         env_changed = set(env_vars)
+
+        # Don't leave an empty mapping behind if the block ends up cleared.
+        if not envdict:
+            del sysdict["env"]
 
         new_text = yaml.dump(
             data, default_flow_style=False, sort_keys=False, allow_unicode=True
         )
-        return new_text, sys_changed, env_changed
+        return new_text, sys_changed, env_changed, sys_removed, env_removed
 
     def _apply_to_game(self):
         index = self._game_combo.currentIndex()
@@ -6517,27 +6869,37 @@ class LutrisSyncWidget(QWidget):
             return
         entry = self._games[index]
         all_env = self._collect_all_env()
-        system_keys, env_vars = self._split_gamescope(all_env)
-        if not system_keys and not env_vars:
-            return
+        system_keys, env_vars, warnings = self._split_gamescope(all_env)
 
         try:
             with open(entry.path, "r", encoding="utf-8") as f:
                 original_text = f.read()
-            new_text, sys_changed, env_changed = self._merge_yaml(
+            new_text, sys_changed, env_changed, sys_removed, env_removed = self._merge_yaml(
                 original_text, system_keys, env_vars
             )
         except Exception as e:
             QMessageBox.critical(self, "Merge failed", f"Could not merge: {e}")
             return
 
-        total = len(sys_changed) + len(env_changed)
+        # A removal-only round is still a real change. The old guard bailed
+        # out whenever nothing was being WRITTEN, so clearing a control in
+        # the GUI could never propagate to disk.
+        total = (len(sys_changed) + len(env_changed)
+                 + len(sys_removed) + len(env_removed))
+        if total == 0:
+            self._status_label.setText("Nothing to write — file already matches the GUI.")
+            return
         sys_line = f"\n  • {len(sys_changed)} key(s) into system.*" if sys_changed else ""
         env_line = f"\n  • {len(env_changed)} var(s) into system.env" if env_changed else ""
+        del_line = (f"\n  • {len(sys_removed)} stale key(s) removed from system.*: "
+                    f"{', '.join(sorted(sys_removed))}") if sys_removed else ""
+        envdel_line = (f"\n  • {len(env_removed)} stale var(s) removed from system.env: "
+                       f"{', '.join(sorted(env_removed))}") if env_removed else ""
+        warn_line = ("\n\n⚠ " + "\n⚠ ".join(warnings)) if warnings else ""
         reply = QMessageBox.question(
             self, "Write Lutris config",
             f"Write {total} change(s) into:\n{entry.path}"
-            f"{sys_line}{env_line}\n\n"
+            f"{sys_line}{env_line}{del_line}{envdel_line}{warn_line}\n\n"
             "A timestamped backup will be created first.",
             QMessageBox.Yes | QMessageBox.No,
         )
