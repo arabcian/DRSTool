@@ -3393,6 +3393,43 @@ DXVK_ENV_VARS: List[EnvVarDef] = [
               "dxvk.enableGraphicsPipelineLibrary, d3d11.samplerAnisotropy. Takes priority "
               "over an on-disk dxvk.conf for the keys it sets.",
               placeholder="dxgi.hideAmdGpu = True; dxgi.syncInterval = 0"),
+    EnvVarDef("DXVK_WSI_DRIVER", "DXVK", "enum", "",
+              "Selects the windowing backend DXVK talks to. On Linux builds this is NOT "
+              "optional — DXVK throws DxvkError(\"DXVK_WSI_DRIVER environment variable "
+              "unset\") when it is empty, since only the Win32 build has a sane fallback. "
+              "Proton and Lutris set it for you; you only touch it when running DXVK "
+              "outside a launcher, or to force SDL3 vs SDL2 while chasing a "
+              "fullscreen/HDR/cursor bug. The value must match a backend that was actually "
+              "compiled in, otherwise WSI init fails outright. "
+              "Syntax: DXVK_WSI_DRIVER=SDL3 %command%",
+              options=["SDL3", "SDL2", "GLFW", "Win32"]),
+
+    EnvVarDef("DXVK_NO_VR", "DXVK", "enum", "",
+              "Stops DXVK from loading and querying OpenVR. DXVK asks OpenVR which Vulkan "
+              "instance/device extensions a VR runtime needs; on a machine with SteamVR "
+              "installed but no headset in use that probe can cost startup time or hang if "
+              "the runtime is in a bad state. Set to 1 for non-VR games on a VR-capable "
+              "system. "
+              "Syntax: DXVK_NO_VR=1 %command%",
+              options=["1"]),
+
+    EnvVarDef("DXVK_FORCE_WINDOWED", "DXVK", "enum", "",
+              "Forces D3D9 swapchains to stay windowed, ignoring the game's request for "
+              "exclusive fullscreen. Useful for old D3D9 titles that mode-switch badly on "
+              "Wayland or on a multi-monitor setup, and for keeping a compositor's VRR / "
+              "HDR path in charge instead of handing the display over to the game. D3D9 "
+              "path only. "
+              "Syntax: DXVK_FORCE_WINDOWED=1 %command%",
+              options=["1"]),
+
+    EnvVarDef("DXVK_SHADER_CACHE", "DXVK", "enum", "",
+              "Set to 0 to disable the driver-level shader cache DXVK enables by default "
+              "(only checked when no shader dump path is set). Distinct from "
+              "DXVK_STATE_CACHE, which is DXVK's own pipeline state cache. Mostly a "
+              "debugging switch — disabling it means every run pays full compilation cost. "
+              "Syntax: DXVK_SHADER_CACHE=0 %command%",
+              options=["0", "1"]),
+
 ]
 
 # Per-flag descriptions for VKD3D_CONFIG checkbox UI
@@ -3548,10 +3585,18 @@ VKD3D_ENV_VARS: List[EnvVarDef] = [
               placeholder="28"),
     # ── Swapchain ────────────────────────────────────────────────────────────
     EnvVarDef("VKD3D_SWAPCHAIN_LATENCY_FRAMES", "VKD3D-Proton", "int", "",
-              "Override the swapchain frame latency (default 3). Lower values reduce input lag at the "
-              "cost of CPU/GPU starvation risk. 2 is often stable; 1 is aggressive. "
-              "Also accepted by DXGI path. Default removed in v2.14 (was previously forced to 2).",
-              placeholder="2"),
+              "Maximum number of frames in flight, enforced through KHR_present_wait "
+              "(default 3). Lower = less input lag at the cost of CPU/GPU starvation risk; "
+              "2 is often stable, 1 is aggressive. Also accepted on the DXGI path. Default "
+              "removed in v2.14 (was previously forced to 2).\n"
+              "Upstream applies it to the swapchain's internal frame latency, accepting 1 "
+              "up to the DXGI swap-chain buffer maximum.\n"
+              "vkd3d-low-latency ALSO feeds it to the frame pacer's wait latency, and there "
+              "only 1-3 is accepted. That fork deliberately defaults to 3 rather than "
+              "dxvk-low-latency's 2: at 2 a lot of D3D12 games throttle their fps, so 2 is "
+              "left as a manual choice for the titles where it doesn't. "
+              "Syntax: VKD3D_SWAPCHAIN_LATENCY_FRAMES=2 %command%",
+              placeholder="2  (1-3 on vkd3d-low-latency)"),
     # ── Tessellation ─────────────────────────────────────────────────────────
     EnvVarDef("VKD3D_LIMIT_TESS_FACTORS", "VKD3D-Proton", "enum", "",
               "Clamp tessellation factors to reduce GPU load in titles with excessive tessellation "
@@ -3580,6 +3625,119 @@ VKD3D_ENV_VARS: List[EnvVarDef] = [
               "through ID3D12PipelineLibrary, instead of also letting vkd3d-proton silently "
               "cache every PSO it sees in its own automatic vkd3d-proton.cache disk cache.",
               options=["0", "1"]),
+    EnvVarDef("VKD3D_SWAPCHAIN_IMAGES", "VKD3D-Proton", "int", "",
+              "Overrides the swapchain's minimum image count. The driver minimum is still "
+              "respected, so this can only raise it. More images smooth over presentation "
+              "hitches at the cost of latency and VRAM; fewer is not achievable this way. "
+              "Syntax: VKD3D_SWAPCHAIN_IMAGES=3 %command%",
+              placeholder="e.g. 3"),
+
+    EnvVarDef("VKD3D_SWAPCHAIN_DEBUG_LATENCY", "VKD3D-Proton", "enum", "",
+              "Logs per-present latency information from the swapchain. Diagnostic — pair "
+              "with PROTON_LOG=1 when checking whether a game actually drives the "
+              "low-latency path at all. "
+              "Syntax: VKD3D_SWAPCHAIN_DEBUG_LATENCY=1 %command%",
+              options=["1"]),
+
+    EnvVarDef("VKD3D_SHADER_MODEL", "VKD3D-Proton", "enum", "",
+              "Caps the shader model vkd3d-proton reports to the game. Lowering it can "
+              "steer a title onto a simpler rendering path (or work around a broken "
+              "SM6.6+ path); raising it above what the driver supports will not work. "
+              "Unrecognised strings are ignored. "
+              "Syntax: VKD3D_SHADER_MODEL=6_6 %command%",
+              options=["5_1", "6_0", "6_1", "6_2", "6_3", "6_4",
+                       "6_5", "6_6", "6_7", "6_8", "6_9"]),
+
+    EnvVarDef("VKD3D_LOG_BUFFERED", "VKD3D-Proton", "int", "",
+              "Buffers log output in memory instead of writing it out line by line; the "
+              "value is the ring buffer size in bytes. Keeps heavy VKD3D_DEBUG logging "
+              "from distorting the very frame timings you are trying to measure. Note the "
+              "trade-off: on a hard crash the tail of the log may never be flushed. "
+              "Syntax: VKD3D_LOG_BUFFERED=1048576 VKD3D_DEBUG=info %command%",
+              placeholder="e.g. 1048576 (bytes)"),
+
+    EnvVarDef("VKD3D_UNIX_ENV", "VKD3D-Proton", "string", "",
+              "Passes environment variables from the Unix side into the D3D12 core module "
+              "at load time (applied early, before device creation). Escape hatch for "
+              "launchers that cannot set a variable in the Wine environment directly. "
+              "Syntax: VKD3D_UNIX_ENV=\"VKD3D_CONFIG=dxr\" %command%",
+              placeholder='e.g. VKD3D_CONFIG=dxr'),
+
+    EnvVarDef("VKD3D_UNIX_POST_ENV", "VKD3D-Proton", "string", "",
+              "Same mechanism as VKD3D_UNIX_ENV but applied LATE in initialisation, for "
+              "settings that must not be visible during early setup. "
+              "Syntax: VKD3D_UNIX_POST_ENV=\"...\" %command%",
+              placeholder='e.g. VAR=value'),
+
+    EnvVarDef("VKD3D_QUEUE_PROFILE", "VKD3D-Proton", "string", "",
+              "Writes a queue timeline trace to the given path — submissions, waits and "
+              "signals per Vulkan queue. The tool of choice when frametime spikes look "
+              "like queue starvation or a serialised submit rather than raw GPU cost. "
+              "Syntax: VKD3D_QUEUE_PROFILE=/tmp/queue.json %command%",
+              placeholder="e.g. /tmp/queue.json"),
+
+    EnvVarDef("VKD3D_QUEUE_PROFILE_ABSOLUTE", "VKD3D-Proton", "enum", "",
+              "Emits queue-profile timestamps as absolute values instead of relative ones, "
+              "so the trace lines up with Wine's QPC-relative logs. Only meaningful "
+              "together with VKD3D_QUEUE_PROFILE. "
+              "Syntax: VKD3D_QUEUE_PROFILE=/tmp/q.json VKD3D_QUEUE_PROFILE_ABSOLUTE=1 %command%",
+              options=["1"]),
+
+    EnvVarDef("VKD3D_TIMESTAMP_PROFILE", "VKD3D-Proton", "string", "",
+              "Writes GPU timestamp profiling data to the given path — per-pass GPU cost, "
+              "as opposed to VKD3D_QUEUE_PROFILE's submission-level view. "
+              "Syntax: VKD3D_TIMESTAMP_PROFILE=/tmp/ts.json %command%",
+              placeholder="e.g. /tmp/timestamps.json"),
+
+    EnvVarDef("VKD3D_PROFILE_PATH", "VKD3D-Proton", "string", "",
+              "Output path for vkd3d-proton's built-in profiling counters (enabled in "
+              "builds compiled with profiling support). "
+              "Syntax: VKD3D_PROFILE_PATH=/tmp/vkd3d-profile %command%",
+              placeholder="e.g. /tmp/vkd3d-profile"),
+
+    EnvVarDef("VKD3D_AUTO_CAPTURE_SHADER", "VKD3D-Proton", "string", "",
+              "RenderDoc auto-capture: captures the frame in which the shader with this "
+              "hash is used. Requires the RenderDoc layer to be loaded; vkd3d warns and "
+              "does nothing when neither this nor VKD3D_AUTO_CAPTURE_COUNTS is set. "
+              "Syntax: VKD3D_AUTO_CAPTURE_SHADER=<hash> %command%",
+              placeholder="e.g. deadbeefdeadbeef"),
+
+    EnvVarDef("VKD3D_AUTO_CAPTURE_COUNTS", "VKD3D-Proton", "string", "",
+              "RenderDoc auto-capture by frame number — a comma-separated list of frame "
+              "indices to capture. Can be used on its own or alongside "
+              "VKD3D_AUTO_CAPTURE_SHADER. "
+              "Syntax: VKD3D_AUTO_CAPTURE_COUNTS=100,200,300 %command%",
+              placeholder="e.g. 100,200,300"),
+
+    EnvVarDef("VKD3D_QA_HASHES", "VKD3D-Proton", "string", "",
+              "Path to a file of shader hashes for descriptor QA / validation runs. Note "
+              "the side effect: setting this (like VKD3D_SHADER_OVERRIDE or "
+              "VKD3D_SHADER_DUMP_PATH) forces the pipeline_library_ignore_spirv config "
+              "flag on, so the pipeline library stops being reused — expect slower "
+              "startup while it is set. "
+              "Syntax: VKD3D_QA_HASHES=/tmp/hashes.txt %command%",
+              placeholder="e.g. /tmp/hashes.txt"),
+
+    EnvVarDef("VKD3D_BARRIER_HASHES", "VKD3D-Proton", "string", "",
+              "Path to a file of shader hashes used by the breadcrumb/barrier debugging "
+              "path, for narrowing a GPU hang down to specific barriers. Debug only. "
+              "Syntax: VKD3D_BARRIER_HASHES=/tmp/barriers.txt %command%",
+              placeholder="e.g. /tmp/barriers.txt"),
+
+    EnvVarDef("VKD3D_SHADER_QUIRKS", "VKD3D-Proton", "string", "",
+              "Path to a file of per-shader quirk overrides, applied at shader compile "
+              "time. Development aid for testing a workaround before it is baked into "
+              "vkd3d-proton's own quirk tables. "
+              "Syntax: VKD3D_SHADER_QUIRKS=/tmp/quirks.txt %command%",
+              placeholder="e.g. /tmp/quirks.txt"),
+
+    EnvVarDef("VKD3D_BLOOM_BUFFER_SIZE_LOG2", "VKD3D-Proton", "int", "24",
+              "Size of the descriptor-QA bloom filter buffer, as a power of two "
+              "(24 = 16 MiB, the default). Only allocated when descriptor QA with sync "
+              "validation is active; raise it if the QA layer reports collisions. "
+              "Syntax: VKD3D_BLOOM_BUFFER_SIZE_LOG2=26 %command%",
+              placeholder="e.g. 24 (log2 of bytes)"),
+
 ]
 
 
@@ -4257,6 +4415,18 @@ PROTON_ENV_VARS: List[EnvVarDef] = [
               "Use OpenGL-based wined3d instead of Vulkan-based DXVK for d3d11/d3d10/d3d9. "
               "Rarely an improvement, but occasionally works around a DXVK-specific bug.",
               options=["0", "1"]),
+    EnvVarDef("PROTON_DXVK_SAREK", "Proton", "enum", "",
+              "[proton-cachyos] Switches the DXVK shipped with proton-cachyos over to "
+              "DXVK-Sarek, a Vulkan 1.1/1.2 build maintained off the 1.10.x branch for GPUs "
+              "that no longer meet upstream DXVK's requirements (and for Box64/FEX on "
+              "Mali/Adreno). Sarek is the officially supported way to use it. On current "
+              "hardware there is no reason to enable this — upstream DXVK is newer — "
+              "except to reach Sarek-only options such as dyasync (DXVK_DISABLE_DYASYNC) "
+              "or DXVK_ALL_CORES. Mutually exclusive in practice with "
+              "PROTON_DXVK_LOWLATENCY: both replace the same DXVK. "
+              "Syntax: PROTON_DXVK_SAREK=1 %command%",
+              options=["1"]),
+
     EnvVarDef("PROTON_DXVK_LOWLATENCY", "Proton", "enum", "",
               "Enable the dxvk-low-latency fork (Proton-CachyOS/community builds), which adds "
               "low-latency frame pacing on top of DXVK to reduce input lag and improve frame "
@@ -4889,9 +5059,135 @@ GAMESCOPE_FLAGS: List[GamescopeFlagDef] = [
                       "Display a heatmap-style debug view of HDR luminance across the scene."),
 ]
 
+
+# ============================================================================
+# DXVK / VKD3D FORK ENV VARS
+# ----------------------------------------------------------------------------
+# Read straight out of the forks' own sources rather than their READMEs, so
+# what's here is what the code actually looks up:
+#
+#   DXVK-Sarek          github.com/pythonlover02/DXVK-Sarek
+#                       Vulkan 1.1/1.2 DXVK for hardware below upstream's
+#                       requirements (1.10.x branch + backports).
+#                       Officially supported by proton-cachyos:
+#                       PROTON_DXVK_SAREK=1
+#
+#   dxvk-low-latency    github.com/netborg-afps/dxvk-low-latency
+#                       Upstream DXVK plus a low-latency frame pacer.
+#                       Shipped in proton-cachyos:
+#                       PROTON_DXVK_LOWLATENCY=1
+#                       (otherwise: drop the .dll files into a custom Proton)
+#
+#   vkd3d-low-latency   github.com/netborg-afps/vkd3d-low-latency
+#                       vkd3d-proton plus the same frame pacer, wired to the
+#                       Reflex API and waitable DXGI swapchains. NO Proton
+#                       switch — d3d12.dll / d3d12core.dll have to be replaced
+#                       inside a custom Proton build by hand.
+#
+#   d7vk                github.com/WinterSnowfall/d7vk
+#                       D3D7/6/5/3 on top of DXVK's D3D9 backend. Standalone
+#                       layer, no Proton switch. (Sarek carries the same
+#                       feature set for older hardware.)
+#
+# Vars that turned out to be plain upstream DXVK / vkd3d-proton ones that
+# DRSTool simply didn't cover yet are filed under the existing "DXVK" and
+# "VKD3D-Proton" categories instead of here — labelling them as fork flags
+# would be wrong.
+# ============================================================================
+
+FORK_ENV_VARS: List[EnvVarDef] = [
+    # ── dxvk-low-latency + DXVK-Sarek ───────────────────────────────────
+    EnvVarDef("DXVK_FRAME_PACE", "DXVK Forks", "enum", "",
+              "[dxvk-low-latency | DXVK-Sarek] Frame pacing mode — how CPU and GPU are "
+              "synchronised. Overrides the dxvk.framePace config option.\n"
+              "max-frame-latency: stable latency in the GPU limit as long as render times "
+              "are stable; higher latency but very smooth. Also what both forks fall back "
+              "to when the value isn't recognised.\n"
+              "low-latency: the default in both forks. Lower latency in the GPU limit, "
+              "fine-tunable via dxvk.lowLatencyOffset and "
+              "dxvk.lowLatencyAllowCpuFramesOverlap.\n"
+              "min-latency: potentially the lowest latency, at the cost of fps — it stalls "
+              "the GPU between frames. Generally not recommended; useful for tuning "
+              "low-latency against, or for CPU-limited games.\n"
+              "low-latency-vrr-<Hz>: dxvk-low-latency ONLY — VRR-aware pacing at the given "
+              "refresh rate. The fork's README suggests DXVK_FRAME_RATE=225 together with "
+              "low-latency-vrr-235 on a 240 Hz VRR panel. Sarek does not implement this "
+              "mode and will fall back to max-frame-latency.\n"
+              "Proton: proton-cachyos ships dxvk-low-latency behind "
+              "PROTON_DXVK_LOWLATENCY=1 and DXVK-Sarek behind PROTON_DXVK_SAREK=1. "
+              "Syntax: DXVK_FRAME_PACE=low-latency-vrr-235 DXVK_FRAME_RATE=225 %command%",
+              options=["max-frame-latency", "low-latency", "min-latency",
+                       "low-latency-vrr-165", "low-latency-vrr-235"]),
+
+    # ── DXVK-Sarek only ────────────────────────────────────────────
+    EnvVarDef("DXVK_ALL_CORES", "DXVK Forks", "enum", "",
+              "[DXVK-Sarek] Lets the pipeline compiler and the state-cache worker use every "
+              "logical core instead of Sarek's default reduced thread count. Sarek targets "
+              "older/weaker CPUs where saturating all cores during shader compilation "
+              "starves the render thread, so it holds threads back by default. Worth "
+              "setting on a modern many-core CPU where that reasoning no longer applies. "
+              "Not present in upstream DXVK. "
+              "Syntax: PROTON_DXVK_SAREK=1 DXVK_ALL_CORES=1 %command%",
+              options=["1"]),
+
+    EnvVarDef("DXVK_DISABLE_DYASYNC", "DXVK Forks", "enum", "",
+              "[DXVK-Sarek] Turns OFF dyasync (Dynamic Asynchronous Pipeline Compilation), "
+              "which Sarek enables by default (dxvk.enableDyasync = True). With dyasync, a "
+              "shader is compiled synchronously the first time it is seen; every later "
+              "VARIANT of it (new blend mode, depth test, cull mode, render pass — same "
+              "shaders) compiles in the background while DXVK draws with the closest "
+              "already-compiled pipeline as a placeholder, then swaps it in. Safer than a "
+              "classic async patch because something is always drawn, but it is still "
+              "pipeline substitution — disable it for multiplayer titles with strict "
+              "anti-cheat. Thread count is dxvk.numDyasyncThreads. "
+              "Syntax: PROTON_DXVK_SAREK=1 DXVK_DISABLE_DYASYNC=1 %command%",
+              options=["1"]),
+
+    EnvVarDef("DXVK_PERF_EVENTS", "DXVK Forks", "enum", "",
+              "[DXVK-Sarek] Enables VK_EXT_debug_utils so performance/debug events reach "
+              "capture tools. Sarek hides the extension behind this variable because it "
+              "adds real overhead in winevulkan — the fork logs a warning when it is on. "
+              "Profiling only; leave unset for play. "
+              "Syntax: PROTON_DXVK_SAREK=1 DXVK_PERF_EVENTS=1 %command%",
+              options=["1"]),
+
+    # ── d7vk ──────────────────────────────────────────────────────
+    EnvVarDef("D7VK_LOG_LEVEL", "DXVK Forks", "enum", "",
+              "[d7vk] Log level for the D3D7/6/5/3 translation layer. d7vk keeps its own "
+              "logger separate from the DXVK D3D9 backend it sits on, so DXVK_LOG_LEVEL "
+              "does NOT cover it — set both when tracing a DDraw-era title. "
+              "Syntax: D7VK_LOG_LEVEL=debug D7VK_LOG_PATH=/tmp %command%",
+              options=["trace", "debug", "info", "warn", "error", "none"]),
+
+    EnvVarDef("D7VK_LOG_PATH", "DXVK Forks", "string", "",
+              "[d7vk] Directory for the d7vk log file. Same split as D7VK_LOG_LEVEL: "
+              "independent of DXVK_LOG_PATH. Use 'none' to suppress the file entirely. "
+              "Syntax: D7VK_LOG_PATH=/tmp %command%",
+              placeholder="e.g. /tmp  or  none"),
+
+    # ── vkd3d-low-latency ──────────────────────────────────────
+    EnvVarDef("VKD3D_LOW_LATENCY_OFFSET", "VKD3D Forks", "int", "100",
+              "[vkd3d-low-latency] Fine-tunes the low-latency frame pacer, in "
+              "MICROSECONDS. Larger values start a frame later, which can improve "
+              "responsiveness slightly; the fork defaults to 100us rather than 0 because "
+              "it does not yet measure the blit cost. Clamped to 0-500 in the fork's code "
+              "(values are parsed unsigned, so a negative number wraps — don't use one "
+              "here, unlike DXVK's dxvk.lowLatencyOffset which genuinely accepts "
+              "-10000..10000).\n"
+              "Only active when the game actually drives the pacer: it needs either the "
+              "Nvidia Reflex API or a waitable DXGI swapchain. Confirm with PROTON_LOG=1 "
+              "and look for the swapchain lines in the vkd3d log.\n"
+              "Proton: no switch — vkd3d-low-latency has to be installed by replacing "
+              "d3d12.dll and d3d12core.dll inside a custom Proton build. "
+              "Syntax: VKD3D_LOW_LATENCY_OFFSET=100 %command%",
+              placeholder="e.g. 100 (microseconds, 0-500)"),
+]
+
+
 ALL_ENV_VARS = (DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS + NVIDIA_PRIME_ENV_VARS +
                  PROTON_ENV_VARS + WINE_ENV_VARS + DXVK_NVAPI_ENV_VARS + NVPRESENT_ENV_VARS +
-                 SYS_ENV_VARS + FLM_ENV_VARS + GAMESCOPE_ENV_VARS)
+                 SYS_ENV_VARS + FLM_ENV_VARS + GAMESCOPE_ENV_VARS +
+                 FORK_ENV_VARS)
 
 
 # ============================================================================
