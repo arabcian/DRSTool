@@ -6863,6 +6863,14 @@ class LutrisSyncWidget(QWidget):
                     notes.append("gamescope_flags: unrecognised token(s) dropped: "
                                  + " ".join(sorted(unknown)))
 
+            # prefix_command round-trip: a MangoHud prefix written by a
+            # previous sync (alone, or trailing the lutris-game-tune wrapper)
+            # comes back as the pseudo-flag.
+            if GamescopeFlagsWidget.MANGOHUD_PREFIX in str(
+                    sysdict.get("prefix_command", "") or ""):
+                flags[GamescopeFlagsWidget.MANGOHUD_KEY] = \
+                    GamescopeFlagsWidget.MANGOHUD_PREFIX
+
             self._gamescope_widget.load_flag_values(enabled, flags)
 
         # ── Env vars ────────────────────────────────────────────────
@@ -7000,13 +7008,30 @@ class LutrisSyncWidget(QWidget):
             if leftover_parts:
                 system_keys["gamescope_flags"] = " ".join(leftover_parts)
 
+        # MangoHud. Lutris builds the gamescope invocation itself, so there is
+        # no '--' here to hang the prefix off — its equivalent is
+        # system.prefix_command, which Lutris puts in front of the game's
+        # execution command (i.e. exactly where `-- mangohud --dlsym` would
+        # have landed in a hand-written command line).
+        mangohud_on = (self._gamescope_widget is not None
+                       and self._gamescope_widget.mangohud_enabled())
+
         # lutris-game-tune wiring — written straight into system.* like
         # everything else here; no separate confirmation prompt.
         if self._chk_lgtune.isChecked():
             nice = self._lgtune_nice.value()
             system_keys["prelaunch_command"] = f"{self._LGTUNE_WRAPPER_PATH} PRE"
             system_keys["postexit_command"] = f"{self._LGTUNE_WRAPPER_PATH} POST"
-            system_keys["prefix_command"] = f"{self._LGTUNE_WRAPPER_PATH} RUN {nice}"
+            # Both want prefix_command. They compose rather than conflict: the
+            # tune wrapper execs whatever follows it, so mangohud goes second
+            # and ends up wrapping the game while still running under the
+            # wrapper's scheduling settings.
+            prefix = f"{self._LGTUNE_WRAPPER_PATH} RUN {nice}"
+            if mangohud_on:
+                prefix += f" {GamescopeFlagsWidget.MANGOHUD_PREFIX}"
+            system_keys["prefix_command"] = prefix
+        elif mangohud_on:
+            system_keys["prefix_command"] = GamescopeFlagsWidget.MANGOHUD_PREFIX
 
         return system_keys, remaining, warnings
 
@@ -7126,8 +7151,14 @@ class LutrisSyncWidget(QWidget):
                 continue
             # lutris-game-tune keys are only ours while they still point at our
             # wrapper — never clobber a hand-written prelaunch_command.
+            # prefix_command has a second owner: a MangoHud-only prefix carries
+            # no wrapper path, so without this it could never be removed and
+            # unticking MangoHud would leave `prefix_command: mangohud --dlsym`
+            # behind forever.
+            cur_val = str(sysdict.get(k, ""))
             if k in cls._LGTUNE_KEYS and \
-               cls._LGTUNE_WRAPPER_PATH not in str(sysdict.get(k, "")):
+               cls._LGTUNE_WRAPPER_PATH not in cur_val and \
+               cur_val.strip() != GamescopeFlagsWidget.MANGOHUD_PREFIX:
                 continue
             del sysdict[k]
             sys_removed.add(k)
@@ -8544,6 +8575,12 @@ QPlainTextEdit{
 # ============================================================================
 
 class GamescopeFlagsWidget(QWidget):
+    # Pseudo-flag key for the MangoHud prefix. Deliberately not '-'-prefixed
+    # so it can never be mistaken for a real gamescope argument by the
+    # leftover-flag packer or the CLI parser.
+    MANGOHUD_KEY = "mangohud"
+    MANGOHUD_PREFIX = "mangohud --dlsym"
+
     """
     CLI-flag builder for `gamescope` itself (see GAMESCOPE_FLAGS).
     A master 'Enable Gamescope' checkbox gates every control below it; while
@@ -8590,6 +8627,31 @@ class GamescopeFlagsWidget(QWidget):
         )
         self._enable_chk.toggled.connect(self._on_master_toggled)
         outer.addWidget(self._enable_chk)
+
+        # MangoHud is not a gamescope flag - it is a wrapper for the GAME, so
+        # it belongs after gamescope's trailing '--', not among the arguments
+        # gamescope itself parses. `--dlsym` makes the mangohud script hook
+        # through dlsym() instead of relying on the loader, which is what makes
+        # the overlay show up under a nested compositor and on OpenGL titles.
+        self._mangohud_chk = QCheckBox(
+            "Enable MangoHud  (appends `mangohud --dlsym` after `--`)")
+        self._mangohud_chk.setStyleSheet(
+            "QCheckBox{color:#e8eaf0; font-size:11px; font-weight:600;} "
+            "QCheckBox::indicator{width:16px; height:16px; border:1px solid #4a5468; "
+            "border-radius:3px; background:#1a1f28;} "
+            "QCheckBox::indicator:hover{border-color:#76b900;} "
+            "QCheckBox::indicator:checked{background:#76b900; border:1px solid #76b900;} "
+            "QCheckBox:disabled{color:#5a606c;}"
+        )
+        self._mangohud_chk.setToolTip(
+            "gamescope <flags> -- mangohud --dlsym <your command>\n\n"
+            "Requires the `mangohud` wrapper script in PATH (media-libs/mangohud).\n"
+            "On Lutris Game Sync this is written to system.prefix_command instead, "
+            "which is where Lutris expects a command prefix."
+        )
+        self._mangohud_chk.setEnabled(False)
+        self._mangohud_chk.toggled.connect(self._emit_changed)
+        outer.addWidget(self._mangohud_chk)
 
         self._form_container = QWidget()
         self._form_container.setEnabled(False)
@@ -8700,6 +8762,10 @@ class GamescopeFlagsWidget(QWidget):
 
     def _on_master_toggled(self, checked: bool):
         self._form_container.setEnabled(checked)
+        # The prefix is defined relative to gamescope's '--', so it only means
+        # anything while the wrapper is on. Left checked-but-greyed so the
+        # choice survives an off/on cycle.
+        self._mangohud_chk.setEnabled(checked)
         self._emit_changed()
 
     def _emit_changed(self):
@@ -8711,6 +8777,11 @@ class GamescopeFlagsWidget(QWidget):
     def is_enabled(self) -> bool:
         return self._enable_chk.isChecked()
 
+    def mangohud_enabled(self) -> bool:
+        """True only when the gamescope wrapper is on AND MangoHud is ticked —
+        the prefix is positioned relative to gamescope's '--'."""
+        return self.is_enabled() and self._mangohud_chk.isChecked()
+
     def get_flag_values(self) -> Dict[str, str]:
         """
         { flag: value } for every flag currently set.
@@ -8720,6 +8791,12 @@ class GamescopeFlagsWidget(QWidget):
         if not self.is_enabled():
             return {}
         values: Dict[str, str] = {}
+        # Pseudo-flag: not a gamescope argument, but it rides along in the same
+        # dict so profile save/load and the Lutris round-trip pick it up
+        # without a second plumbing path. It can never collide with a real
+        # entry — every GAMESCOPE_FLAGS key starts with '-'.
+        if self._mangohud_chk.isChecked():
+            values[self.MANGOHUD_KEY] = self.MANGOHUD_PREFIX
         for gf in GAMESCOPE_FLAGS:
             ctrl = self._controls[gf.flag]
             if gf.kind == "toggle":
@@ -8746,11 +8823,17 @@ class GamescopeFlagsWidget(QWidget):
             return ""
         parts = ["gamescope"]
         for flag, val in self.get_flag_values().items():
+            if flag == self.MANGOHUD_KEY:
+                continue                      # goes AFTER '--', not before
             if val == "":
                 parts.append(flag)
             else:
                 parts.append(f"{flag} {shlex.quote(val)}")
         parts.append("--")
+        # Everything past '--' wraps the game, so MangoHud sits here — in front
+        # of whatever command the launcher appends.
+        if self._mangohud_chk.isChecked():
+            parts.append(self.MANGOHUD_PREFIX)
         if inner:
             parts.append(inner)
         return " ".join(parts)
@@ -8760,6 +8843,7 @@ class GamescopeFlagsWidget(QWidget):
 
     def reset_all_values(self):
         self._enable_chk.setChecked(False)
+        self._mangohud_chk.setChecked(False)
         for gf in GAMESCOPE_FLAGS:
             ctrl = self._controls[gf.flag]
             if gf.kind == "toggle":
@@ -8773,6 +8857,7 @@ class GamescopeFlagsWidget(QWidget):
     def load_flag_values(self, enabled: bool, values: Dict[str, str]):
         """Restore state, e.g. from a saved profile."""
         self._enable_chk.setChecked(enabled)
+        self._mangohud_chk.setChecked(self.MANGOHUD_KEY in values)
         for gf in GAMESCOPE_FLAGS:
             ctrl = self._controls[gf.flag]
             v = values.get(gf.flag)
