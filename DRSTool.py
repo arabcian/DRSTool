@@ -8843,7 +8843,8 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 600)
         self.setStyleSheet("""
             QMainWindow { background: #0d0f12; }
-            QSplitter::handle { background: #1e2535; }
+            QSplitter::handle:horizontal { background: #1e2535; width: 4px; }
+            QSplitter::handle:horizontal:hover { background: #4a7300; }
         """)
 
         central = QWidget()
@@ -8857,10 +8858,20 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self._output_bar)
 
         splitter = QSplitter(Qt.Horizontal)
+        # The sidebar is a single shared widget behind every tab, so if the
+        # splitter is allowed to collapse it to width 0 (default behaviour,
+        # and easy to do by accident because the handle used to be a 1px
+        # sliver indistinguishable from the sidebar's border) every tab's
+        # left pane goes blank at once with no visible handle to drag back —
+        # the only way out was restarting the app.
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(4)
 
         # ===== Sidebar =====
         sidebar = QWidget()
         sidebar.setStyleSheet("background: #0d0f12; border-right: 1px solid #1e2535;")
+        sidebar.setMinimumWidth(240)
+        sidebar.setMaximumWidth(900)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(6, 6, 6, 6)
         sidebar_layout.setSpacing(4)
@@ -8989,7 +9000,6 @@ class MainWindow(QMainWindow):
         self._sidebar_stack.addWidget(profiles_subtabs)
 
         splitter.addWidget(sidebar)
-        splitter.setSizes([220, 680])
 
         # ===== Right side (editor area) =====
         editor = QWidget()
@@ -9049,6 +9059,13 @@ class MainWindow(QMainWindow):
         self._right_stack.setCurrentIndex(0)
 
         splitter.addWidget(editor)
+        # setSizes() must run *after* both panes are in the splitter — the
+        # old call sat right after addWidget(sidebar), when the splitter
+        # still held a single widget, so the second value was discarded and
+        # the requested 220/680 split never actually applied.
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([320, 880])
         main_layout.addWidget(splitter)
 
         # Status bar
@@ -9255,9 +9272,10 @@ class MainWindow(QMainWindow):
             self.settings_manager.get_loaded_gamescope_enabled(),
             self.settings_manager.get_loaded_gamescope_flags(),
         )
-        # 2. Hide env editor right panel (stale data)
+        # 2. Drop any pending edit in the env editor (stale data). No hide()
+        #    here: QStackedWidget.setCurrentIndex() shows the page again
+        #    anyway, so the call was a no-op that only obscured the logic.
         self._env_editor.discard_pending_edit()
-        self._env_editor.hide()
         # 3. Clear per-tab right-panel memory so tabs start fresh
         self._tab_right_memory = {}
         # 4. Repopulate lists
@@ -9297,6 +9315,23 @@ def main():
     # olduğunca erken çağrılmalı ki Wayland platform eklentisi app_id'yi
     # okurken zaten doğru argv[0]'ı görsün.
     apply_wayland_app_id(APP_ID)
+
+    # PySide6 prints an unhandled exception raised inside a slot to stderr and
+    # then carries on, which can leave the UI half-rebuilt and silently broken
+    # (e.g. a populate() that raised after self.clear() leaves an empty list
+    # with signals still blocked). Surface it instead of losing it.
+    def _excepthook(exc_type, exc_value, exc_tb):
+        import traceback
+        traceback.print_exception(exc_type, exc_value, exc_tb)
+        try:
+            QMessageBox.critical(
+                None, "Internal error",
+                "".join(traceback.format_exception_only(exc_type, exc_value)),
+            )
+        except Exception:
+            pass
+
+    sys.excepthook = _excepthook
 
     # Wayland altında pencere sınıfının .desktop girdisiyle eşleşmesi için
     # QApplication oluşturulmadan önce app adı ayarlanır.
