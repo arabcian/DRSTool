@@ -31,6 +31,34 @@ CSTATE_KEEP_MAX=1
 # vm.swappiness value while in game mode
 VM_SWAPPINESS=10
 
+# --- VM: fragmentation defences ------------------------------------------------
+# IMPORTANT: do not disable both of these at once. compaction_proactiveness=0
+# stops background defragmentation and watermark_boost_factor=0/1 stops the
+# kernel from reacting to fragmentation events. With both off, free memory
+# fragments monotonically during a session and the first higher-order
+# allocation that fails ends up in synchronous direct compaction — which is
+# what turns a smooth first few minutes into stutter later on.
+VM_COMPACTION_PROACTIVENESS=5
+VM_WATERMARK_BOOST_FACTOR=15000
+
+# vmstat refresh interval (seconds). Higher = fewer per-cpu timer wakeups, but
+# the zone statistics used by watermark checks go stale for that long.
+VM_STAT_INTERVAL=10
+
+# --- MGLRU ---------------------------------------------------------------------
+# Bitmask: 0x1 core, 0x2 batched leaf-PTE aging (page-table walks), 0x4 non-leaf.
+# 7 = kernel default. Clearing 0x2 forces rmap-based aging, whose cost scales
+# with the game's mapped address space and therefore grows over a session.
+LRU_GEN_ENABLED=7
+
+# --- Scheduler (debugfs) -------------------------------------------------------
+# Smaller base slice = lower latency, slightly lower throughput.
+SCHED_MIN_BASE_SLICE_NS=1000000
+SCHED_MIGRATION_COST_NS=500000
+# Kernel default is 32. Lower values slow down load-balance correction as the
+# runnable thread count grows.
+SCHED_NR_MIGRATE=32
+
 # --- CCD/CCX core isolation ------------------------------------------------------
 # Note: THP settings (enabled/shmem_enabled/defrag) are INTENTIONALLY absent
 # here — all three are always hardcoded to "always" in the script and are
@@ -88,8 +116,24 @@ CCD_EXTRA_GOOD_PROCS=
 # 0 = one-shot move only.
 CCD_MONITOR_SECONDS=30
 
-# cpuset.cpus.partition type: "root" (allows housekeeping) or "isolated"
-# (more aggressive isolation). If you want to reduce jitter you can try
-# "isolated" for theGood — it may cause stability issues on some systems.
+# "timed"   = stop scanning after CCD_MONITOR_SECONDS (old behaviour)
+# "session" = keep a detached, nice-19 watcher (running inside theUgly) alive
+#             until POST. Launcher overlays, anti-cheat, Wine services and
+#             shader workers spawn minutes into a session; without this they
+#             land in the root cgroup unconstrained and get scheduled onto the
+#             game's CCD.
+CCD_MONITOR_MODE=session
+# Sweep interval of the session watcher, in seconds.
+CCD_MONITOR_INTERVAL=5
+
+# cpuset.cpus.partition type: "member", "root" or "isolated".
+# theGood must be a partition root ("root" or "isolated") for the isolation to
+# be real: only a valid partition root takes EXCLUSIVE ownership of its CPUs,
+# which is what stops root-cgroup strays from being scheduled on the game's CCD.
+# theUgly should normally stay "member". If BOTH groups claim their CPUs
+# exclusively, the root cgroup can be left with no CPUs at all and the kernel
+# silently marks the partition "root invalid" — the cgroups still exist and
+# still look configured, but nothing is actually isolated. Check with:
+#   lutris-game-tune-wrapper STATUS   (look for "partition: root", not "invalid")
 CCD_GOOD_PARTITION_TYPE=root
-CCD_UGLY_PARTITION_TYPE=root
+CCD_UGLY_PARTITION_TYPE=member

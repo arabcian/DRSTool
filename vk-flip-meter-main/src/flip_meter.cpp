@@ -456,6 +456,9 @@ struct FLMConfig {
     std::string measure_cpu;        // [item 13]
     bool        stats        = false;
     std::string csv_path;
+    // [FIX-77] Seconds between fflush() of the CSV stream. 0 = never (v2.8
+    // behaviour). Load-time only, like FLM_CSV itself.
+    int         csv_sync_s   = 5;
     std::string config_path;        // [FIX-21] FLM_CONFIG live config file
 
     // Hot-reloadable
@@ -810,6 +813,7 @@ static void init_config() {
         if ((e = getenv("FLM_MEASURE_CPU")))    g_config.measure_cpu  = e;
         if ((e = getenv("FLM_STATS")))          g_config.stats        = (atoi(e) != 0);
         if ((e = getenv("FLM_CSV")))            g_config.csv_path     = e;
+        if ((e = getenv("FLM_CSV_SYNC_S")))     g_config.csv_sync_s   = std::clamp(atoi(e), 0, 600);
         if ((e = getenv("FLM_CONFIG")))         g_config.config_path  = e;  // [FIX-21]
         if ((e = getenv("FLM_LOG_FILE"))) {
             if (FILE* f = fopen(e, "a")) {
@@ -1151,6 +1155,7 @@ struct SwapchainState {
     };
     CsvRow  csv_buf[FlmConst::CSV_BUFFER];
     int     csv_n = 0;
+    int64_t csv_last_sync_ns = 0;   // [FIX-77]
 
     SwapchainState(VkDevice dev, VkSwapchainKHR sc, DeviceDispatch* d)
         : device(dev), swapchain(sc), disp(d) {}
@@ -1203,6 +1208,36 @@ struct SwapchainState {
                     csv_buf[i].pacing);
         }
         csv_n = 0;
+    }
+    // [FIX-77] Get the rows onto DISK, not just into stdio's buffer.
+    //
+    // FIX-30 deliberately removed fflush from csv_flush: csv_flush only moves
+    // rows from csv_buf into a 1 MB _IOFBF stdio buffer, and the real write()
+    // was left to happen whenever that buffer filled. Two consequences that
+    // only show up when you actually need the file:
+    //
+    //   1. NOTHING reaches disk for the first ~19k rows (≈76s at 250 FPS), and
+    //      if the process does not unwind cleanly — Lutris "stop", SIGKILL, a
+    //      game that calls _exit(), a driver crash — every buffered row is
+    //      lost. The destructor is the only other flush path, so the common
+    //      outcome of a diagnostic run is a header-only file.
+    //   2. When the 1 MB buffer DOES fill, it fills all at once: a single
+    //      ~1 MB blocking write() inside the measurement thread. If that write
+    //      stalls past MEAS_FRESH_NS (250ms) the FIX-43 freshness guard trips
+    //      and pacing silently switches off — i.e. the logging perturbs the
+    //      very thing being logged.
+    //
+    // A small periodic fflush fixes both: ~70 KB every 5s at 250 FPS is far
+    // below the cost of the 1 MB burst it replaces, and the file is never more
+    // than csv_sync_s behind reality. Set FLM_CSV_SYNC_S=0 for the old
+    // behaviour.
+    void csv_sync(int64_t now_ns_val, int csv_sync_s) {
+        if (!csv_fp || csv_sync_s <= 0) return;
+        if (csv_last_sync_ns == 0) { csv_last_sync_ns = now_ns_val; return; }
+        if (now_ns_val - csv_last_sync_ns < (int64_t)csv_sync_s * 1'000'000'000LL) return;
+        if (csv_n) csv_flush();
+        fflush(csv_fp);
+        csv_last_sync_ns = now_ns_val;
     }
     void csv_push(int64_t flip, int64_t interval, bool fake, bool hitch, uint32_t slot,
                   int mfg, int64_t slot_mean, bool pacing) {
@@ -1766,6 +1801,8 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
                          st->pacing_enabled.load(std::memory_order_relaxed)); // [FIX-31]
 
             // [FIX-32] Interval configurable via FLM_STATS_INTERVAL (seconds).
+            st->csv_sync(tnow, g_config.csv_sync_s);   // [FIX-77]
+
             int64_t stats_iv = g_config.stats_interval_ns.load(std::memory_order_relaxed);
             if (g_config.stats && tnow - st->stat_last_ns >= stats_iv &&
                 st->stat_frames > 0) {
@@ -1802,6 +1839,7 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
     }
 
     if (st->csv_n) st->csv_flush();
+    if (st->csv_fp) fflush(st->csv_fp);   // [FIX-77] thread exit → disk, not stdio
     FLM_LOG(LogLevel::DEBUG, "Measurement thread stopped");
 }
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# lutris-game-tune.sh — Lutris Pre/Post Game System Tuner (v4.1)
+# lutris-game-tune.sh — Lutris Pre/Post Game System Tuner (v4.2)
 #
 # Not meant to be called directly. Invoked by lutris-game-tune-wrapper (a
 # setuid root binary). See lutris-game-tune-wrapper.c for wrapper setup.
@@ -99,6 +99,51 @@
 #   - Configurable log level (LOG_LEVEL) with DEBUG support.
 #   - Micro-optimizations (bash built-in redirections, explicit find -P).
 #   - CCD_PROTECTED_CGROUPS deprecated warning.
+#
+# v4.2 changes — "smooth at first, stutters after a few minutes" fixes:
+#   - PERF (main cause): move_pid_list_to_group() used to write EVERY tracked
+#     PID to cgroup.procs on every monitor pass, even PIDs that were already
+#     in the target cgroup. Each such write takes cgroup_threadgroup_rwsem
+#     for WRITE (a percpu_rwsem => rcu_sync_enter => synchronize_rcu), which
+#     blocks fork/exec/clone system-wide for the duration. With a game tree
+#     that keeps growing (Wine services, DXVK/VKD3D compile pools, overlays,
+#     anti-cheat) this cost grows over the session and shows up as periodic
+#     system-wide micro-stalls that a present-to-present frametime graph
+#     cannot see. Now every PID's current cgroup is checked first and only
+#     genuine migrations are performed.
+#   - PERF: process-tree discovery no longer forks `pgrep -P` once per PID
+#     (hundreds of forks every pass, growing with the tree). A single pass
+#     over /proc builds the whole PPID map instead.
+#   - CORRECTNESS: theUgly now defaults to partition type "member" instead of
+#     "root". With both groups as partition roots the root cgroup's effective
+#     cpuset could end up empty, which makes the kernel silently mark
+#     theGood's partition "root invalid" — i.e. no isolation at all, with no
+#     error anywhere. With only theGood as a partition root, CCD0 is genuinely
+#     exclusive and processes left in the root cgroup physically cannot be
+#     scheduled on it. Partition state is now verified and reported.
+#   - CCD monitoring can now run for the WHOLE game session
+#     (CCD_MONITOR_MODE=session, default) via a detached background watcher
+#     instead of stopping after 30s. Late-spawning helpers (launcher overlays,
+#     anti-cheat, Wine services, shader workers) previously landed in the root
+#     cgroup unconstrained several minutes in — exactly when the stutters
+#     start. The watcher runs at nice 19 inside theUgly, closes the flock fd,
+#     and is stopped by POST.
+#   - VM: watermark_boost_factor is no longer forced to 1 and
+#     compaction_proactiveness is no longer forced to 0. Disabling BOTH
+#     fragmentation defences means free memory fragments monotonically during
+#     a session; the first higher-order allocation that fails then hits
+#     synchronous direct compaction, often in a driver/worker thread rather
+#     than the render thread — again invisible to a frametime graph. Both are
+#     now configurable with sane defaults.
+#   - VM: vm.stat_interval default lowered 20 -> 10 (zone stats used by
+#     watermark checks were going stale for up to 20s).
+#   - MM: lru_gen.enabled default 5 -> 7. Bit 0x2 (batched leaf-PTE aging via
+#     page-table walks) was being cleared, forcing MGLRU back onto rmap
+#     scanning, whose cost scales with the game's mapped address space — so
+#     reclaim gets more expensive the longer the session runs.
+#   - SCHED: nr_migrate default 8 -> 32 (kernel default; 8 slows down
+#     load-balance correction as the runnable thread count grows) and
+#     min_base_slice_ns default 3000000 -> 1000000, both now configurable.
 # =============================================================================
 
 set -euo pipefail
@@ -125,6 +170,27 @@ DISABLE_DEEP_CSTATES=0
 CSTATE_KEEP_MAX=1
 # vm.swappiness value while in game mode
 VM_SWAPPINESS=10
+# Proactive background compaction (0 = off). Setting this to 0 removes the
+# only mechanism that keeps free memory defragmented during a long session.
+# Low but non-zero is the safe default: kcompactd works in the background
+# instead of the game hitting synchronous direct compaction later.
+VM_COMPACTION_PROACTIVENESS=5
+# Watermark boost on external fragmentation events (kernel default 15000,
+# 0 = disabled). Do NOT set this to 0/1 together with
+# VM_COMPACTION_PROACTIVENESS=0 — that disables both defences at once.
+VM_WATERMARK_BOOST_FACTOR=15000
+# vmstat refresh interval in seconds. Larger = fewer per-cpu timer wakeups,
+# but zone statistics used by watermark checks go stale for that long.
+VM_STAT_INTERVAL=10
+# MGLRU feature bitmask (0x1 core, 0x2 batched leaf-PTE aging, 0x4 non-leaf).
+# 7 = kernel default. Clearing 0x2 forces rmap-based aging, whose cost grows
+# with the process's mapped address space.
+LRU_GEN_ENABLED=7
+
+# --- Scheduler ----------------------------------------------------------------
+SCHED_MIN_BASE_SLICE_NS=1000000
+SCHED_MIGRATION_COST_NS=500000
+SCHED_NR_MIGRATE=32
 
 THP_ENABLED="madvise"
 THP_SHMEM_ENABLED="madvise"
@@ -145,9 +211,22 @@ CCD_EXTRA_GOOD_PROCS=""
 # (shader compilation, DXVK/VKD3D workers) after the launcher is moved.
 # 0 = one-shot move only.
 CCD_MONITOR_SECONDS=30
-# cpuset.cpus.partition type: "root" or "isolated"
+# "timed"   = only scan for CCD_MONITOR_SECONDS, then stop (v4.1 behaviour)
+# "session" = after the initial timed window, keep a detached low-priority
+#             watcher alive until POST. Late-spawning helpers (overlays,
+#             anti-cheat, Wine services) are what land unconstrained a few
+#             minutes in, so this is the default.
+CCD_MONITOR_MODE="session"
+# Sweep interval of the detached session watcher, in seconds.
+CCD_MONITOR_INTERVAL=5
+# cpuset.cpus.partition type: "member", "root" or "isolated".
+# theGood should be a partition root ("root"/"isolated") so that CCD0 is
+# exclusively owned and nothing outside it can be scheduled there.
+# theUgly should normally stay "member": if BOTH groups claim their CPUs
+# exclusively, the root cgroup's effective cpuset can end up empty and the
+# kernel silently invalidates the partition, disabling isolation entirely.
 CCD_GOOD_PARTITION_TYPE="root"
-CCD_UGLY_PARTITION_TYPE="root"
+CCD_UGLY_PARTITION_TYPE="member"
 
 # --- Logging -------------------------------------------------------------------
 LOG_LEVEL="INFO"   # DEBUG, INFO, WARN, ERROR
@@ -284,6 +363,59 @@ load_config() {
                     VM_SWAPPINESS="${val}"
                 else
                     warn "Invalid VM_SWAPPINESS '${val}' (0-100), using default ${VM_SWAPPINESS}"
+                fi ;;
+            VM_COMPACTION_PROACTIVENESS)
+                if [[ "${val}" =~ ^[0-9]+$ ]] && (( val >= 0 && val <= 100 )); then
+                    VM_COMPACTION_PROACTIVENESS="${val}"
+                else
+                    warn "Invalid VM_COMPACTION_PROACTIVENESS '${val}' (0-100), using default ${VM_COMPACTION_PROACTIVENESS}"
+                fi ;;
+            VM_WATERMARK_BOOST_FACTOR)
+                if [[ "${val}" =~ ^[0-9]+$ ]]; then
+                    VM_WATERMARK_BOOST_FACTOR="${val}"
+                else
+                    warn "Invalid VM_WATERMARK_BOOST_FACTOR '${val}', using default ${VM_WATERMARK_BOOST_FACTOR}"
+                fi ;;
+            VM_STAT_INTERVAL)
+                if [[ "${val}" =~ ^[0-9]+$ ]] && (( val >= 1 && val <= 120 )); then
+                    VM_STAT_INTERVAL="${val}"
+                else
+                    warn "Invalid VM_STAT_INTERVAL '${val}' (1-120), using default ${VM_STAT_INTERVAL}"
+                fi ;;
+            LRU_GEN_ENABLED)
+                if [[ "${val}" =~ ^[0-9]+$ ]] && (( val >= 0 && val <= 7 )); then
+                    LRU_GEN_ENABLED="${val}"
+                else
+                    warn "Invalid LRU_GEN_ENABLED '${val}' (0-7), using default ${LRU_GEN_ENABLED}"
+                fi ;;
+            SCHED_MIN_BASE_SLICE_NS)
+                if [[ "${val}" =~ ^[0-9]+$ ]] && (( val >= 100000 )); then
+                    SCHED_MIN_BASE_SLICE_NS="${val}"
+                else
+                    warn "Invalid SCHED_MIN_BASE_SLICE_NS '${val}' (>=100000), using default ${SCHED_MIN_BASE_SLICE_NS}"
+                fi ;;
+            SCHED_MIGRATION_COST_NS)
+                if [[ "${val}" =~ ^[0-9]+$ ]]; then
+                    SCHED_MIGRATION_COST_NS="${val}"
+                else
+                    warn "Invalid SCHED_MIGRATION_COST_NS '${val}', using default ${SCHED_MIGRATION_COST_NS}"
+                fi ;;
+            SCHED_NR_MIGRATE)
+                if [[ "${val}" =~ ^[0-9]+$ ]] && (( val >= 1 && val <= 128 )); then
+                    SCHED_NR_MIGRATE="${val}"
+                else
+                    warn "Invalid SCHED_NR_MIGRATE '${val}' (1-128), using default ${SCHED_NR_MIGRATE}"
+                fi ;;
+            CCD_MONITOR_MODE)
+                case "${val,,}" in
+                    timed|session) CCD_MONITOR_MODE="${val,,}" ;;
+                    *) warn "Invalid CCD_MONITOR_MODE '${val}' (timed|session), using default ${CCD_MONITOR_MODE}" ;;
+                esac ;;
+            CCD_MONITOR_INTERVAL)
+                if [[ "${val}" =~ ^[0-9]+$ ]] && (( val >= 1 && val <= 60 )); then
+                    CCD_MONITOR_INTERVAL="${val}"
+                else
+                    warn "Invalid CCD_MONITOR_INTERVAL '${val}' (1-60), using default ${CCD_MONITOR_INTERVAL}"
                 fi ;;
             CCD_ISOLATION_ENABLED) CCD_ISOLATION_ENABLED="${val}" ;;
             CCD_LAUNCHER)          CCD_LAUNCHER="${val}" ;;
@@ -604,11 +736,71 @@ setup_cpuset_group() {
     log "${name} -> cpuset.cpus=${cpus}, mems=${mem_node}, partition=${partition_type}"
     echo "${cpus}" > "${dir}/cpuset.cpus" 2>/dev/null || warn "Failed to write cpuset.cpus: ${name}"
     echo "${mem_node}" > "${dir}/cpuset.mems" 2>/dev/null || warn "Failed to write cpuset.mems: ${name}"
-    echo "${partition_type}" > "${dir}/cpuset.cpus.partition" 2>/dev/null || warn "Failed to write cpuset.cpus.partition: ${name}"
-
-    if [[ -r "${dir}/cpuset.cpus.effective" ]]; then
-        log "${name} effective cpus: $(cat "${dir}/cpuset.cpus.effective")"
+    if [[ "${partition_type}" != "member" ]]; then
+        echo "${partition_type}" > "${dir}/cpuset.cpus.partition" 2>/dev/null || \
+            warn "Failed to write cpuset.cpus.partition: ${name}"
     fi
+
+    local effective="" pstate=""
+    [[ -r "${dir}/cpuset.cpus.effective" ]] && effective="$(cat "${dir}/cpuset.cpus.effective" 2>/dev/null)"
+    [[ -r "${dir}/cpuset.cpus.partition" ]] && pstate="$(cat "${dir}/cpuset.cpus.partition" 2>/dev/null)"
+    log "${name} effective cpus: ${effective:-<none>} (partition: ${pstate:-n/a})"
+
+    # A partition the kernel refused shows up as "root invalid"/"isolated
+    # invalid". The cgroup still exists and still looks configured, but the
+    # CPUs are NOT exclusively owned — i.e. isolation silently does nothing.
+    # Report it loudly instead of pretending everything worked.
+    if [[ "${pstate}" == *invalid* ]]; then
+        warn "${name}: cpuset partition is INVALID ('${pstate}') — CPUs are not exclusively owned,"
+        warn "  so processes outside ${name} can still be scheduled on ${cpus}."
+        warn "  Most common cause: another cgroup already claims these CPUs exclusively, or the"
+        warn "  root cgroup would be left with no CPUs. Try CCD_UGLY_PARTITION_TYPE=member."
+        return 2
+    fi
+    # Empty effective set means every task in this group would be unrunnable.
+    if [[ -z "${effective}" ]]; then
+        warn "${name}: effective cpuset is empty — not usable."
+        return 2
+    fi
+    return 0
+}
+
+# Read a PID's cgroup-v2 path (e.g. "/theGood"). Empty on failure.
+_pid_cgroup_path() {
+    local pid="$1" line
+    while IFS= read -r line; do
+        if [[ "${line}" == 0::* ]]; then
+            printf '%s' "${line#0::}"
+            return 0
+        fi
+    done < "/proc/${pid}/cgroup" 2>/dev/null
+    return 1
+}
+
+# Build a PID -> PPID map for the whole system in ONE pass over /proc.
+# The previous implementation forked `pgrep -P <pid>` once per PID, i.e.
+# hundreds of forks per monitor pass, and the cost grew with the size of the
+# game's process tree — the sweep itself became a jitter source over time.
+declare -gA PPID_MAP=()
+declare -gA CHILDREN_MAP=()
+build_process_map() {
+    PPID_MAP=()
+    CHILDREN_MAP=()
+    local stat_file line pid after ppid
+    for stat_file in /proc/[0-9]*/stat; do
+        read -r line < "${stat_file}" 2>/dev/null || continue
+        [[ -n "${line}" ]] || continue
+        # Format: "<pid> (<comm>) <state> <ppid> ..." — comm may contain
+        # spaces and parentheses, so cut at the LAST ") " rather than
+        # splitting on whitespace. Pure parameter expansion: no forks.
+        pid="${line%% *}"
+        after="${line##*) }"      # "<state> <ppid> ..."
+        after="${after#* }"       # "<ppid> ..."
+        ppid="${after%% *}"
+        [[ "${ppid}" =~ ^[0-9]+$ ]] || continue
+        PPID_MAP["${pid}"]="${ppid}"
+        CHILDREN_MAP["${ppid}"]+="${pid} "
+    done
 }
 
 get_process_tree() {
@@ -617,15 +809,17 @@ get_process_tree() {
     local -A seen=()
     local pid child
 
+    (( ${#PPID_MAP[@]} == 0 )) && build_process_map
+
     while (( ${#queue[@]} > 0 )); do
         pid="${queue[0]}"
         queue=("${queue[@]:1}")
         [[ -n "${seen[$pid]:-}" ]] && continue
         seen[$pid]=1
         result+=("${pid}")
-        while read -r child; do
+        for child in ${CHILDREN_MAP[$pid]:-}; do
             [[ -n "${child}" ]] && queue+=("${child}")
-        done < <(pgrep -P "${pid}" 2>/dev/null)
+        done
     done
     printf '%s\n' "${result[@]}"
 }
@@ -825,13 +1019,36 @@ move_all_procs_under() {
     echo "${success} ${fail}"
 }
 
+# Move PIDs into a cgroup, SKIPPING any process that is already there.
+#
+# This skip is the single most important fix in v4.2. Writing a PID to
+# cgroup.procs is never free even when it is a no-op migration: the kernel
+# takes cgroup_threadgroup_rwsem for WRITE first (a percpu_rwsem, so
+# rcu_sync_enter -> synchronize_rcu), which blocks every fork/exec/clone on
+# the machine for as long as it is held, and only afterwards notices that
+# source and destination csets are identical. The old code re-wrote every
+# tracked PID on every 2s pass, so the number of these global stalls grew
+# with the game's process tree — smooth at the start of a session, steadily
+# worse a few minutes in, and completely invisible to a present-to-present
+# frametime graph because the stall lands on whatever thread happens to be
+# forking or waiting on the lock.
+#
+# $1 = absolute path to the destination cgroup directory
 move_pid_list_to_group() {
-    local group_procs="$1"; shift
-    local success=0 fail=0 pid
+    local group_dir="$1"; shift
+    local group_procs="${group_dir}/cgroup.procs"
+    local rel="${group_dir#${CGROUP_V2_ROOT}}"
+    [[ -z "${rel}" ]] && rel="/"
+    local success=0 fail=0 skipped=0 pid cur
     for pid in "$@"; do
         [[ -z "${pid}" ]] && continue
         [[ -d "/proc/${pid}" ]] || continue
         if is_pid_protected_by_name "${pid}"; then
+            continue
+        fi
+        cur="$(_pid_cgroup_path "${pid}" || true)"
+        if [[ "${cur}" == "${rel}" ]]; then
+            skipped=$((skipped + 1))
             continue
         fi
         if echo "${pid}" > "${group_procs}" 2>/dev/null; then
@@ -840,15 +1057,18 @@ move_pid_list_to_group() {
             fail=$((fail + 1))
         fi
     done
-    echo "${success} ${fail}"
+    echo "${success} ${fail} ${skipped}"
 }
 
 move_launcher_tree_once() {
-    local good_procs="$1"
+    local good_dir="$1"
     local -A all_pids=()
     local pid p
     local -a patterns=()
     read -r -a patterns <<< "${CCD_LAUNCHER} ${CCD_EXTRA_GOOD_PROCS}"
+
+    # One /proc pass for the whole sweep, reused by the tree walk below.
+    build_process_map
 
     # Step 1: Reload previously tracked live processes (reparenting protection)
     local tracked_file="${STATE_DIR}/.tracked_game_pids"
@@ -880,20 +1100,20 @@ move_launcher_tree_once() {
     while (( ${#queue[@]} > 0 )); do
         pid="${queue[0]}"
         queue=("${queue[@]:1}")
-        while read -r child; do
+        for child in ${CHILDREN_MAP[$pid]:-}; do
             if [[ -n "${child}" && -z "${all_pids[$child]:-}" ]]; then
                 all_pids[$child]=1
                 queue+=("${child}")   # newly discovered child enters the scan loop
             fi
-        done < <(pgrep -P "${pid}" 2>/dev/null)
+        done
     done
 
     # Step 4: Persist the live process list for the next monitoring iteration
     printf '%s\n' "${!all_pids[@]}" > "${tracked_file}"
 
-    # Step 5: Safely move all discovered processes to the performance cgroup
-    local s f
-    read -r s f <<< "$(move_pid_list_to_group "${good_procs}" "${!all_pids[@]}")"
+    # Step 5: Move only the processes that are not already in the group
+    local s f sk
+    read -r s f sk <<< "$(move_pid_list_to_group "${good_dir}" "${!all_pids[@]}")"
     echo "${s} ${f} ${#all_pids[@]}"
 }
 
@@ -952,6 +1172,10 @@ move_root_level_procs() {
     local dst_procs="$1"
     local success=0 fail=0 pid
     local -a pids=()
+    # Only track origins discovered in THIS sweep: with the session watcher
+    # running every few seconds, keeping the map across sweeps would make
+    # append_pid_origins() re-read a growing file forever.
+    CCD_PID_ORIGIN=()
     mapfile -t pids < "${CGROUP_V2_ROOT}/cgroup.procs" 2>/dev/null
     for pid in "${pids[@]}"; do
         [[ -z "${pid}" ]] && continue
@@ -967,7 +1191,7 @@ move_root_level_procs() {
         fi
     done
     # Append only new PIDs to the persistent origin file
-    append_pid_origins
+    (( ${#CCD_PID_ORIGIN[@]} > 0 )) && append_pid_origins
     echo "${success} ${fail}"
 }
 
@@ -1021,8 +1245,12 @@ apply_ccd_isolation() {
             warn "Failed to enable the cpuset subtree_control."
     fi
 
-    # Create theUgly first; bail out if it fails
-    setup_cpuset_group "${CCD_UGLY_GROUP}" "${ccx1}" "${CCD_UGLY_PARTITION_TYPE}" || return 0
+    # Create theUgly first; bail out only on a hard failure (rc 1 = mkdir/
+    # write failed). rc 2 means "created but the partition is invalid", which
+    # has already been warned about and is survivable.
+    local rc=0
+    setup_cpuset_group "${CCD_UGLY_GROUP}" "${ccx1}" "${CCD_UGLY_PARTITION_TYPE}" || rc=$?
+    (( rc == 1 )) && return 0
     local ugly_dir="${CGROUP_V2_ROOT}/${CCD_UGLY_GROUP}"
 
     # Constrain existing top-level cgroups IN PLACE
@@ -1049,16 +1277,18 @@ apply_ccd_isolation() {
     log "  root-level: ${us} process(es) moved to ${CCD_UGLY_GROUP}, ${uf} failed (kernel threads are expected)."
 
     # Create theGood group
-    setup_cpuset_group "${CCD_GOOD_GROUP}" "${ccx0}" "${CCD_GOOD_PARTITION_TYPE}" || {
+    rc=0
+    setup_cpuset_group "${CCD_GOOD_GROUP}" "${ccx0}" "${CCD_GOOD_PARTITION_TYPE}" || rc=$?
+    if (( rc == 1 )); then
         # If theGood creation fails, remove theUgly and abort
         warn "Failed to create theGood cgroup — cleaning up theUgly"
         cleanup_stale_ccd_cgroups
         return 0
-    }
-    local good_procs="${CGROUP_V2_ROOT}/${CCD_GOOD_GROUP}/cgroup.procs"
+    fi
+    local good_dir="${CGROUP_V2_ROOT}/${CCD_GOOD_GROUP}"
 
     local success fail total
-    read -r success fail total <<< "$(move_launcher_tree_once "${good_procs}")"
+    read -r success fail total <<< "$(move_launcher_tree_once "${good_dir}")"
     if (( total == 0 )); then
         log "  No running process found for '${CCD_LAUNCHER}' (it may not have started yet)."
     else
@@ -1071,21 +1301,98 @@ apply_ccd_isolation() {
         end_time=$(( $(date +%s) + CCD_MONITOR_SECONDS ))
         while (( $(date +%s) < end_time )); do
             sleep 2
-            read -r s f t <<< "$(move_launcher_tree_once "${good_procs}")"
-            (( t > 0 )) && log "  [watch] ${t} processes scanned (${s} newly/re-moved)."
+            read -r s f t <<< "$(move_launcher_tree_once "${good_dir}")"
+            (( s > 0 )) && log "  [watch] ${t} processes tracked (${s} newly moved)."
             # Also re-sweep the root cgroup: wine/proton workers that are
-            # reparented or setsid'd away from the launcher's pgrep -P chain
+            # reparented or setsid'd away from the launcher's parent chain
             # never show up in move_launcher_tree_once's targets, and would
-            # otherwise sit unconstrained in root for the rest of the
-            # session (letting the scheduler park them wherever it likes,
-            # usually next to the hot CCD0 workload) until the one-shot
-            # root-level move_root_level_procs() call at the top of this
-            # function is repeated here every 2s instead of just once.
+            # otherwise sit unconstrained in root.
             read -r rs rf <<< "$(move_root_level_procs "${ugly_dir}/cgroup.procs")"
             (( rs > 0 )) && log "  [watch] ${rs} new stray root-level process(es) moved to ${CCD_UGLY_GROUP}."
         done
-        log "  Monitoring finished."
+        log "  Initial monitoring window finished."
     fi
+
+    if [[ "${CCD_MONITOR_MODE}" == "session" ]]; then
+        start_session_monitor "${good_dir}" "${ugly_dir}"
+    fi
+}
+
+# --- Session-long CCD watcher --------------------------------------------------
+# The v4.1 design only swept for CCD_MONITOR_SECONDS (30s by default) and then
+# stopped. But the processes that matter most spawn LATER: launcher/store
+# overlays, anti-cheat services, Wine services, background shader-cache
+# workers, second-stage game executables. Anything that appears after the
+# window and is reparented away from the launcher tree ends up in the root
+# cgroup, unconstrained — free to be scheduled right next to the game on CCD0.
+# That is a textbook "fine for the first few minutes, then it degrades"
+# pattern, so the watcher now optionally runs for the whole session.
+#
+# The watcher itself must not become a jitter source, so it: runs at nice 19,
+# lives inside theUgly (never on the game's CCD), sweeps at a low frequency,
+# and — critically — closes the inherited flock file descriptor so it does not
+# hold the PRE/POST lock for the entire session.
+readonly MONITOR_PID_FILE_NAME=".monitor_pid"
+
+start_session_monitor() {
+    local good_dir="$1" ugly_dir="$2"
+    local pid_file="${STATE_DIR}/${MONITOR_PID_FILE_NAME}"
+
+    stop_session_monitor   # never leave two watchers running
+
+    (
+        # Release the PRE/POST lock inherited from the parent, otherwise POST
+        # would block on it until the game exits and the watcher is killed.
+        exec 9>&- 2>/dev/null || true
+        exec 0</dev/null
+        trap 'exit 0' TERM INT
+
+        renice -n 19 -p "$$" >/dev/null 2>&1 || true
+        # Put the watcher on the system CCD so its own work never lands on
+        # the cores the game is using.
+        echo "$$" > "${ugly_dir}/cgroup.procs" 2>/dev/null || true
+
+        local s f t rs rf
+        while :; do
+            sleep "${CCD_MONITOR_INTERVAL}"
+            # Stop as soon as game mode is over or the groups are gone.
+            [[ -f "${REFCOUNT_FILE}" ]] || break
+            [[ -d "${good_dir}" && -d "${ugly_dir}" ]] || break
+
+            refresh_protected_session_pids
+            read -r s f t <<< "$(move_launcher_tree_once "${good_dir}")"
+            (( s > 0 )) && log_debug "[monitor] ${s} process(es) moved to ${CCD_GOOD_GROUP} (${t} tracked)."
+            read -r rs rf <<< "$(move_root_level_procs "${ugly_dir}/cgroup.procs")"
+            (( rs > 0 )) && log_debug "[monitor] ${rs} stray root-level process(es) moved to ${CCD_UGLY_GROUP}."
+        done
+    ) &
+    local mon_pid=$!
+    disown "${mon_pid}" 2>/dev/null || true
+    _state_write "${pid_file}" "${mon_pid}" || true
+    log "  Session watcher started (pid ${mon_pid}, every ${CCD_MONITOR_INTERVAL}s, nice 19, inside ${CCD_UGLY_GROUP})."
+}
+
+stop_session_monitor() {
+    local pid_file="${STATE_DIR}/${MONITOR_PID_FILE_NAME}"
+    [[ -f "${pid_file}" ]] || return 0
+    local mon_pid
+    mon_pid="$(cat "${pid_file}" 2>/dev/null)"
+    rm -f "${pid_file}"
+    [[ "${mon_pid}" =~ ^[0-9]+$ ]] || return 0
+    [[ -d "/proc/${mon_pid}" ]] || return 0
+    # Only kill it if it really is one of ours.
+    local comm
+    comm="$(cat "/proc/${mon_pid}/comm" 2>/dev/null || true)"
+    [[ "${comm}" == "bash" || "${comm}" == "lutris-game-tun"* ]] || return 0
+    kill -TERM "${mon_pid}" 2>/dev/null || true
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        [[ -d "/proc/${mon_pid}" ]] || break
+        sleep 0.1
+    done
+    [[ -d "/proc/${mon_pid}" ]] && kill -KILL "${mon_pid}" 2>/dev/null || true
+    log "  Session watcher stopped (pid ${mon_pid})."
+    return 0
 }
 
 # Called from POST: moves all processes from theGood/theUgly back to the
@@ -1104,6 +1411,10 @@ restore_ccd_isolation() {
     [[ -d "${ugly_dir}" || -d "${good_dir}" || -f "${STATE_DIR}/${CPUSET_SAVE_FILE_NAME}" ]] || return 0
 
     log "--- Reverting CCD/CCX core isolation ---"
+
+    # Stop the session watcher first — otherwise it would keep moving
+    # processes back into theGood/theUgly while we are trying to empty them.
+    stop_session_monitor
 
     # Undo the in-place cpuset constraints on existing cgroups FIRST, so
     # session/service processes get their full CPU range back immediately,
@@ -1239,24 +1550,26 @@ apply_game_settings() {
     fi
     log "Reference count: ${count} (first game — applying parameters)"
 
-    # First game — reset stale CCD tracking files
+    # First game — stop any watcher left behind by a crashed session and
+    # reset stale CCD tracking files
+    stop_session_monitor
     rm -f "${STATE_DIR}/.tracked_game_pids" "${STATE_DIR}/.ccd_pid_origin" "${STATE_DIR}/.ccd_cpuset_saved"
 
     log "--- VM Parameters ---"
-    tune_param "/proc/sys/vm/compaction_proactiveness"        "0"                 "vm.compaction_proactiveness"
-    tune_param "/proc/sys/vm/watermark_boost_factor"          "1"                 "vm.watermark_boost_factor"
+    tune_param "/proc/sys/vm/compaction_proactiveness"        "${VM_COMPACTION_PROACTIVENESS}" "vm.compaction_proactiveness"
+    tune_param "/proc/sys/vm/watermark_boost_factor"          "${VM_WATERMARK_BOOST_FACTOR}"   "vm.watermark_boost_factor"
     tune_param "/proc/sys/vm/min_free_kbytes"                 "262144"            "vm.min_free_kbytes"
     tune_param "/proc/sys/vm/watermark_scale_factor"          "50"                "vm.watermark_scale_factor"
     tune_param "/proc/sys/vm/swappiness"                      "${VM_SWAPPINESS}"  "vm.swappiness"
     tune_param "/proc/sys/vm/zone_reclaim_mode"               "0"                 "vm.zone_reclaim_mode"
     tune_param "/proc/sys/vm/page_lock_unfairness"            "1"                 "vm.page_lock_unfairness"
     # extend the vmstat update interval -> fewer periodic per-cpu timer wakeups
-    tune_param "/proc/sys/vm/stat_interval"                   "20"                "vm.stat_interval"
+    tune_param "/proc/sys/vm/stat_interval"                   "${VM_STAT_INTERVAL}" "vm.stat_interval"
     # disable swap readahead -> single-page swap-in, lower latency (ideal with zram)
     tune_param "/proc/sys/vm/page-cluster"                    "0"                 "vm.page-cluster"
 
     log "--- LRU Gen ---"
-    tune_param "/sys/kernel/mm/lru_gen/enabled"               "5"       "lru_gen.enabled"
+    tune_param "/sys/kernel/mm/lru_gen/enabled"               "${LRU_GEN_ENABLED}" "lru_gen.enabled"
 
     log "--- Transparent HugePage ---"
     tune_choice_param "/sys/kernel/mm/transparent_hugepage/enabled"       "${THP_ENABLED}" "thp.enabled"
@@ -1277,9 +1590,9 @@ apply_game_settings() {
 
     log "--- Scheduler (debugfs) ---"
     if ensure_debugfs; then
-        tune_param "/sys/kernel/debug/sched/min_base_slice_ns" "3000000" "sched_debug.min_base_slice_ns"
-        tune_param "/sys/kernel/debug/sched/migration_cost_ns" "500000"  "sched_debug.migration_cost_ns"
-        tune_param "/sys/kernel/debug/sched/nr_migrate"        "8"       "sched_debug.nr_migrate"
+        tune_param "/sys/kernel/debug/sched/min_base_slice_ns" "${SCHED_MIN_BASE_SLICE_NS}" "sched_debug.min_base_slice_ns"
+        tune_param "/sys/kernel/debug/sched/migration_cost_ns" "${SCHED_MIGRATION_COST_NS}" "sched_debug.migration_cost_ns"
+        tune_param "/sys/kernel/debug/sched/nr_migrate"        "${SCHED_NR_MIGRATE}"        "sched_debug.nr_migrate"
     else
         warn "debugfs not accessible — sched debug parameters skipped"
     fi
@@ -1329,6 +1642,10 @@ restore_game_settings() {
     fi
     log "Reference count: 0 (last game exited — starting restore)"
     log "--- RESTORE ---"
+
+    # Unconditional: restore_ccd_isolation() returns early when no cgroups
+    # exist, and a watcher must never outlive game mode.
+    stop_session_monitor
 
     local ccd_restore_failed=0
     restore_ccd_isolation || ccd_restore_failed=1
@@ -1406,7 +1723,7 @@ show_status() {
         local game_count
         game_count="$(_refcount_read)"
         local param_count
-        param_count="$(find -P "${STATE_DIR}" -maxdepth 1 -type f -not -name '.refcount' -not -name '.ccd_*' -not -name '.tracked_game_pids' | wc -l)"
+        param_count="$(find -P "${STATE_DIR}" -maxdepth 1 -type f -not -name '.refcount' -not -name '.ccd_*' -not -name '.tracked_game_pids' -not -name '.monitor_pid' | wc -l)"
         echo "Game mode: ACTIVE (${game_count} game(s) running, ${param_count} parameter(s) saved)"
         echo
         printf '%-55s %s\n' "PARAMETER (save file)" "ORIGINAL VALUE"
@@ -1416,7 +1733,7 @@ show_status() {
             [[ -f "${f}" ]] || continue
             local fname
             fname="$(basename "${f}")"
-            [[ "${fname}" == ".refcount" || "${fname}" == .ccd_* || "${fname}" == ".tracked_game_pids" ]] && continue
+            [[ "${fname}" == ".refcount" || "${fname}" == .ccd_* || "${fname}" == ".tracked_game_pids" || "${fname}" == ".monitor_pid" ]] && continue
             printf '%-55s %s\n' "${fname}" "$(head -c 120 "${f}" | tr '\n' ' ')"
         done
     else
@@ -1427,6 +1744,15 @@ show_status() {
         echo "CCD isolation: ACTIVE"
         echo "  ${CCD_GOOD_GROUP} (performance): $(cat "${CGROUP_V2_ROOT}/${CCD_GOOD_GROUP}/cpuset.cpus.effective" 2>/dev/null)"
         echo "  ${CCD_UGLY_GROUP} (system):      $(cat "${CGROUP_V2_ROOT}/${CCD_UGLY_GROUP}/cpuset.cpus.effective" 2>/dev/null)"
+        echo "  ${CCD_GOOD_GROUP} partition:      $(cat "${CGROUP_V2_ROOT}/${CCD_GOOD_GROUP}/cpuset.cpus.partition" 2>/dev/null)"
+        echo "  ${CCD_UGLY_GROUP} partition:      $(cat "${CGROUP_V2_ROOT}/${CCD_UGLY_GROUP}/cpuset.cpus.partition" 2>/dev/null)"
+        local mon_pid=""
+        [[ -f "${STATE_DIR}/${MONITOR_PID_FILE_NAME}" ]] && mon_pid="$(cat "${STATE_DIR}/${MONITOR_PID_FILE_NAME}" 2>/dev/null)"
+        if [[ -n "${mon_pid}" && -d "/proc/${mon_pid}" ]]; then
+            echo "  session watcher:        RUNNING (pid ${mon_pid})"
+        else
+            echo "  session watcher:        not running"
+        fi
     else
         echo "CCD isolation: OFF (may be single CCX/CCD, disabled, or game mode is not active)"
     fi
