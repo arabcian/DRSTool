@@ -7836,6 +7836,23 @@ LGTUNE_KEYS: List[tuple] = [
      "rather than a fixed ceiling.",
      ["performance", "powersave", "schedutil", "ondemand", "conservative"]),
 
+    ("SET_EPP_BOOST", "check", "1",
+     "Enable amd-pstate per-core EPP boost during gameplay",
+     "Writes 1 to /sys/module/amd_pstate/parameters/epp_boost on PRE and "
+     "restores the previous value on POST.  This is the per-core epp_boost "
+     "mechanism: an update-util hook samples each core's C0 residency every "
+     "10 ms and, when a core is at least 50% busy, pins that core's EPP field "
+     "to performance (0) until 300 ms pass without another busy sample.  It "
+     "targets the case a plain governor change cannot fix — a render thread "
+     "that blocks briefly on a futex or GPU fence every frame decays the "
+     "hardware's performance signal, so each post-wakeup burst restarts at a "
+     "low operating point and inflates the frame-time tail.  Unlike forcing "
+     "EPP=performance globally, the boost is per-core and short-lived, so "
+     "idle cores are not held at high power.  NOTE: this knob is NOT in "
+     "mainline as of this writing — it only exists on kernels built with the "
+     "epp_boost patch series.  On kernels without it the script skips the "
+     "write silently, so leaving this enabled is harmless either way."),
+
     # ── PCIe ASPM ─────────────────────────────────────────────────────────────
     ("SET_ASPM", "check", "1",
      "Set PCIe ASPM policy on game start",
@@ -8253,6 +8270,26 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
             desc_lbl.setStyleSheet("color:#8a92a5; font-size:9px; font-style:italic;")
             grid.addWidget(desc_lbl, row_idx * 2 + 1, 0, 1, 2)
 
+        # ── Runtime availability hint for SET_EPP_BOOST ───────────────────────
+        # epp_boost is not upstream yet, so annotate the checkbox with whether
+        # the knob actually exists on the running kernel. Purely informational:
+        # the option stays writable either way, since the user may be
+        # configuring for a patched kernel they haven't booted yet.
+        _epp_ctrl = self._key_widgets.get("SET_EPP_BOOST")
+        if isinstance(_epp_ctrl, QCheckBox):
+            _epp_present = Path("/sys/module/amd_pstate/parameters/epp_boost").exists()
+            if _epp_present:
+                _epp_ctrl.setText(_epp_ctrl.text() + "   [kernel: supported]")
+            else:
+                _epp_ctrl.setText(_epp_ctrl.text() + "   [kernel: not present]")
+                _epp_ctrl.setToolTip(
+                    _epp_ctrl.toolTip()
+                    + "\n\nThis kernel does not expose "
+                      "/sys/module/amd_pstate/parameters/epp_boost — the setting "
+                      "will be saved but skipped at PRE time until you boot a "
+                      "kernel with the epp_boost patch series applied."
+                )
+
         settings_layout.addLayout(grid)
 
         # Save / status / log button row
@@ -8416,6 +8453,11 @@ QPlainTextEdit{
         lines += [
             f"SET_CPU_GOVERNOR={_val('SET_CPU_GOVERNOR')}",
             f"CPU_GOVERNOR={_val('CPU_GOVERNOR')}",
+            "",
+            "# amd-pstate per-core EPP boost (kernel module parameter; only present",
+            "# on kernels built with the epp_boost patch series — skipped silently",
+            "# otherwise). 1=on, 0=off.",
+            f"SET_EPP_BOOST={_val('SET_EPP_BOOST')}",
             "",
             "# --- PCIe ASPM ---------------------------------------------------",
             f"SET_ASPM={_val('SET_ASPM')}",
