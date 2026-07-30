@@ -2172,7 +2172,7 @@ class OutputBarWidget(QWidget):
         self._gamescope_widget: Optional['GamescopeFlagsWidget'] = None  # set after construction
 
         # Three rows: row1 NVAPI vars, row2 DXVK|VKD3D vars, row3 buttons
-        self.setFixedHeight(114)
+        self.setFixedHeight(130)
         self.setStyleSheet("background: #141720; border-bottom: 1px solid #1e2535;")
 
         root = QVBoxLayout(self)
@@ -2180,10 +2180,10 @@ class OutputBarWidget(QWidget):
         root.setSpacing(3)
 
         # ── Shared label style ────────────────────────────────────────────────
-        lbl_ss  = "font-family: monospace; font-size: 10px; color: #76b900; font-weight: 600;"
-        val_ss  = "font-family: monospace; font-size: 10px; color: #e8eaf0;"
+        lbl_ss  = "font-family: monospace; font-size: 12px; color: #76b900; font-weight: 600;"
+        val_ss  = "font-family: monospace; font-size: 12px; color: #e8eaf0;"
         box_ss  = ("QLabel{ background:#0d1016; border:1px solid #2b3444; border-radius:4px;"
-                   " padding:2px 8px; color:#f0f0f0; font-family:monospace; font-size:10px; }")
+                   " padding:2px 8px; color:#f0f0f0; font-family:monospace; font-size:12px; }")
 
         # ── Row 1: DXVK_NVAPI_GPU_ARCH  |  DXVK_NVAPI_DRS_SETTINGS ──────────
         row1 = QHBoxLayout()
@@ -2260,20 +2260,20 @@ class OutputBarWidget(QWidget):
 
         btn_ss_green = """
 QPushButton{background:#379f47;border:1px solid #56bf69;border-radius:5px;
-    color:white;font-weight:600;font-size:10px;}
+    color:white;font-weight:600;font-size:12px;}
 QPushButton:hover{background:#43b755;}
 QPushButton:pressed{background:#2f8c3f;}"""
 
         btn_ss_blue = """
 QPushButton{background:#2d6cdf;border:1px solid #4f87ea;border-radius:5px;
-    color:white;font-weight:600;font-size:10px;}
+    color:white;font-weight:600;font-size:12px;}
 QPushButton:hover{background:#3d7cf0;}
 QPushButton:pressed{background:#235cc2;}
 QPushButton:disabled{background:#222831;border:1px solid #333b46;color:#666;}"""
 
         btn_ss_red = """
 QPushButton{background:#b93b3b;border:1px solid #e05b5b;border-radius:5px;
-    color:white;font-weight:600;font-size:10px;}
+    color:white;font-weight:600;font-size:12px;}
 QPushButton:hover{background:#cd4949;}
 QPushButton:pressed{background:#a13232;}"""
 
@@ -2496,7 +2496,7 @@ class SettingEditorWidget(QWidget):
         self._name_label.setStyleSheet("""
 QLabel{
     color:#f2f2f2;
-    font-size:16px;
+    font-size:18px;
     font-weight:700;
 }
 """)
@@ -2512,7 +2512,7 @@ QLabel{
     padding:4px 10px;
     color:#8ea0ba;
     font-family:monospace;
-    font-size:9px;
+    font-size:11px;
 }
 """)
         self._id_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -2527,7 +2527,7 @@ QLabel{
     padding:4px 10px;
     color:#9be238;
     font-family:monospace;
-    font-size:9px;
+    font-size:11px;
     font-weight:600;
 }
 """)
@@ -2541,7 +2541,7 @@ QLabel{
         self._desc_label.setStyleSheet("""
 QLabel{
     color:#a7afbc;
-    font-size:11px;
+    font-size:13px;
     line-height:140%;
 }
 """)
@@ -2574,7 +2574,7 @@ QPushButton{
     color:white;
     padding:4px 16px;
     font-weight:600;
-    font-size:10px;
+    font-size:12px;
 }
 QPushButton:hover{
     background:#ca4545;
@@ -2692,7 +2692,7 @@ QPushButton{
     border-radius:6px;
     color:#d8d8d8;
     padding:5px;
-    font-size:9px;
+    font-size:11px;
     font-weight:600;
 }
 QPushButton:hover{
@@ -2741,7 +2741,7 @@ QPushButton{
     border-radius:6px;
     color:#76b900;
     padding:5px;
-    font-size:9px;
+    font-size:11px;
     font-weight:600;
 }
 QPushButton:hover{
@@ -2757,7 +2757,7 @@ QPushButton{
     border-radius:6px;
     color:#d8d8d8;
     padding:5px;
-    font-size:9px;
+    font-size:11px;
     font-weight:600;
 }
 QPushButton:hover{
@@ -2784,7 +2784,7 @@ QPushButton:hover{
             spin.setValue(int(cur, 16) if cur.startswith("0x") else int(cur))
         else:
             spin.setValue(int(s.default, 16) if s.default.startswith("0x") else int(s.default))
-        spin.setFixedHeight(26)
+        spin.setFixedHeight(30)
         spin.setStyleSheet("""
 QSpinBox{
     background:#1a1f28;
@@ -2792,7 +2792,7 @@ QSpinBox{
     border-radius:6px;
     color:#d8d8d8;
     padding:3px 8px;
-    font-size:10px;
+    font-size:12px;
 }
 QSpinBox:focus{
     border:1px solid #76b900;
@@ -2805,7 +2805,7 @@ QSpinBox:hover{
         hbox.addWidget(spin)
 
         range_label = QLabel(f"Range: {s.min}–{s.max}")
-        range_label.setStyleSheet("font-family: monospace; font-size: 9px; color: #8a92a5;")
+        range_label.setStyleSheet("font-family: monospace; font-size: 11px; color: #8a92a5;")
         hbox.addWidget(range_label)
 
         hbox.addStretch()
@@ -2816,7 +2816,7 @@ QSpinBox:hover{
         grid.setSpacing(6)
 
         dec_label = QLabel("Decimal:")
-        dec_label.setStyleSheet("font-size: 9px; color: #8a92a5;")
+        dec_label.setStyleSheet("font-size: 11px; color: #8a92a5;")
         grid.addWidget(dec_label, 0, 0)
 
         dec_spin = QSpinBox()
@@ -2828,7 +2828,7 @@ QSpinBox:hover{
         dec_spin.setRange(0, 0x7FFFFFFF)
         if cur is not None:
             dec_spin.setValue(int(cur, 16))
-        dec_spin.setFixedHeight(26)
+        dec_spin.setFixedHeight(30)
         dec_spin.setStyleSheet("""
 QSpinBox{
     background:#1a1f28;
@@ -2836,7 +2836,7 @@ QSpinBox{
     border-radius:6px;
     color:#d8d8d8;
     padding:3px 8px;
-    font-size:10px;
+    font-size:12px;
 }
 QSpinBox:focus{
     border:1px solid #76b900;
@@ -2849,7 +2849,7 @@ QSpinBox:hover{
         grid.addWidget(dec_spin, 0, 1)
 
         hex_label = QLabel("Hex: 0x")
-        hex_label.setStyleSheet("font-size: 9px; color: #8a92a5;")
+        hex_label.setStyleSheet("font-size: 11px; color: #8a92a5;")
         grid.addWidget(hex_label, 0, 2)
 
         hex_edit = QLineEdit()
@@ -2857,7 +2857,7 @@ QSpinBox:hover{
             hex_edit.setText(cur.replace("0x", "").upper())
         else:
             hex_edit.setText("0")
-        hex_edit.setFixedHeight(26)
+        hex_edit.setFixedHeight(30)
         hex_edit.setStyleSheet("""
 QLineEdit{
     background:#1a1f28;
@@ -2865,7 +2865,7 @@ QLineEdit{
     border-radius:6px;
     color:#9be238;
     font-family:monospace;
-    font-size:10px;
+    font-size:12px;
     padding:3px 8px;
 }
 QLineEdit:focus{
@@ -2917,9 +2917,9 @@ QPushButton{
     border-radius:6px;
     color:#76b900;
     padding:3px 5px;
-    font-size:8px;
+    font-size:10px;
     font-family:monospace;
-    min-height:26px;
+    min-height:30px;
 }
 QPushButton:hover{
     background:#252c37;
@@ -2934,9 +2934,9 @@ QPushButton{
     border-radius:6px;
     color:#d8d8d8;
     padding:3px 5px;
-    font-size:8px;
+    font-size:10px;
     font-family:monospace;
-    min-height:26px;
+    min-height:30px;
 }
 QPushButton:hover{
     background:#252c37;
@@ -2957,11 +2957,11 @@ QPushButton:hover{
         val_layout.setSpacing(8)
 
         calc_label = QLabel("Combined Value:")
-        calc_label.setStyleSheet("font-size: 9px; color: #8a92a5; font-family: monospace;")
+        calc_label.setStyleSheet("font-size: 11px; color: #8a92a5; font-family: monospace;")
         val_layout.addWidget(calc_label)
 
         calc_value = QLabel(f"0x{cur_val:08X}" if cur_val else "0x0")
-        calc_value.setStyleSheet("font-size: 10px; color: #9be238; font-family: monospace;")
+        calc_value.setStyleSheet("font-size: 12px; color: #9be238; font-family: monospace;")
         calc_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
         val_layout.addWidget(calc_value)
 
@@ -2973,7 +2973,7 @@ QPushButton:hover{
         hbox.setSpacing(8)
 
         hex_label = QLabel("0x")
-        hex_label.setStyleSheet("font-size: 9px; color: #8a92a5;")
+        hex_label.setStyleSheet("font-size: 11px; color: #8a92a5;")
         hbox.addWidget(hex_label)
 
         hex_edit = QLineEdit()
@@ -2981,7 +2981,7 @@ QPushButton:hover{
             hex_edit.setText(cur.replace("0x", "").upper())
         else:
             hex_edit.setText("0")
-        hex_edit.setFixedHeight(26)
+        hex_edit.setFixedHeight(30)
         hex_edit.setStyleSheet("""
 QLineEdit{
     background:#1a1f28;
@@ -2989,7 +2989,7 @@ QLineEdit{
     border-radius:6px;
     color:#9be238;
     font-family:monospace;
-    font-size:10px;
+    font-size:12px;
     padding:3px 8px;
 }
 QLineEdit:focus{
@@ -3138,7 +3138,7 @@ QListWidget::item{
     border-radius:0px;
     padding:4px 12px;
     margin:0px;
-    font-size:10px;
+    font-size:12px;
     font-weight:400;
     border-left:2px solid transparent;
 }
@@ -3242,7 +3242,7 @@ class ArchDetailWidget(QWidget):
         self._name_label.setStyleSheet("""
 QLabel{
     color:#f2f2f2;
-    font-size:16px;
+    font-size:18px;
     font-weight:700;
 }
 """)
@@ -3251,13 +3251,13 @@ QLabel{
 
         # Architecture field
         self._arch_label = QLabel()
-        self._arch_label.setStyleSheet("color: #a7afbc; font-size: 11px;")
+        self._arch_label.setStyleSheet("color: #a7afbc; font-size: 13px;")
         self._arch_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self._arch_label)
 
         # Code and example
         self._code_label = QLabel()
-        self._code_label.setStyleSheet("font-family: monospace; font-size: 10px; color: #8ea0ba;")
+        self._code_label.setStyleSheet("font-family: monospace; font-size: 12px; color: #8ea0ba;")
         self._code_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self._code_label)
 
@@ -3267,7 +3267,7 @@ QLabel{
             "in DXVK‑NVAPI."
         )
         self._desc_label.setWordWrap(True)
-        self._desc_label.setStyleSheet("color: #a7afbc; font-size: 11px;")
+        self._desc_label.setStyleSheet("color: #a7afbc; font-size: 13px;")
         layout.addWidget(self._desc_label)
 
         layout.addStretch()
@@ -3283,7 +3283,7 @@ QPushButton{
     color:white;
     padding:4px 16px;
     font-weight:600;
-    font-size:10px;
+    font-size:12px;
 }
 QPushButton:hover{
     background:#ca4545;
@@ -5229,7 +5229,7 @@ QListWidget::item{
     border-radius:0px;
     padding:4px 12px;
     margin:0px;
-    font-size:10px;
+    font-size:12px;
     font-weight:400;
     border-left:2px solid transparent;
 }
@@ -5445,7 +5445,7 @@ QLineEdit{
     border-radius:6px;
     color:#d8d8d8;
     font-family:monospace;
-    font-size:10px;
+    font-size:12px;
     padding:5px 10px;
 }
 QLineEdit:focus{ border:1px solid #76b900; }
@@ -5482,7 +5482,7 @@ QLineEdit:hover{ background:#252c37; }
         self._name_label.setStyleSheet("""
 QLabel{
     color:#f2f2f2;
-    font-size:16px;
+    font-size:18px;
     font-weight:700;
 }
 """)
@@ -5498,7 +5498,7 @@ QLabel{
     padding:4px 10px;
     color:#8ea0ba;
     font-family:monospace;
-    font-size:9px;
+    font-size:11px;
 }
 """)
         self._cat_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -5513,7 +5513,7 @@ QLabel{
     padding:4px 10px;
     color:#9be238;
     font-family:monospace;
-    font-size:9px;
+    font-size:11px;
     font-weight:600;
 }
 """)
@@ -5528,7 +5528,7 @@ QLabel{
         self._desc_label.setStyleSheet("""
 QLabel{
     color:#a7afbc;
-    font-size:11px;
+    font-size:13px;
     line-height:140%;
 }
 """)
@@ -5554,7 +5554,7 @@ QPushButton{
     color:white;
     padding:4px 16px;
     font-weight:600;
-    font-size:10px;
+    font-size:12px;
 }
 QPushButton:hover{ background:#ca4545; }
 QPushButton:pressed{ background:#a73434; }
@@ -5646,7 +5646,7 @@ QPushButton:pressed{ background:#a73434; }
             btn.setCheckable(True)
             if opt == cur:
                 btn.setChecked(True)
-            btn.setFixedHeight(26)
+            btn.setFixedHeight(30)
             btn.setStyleSheet("""
 QPushButton{
     background:#1a1f28;
@@ -5654,7 +5654,7 @@ QPushButton{
     border-radius:6px;
     color:#d8d8d8;
     padding:5px;
-    font-size:9px;
+    font-size:11px;
     font-weight:600;
 }
 QPushButton:hover{
@@ -5714,9 +5714,9 @@ QPushButton:checked{
 
         # Column headers
         hdr_flag = QLabel("Flag")
-        hdr_flag.setStyleSheet("color:#8a92a5; font-size:8px; font-weight:600;")
+        hdr_flag.setStyleSheet("color:#8a92a5; font-size:10px; font-weight:600;")
         hdr_desc = QLabel("Description")
-        hdr_desc.setStyleSheet("color:#8a92a5; font-size:8px; font-weight:600;")
+        hdr_desc.setStyleSheet("color:#8a92a5; font-size:10px; font-weight:600;")
         grid.addWidget(hdr_flag, 0, 0)
         grid.addWidget(hdr_desc, 0, 1)
 
@@ -5731,7 +5731,7 @@ QPushButton:checked{
             btn = QPushButton(flag)
             btn.setCheckable(True)
             btn.setChecked(flag in active)
-            btn.setFixedHeight(26)
+            btn.setFixedHeight(30)
             self._apply_flag_btn_style(btn)
             btn.toggled.connect(lambda checked, f=flag: self._on_vkd3d_flag_toggled())
             self._vkd3d_btns[flag] = btn
@@ -5739,7 +5739,7 @@ QPushButton:checked{
             desc_text = VKD3D_CONFIG_DESCS.get(flag, "")
             desc_lbl = QLabel(desc_text)
             desc_lbl.setWordWrap(True)
-            desc_lbl.setStyleSheet("color:#a7afbc; font-size:9px;")
+            desc_lbl.setStyleSheet("color:#a7afbc; font-size:11px;")
 
             grid.addWidget(btn,      r_idx + 2, 0)
             grid.addWidget(desc_lbl, r_idx + 2, 1)
@@ -5754,7 +5754,7 @@ QPushButton{
     border-radius:6px;
     color:#d8d8d8;
     padding:4px 10px;
-    font-size:9px;
+    font-size:11px;
     font-weight:600;
     text-align:left;
 }
@@ -5808,7 +5808,7 @@ QPushButton:checked{
             btn = QPushButton(opt)
             btn.setCheckable(True)
             btn.setChecked(opt in active_plain)
-            btn.setFixedHeight(26)
+            btn.setFixedHeight(30)
             self._apply_flag_btn_style(btn)
             btn.toggled.connect(lambda checked, o=opt: self._on_flag_toggled())
             self._flag_btns[opt] = btn
@@ -5821,14 +5821,14 @@ QPushButton:checked{
 
         if param_options:
             hint = QLabel("Also available (type manually, comma-separated): " + ", ".join(param_options))
-            hint.setStyleSheet("color:#3a4a5a; font-size:8px; font-family:monospace;")
+            hint.setStyleSheet("color:#3a4a5a; font-size:10px; font-family:monospace;")
             hint.setWordWrap(True)
             self._control_layout.addWidget(hint)
 
             extra_edit = QLineEdit(",".join(self._flag_extra_tokens))
             extra_edit.setStyleSheet(self._EDIT_SS)
             extra_edit.setPlaceholderText("e.g. scale=2")
-            extra_edit.setFixedHeight(28)
+            extra_edit.setFixedHeight(32)
             extra_edit.textChanged.connect(self._on_extra_flags_changed)
             self._control_layout.addWidget(extra_edit)
 
@@ -5856,7 +5856,7 @@ QPushButton:checked{
         edit = QLineEdit(cur)
         edit.setStyleSheet(self._EDIT_SS)
         edit.setPlaceholderText(ev.placeholder or ev.default or "")
-        edit.setFixedHeight(28)
+        edit.setFixedHeight(32)
         if ev.vtype == "int":
             # Vars declared as "int" (FLM_TARGET_FPS, FLM_SPIN_NS, ...) only
             # ever hold a non-negative integer — flip_meter.cpp atoi/atoll's
@@ -5952,7 +5952,7 @@ QListWidget::item{
     border-radius:0px;
     padding:4px 12px;
     margin:0px;
-    font-size:10px;
+    font-size:12px;
     font-weight:400;
     border-left:2px solid transparent;
 }
@@ -6104,10 +6104,10 @@ class ProfileManagerWidget(QWidget):
                 background: #141720;
                 border: 1px solid #1e2535;
                 color: #e8eaf0;
-                font-size: 10px;
+                font-size: 12px;
                 padding: 3px 8px;
                 border-radius: 3px;
-                min-height: 22px;
+                min-height: 26px;
             }
             QLineEdit:focus {
                 border-color: #4a7300;
@@ -6125,9 +6125,9 @@ class ProfileManagerWidget(QWidget):
                 border: 1px solid #76b900;
                 border-radius: 3px;
                 padding: 3px 12px;
-                font-size: 10px;
+                font-size: 12px;
                 font-weight: 700;
-                min-height: 22px;
+                min-height: 26px;
             }
             QPushButton:hover {
                 background: #8fd400;
@@ -6143,7 +6143,7 @@ class ProfileManagerWidget(QWidget):
                 border: 1px solid #1e2535;
                 border-radius: 3px;
                 color: #c8cdd8;
-                font-size: 10px;
+                font-size: 12px;
             }
             QListWidget::item {
                 padding: 5px 10px;
@@ -6172,8 +6172,8 @@ class ProfileManagerWidget(QWidget):
                 padding: 3px 10px;
                 background: #141720;
                 color: #c8cdd8;
-                font-size: 9px;
-                min-height: 20px;
+                font-size: 11px;
+                min-height: 24px;
             }
             QPushButton:hover {
                 border-color: #4a7300;
@@ -6190,8 +6190,8 @@ class ProfileManagerWidget(QWidget):
                 padding: 3px 10px;
                 background: #141720;
                 color: #e84545;
-                font-size: 9px;
-                min-height: 20px;
+                font-size: 11px;
+                min-height: 24px;
             }
             QPushButton:hover {
                 border-color: #e84545;
@@ -6427,7 +6427,7 @@ class LutrisSyncWidget(QWidget):
         layout.setSpacing(6)
 
         header = QLabel("Lutris Game Sync")
-        header.setStyleSheet("color:#e8eaf0; font-size:11px; font-weight:700;")
+        header.setStyleSheet("color:#e8eaf0; font-size:13px; font-weight:700;")
         layout.addWidget(header)
 
         if not _HAVE_YAML:
@@ -6437,7 +6437,7 @@ class LutrisSyncWidget(QWidget):
                 "to enable Lutris sync."
             )
             warn.setWordWrap(True)
-            warn.setStyleSheet("color:#e84545; font-size:10px;")
+            warn.setStyleSheet("color:#e84545; font-size:12px;")
             layout.addWidget(warn)
             layout.addStretch()
             return
@@ -6450,7 +6450,7 @@ class LutrisSyncWidget(QWidget):
             "into system.* — the rest go into system.env as plain env vars."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color:#a8adb8; font-size:9px;")
+        desc.setStyleSheet("color:#a8adb8; font-size:11px;")
         layout.addWidget(desc)
 
         # ── Games folder + rescan ─────────────────────────────────────────────
@@ -6461,15 +6461,15 @@ class LutrisSyncWidget(QWidget):
         self._path_label.setStyleSheet("""
             QLineEdit {
                 background: #141720; border: 1px solid #1e2535;
-                color: #a8adb8; font-size: 9px; font-family: monospace;
-                padding: 3px 8px; border-radius: 3px; min-height: 22px;
+                color: #a8adb8; font-size: 11px; font-family: monospace;
+                padding: 3px 8px; border-radius: 3px; min-height: 26px;
             }
         """)
         scan_row.addWidget(self._path_label, stretch=1)
         _btn_ss = """
             QPushButton {
                 border: 1px solid #1e2535; border-radius: 3px; padding: 3px 8px;
-                background: #141720; color: #c8cdd8; font-size: 9px; min-height: 22px;
+                background: #141720; color: #c8cdd8; font-size: 11px; min-height: 26px;
             }
             QPushButton:hover { border-color: #4a7300; }
         """
@@ -6492,7 +6492,7 @@ class LutrisSyncWidget(QWidget):
         self._game_combo.setStyleSheet("""
             QComboBox {
                 background: #141720; border: 1px solid #1e2535; color: #e8eaf0;
-                font-size: 10px; padding: 3px 8px; border-radius: 3px; min-height: 24px;
+                font-size: 12px; padding: 3px 8px; border-radius: 3px; min-height: 28px;
             }
             QComboBox:hover { border-color: #4a7300; }
         """)
@@ -6506,7 +6506,7 @@ class LutrisSyncWidget(QWidget):
         # settings that aren't already tracked elsewhere in the GUI.
         _grp_ss = """
             QGroupBox {
-                color: #a8adb8; font-size: 9px; font-weight: 700;
+                color: #a8adb8; font-size: 11px; font-weight: 700;
                 border: 1px solid #1e2535; border-radius: 3px;
                 margin-top: 8px; padding-top: 14px;
             }
@@ -6516,7 +6516,7 @@ class LutrisSyncWidget(QWidget):
         # nearly invisible against this dark theme, so give it a real
         # border + a bright checked state.
         _chk_ss = """
-            QCheckBox { color:#c8cdd8; font-size:11px; }
+            QCheckBox { color:#c8cdd8; font-size:13px; }
             QCheckBox::indicator {
                 width:15px; height:15px; border:1px solid #5a6478;
                 border-radius:3px; background:#1a1f28;
@@ -6540,15 +6540,15 @@ class LutrisSyncWidget(QWidget):
         nice_row = QHBoxLayout()
         nice_row.setSpacing(6)
         nice_lbl = QLabel("RUN nice value:")
-        nice_lbl.setStyleSheet("color:#c8cdd8; font-size:11px;")
+        nice_lbl.setStyleSheet("color:#c8cdd8; font-size:13px;")
         self._lgtune_nice = QSpinBox()
         self._lgtune_nice.setRange(-20, 19)
         self._lgtune_nice.setValue(-10)
         self._lgtune_nice.setStyleSheet("""
             QSpinBox {
                 background: #141720; border: 1px solid #1e2535; color: #e8eaf0;
-                font-size: 11px; font-family: monospace; padding: 2px 4px;
-                border-radius: 3px; min-height: 20px;
+                font-size: 13px; font-family: monospace; padding: 2px 4px;
+                border-radius: 3px; min-height: 24px;
             }
             QSpinBox:hover { border-color: #4a7300; }
         """)
@@ -6567,7 +6567,7 @@ class LutrisSyncWidget(QWidget):
         )
         lgtune_note.setWordWrap(True)
         lgtune_note.setStyleSheet(
-            "color:#8a92a5; font-size:11px; font-family:monospace;"
+            "color:#8a92a5; font-size:13px; font-family:monospace;"
         )
         lgtune_layout.addWidget(lgtune_note)
 
@@ -6579,7 +6579,7 @@ class LutrisSyncWidget(QWidget):
         self._preview.setStyleSheet("""
             QPlainTextEdit {
                 background: #0d0f12; border: 1px solid #1e2535;
-                color: #9fd63a; font-family: monospace; font-size: 9px; border-radius: 3px;
+                color: #9fd63a; font-family: monospace; font-size: 11px; border-radius: 3px;
             }
         """)
         self._preview.setPlaceholderText("Select a game to preview the resulting YAML changes...")
@@ -6593,8 +6593,8 @@ class LutrisSyncWidget(QWidget):
         self._apply_btn.setStyleSheet("""
             QPushButton {
                 background: #76b900; color: #000; border: 1px solid #76b900;
-                border-radius: 3px; padding: 4px 12px; font-size: 10px;
-                font-weight: 700; min-height: 24px;
+                border-radius: 3px; padding: 4px 12px; font-size: 12px;
+                font-weight: 700; min-height: 28px;
             }
             QPushButton:hover { background: #8fd400; }
             QPushButton:disabled { background: #2a2f38; color: #8a92a5; border-color: #1e2535; }
@@ -6616,8 +6616,8 @@ class LutrisSyncWidget(QWidget):
         self._import_btn.setStyleSheet("""
             QPushButton {
                 background: #1a1f28; color: #d8d8d8; border: 1px solid #323c4b;
-                border-radius: 3px; padding: 4px 12px; font-size: 10px;
-                font-weight: 600; min-height: 24px;
+                border-radius: 3px; padding: 4px 12px; font-size: 12px;
+                font-weight: 600; min-height: 28px;
             }
             QPushButton:hover { background: #232a35; border-color: #4a7300; }
             QPushButton:disabled { background: #14181f; color: #6a7080; }
@@ -6628,7 +6628,7 @@ class LutrisSyncWidget(QWidget):
 
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
-        self._status_label.setStyleSheet("color:#a8adb8; font-size:9px;")
+        self._status_label.setStyleSheet("color:#a8adb8; font-size:11px;")
         layout.addWidget(self._status_label)
 
         for w in (self._chk_lgtune,):
@@ -7297,7 +7297,7 @@ QLineEdit{
     border-radius:6px;
     color:#d8d8d8;
     font-family:monospace;
-    font-size:10px;
+    font-size:12px;
     padding:5px 10px;
 }
 QLineEdit:focus{ border:1px solid #76b900; }
@@ -7307,7 +7307,7 @@ QLineEdit:hover{ background:#252c37; }
 # Shared stylesheet for group boxes inside the Extra Tools panels
 _TOOL_GROUP_SS = """
 QGroupBox{
-    color:#8ea0ba; font-size:10px; font-weight:700;
+    color:#8ea0ba; font-size:12px; font-weight:700;
     border:1px solid #1e2535; border-radius:6px;
     margin-top:8px; padding-top:14px;
 }
@@ -7322,7 +7322,7 @@ def _tool_btn(label: str, bg="#1a1f28", border="#323c4b", fg="#d8d8d8",
     btn.setStyleSheet(f"""
 QPushButton{{
     background:{bg}; border:1px solid {border}; border-radius:5px;
-    color:{fg}; padding:5px 14px; font-weight:{weight}; font-size:10px;
+    color:{fg}; padding:5px 14px; font-weight:{weight}; font-size:12px;
 }}
 QPushButton:hover{{ border:1px solid #76b900; }}
 QPushButton:disabled{{ color:#3a4250; border:1px solid #232a36; background:#12151b; }}
@@ -7342,7 +7342,7 @@ class ExtraToolsSidebarWidget(QWidget):
         layout.setSpacing(12)
 
         title = QLabel("Extra Tools")
-        title.setStyleSheet("color:#e8eaf0; font-size:13px; font-weight:700;")
+        title.setStyleSheet("color:#e8eaf0; font-size:15px; font-weight:700;")
         layout.addWidget(title)
 
         sep1 = QFrame()
@@ -7352,12 +7352,12 @@ class ExtraToolsSidebarWidget(QWidget):
 
         # ── vk_flip_meter blurb ──────────────────────────────────────────────
         vkfm_title = QLabel("vk_flip_meter")
-        vkfm_title.setStyleSheet("color:#c8cdd8; font-size:11px; font-weight:700;")
+        vkfm_title.setStyleSheet("color:#c8cdd8; font-size:13px; font-weight:700;")
         layout.addWidget(vkfm_title)
 
         vkfm_sub = QLabel("Frame Pacing / Cadence Modulation Vulkan Layer")
         vkfm_sub.setWordWrap(True)
-        vkfm_sub.setStyleSheet("color:#8a92a5; font-size:9px;")
+        vkfm_sub.setStyleSheet("color:#8a92a5; font-size:11px;")
         layout.addWidget(vkfm_sub)
 
         vkfm_info = QLabel(
@@ -7368,7 +7368,7 @@ class ExtraToolsSidebarWidget(QWidget):
             "hot-reload knobs into a running game via FLM_CONFIG + SIGUSR1."
         )
         vkfm_info.setWordWrap(True)
-        vkfm_info.setStyleSheet("color:#a7afbc; font-size:10px; line-height:145%;")
+        vkfm_info.setStyleSheet("color:#a7afbc; font-size:12px; line-height:145%;")
         layout.addWidget(vkfm_info)
 
         sep2 = QFrame()
@@ -7378,12 +7378,12 @@ class ExtraToolsSidebarWidget(QWidget):
 
         # ── lutris-game-tune blurb ───────────────────────────────────────────
         lgt_title = QLabel("lutris-game-tune")
-        lgt_title.setStyleSheet("color:#c8cdd8; font-size:11px; font-weight:700;")
+        lgt_title.setStyleSheet("color:#c8cdd8; font-size:13px; font-weight:700;")
         layout.addWidget(lgt_title)
 
         lgt_sub = QLabel("System-wide Lutris / Wine performance tuner")
         lgt_sub.setWordWrap(True)
-        lgt_sub.setStyleSheet("color:#8a92a5; font-size:9px;")
+        lgt_sub.setStyleSheet("color:#8a92a5; font-size:11px;")
         layout.addWidget(lgt_sub)
 
         lgt_info = QLabel(
@@ -7394,7 +7394,7 @@ class ExtraToolsSidebarWidget(QWidget):
             "Not part of DRSTool profiles — applies to all games globally."
         )
         lgt_info.setWordWrap(True)
-        lgt_info.setStyleSheet("color:#a7afbc; font-size:10px; line-height:145%;")
+        lgt_info.setStyleSheet("color:#a7afbc; font-size:12px; line-height:145%;")
         layout.addWidget(lgt_info)
 
         layout.addStretch()
@@ -7425,7 +7425,7 @@ class FlmInstallWidget(QWidget):
         layout.setSpacing(10)
 
         header = QLabel("vk_flip_meter — Build & Install")
-        header.setStyleSheet("color:#f2f2f2; font-size:16px; font-weight:700;")
+        header.setStyleSheet("color:#f2f2f2; font-size:18px; font-weight:700;")
         layout.addWidget(header)
 
         desc = QLabel(
@@ -7436,7 +7436,7 @@ class FlmInstallWidget(QWidget):
         )
         desc.setWordWrap(True)
         desc.setTextFormat(Qt.RichText)
-        desc.setStyleSheet("color:#a7afbc; font-size:11px; line-height:140%;")
+        desc.setStyleSheet("color:#a7afbc; font-size:13px; line-height:140%;")
         layout.addWidget(desc)
 
         # Source path banner (read-only, bundled)
@@ -7444,15 +7444,15 @@ class FlmInstallWidget(QWidget):
         src_row.setSpacing(6)
         src_icon = QLabel("📁")
         src_lbl = QLabel("Source:")
-        src_lbl.setStyleSheet("color:#8ea0ba; font-size:10px; font-weight:600;")
+        src_lbl.setStyleSheet("color:#8ea0ba; font-size:12px; font-weight:600;")
         self._src_path_lbl = QLabel(str(self._BUNDLED_SRC))
         self._src_path_lbl.setStyleSheet(
-            "color:#76b900; font-size:10px; font-family:monospace;"
+            "color:#76b900; font-size:12px; font-family:monospace;"
         )
         src_ok = (self._BUNDLED_SRC / "CMakeLists.txt").is_file()
         self._src_status = QLabel("✔ found" if src_ok else "✘ not found")
         self._src_status.setStyleSheet(
-            f"color:{'#76b900' if src_ok else '#c04040'}; font-size:10px; font-weight:700;"
+            f"color:{'#76b900' if src_ok else '#c04040'}; font-size:12px; font-weight:700;"
         )
         src_row.addWidget(src_icon)
         src_row.addWidget(src_lbl)
@@ -7464,7 +7464,7 @@ class FlmInstallWidget(QWidget):
         form.setSpacing(8)
 
         prefix_lbl = QLabel("Install prefix:")
-        prefix_lbl.setStyleSheet("color:#8ea0ba; font-size:10px; font-weight:600;")
+        prefix_lbl.setStyleSheet("color:#8ea0ba; font-size:12px; font-weight:600;")
         self._prefix_edit = QLineEdit("/usr/local")
         self._prefix_edit.setStyleSheet(FLM_FIELD_SS)
         form.addWidget(prefix_lbl, 0, 0)
@@ -7476,7 +7476,7 @@ class FlmInstallWidget(QWidget):
             "FLM_NATIVE_BUILD  (-O3 -march=native -mtune=native -flto — specific to this machine, not portable)"
         )
         self._native_chk.setStyleSheet("""
-QCheckBox{ color:#d8d8d8; font-size:10px; spacing:8px; }
+QCheckBox{ color:#d8d8d8; font-size:12px; spacing:8px; }
 QCheckBox::indicator{ width:14px; height:14px; border:1px solid #323c4b; border-radius:3px; background:#1a1f28; }
 QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
 """)
@@ -7485,7 +7485,7 @@ QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
         native_warn = QLabel(
             "If enabled: the .so built for the 7845HX may not run on a different CPU (a different machine)."
         )
-        native_warn.setStyleSheet("color:#8a92a5; font-size:9px; font-style:italic;")
+        native_warn.setStyleSheet("color:#8a92a5; font-size:11px; font-style:italic;")
         layout.addWidget(native_warn)
 
         btn_row = QHBoxLayout()
@@ -7505,7 +7505,7 @@ QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
         layout.addLayout(btn_row)
 
         self._status_lbl = QLabel("Ready.")
-        self._status_lbl.setStyleSheet("color:#8a92a5; font-size:9px;")
+        self._status_lbl.setStyleSheet("color:#8a92a5; font-size:11px;")
         layout.addWidget(self._status_lbl)
 
         # ── Live tuning: FLM_CONFIG file + SIGUSR1 ───────────────────────────
@@ -7516,7 +7516,7 @@ QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
         # vars (from the Env Vars tab) into the .conf, then signal the game.
         live_group = QGroupBox("Live Tuning  (FLM_CONFIG + SIGUSR1)")
         live_group.setStyleSheet("""
-QGroupBox{ color:#8ea0ba; font-size:10px; font-weight:700;
+QGroupBox{ color:#8ea0ba; font-size:12px; font-weight:700;
     border:1px solid #1e2535; border-radius:6px;
     margin-top:8px; padding-top:12px; }
 QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
@@ -7525,7 +7525,7 @@ QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
         live_layout.setSpacing(6)
 
         conf_lbl = QLabel("Config file:")
-        conf_lbl.setStyleSheet("color:#8ea0ba; font-size:9px; font-weight:600;")
+        conf_lbl.setStyleSheet("color:#8ea0ba; font-size:11px; font-weight:600;")
         self._conf_edit = QLineEdit("/tmp/flm.conf")
         self._conf_edit.setStyleSheet(FLM_FIELD_SS)
         self._write_conf_btn = _tool_btn("Write .conf")
@@ -7535,7 +7535,7 @@ QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
         live_layout.addWidget(self._write_conf_btn, 0, 2)
 
         proc_lbl = QLabel("Process match:")
-        proc_lbl.setStyleSheet("color:#8ea0ba; font-size:9px; font-weight:600;")
+        proc_lbl.setStyleSheet("color:#8ea0ba; font-size:11px; font-weight:600;")
         self._proc_edit = QLineEdit()
         self._proc_edit.setStyleSheet(FLM_FIELD_SS)
         self._proc_edit.setPlaceholderText("pkill -f pattern, e.g. GameName.exe")
@@ -7551,7 +7551,7 @@ QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
             "written as comments — the layer can't change them at runtime."
         )
         live_hint.setWordWrap(True)
-        live_hint.setStyleSheet("color:#8a92a5; font-size:8px; font-style:italic;")
+        live_hint.setStyleSheet("color:#8a92a5; font-size:10px; font-style:italic;")
         live_layout.addWidget(live_hint, 2, 0, 1, 3)
 
         layout.addWidget(live_group)
@@ -7565,7 +7565,7 @@ QPlainTextEdit{
     border-radius:6px;
     color:#9be238;
     font-family:monospace;
-    font-size:9px;
+    font-size:11px;
     padding:6px;
 }
 """)
@@ -7580,7 +7580,7 @@ QPlainTextEdit{
         src_ok = (self._BUNDLED_SRC / "CMakeLists.txt").is_file()
         self._src_status.setText("✔ found" if src_ok else "✘ not found")
         self._src_status.setStyleSheet(
-            f"color:{'#76b900' if src_ok else '#c04040'}; font-size:10px; font-weight:700;"
+            f"color:{'#76b900' if src_ok else '#c04040'}; font-size:12px; font-weight:700;"
         )
 
     # ── console ──────────────────────────────────────────────────────────────
@@ -8068,7 +8068,7 @@ class LgtuneWidget(QWidget):
         root.addWidget(scroll, 1)
 
         header = QLabel("lutris-game-tune — System-wide Game Tuner")
-        header.setStyleSheet("color:#f2f2f2; font-size:16px; font-weight:700;")
+        header.setStyleSheet("color:#f2f2f2; font-size:18px; font-weight:700;")
         layout.addWidget(header)
 
         # ── How it works / usage ─────────────────────────────────────────────
@@ -8124,7 +8124,7 @@ class LgtuneWidget(QWidget):
         usage_text.setWordWrap(True)
         usage_text.setTextFormat(Qt.RichText)
         usage_text.setStyleSheet(
-            "color:#a7afbc; font-size:10px; line-height:155%; "
+            "color:#a7afbc; font-size:12px; line-height:155%; "
             "background:transparent;"
         )
         usage_layout.addWidget(usage_text)
@@ -8138,23 +8138,23 @@ class LgtuneWidget(QWidget):
 
         self._status_banner = QLabel()
         self._status_banner.setWordWrap(True)
-        self._status_banner.setStyleSheet("font-size:10px; font-weight:700; padding:4px;")
+        self._status_banner.setStyleSheet("font-size:12px; font-weight:700; padding:4px;")
         install_layout.addWidget(self._status_banner)
 
         # Bundled source path banner (read-only)
         src_row = QHBoxLayout()
         src_row.setSpacing(6)
         src_lbl = QLabel("📁 Source:")
-        src_lbl.setStyleSheet("color:#8ea0ba; font-size:10px; font-weight:600;")
+        src_lbl.setStyleSheet("color:#8ea0ba; font-size:12px; font-weight:600;")
         self._lgt_src_lbl = QLabel(str(self._BUNDLED_SRC))
         self._lgt_src_lbl.setStyleSheet(
-            "color:#76b900; font-size:10px; font-family:monospace;"
+            "color:#76b900; font-size:12px; font-family:monospace;"
         )
         lgt_src_ok = (self._BUNDLED_SRC / "install.sh").is_file()
         self._lgt_src_status = QLabel("✔ found" if lgt_src_ok else "✘ not found")
         self._lgt_src_status.setStyleSheet(
             f"color:{'#76b900' if lgt_src_ok else '#c04040'}; "
-            "font-size:10px; font-weight:700;"
+            "font-size:12px; font-weight:700;"
         )
         src_row.addWidget(src_lbl)
         src_row.addWidget(self._lgt_src_lbl, 1)
@@ -8184,7 +8184,7 @@ class LgtuneWidget(QWidget):
         )
         install_note.setWordWrap(True)
         install_note.setTextFormat(Qt.RichText)
-        install_note.setStyleSheet("color:#8a92a5; font-size:9px; font-style:italic;")
+        install_note.setStyleSheet("color:#8a92a5; font-size:11px; font-style:italic;")
         install_layout.addWidget(install_note)
 
         layout.addWidget(install_group)
@@ -8209,7 +8209,7 @@ class LgtuneWidget(QWidget):
 
             # Label (key name, bold)
             key_lbl = QLabel(f"<b>{key}</b>")
-            key_lbl.setStyleSheet("color:#c8cdd8; font-size:10px;")
+            key_lbl.setStyleSheet("color:#c8cdd8; font-size:12px;")
             key_lbl.setToolTip(desc)
             grid.addWidget(key_lbl, row_idx * 2, 0, Qt.AlignTop)
 
@@ -8218,7 +8218,7 @@ class LgtuneWidget(QWidget):
                 ctrl = QCheckBox(label)
                 ctrl.setChecked(default == "1")
                 ctrl.setStyleSheet(
-                    "QCheckBox{ color:#d8d8d8; font-size:10px; spacing:6px; }"
+                    "QCheckBox{ color:#d8d8d8; font-size:12px; spacing:6px; }"
                     "QCheckBox::indicator{ width:14px; height:14px; "
                     "border:1px solid #323c4b; border-radius:3px; background:#1a1f28; }"
                     "QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }"
@@ -8231,7 +8231,7 @@ class LgtuneWidget(QWidget):
                 ctrl.setCurrentIndex(idx_default)
                 ctrl.setStyleSheet("""
 QComboBox{ background:#1a1f28; border:1px solid #323c4b; border-radius:4px;
-           color:#d8d8d8; font-size:10px; padding:3px 8px; min-height:22px; }
+           color:#d8d8d8; font-size:12px; padding:3px 8px; min-height:26px; }
 QComboBox:hover{ border:1px solid #76b900; }
 QComboBox QAbstractItemView{ background:#141720; color:#d8d8d8; selection-background-color:#1e2535; }
 """)
@@ -8244,7 +8244,7 @@ QComboBox QAbstractItemView{ background:#141720; color:#d8d8d8; selection-backgr
                 ctrl.setValue(int(default))
                 ctrl.setStyleSheet("""
 QSpinBox{ background:#1a1f28; border:1px solid #323c4b; border-radius:4px;
-          color:#d8d8d8; font-size:10px; padding:3px 6px; }
+          color:#d8d8d8; font-size:12px; padding:3px 6px; }
 QSpinBox:hover{ border:1px solid #76b900; }
 QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
 """)
@@ -8267,7 +8267,7 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
             # Description (smaller, muted, spans full row)
             desc_lbl = QLabel(desc)
             desc_lbl.setWordWrap(True)
-            desc_lbl.setStyleSheet("color:#8a92a5; font-size:9px; font-style:italic;")
+            desc_lbl.setStyleSheet("color:#a7afbc; font-size:11px; font-style:italic;")
             grid.addWidget(desc_lbl, row_idx * 2 + 1, 0, 1, 2)
 
         # ── Runtime availability hint for SET_EPP_BOOST ───────────────────────
@@ -8315,7 +8315,7 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
         )
         save_note.setWordWrap(True)
         save_note.setTextFormat(Qt.RichText)
-        save_note.setStyleSheet("color:#8a92a5; font-size:9px; font-style:italic;")
+        save_note.setStyleSheet("color:#8a92a5; font-size:11px; font-style:italic;")
         settings_layout.addWidget(save_note)
 
         layout.addWidget(self._settings_group)
@@ -8323,7 +8323,7 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
         # ── Console ───────────────────────────────────────────────────────────
         console_hdr = QHBoxLayout()
         console_lbl = QLabel("Output")
-        console_lbl.setStyleSheet("color:#8ea0ba; font-size:10px; font-weight:700;")
+        console_lbl.setStyleSheet("color:#8ea0ba; font-size:12px; font-weight:700;")
         clear_btn = _tool_btn("Clear")
         clear_btn.clicked.connect(lambda: self._console.clear())
         console_hdr.addWidget(console_lbl)
@@ -8337,7 +8337,7 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
         self._console.setStyleSheet("""
 QPlainTextEdit{
     background:#0a0c0f; border:1px solid #1e2535; border-radius:6px;
-    color:#9be238; font-family:monospace; font-size:9px; padding:6px;
+    color:#9be238; font-family:monospace; font-size:11px; padding:6px;
 }
 """)
         layout.addWidget(self._console)
@@ -8363,14 +8363,14 @@ QPlainTextEdit{
         self._lgt_src_status.setText("✔ found" if src_ok else "✘ not found")
         self._lgt_src_status.setStyleSheet(
             f"color:{'#76b900' if src_ok else '#c04040'}; "
-            "font-size:10px; font-weight:700;"
+            "font-size:12px; font-weight:700;"
         )
         if self._is_installed():
             self._status_banner.setText(
                 f"✔  Installed  —  {LGTUNE_WRAPPER}"
             )
             self._status_banner.setStyleSheet(
-                "color:#76b900; font-size:10px; font-weight:700; padding:4px;"
+                "color:#76b900; font-size:12px; font-weight:700; padding:4px;"
             )
             self._install_btn.hide()
             self._uninstall_btn.show()
@@ -8382,7 +8382,7 @@ QPlainTextEdit{
                 "Click Install to build and install from the bundled source."
             )
             self._status_banner.setStyleSheet(
-                "color:#c04040; font-size:10px; font-weight:700; padding:4px;"
+                "color:#c04040; font-size:12px; font-weight:700; padding:4px;"
             )
             self._install_btn.show()
             self._uninstall_btn.hide()
@@ -8646,7 +8646,7 @@ class GamescopeFlagsWidget(QWidget):
         outer.setSpacing(6)
 
         header = QLabel("Gamescope Command Builder")
-        header.setStyleSheet("color:#e8eaf0; font-size:12px; font-weight:700;")
+        header.setStyleSheet("color:#e8eaf0; font-size:14px; font-weight:700;")
         outer.addWidget(header)
 
         desc = QLabel(
@@ -8656,12 +8656,12 @@ class GamescopeFlagsWidget(QWidget):
             "(STEAM_GAMESCOPE_*, ENABLE_GAMESCOPE_WSI, ...) are still in the Env Vars tab."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color:#a8adb8; font-size:10px;")
+        desc.setStyleSheet("color:#a8adb8; font-size:12px;")
         outer.addWidget(desc)
 
         self._enable_chk = QCheckBox("Enable Gamescope wrapper")
         self._enable_chk.setStyleSheet(
-            "QCheckBox{color:#e8eaf0; font-size:11px; font-weight:600;} "
+            "QCheckBox{color:#e8eaf0; font-size:13px; font-weight:600;} "
             "QCheckBox::indicator{width:16px; height:16px; border:1px solid #4a5468; "
             "border-radius:3px; background:#1a1f28;} "
             "QCheckBox::indicator:hover{border-color:#76b900;} "
@@ -8678,7 +8678,7 @@ class GamescopeFlagsWidget(QWidget):
         self._mangohud_chk = QCheckBox(
             "Enable MangoHud  (appends `mangohud --dlsym` after `--`)")
         self._mangohud_chk.setStyleSheet(
-            "QCheckBox{color:#e8eaf0; font-size:11px; font-weight:600;} "
+            "QCheckBox{color:#e8eaf0; font-size:13px; font-weight:600;} "
             "QCheckBox::indicator{width:16px; height:16px; border:1px solid #4a5468; "
             "border-radius:3px; background:#1a1f28;} "
             "QCheckBox::indicator:hover{border-color:#76b900;} "
@@ -8708,7 +8708,7 @@ class GamescopeFlagsWidget(QWidget):
         for cat, flags in by_cat.items():
             box = QGroupBox(cat)
             box.setStyleSheet(
-                "QGroupBox{color:#d46a6a; font-size:10px; font-weight:700; "
+                "QGroupBox{color:#d46a6a; font-size:12px; font-weight:700; "
                 "border:1px solid #2a3244; border-radius:3px; margin-top:8px; padding-top:8px;} "
                 "QGroupBox::title{subcontrol-origin:margin; left:8px; padding:0 4px;}"
             )
@@ -8720,7 +8720,7 @@ class GamescopeFlagsWidget(QWidget):
             for gf in flags:
                 label_txt = gf.name + (f"  ({gf.short})" if gf.short else "")
                 lbl = QLabel(label_txt)
-                lbl.setStyleSheet("color:#dde1e8; font-size:10px;")
+                lbl.setStyleSheet("color:#dde1e8; font-size:12px;")
                 lbl.setToolTip(gf.desc)
 
                 if gf.kind == "toggle":
@@ -8751,7 +8751,7 @@ class GamescopeFlagsWidget(QWidget):
                 if gf.kind != "toggle":
                     ctrl.setStyleSheet(
                         "QLineEdit,QComboBox{background:#181d28; border:1px solid #3a4256; "
-                        "color:#e8eaf0; font-size:10px; padding:2px 4px; min-height:18px; "
+                        "color:#e8eaf0; font-size:12px; padding:2px 4px; min-height:22px; "
                         "border-radius:3px;} "
                         "QLineEdit:focus,QComboBox:focus{border-color:#76b900;} "
                         "QLineEdit:disabled,QComboBox:disabled{color:#6a7284; background:#14171d; "
@@ -8774,14 +8774,14 @@ class GamescopeFlagsWidget(QWidget):
 
         # ── Live command preview ────────────────────────────────────────────
         preview_lbl = QLabel("Preview")
-        preview_lbl.setStyleSheet("color:#a8adb8; font-size:10px; font-weight:700;")
+        preview_lbl.setStyleSheet("color:#a8adb8; font-size:12px; font-weight:700;")
         outer.addWidget(preview_lbl)
 
         self._preview = QLineEdit()
         self._preview.setReadOnly(True)
         self._preview.setStyleSheet(
             "QLineEdit{background:#0d0f12; border:1px solid #1e2535; color:#76b900; "
-            "font-family:monospace; font-size:10px; padding:4px 6px;}"
+            "font-family:monospace; font-size:12px; padding:4px 6px;}"
         )
         outer.addWidget(self._preview)
 
@@ -8790,7 +8790,7 @@ class GamescopeFlagsWidget(QWidget):
         copy_btn = QPushButton("Copy Command")
         copy_btn.setStyleSheet(
             "QPushButton{background:#141720; border:1px solid #1e2535; color:#e8eaf0; "
-            "font-size:10px; padding:4px 10px; border-radius:3px;} "
+            "font-size:12px; padding:4px 10px; border-radius:3px;} "
             "QPushButton:hover{border-color:#4a7300;}"
         )
         copy_btn.clicked.connect(self._copy_command)
@@ -8924,7 +8924,7 @@ QTabWidget::pane { border: 1px solid #1e2535; top: -1px; }
 QTabBar::tab {
     background: #141720; color: #a8adb8;
     border: 1px solid #1e2535; border-bottom: none;
-    padding: 4px 14px; font-size: 9px; font-weight: 600;
+    padding: 4px 14px; font-size: 11px; font-weight: 600;
 }
 QTabBar::tab:selected { background: #1a1f2e; color: #e8eaf0; border-color: #4a7300; }
 QTabBar::tab:hover { color: #c8cdd8; }
@@ -9010,10 +9010,10 @@ class MainWindow(QMainWindow):
                 background: #141720;
                 border: 1px solid #1e2535;
                 color: #e8eaf0;
-                font-size: 10px;
+                font-size: 12px;
                 padding: 3px 8px;
                 border-radius: 3px;
-                min-height: 24px;
+                min-height: 28px;
             }
             QLineEdit:focus {
                 border-color: #4a7300;
@@ -9054,7 +9054,7 @@ class MainWindow(QMainWindow):
                 padding: 3px 5px;
                 background: transparent;
                 color: #8a92a5;
-                font-size: 9px;
+                font-size: 11px;
                 font-weight: 600;
             }
             QPushButton:checked {
@@ -9117,7 +9117,7 @@ class MainWindow(QMainWindow):
             QTabBar::tab {
                 background: #141720; color: #a8adb8;
                 border: 1px solid #1e2535; border-bottom: none;
-                padding: 4px 10px; font-size: 9px; font-weight: 600;
+                padding: 4px 10px; font-size: 11px; font-weight: 600;
             }
             QTabBar::tab:selected { background: #1a1f2e; color: #e8eaf0; border-color: #4a7300; }
             QTabBar::tab:hover { color: #c8cdd8; }
@@ -9142,7 +9142,7 @@ class MainWindow(QMainWindow):
         # Page 0: Placeholder
         self._placeholder = QLabel("Select a setting or an architecture from the sidebar")
         self._placeholder.setAlignment(Qt.AlignCenter)
-        self._placeholder.setStyleSheet("color: #8a92a5; font-size: 12px;")
+        self._placeholder.setStyleSheet("color: #8a92a5; font-size: 14px;")
         self._right_stack.addWidget(self._placeholder)
 
         # Page 1: Setting editor
@@ -9202,9 +9202,9 @@ class MainWindow(QMainWindow):
             QStatusBar {
                 background: #0d0f12;
                 color: #8a92a5;
-                font-size: 9px;
+                font-size: 11px;
                 border-top: 1px solid #1e2535;
-                min-height: 20px;
+                min-height: 24px;
             }
         """)
         status_bar.showMessage("Ready")
