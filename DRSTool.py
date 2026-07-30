@@ -7357,7 +7357,7 @@ class ExtraToolsSidebarWidget(QWidget):
 
         vkfm_sub = QLabel("Frame Pacing / Cadence Modulation Vulkan Layer")
         vkfm_sub.setWordWrap(True)
-        vkfm_sub.setStyleSheet("color:#8a92a5; font-size:11px;")
+        vkfm_sub.setStyleSheet("color:#8a92a5; font-size:13px;")
         layout.addWidget(vkfm_sub)
 
         vkfm_info = QLabel(
@@ -7383,7 +7383,7 @@ class ExtraToolsSidebarWidget(QWidget):
 
         lgt_sub = QLabel("System-wide Lutris / Wine performance tuner")
         lgt_sub.setWordWrap(True)
-        lgt_sub.setStyleSheet("color:#8a92a5; font-size:11px;")
+        lgt_sub.setStyleSheet("color:#8a92a5; font-size:13px;")
         layout.addWidget(lgt_sub)
 
         lgt_info = QLabel(
@@ -7485,7 +7485,7 @@ QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
         native_warn = QLabel(
             "If enabled: the .so built for the 7845HX may not run on a different CPU (a different machine)."
         )
-        native_warn.setStyleSheet("color:#8a92a5; font-size:11px; font-style:italic;")
+        native_warn.setStyleSheet("color:#8a92a5; font-size:13px; font-style:italic;")
         layout.addWidget(native_warn)
 
         btn_row = QHBoxLayout()
@@ -7505,7 +7505,7 @@ QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
         layout.addLayout(btn_row)
 
         self._status_lbl = QLabel("Ready.")
-        self._status_lbl.setStyleSheet("color:#8a92a5; font-size:11px;")
+        self._status_lbl.setStyleSheet("color:#8a92a5; font-size:13px;")
         layout.addWidget(self._status_lbl)
 
         # ── Live tuning: FLM_CONFIG file + SIGUSR1 ───────────────────────────
@@ -7525,7 +7525,7 @@ QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
         live_layout.setSpacing(6)
 
         conf_lbl = QLabel("Config file:")
-        conf_lbl.setStyleSheet("color:#8ea0ba; font-size:11px; font-weight:600;")
+        conf_lbl.setStyleSheet("color:#8ea0ba; font-size:13px; font-weight:600;")
         self._conf_edit = QLineEdit("/tmp/flm.conf")
         self._conf_edit.setStyleSheet(FLM_FIELD_SS)
         self._write_conf_btn = _tool_btn("Write .conf")
@@ -7535,7 +7535,7 @@ QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
         live_layout.addWidget(self._write_conf_btn, 0, 2)
 
         proc_lbl = QLabel("Process match:")
-        proc_lbl.setStyleSheet("color:#8ea0ba; font-size:11px; font-weight:600;")
+        proc_lbl.setStyleSheet("color:#8ea0ba; font-size:13px; font-weight:600;")
         self._proc_edit = QLineEdit()
         self._proc_edit.setStyleSheet(FLM_FIELD_SS)
         self._proc_edit.setPlaceholderText("pkill -f pattern, e.g. GameName.exe")
@@ -7551,7 +7551,7 @@ QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
             "written as comments — the layer can't change them at runtime."
         )
         live_hint.setWordWrap(True)
-        live_hint.setStyleSheet("color:#8a92a5; font-size:10px; font-style:italic;")
+        live_hint.setStyleSheet("color:#8a92a5; font-size:13px; font-style:italic;")
         live_layout.addWidget(live_hint, 2, 0, 1, 3)
 
         layout.addWidget(live_group)
@@ -7565,7 +7565,7 @@ QPlainTextEdit{
     border-radius:6px;
     color:#9be238;
     font-family:monospace;
-    font-size:11px;
+    font-size:13px;
     padding:6px;
 }
 """)
@@ -8184,7 +8184,7 @@ class LgtuneWidget(QWidget):
         )
         install_note.setWordWrap(True)
         install_note.setTextFormat(Qt.RichText)
-        install_note.setStyleSheet("color:#8a92a5; font-size:11px; font-style:italic;")
+        install_note.setStyleSheet("color:#8a92a5; font-size:13px; font-style:italic;")
         install_layout.addWidget(install_note)
 
         layout.addWidget(install_group)
@@ -8209,7 +8209,7 @@ class LgtuneWidget(QWidget):
 
             # Label (key name, bold)
             key_lbl = QLabel(f"<b>{key}</b>")
-            key_lbl.setStyleSheet("color:#c8cdd8; font-size:12px;")
+            key_lbl.setStyleSheet("color:#c8cdd8; font-size:13px;")
             key_lbl.setToolTip(desc)
             grid.addWidget(key_lbl, row_idx * 2, 0, Qt.AlignTop)
 
@@ -8218,7 +8218,7 @@ class LgtuneWidget(QWidget):
                 ctrl = QCheckBox(label)
                 ctrl.setChecked(default == "1")
                 ctrl.setStyleSheet(
-                    "QCheckBox{ color:#d8d8d8; font-size:12px; spacing:6px; }"
+                    "QCheckBox{ color:#d8d8d8; font-size:13px; spacing:6px; }"
                     "QCheckBox::indicator{ width:14px; height:14px; "
                     "border:1px solid #323c4b; border-radius:3px; background:#1a1f28; }"
                     "QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }"
@@ -8231,7 +8231,7 @@ class LgtuneWidget(QWidget):
                 ctrl.setCurrentIndex(idx_default)
                 ctrl.setStyleSheet("""
 QComboBox{ background:#1a1f28; border:1px solid #323c4b; border-radius:4px;
-           color:#d8d8d8; font-size:12px; padding:3px 8px; min-height:26px; }
+           color:#d8d8d8; font-size:13px; padding:3px 8px; min-height:26px; }
 QComboBox:hover{ border:1px solid #76b900; }
 QComboBox QAbstractItemView{ background:#141720; color:#d8d8d8; selection-background-color:#1e2535; }
 """)
@@ -8244,7 +8244,7 @@ QComboBox QAbstractItemView{ background:#141720; color:#d8d8d8; selection-backgr
                 ctrl.setValue(int(default))
                 ctrl.setStyleSheet("""
 QSpinBox{ background:#1a1f28; border:1px solid #323c4b; border-radius:4px;
-          color:#d8d8d8; font-size:12px; padding:3px 6px; }
+          color:#d8d8d8; font-size:13px; padding:3px 6px; }
 QSpinBox:hover{ border:1px solid #76b900; }
 QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
 """)
@@ -8267,7 +8267,9 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
             # Description (smaller, muted, spans full row)
             desc_lbl = QLabel(desc)
             desc_lbl.setWordWrap(True)
-            desc_lbl.setStyleSheet("color:#a7afbc; font-size:11px; font-style:italic;")
+            desc_lbl.setStyleSheet(
+                "color:#b4bcc9; font-size:13px; line-height:150%; padding:1px 0 6px 0;"
+            )
             grid.addWidget(desc_lbl, row_idx * 2 + 1, 0, 1, 2)
 
         # ── Runtime availability hint for SET_EPP_BOOST ───────────────────────
@@ -8315,7 +8317,7 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
         )
         save_note.setWordWrap(True)
         save_note.setTextFormat(Qt.RichText)
-        save_note.setStyleSheet("color:#8a92a5; font-size:11px; font-style:italic;")
+        save_note.setStyleSheet("color:#8a92a5; font-size:13px; font-style:italic;")
         settings_layout.addWidget(save_note)
 
         layout.addWidget(self._settings_group)
@@ -8337,7 +8339,7 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
         self._console.setStyleSheet("""
 QPlainTextEdit{
     background:#0a0c0f; border:1px solid #1e2535; border-radius:6px;
-    color:#9be238; font-family:monospace; font-size:11px; padding:6px;
+    color:#9be238; font-family:monospace; font-size:13px; padding:6px;
 }
 """)
         layout.addWidget(self._console)
@@ -8924,7 +8926,7 @@ QTabWidget::pane { border: 1px solid #1e2535; top: -1px; }
 QTabBar::tab {
     background: #141720; color: #a8adb8;
     border: 1px solid #1e2535; border-bottom: none;
-    padding: 4px 14px; font-size: 11px; font-weight: 600;
+    padding: 4px 14px; font-size:13px; font-weight: 600;
 }
 QTabBar::tab:selected { background: #1a1f2e; color: #e8eaf0; border-color: #4a7300; }
 QTabBar::tab:hover { color: #c8cdd8; }
