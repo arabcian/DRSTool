@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# lutris-game-tune.sh — Lutris Pre/Post Game System Tuner (v4.2)
+# lutris-game-tune.sh — Lutris Pre/Post Game System Tuner (v4.3)
 #
 # Not meant to be called directly. Invoked by lutris-game-tune-wrapper (a
 # setuid root binary). See lutris-game-tune-wrapper.c for wrapper setup.
@@ -144,6 +144,15 @@
 #   - SCHED: nr_migrate default 8 -> 32 (kernel default; 8 slows down
 #     load-balance correction as the runnable thread count grows) and
 #     min_base_slice_ns default 3000000 -> 1000000, both now configurable.
+#
+# v4.3 changes:
+#   - Added support for amd-pstate's per-core "epp_boost" module parameter
+#     (/sys/module/amd_pstate/parameters/epp_boost). Not yet upstream as of
+#     this writing — only present on kernels built with the epp_boost patch
+#     series. Enabled on PRE / restored on POST like every other tunable;
+#     configurable via SET_EPP_BOOST (default 1). Silently skipped (debug-
+#     logged only) on kernels where the sysfs knob doesn't exist, so this
+#     is safe to leave on even without a patched kernel.
 # =============================================================================
 
 set -euo pipefail
@@ -159,6 +168,11 @@ readonly CONFIG_FILE="/etc/lutris-game-tune.conf"
 # CPU frequency governor (amd-pstate active mode also sets EPP to performance)
 CPU_GOVERNOR="performance"
 SET_CPU_GOVERNOR=1
+# amd-pstate per-core EPP boost (kernel module param; not upstream yet as of
+# this writing — only present on patched kernels). Silently skipped if the
+# sysfs knob doesn't exist, so this is safe to leave enabled across kernels
+# that don't have it.
+SET_EPP_BOOST=1
 # PCIe ASPM policy during gameplay (cuts link wake-up latency)
 ASPM_POLICY="performance"
 SET_ASPM=1
@@ -349,6 +363,7 @@ load_config() {
         case "${key}" in
             CPU_GOVERNOR)          CPU_GOVERNOR="${val}" ;;
             SET_CPU_GOVERNOR)      SET_CPU_GOVERNOR="${val}" ;;
+            SET_EPP_BOOST)         SET_EPP_BOOST="${val}" ;;
             ASPM_POLICY)           ASPM_POLICY="${val}" ;;
             SET_ASPM)              SET_ASPM="${val}" ;;
             DISABLE_DEEP_CSTATES)  DISABLE_DEEP_CSTATES="${val}" ;;
@@ -660,6 +675,27 @@ restore_cpu_governor() {
             restore_param "${pol}/energy_performance_preference" "epp.$(basename "${pol}")"
         fi
     done
+}
+
+# --- amd-pstate EPP boost (per-core, not yet upstream) ------------------------
+# /sys/module/amd_pstate/parameters/epp_boost only exists on kernels built
+# with the epp_boost patch series applied. tune_param already no-ops cleanly
+# via its [[ ! -e "${path}" ]] check, but we check here too so the log
+# reflects "feature not present on this kernel" rather than a generic skip.
+EPP_BOOST_PATH="/sys/module/amd_pstate/parameters/epp_boost"
+
+tune_epp_boost() {
+    [[ "${SET_EPP_BOOST}" == "1" ]] || return 0
+    if [[ ! -e "${EPP_BOOST_PATH}" ]]; then
+        log_debug "epp_boost not present on this kernel, skipped"
+        return 0
+    fi
+    tune_param "${EPP_BOOST_PATH}" "1" "amd_pstate.epp_boost"
+}
+
+restore_epp_boost() {
+    [[ -e "${EPP_BOOST_PATH}" ]] || return 0
+    restore_param "${EPP_BOOST_PATH}" "amd_pstate.epp_boost"
 }
 
 # --- Deep C-state control (optional) ----------------------------------------
@@ -1599,6 +1635,7 @@ apply_game_settings() {
 
     log "--- CPU Governor / EPP ---"
     tune_cpu_governor
+    tune_epp_boost
 
     tune_cstates
 
@@ -1686,6 +1723,7 @@ restore_game_settings() {
 
     log "--- CPU Governor / EPP ---"
     restore_cpu_governor
+    restore_epp_boost
 
     restore_cstates
 
@@ -1764,7 +1802,8 @@ show_status() {
              /proc/sys/kernel/watchdog \
              /sys/kernel/mm/transparent_hugepage/enabled \
              /sys/module/pcie_aspm/parameters/policy \
-             /sys/devices/system/cpu/cpufreq/policy0/scaling_governor; do
+             /sys/devices/system/cpu/cpufreq/policy0/scaling_governor \
+             /sys/module/amd_pstate/parameters/epp_boost; do
         [[ -e "${p}" ]] && printf '  %-60s %s\n' "${p}" "$(cat "${p}" 2>/dev/null)"
     done
     return 0

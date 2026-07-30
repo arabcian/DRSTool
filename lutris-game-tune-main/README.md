@@ -194,6 +194,11 @@ silently ignored (with a warning logged).
 SET_CPU_GOVERNOR=1
 CPU_GOVERNOR=performance
 
+# amd-pstate per-core EPP boost (kernel module param). Only present on
+# kernels built with the (not-yet-upstream) epp_boost patch series;
+# skipped silently if the sysfs knob doesn't exist. 1=on, 0=off.
+SET_EPP_BOOST=1
+
 # --- PCIe ASPM ---
 SET_ASPM=1
 ASPM_POLICY=performance

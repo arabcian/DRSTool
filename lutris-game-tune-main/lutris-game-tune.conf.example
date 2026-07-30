@@ -15,6 +15,12 @@
 CPU_GOVERNOR=performance
 SET_CPU_GOVERNOR=1
 
+# amd-pstate per-core EPP boost (kernel module parameter). Only present on
+# kernels built with the (not-yet-upstream) epp_boost patch series; if the
+# sysfs knob doesn't exist on your running kernel this is silently skipped,
+# so it's safe to leave at 1 whether or not you're on a patched kernel.
+SET_EPP_BOOST=1
+
 # --- PCIe ASPM -----------------------------------------------------------------
 # PCIe ASPM policy during gameplay: performance | default | powersave
 ASPM_POLICY=performance
