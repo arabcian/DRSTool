@@ -361,7 +361,7 @@ load_config() {
         if [[ "${line}" =~ ^CCD_EXTRA_GOOD_PROCS=(.*)$ ]]; then
             key="CCD_EXTRA_GOOD_PROCS"
             val="${BASH_REMATCH[1]}"
-        elif [[ "${line}" =~ ^([A-Z_]+)=([[:alnum:]_.-]+)$ ]]; then
+        elif [[ "${line}" =~ ^([A-Z0-9_]+)=([[:alnum:]_.-]+)$ ]]; then
             key="${BASH_REMATCH[1]}"
             val="${BASH_REMATCH[2]}"
         elif [[ "${line}" =~ ^CCD_PROTECTED_CGROUPS=(.*)$ ]]; then
