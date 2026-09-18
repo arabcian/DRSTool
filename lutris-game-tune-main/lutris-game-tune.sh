@@ -153,6 +153,16 @@
 #     configurable via SET_EPP_BOOST (default 1). Silently skipped (debug-
 #     logged only) on kernels where the sysfs knob doesn't exist, so this
 #     is safe to leave on even without a patched kernel.
+#
+# v4.4 changes:
+#   - Added support for the amd_x3d_vcache driver's per-CPU core preference
+#     (.../drivers/amd_x3d_vcache/<instance>/amd_x3d_mode, "frequency" or
+#     "cache"). AMD 3D V-Cache CPUs only; the ACPI instance directory is
+#     discovered at runtime (not hardcoded as AMDI0101:00) since it isn't
+#     guaranteed to be the same on every board/BIOS. Configurable via
+#     SET_X3D_VCACHE_MODE (default 1) and X3D_VCACHE_MODE (default
+#     "frequency"). Silently skipped, like epp_boost, when the driver isn't
+#     bound.
 # =============================================================================
 
 set -euo pipefail
@@ -173,6 +183,12 @@ SET_CPU_GOVERNOR=1
 # sysfs knob doesn't exist, so this is safe to leave enabled across kernels
 # that don't have it.
 SET_EPP_BOOST=1
+# AMD 3D V-Cache core preference (amd_x3d_vcache driver; AMD 3D V-Cache CPUs
+# only). "frequency" prefers the higher-clocking CCD, "cache" prefers cores
+# on the CCD with the larger L3. Silently skipped if the driver isn't bound
+# (non-X3D CPU or kernel without the driver), so safe to leave enabled.
+SET_X3D_VCACHE_MODE=1
+X3D_VCACHE_MODE="frequency"
 # PCIe ASPM policy during gameplay (cuts link wake-up latency)
 ASPM_POLICY="performance"
 SET_ASPM=1
@@ -364,6 +380,12 @@ load_config() {
             CPU_GOVERNOR)          CPU_GOVERNOR="${val}" ;;
             SET_CPU_GOVERNOR)      SET_CPU_GOVERNOR="${val}" ;;
             SET_EPP_BOOST)         SET_EPP_BOOST="${val}" ;;
+            SET_X3D_VCACHE_MODE)   SET_X3D_VCACHE_MODE="${val}" ;;
+            X3D_VCACHE_MODE)
+                case "${val,,}" in
+                    frequency|cache) X3D_VCACHE_MODE="${val,,}" ;;
+                    *) warn "Invalid X3D_VCACHE_MODE '${val}' (frequency|cache), using default ${X3D_VCACHE_MODE}" ;;
+                esac ;;
             ASPM_POLICY)           ASPM_POLICY="${val}" ;;
             SET_ASPM)              SET_ASPM="${val}" ;;
             DISABLE_DEEP_CSTATES)  DISABLE_DEEP_CSTATES="${val}" ;;
@@ -696,6 +718,36 @@ tune_epp_boost() {
 restore_epp_boost() {
     [[ -e "${EPP_BOOST_PATH}" ]] || return 0
     restore_param "${EPP_BOOST_PATH}" "amd_pstate.epp_boost"
+}
+
+# --- AMD 3D V-Cache core preference (amd_x3d_vcache driver) --------------------
+# /sys/bus/platform/drivers/amd_x3d_vcache/<instance>/amd_x3d_mode only exists
+# when the driver is bound (AMD 3D V-Cache CPU + supporting kernel). <instance>
+# is an ACPI device instance id (e.g. AMDI0101:00) and is NOT guaranteed to be
+# ":00" on every board/BIOS, so it is discovered rather than hardcoded.
+# Accepts "frequency" (prefer the higher-clocking CCD) or "cache" (prefer
+# cores on the CCD with the larger L3), matching the driver's own ABI.
+find_x3d_vcache_path() {
+    find -P /sys/bus/platform/drivers/amd_x3d_vcache \
+        -mindepth 2 -maxdepth 2 -name amd_x3d_mode -print -quit 2>/dev/null
+}
+
+tune_x3d_vcache() {
+    [[ "${SET_X3D_VCACHE_MODE}" == "1" ]] || return 0
+    local path
+    path="$(find_x3d_vcache_path)"
+    if [[ -z "${path}" ]]; then
+        log_debug "amd_x3d_vcache driver not bound (non-X3D CPU or unsupported kernel), skipped"
+        return 0
+    fi
+    tune_param "${path}" "${X3D_VCACHE_MODE}" "amd_x3d_vcache.amd_x3d_mode"
+}
+
+restore_x3d_vcache() {
+    local path
+    path="$(find_x3d_vcache_path)"
+    [[ -n "${path}" ]] || return 0
+    restore_param "${path}" "amd_x3d_vcache.amd_x3d_mode"
 }
 
 # --- Deep C-state control (optional) ----------------------------------------
@@ -1637,6 +1689,9 @@ apply_game_settings() {
     tune_cpu_governor
     tune_epp_boost
 
+    log "--- AMD 3D V-Cache ---"
+    tune_x3d_vcache
+
     tune_cstates
 
     log "--- PCIe ASPM ---"
@@ -1725,6 +1780,9 @@ restore_game_settings() {
     restore_cpu_governor
     restore_epp_boost
 
+    log "--- AMD 3D V-Cache ---"
+    restore_x3d_vcache
+
     restore_cstates
 
     log "--- PCIe ASPM ---"
@@ -1806,6 +1864,9 @@ show_status() {
              /sys/module/amd_pstate/parameters/epp_boost; do
         [[ -e "${p}" ]] && printf '  %-60s %s\n' "${p}" "$(cat "${p}" 2>/dev/null)"
     done
+    local x3d_path
+    x3d_path="$(find_x3d_vcache_path)"
+    [[ -n "${x3d_path}" ]] && printf '  %-60s %s\n' "${x3d_path}" "$(cat "${x3d_path}" 2>/dev/null)"
     return 0
 }
 

@@ -21,6 +21,16 @@ SET_CPU_GOVERNOR=1
 # so it's safe to leave at 1 whether or not you're on a patched kernel.
 SET_EPP_BOOST=1
 
+# --- AMD 3D V-Cache core preference (amd_x3d_vcache driver) ---------------------
+# AMD 3D V-Cache CPUs only (dual-CCD X3D parts). Exposes a core preference to
+# the scheduler via the driver's amd_x3d_mode sysfs file:
+#   frequency = prefer the higher-clocking CCD
+#   cache     = prefer cores on the CCD with the larger L3
+# Silently skipped if the driver isn't bound (non-X3D CPU or unsupported
+# kernel), so it's safe to leave at 1 on any system.
+SET_X3D_VCACHE_MODE=1
+X3D_VCACHE_MODE=frequency
+
 # --- PCIe ASPM -----------------------------------------------------------------
 # PCIe ASPM policy during gameplay: performance | default | powersave
 ASPM_POLICY=performance
