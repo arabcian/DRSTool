@@ -7853,6 +7853,27 @@ LGTUNE_KEYS: List[tuple] = [
      "epp_boost patch series.  On kernels without it the script skips the "
      "write silently, so leaving this enabled is harmless either way."),
 
+    # ── AMD 3D V-Cache ────────────────────────────────────────────────────────
+    ("SET_X3D_VCACHE_MODE", "check", "1",
+     "Set AMD 3D V-Cache core preference on game start",
+     "Writes X3D_VCACHE_MODE to the amd_x3d_vcache driver's amd_x3d_mode "
+     "sysfs file on PRE and restores the previous value on POST.  AMD 3D "
+     "V-Cache CPUs only (dual-CCD parts where one CCD has the extra L3 die "
+     "stacked on it).  The driver's instance directory (an ACPI device id, "
+     "e.g. AMDI0101:00) is discovered at runtime rather than hardcoded, "
+     "since it isn't guaranteed to be the same on every board/BIOS.  "
+     "Silently skipped if the driver isn't bound (non-X3D CPU or a kernel "
+     "without the driver), so leaving this enabled is harmless either way."),
+
+    ("X3D_VCACHE_MODE", "combo", "frequency",
+     "AMD 3D V-Cache core preference",
+     "Value written to the amd_x3d_mode sysfs file.  'frequency' asks the "
+     "scheduler to prefer the higher-clocking CCD (usually better for "
+     "CPU-bound / high-refresh-rate titles).  'cache' asks it to prefer "
+     "cores on the CCD with the larger L3 (usually better for games that "
+     "are sensitive to cache misses, e.g. large open-world titles).",
+     ["frequency", "cache"]),
+
     # ── PCIe ASPM ─────────────────────────────────────────────────────────────
     ("SET_ASPM", "check", "1",
      "Set PCIe ASPM policy on game start",
@@ -8292,6 +8313,28 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
                       "kernel with the epp_boost patch series applied."
                 )
 
+        # ── Runtime availability hint for SET_X3D_VCACHE_MODE ─────────────────
+        # amd_x3d_mode only exists when the amd_x3d_vcache driver is bound (AMD
+        # 3D V-Cache CPU + supporting kernel). The instance directory name is an
+        # ACPI device id (e.g. AMDI0101:00) that isn't guaranteed to be the same
+        # on every board/BIOS, so it is globbed for rather than hardcoded.
+        _x3d_ctrl = self._key_widgets.get("SET_X3D_VCACHE_MODE")
+        if isinstance(_x3d_ctrl, QCheckBox):
+            _x3d_matches = list(Path("/sys/bus/platform/drivers/amd_x3d_vcache").glob("*/amd_x3d_mode")) \
+                if Path("/sys/bus/platform/drivers/amd_x3d_vcache").is_dir() else []
+            if _x3d_matches:
+                _x3d_ctrl.setText(_x3d_ctrl.text() + "   [kernel: supported]")
+            else:
+                _x3d_ctrl.setText(_x3d_ctrl.text() + "   [kernel: not present]")
+                _x3d_ctrl.setToolTip(
+                    _x3d_ctrl.toolTip()
+                    + "\n\nNo amd_x3d_vcache driver instance was found under "
+                      "/sys/bus/platform/drivers/amd_x3d_vcache — either this "
+                      "isn't an AMD 3D V-Cache CPU, or the running kernel doesn't "
+                      "have the driver.  The setting will be saved but skipped at "
+                      "PRE time until the driver is bound."
+                )
+
         settings_layout.addLayout(grid)
 
         # Save / status / log button row
@@ -8460,6 +8503,13 @@ QPlainTextEdit{
             "# on kernels built with the epp_boost patch series — skipped silently",
             "# otherwise). 1=on, 0=off.",
             f"SET_EPP_BOOST={_val('SET_EPP_BOOST')}",
+            "",
+            "# AMD 3D V-Cache core preference (amd_x3d_vcache driver; AMD 3D",
+            "# V-Cache CPUs only). frequency = prefer higher-clocking CCD,",
+            "# cache = prefer cores on the CCD with the larger L3. Skipped",
+            "# silently if the driver isn't bound.",
+            f"SET_X3D_VCACHE_MODE={_val('SET_X3D_VCACHE_MODE')}",
+            f"X3D_VCACHE_MODE={_val('X3D_VCACHE_MODE')}",
             "",
             "# --- PCIe ASPM ---------------------------------------------------",
             f"SET_ASPM={_val('SET_ASPM')}",
