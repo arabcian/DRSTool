@@ -728,7 +728,7 @@ restore_epp_boost() {
 # Accepts "frequency" (prefer the higher-clocking CCD) or "cache" (prefer
 # cores on the CCD with the larger L3), matching the driver's own ABI.
 find_x3d_vcache_path() {
-    find -P /sys/bus/platform/drivers/amd_x3d_vcache \
+    find -L /sys/bus/platform/drivers/amd_x3d_vcache \
         -mindepth 2 -maxdepth 2 -name amd_x3d_mode -print -quit 2>/dev/null
 }
 
