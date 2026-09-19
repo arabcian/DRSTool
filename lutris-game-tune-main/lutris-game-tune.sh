@@ -728,8 +728,39 @@ restore_epp_boost() {
 # Accepts "frequency" (prefer the higher-clocking CCD) or "cache" (prefer
 # cores on the CCD with the larger L3), matching the driver's own ABI.
 find_x3d_vcache_path() {
-    find -L /sys/bus/platform/drivers/amd_x3d_vcache \
-        -mindepth 2 -maxdepth 2 -name amd_x3d_mode -print -quit 2>/dev/null
+    # `find -P` (the default, and what earlier versions used) refuses to
+    # descend into symlinked directories, and `/sys/bus/.../drivers/<driver>/
+    # <device>` entries are ALWAYS symlinks to the real device under
+    # /sys/devices/... — so `find -P` can never see anything past that
+    # symlink. Using `find -L` (follow symlinks) fixes that in principle,
+    # but has been reported to still miss the file in the field on some
+    # setups (chained symlinks, `find` build without full -L support in a
+    # minimal environment, etc.) — a plain bash glob doesn't have any of
+    # `find`'s traversal restrictions and resolves the symlink like any
+    # normal path lookup, so use that instead: it's what the DRSTool.py GUI
+    # detector (Path.glob) does too, and that one has always found it fine.
+    # IMPORTANT: this function must ALWAYS return 0, match or no match.
+    # It is always called as `path="$(find_x3d_vcache_path)"` — a bare
+    # assignment whose right-hand side is a command substitution — and
+    # under `set -euo pipefail` bash propagates a non-zero exit status
+    # from THAT substitution to the assignment itself, which then kills
+    # the entire script right there with NO error message at all. This
+    # was silently aborting the whole PRE/POST run (nothing after this
+    # point — ASPM, audio, PCI latency, CCD isolation — ever ran) on any
+    # system where the match legitimately fails (non-X3D CPU, or a kernel
+    # without the driver). `find ... -print -quit` has the same landmine:
+    # it happens to exit 0 when the search root exists but nothing
+    # matches, but exits 1 (killing the script the same way) if the
+    # search root itself doesn't exist yet — e.g. a race against the
+    # driver being probed at boot.
+    local d
+    for d in /sys/bus/platform/drivers/amd_x3d_vcache/*/; do
+        if [[ -f "${d}amd_x3d_mode" ]]; then
+            printf '%s' "${d}amd_x3d_mode"
+            return 0
+        fi
+    done
+    return 0
 }
 
 tune_x3d_vcache() {
@@ -737,9 +768,10 @@ tune_x3d_vcache() {
     local path
     path="$(find_x3d_vcache_path)"
     if [[ -z "${path}" ]]; then
-        log_debug "amd_x3d_vcache driver not bound (non-X3D CPU or unsupported kernel), skipped"
+        warn "amd_x3d_vcache: no */amd_x3d_mode found under /sys/bus/platform/drivers/amd_x3d_vcache/ — driver not bound (non-X3D CPU, unsupported kernel, or module not yet probed), skipped"
         return 0
     fi
+    log_debug "amd_x3d_vcache path resolved: ${path}"
 
     # amd_x3d_mode writes trigger a synchronous ACPI _DSM call inside the
     # kernel driver (unlike every other sysfs write in this script, which
