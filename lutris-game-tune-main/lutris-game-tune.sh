@@ -740,14 +740,64 @@ tune_x3d_vcache() {
         log_debug "amd_x3d_vcache driver not bound (non-X3D CPU or unsupported kernel), skipped"
         return 0
     fi
-    tune_param "${path}" "${X3D_VCACHE_MODE}" "amd_x3d_vcache.amd_x3d_mode"
+
+    # amd_x3d_mode writes trigger a synchronous ACPI _DSM call inside the
+    # kernel driver (unlike every other sysfs write in this script, which
+    # is a plain, instant procfs/sysfs store). On some BIOS/AGESA versions
+    # this _DSM call can stall indefinitely, hanging the whole PRE run
+    # (and, on POST, the whole restore) with no error and no timeout of
+    # its own. Guard both the read and the write with `timeout` so a
+    # firmware stall degrades to a skipped/warned tunable instead of a
+    # frozen game-tune run.
+    local save_file; save_file="$(_save_name "${path}")"
+    if [[ ! -f "${save_file}" ]]; then
+        local current_val
+        if ! current_val="$(timeout 3 cat "${path}" 2>/dev/null)"; then
+            warn "Read timed out or failed, skipped: amd_x3d_vcache.amd_x3d_mode"
+            return 0
+        fi
+        if [[ -z "${current_val}" ]]; then
+            warn "Read empty value, not saving (will retry next run): amd_x3d_vcache.amd_x3d_mode"
+            return 0
+        fi
+        _state_write "${save_file}" "${current_val}" || return 0
+        log_debug "Saved       [amd_x3d_vcache.amd_x3d_mode]: '${current_val}'"
+    else
+        log_debug "Already saved [amd_x3d_vcache.amd_x3d_mode], not overwriting"
+    fi
+
+    if ! timeout 3 bash -c "printf '%s' \"\$1\" > \"\$2\"" _ "${X3D_VCACHE_MODE}" "${path}" 2>/dev/null; then
+        warn "Write timed out (possible ACPI _DSM stall) or failed: amd_x3d_vcache.amd_x3d_mode = ${X3D_VCACHE_MODE}"
+        return 0
+    fi
+    log "Set         [amd_x3d_vcache.amd_x3d_mode]: ${X3D_VCACHE_MODE}"
 }
 
 restore_x3d_vcache() {
     local path
     path="$(find_x3d_vcache_path)"
     [[ -n "${path}" ]] || return 0
-    restore_param "${path}" "amd_x3d_vcache.amd_x3d_mode"
+
+    local save_file; save_file="$(_save_name "${path}")"
+    [[ -f "${save_file}" ]] || return 0
+    if [[ -L "${save_file}" ]]; then
+        err "SECURITY: state file is a symlink, not read: ${save_file}"
+        rm -f "${save_file}"
+        return 0
+    fi
+
+    local saved_val
+    saved_val="$(cat "${save_file}")"
+
+    # Same stall risk as tune_x3d_vcache() above — guard the restore write
+    # too, so a firmware hang on POST can't block the rest of the restore
+    # sequence (governor, ASPM, CCD teardown, ...) forever.
+    if ! timeout 3 bash -c "printf '%s' \"\$1\" > \"\$2\"" _ "${saved_val}" "${path}" 2>/dev/null; then
+        warn "Restore timed out (possible ACPI _DSM stall) or failed: amd_x3d_vcache.amd_x3d_mode = '${saved_val}'"
+    else
+        log "Restored    [amd_x3d_vcache.amd_x3d_mode]: '${saved_val}'"
+    fi
+    rm -f "${save_file}"
 }
 
 # --- Deep C-state control (optional) ----------------------------------------
