@@ -8017,12 +8017,18 @@ LGTUNE_KEYS: List[tuple] = [
      "test carefully before deploying.",
      ["root", "isolated"]),
 
-    ("CCD_UGLY_PARTITION_TYPE", "combo", "root",
+    ("CCD_UGLY_PARTITION_TYPE", "combo", "member",
      "theUgly cgroup partition type",
-     "cpuset partition type for the system/background CCD cgroup.  Same "
-     "options and caveats as CCD_GOOD_PARTITION_TYPE.  Usually fine to "
-     "leave as 'root'.",
-     ["root", "isolated"]),
+     "cpuset partition type for the system/background CCD cgroup.  'member' "
+     "is the recommended default and matches the script's own fallback: it "
+     "leaves this group as a plain (non-exclusive) cgroup.  If BOTH theGood "
+     "and theUgly claim their CPUs as exclusive partition roots ('root' or "
+     "'isolated'), the top-level cgroup can be left with no CPUs of its "
+     "own, and the kernel silently marks the partition invalid — i.e. no "
+     "isolation at all, with no error anywhere.  Only pick 'root'/'isolated' "
+     "here if you specifically need theUgly to also be an exclusive "
+     "partition and understand this trade-off.",
+     ["member", "root", "isolated"]),
 
     # ── PCI latency ───────────────────────────────────────────────────────────
     ("SET_PCI_LATENCY", "check", "1",
