@@ -791,6 +791,55 @@ def create_all_settings() -> List[Setting]:
                 "DLSS-NR SL override",
                 "Enables override for DLSS Noise Reduction Super Lens.",
                 values=[SettingValue("Off", "0x0"), SettingValue("On", "0x1")]),
+        # ---- New: Streamline (SL) override (DXVK-NVAPI wiki, commit 6eccf85) ----
+        Setting("SL_DLSS_OVERRIDE", "Streamline (SL) Override", "DLSS / NGX", "enum", "0x0",
+                "Streamline Override",
+                "Master enable/disable for NVIDIA Streamline (SL) DLSS plugin override. "
+                "Streamline is NVIDIA's newer plugin framework superseding the legacy NGX "
+                "direct-integration path used by some newer titles. When 'On', DXVK-NVAPI "
+                "allows Streamline-routed DLSS calls to be overridden the same way as the "
+                "legacy NGX_DLSS_* settings. Named-key setting (no numeric DRS ID published "
+                "yet) — set via dedicated env var: DXVK_NVAPI_DRS_SL_DLSS_OVERRIDE=on",
+                values=[SettingValue("Off", "0x0"), SettingValue("On", "0x1")]),
+        # ---- New: DLAA-specific dedicated override key (distinct from 0x10E41DF4) ----
+        Setting("NGX_DLAA_OVERRIDE", "DLAA Snippet Override", "DLSS / NGX", "enum", "0x0",
+                "DLAA Snippet Override",
+                "Enables the dedicated DLAA override snippet path, distinct from forcing "
+                "DLSS-SR Mode to DLAA (0x10E41DF4). 'DLAA_ON' forces DLAA snippet behavior "
+                "regardless of in-game DLSS mode selection. "
+                "Set via env var: DXVK_NVAPI_DRS_NGX_DLAA_OVERRIDE=dlaa_on",
+                values=[
+                    SettingValue("DLAA_DEFAULT", "dlaa_default"),
+                    SettingValue("DLAA_ON", "dlaa_on"),
+                    SettingValue("Default", "default"),
+                ]),
+        # ---- New: force Ultra-Performance via optimal-settings override ----
+        Setting("NGX_DLSS_OVERRIDE_OPTIMAL_SETTINGS", "DLSS-SR Force Ultra-Perf (optimal)", "DLSS / NGX", "enum", "0x0",
+                "DLSS-SR Optimal Settings Override",
+                "Forces DLSS-SR's internal 'optimal settings' resolver to report Ultra-"
+                "Performance scaling ('perf_to_9x') regardless of requested quality mode. "
+                "Different mechanism from DLSS-SR Mode / Scaling above — this overrides "
+                "what the game's optimal-settings query returns. "
+                "Set via env var: DXVK_NVAPI_DRS_NGX_DLSS_OVERRIDE_OPTIMAL_SETTINGS=perf_to_9x",
+                values=[
+                    SettingValue("NONE", "none"),
+                    SettingValue("PERF_TO_9X", "perf_to_9x"),
+                    SettingValue("Default", "default"),
+                ]),
+        # ---- New: DLSSG dynamic target frame rate as its own named setting ----
+        Setting("NGX_DLSSG_DYNAMIC_TARGET_FRAME_RATE", "DLSSG Dynamic Target FPS (named)", "DLSS / NGX", "enum", "0x0",
+                "DLSSG Dynamic Target Frame Rate",
+                "Named-form equivalent of DLSSG Target FPS (0x10CF4125) for the dedicated "
+                "env-var path. Sets the target output FPS DLSSG's Dynamic mode tries to "
+                "hit. 'AUTO' lets the driver pick; 'DISABLED' turns off dynamic targeting. "
+                "Set via env var: DXVK_NVAPI_DRS_NGX_DLSSG_DYNAMIC_TARGET_FRAME_RATE=240",
+                values=[
+                    SettingValue("DISABLED", "disabled"),
+                    SettingValue("AUTO", "auto"),
+                    SettingValue("MIN", "min"),
+                    SettingValue("MAX", "max"),
+                    SettingValue("Default", "default"),
+                ]),
     ])
 
     # ===== Power / Performance =====
@@ -3322,6 +3371,10 @@ DXVK_ENV_VARS: List[EnvVarDef] = [
               placeholder="e.g. devinfo,fps,memory"),
     # ── Frame Rate ───────────────────────────────────────────────────────────
     EnvVarDef("DXVK_FRAME_RATE", "DXVK", "int", "0",
+              # NOTE: Removed upstream in vkd3d-proton 3.0 (Sep 2026) "to align with
+              # DXVK's removal" of this var. For D3D12/VKD3D-Proton titles use
+              # VKD3D_FRAME_RATE instead. Still valid for pure DXVK (D3D9/10/11) titles;
+              # kept here for that reason, not because it's still supported everywhere.
               "Frame rate limiter. 0 = uncapped. Positive value limits to N FPS.",
               placeholder="e.g. 60"),
     # ── Logging ──────────────────────────────────────────────────────────────
@@ -3455,6 +3508,7 @@ VKD3D_CONFIG_DESCS: Dict[str, str] = {
     # ── PSO / Pipeline Cache ──────────────────────────────────────────────────
     "pipeline_library_ignore_mismatch_driver": "Ignore driver-version mismatch when loading the pipeline library cache. Useful after driver updates to avoid cold compiles. Auto-applied for Elden Ring.",
     "retain_psos":                          "Keep PSOs (pipeline state objects) alive instead of freeing them immediately. Prevents use-after-free crashes in FFVII Rebirth, Ark Ascended, and REANIMAL.",
+    "pipeline_library_app_cache":           "Alternative to VKD3D_SHADER_CACHE_PATH=0: makes ID3D12PipelineLibrary the real cache (storing full SPIR-V + driver PSO blobs) instead of vkd3d-proton's own internal shader cache. Useful for games whose own pipeline-library management is more efficient than vkd3d-proton's default caching.",
     # ── Descriptor Heap (2026) ────────────────────────────────────────────────
     "descriptor_heap":                      "Enable the new VK_EXT_descriptor_heap code path (merged May 2026). Requires Mesa ≥ 26.1 or NVIDIA driver with descriptor heap support. Fixes Xid 109 crashes and Crimson Desert hang on Blackwell.",
     # ── CBV / SRV Binding Workarounds ────────────────────────────────────────
@@ -3481,6 +3535,10 @@ VKD3D_CONFIG_DESCS: Dict[str, str] = {
     "vk_debug":                            "Enable Vulkan debug extensions and loads validation layer.",
     "skip_application_workarounds":        "Skip all application-specific workarounds. For debugging only.",
     "force_host_cached":                   "Force all host-visible allocations to CACHED. Speeds up GPU captures with RenderDoc.",
+    "descriptor_qa_checks":                "Requires a build with -Denable_descriptor_qa=true. Instruments all shaders to check for invalid descriptor-heap access at runtime (GPU-assisted debugging) — catches out-of-bounds heap index, mismatched descriptor type, and use of a destroyed resource, and logs the faulting shader hash/instruction. Developer/QA use only; adds overhead.",
+    "instruction_qa_checks":                "Requires a build with descriptor QA instrumentation enabled. Adds fine-grained, per-shader QA checks that flag NaN/Inf values generated during shader execution. Internal QA/debug use only.",
+    # ── Swapchain (new, from CHANGELOG 2.8+) ─────────────────────────────────
+    "swapchain_legacy":                    "Force the old pre-2.8 swapchain implementation instead of the VK_KHR_present_wait-based one. Debug/triage flag only — use if you suspect a regression from the newer swapchain path (e.g. odd frame pacing or a hang tied to present_wait).",
 }
 
 VKD3D_ENV_VARS: List[EnvVarDef] = [
@@ -3509,6 +3567,7 @@ VKD3D_ENV_VARS: List[EnvVarDef] = [
                   # PSO / Pipeline Cache
                   "pipeline_library_ignore_mismatch_driver",
                   "retain_psos",
+                  "pipeline_library_app_cache",
                   # Descriptor Heap (2026)
                   "descriptor_heap",
                   # CBV / SRV Binding
@@ -3535,6 +3594,10 @@ VKD3D_ENV_VARS: List[EnvVarDef] = [
                   "vk_debug",
                   "skip_application_workarounds",
                   "force_host_cached",
+                  "descriptor_qa_checks",
+                  "instruction_qa_checks",
+                  # Swapchain
+                  "swapchain_legacy",
               ],
               placeholder="e.g. dxr,retain_descriptor_heaps"),
     # ── Frame Rate ───────────────────────────────────────────────────────────
