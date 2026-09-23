@@ -14,10 +14,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import Qt, Signal, QObject, QTimer, QProcess
+from PySide6.QtCore import Qt, Signal, QObject, QTimer, QProcess, QSize, QSettings, QRect
 from datetime import datetime
 
-from PySide6.QtGui import QColor, QPalette, QFont, QIcon, QIntValidator
+from PySide6.QtGui import (QColor, QPalette, QFont, QIcon, QIntValidator, QPainter,
+                           QFontMetrics, QKeySequence, QShortcut, QAction, QPen)
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QListWidget, QListWidgetItem, QStackedWidget,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QCheckBox, QFileDialog,
     QComboBox, QGroupBox, QTabWidget,
     QButtonGroup, QFormLayout,
+    QStyledItemDelegate, QStyle, QToolButton, QMenu,
 )
 import shutil
 
@@ -244,12 +246,375 @@ QScrollBar::sub-page:vertical{
 
 
 # ============================================================================
+# Theme — one token set for the whole app
+# ----------------------------------------------------------------------------
+# Most widgets still carry their own local stylesheets (they predate this);
+# these tokens + APP_QSS cover everything those sheets never styled
+# (horizontal scrollbars, tooltips, menus, message boxes, combo popups) so
+# no default-Fusion light chrome leaks into the dark UI anymore.
+# ============================================================================
+
+T = {
+    "bg":        "#0d0f12",
+    "surface":   "#141720",
+    "raised":    "#1a1f2e",
+    "border":    "#1e2535",
+    "border_hi": "#2b3444",
+    "text":      "#e8eaf0",
+    "text2":     "#b9bfcc",
+    "muted":     "#7d8597",
+    "accent":    "#76b900",
+    "accent_hi": "#8fd400",
+    "accent_dim":"#4a7300",
+    "warn":      "#d2a03c",
+    "danger":    "#d05050",
+    "mono":      "monospace",
+}
+
+APP_QSS = f"""
+QToolTip {{
+    background:{T['raised']}; color:{T['text']};
+    border:1px solid {T['border_hi']}; padding:6px 8px; border-radius:4px;
+}}
+QScrollBar:vertical {{ background:transparent; width:8px; margin:0; }}
+QScrollBar::handle:vertical {{ background:{T['border']}; border-radius:4px; min-height:28px; }}
+QScrollBar::handle:vertical:hover {{ background:#3a4458; }}
+QScrollBar:horizontal {{ background:transparent; height:8px; margin:0; }}
+QScrollBar::handle:horizontal {{ background:{T['border']}; border-radius:4px; min-width:28px; }}
+QScrollBar::handle:horizontal:hover {{ background:#3a4458; }}
+QScrollBar::add-line, QScrollBar::sub-line {{ width:0; height:0; border:none; background:none; }}
+QScrollBar::add-page, QScrollBar::sub-page {{ background:none; }}
+QMenu {{
+    background:{T['surface']}; color:{T['text']};
+    border:1px solid {T['border_hi']}; padding:4px;
+}}
+QMenu::item {{ padding:6px 18px; border-radius:3px; }}
+QMenu::item:selected {{ background:rgba(118,185,0,0.16); color:{T['text']}; }}
+QMenu::separator {{ height:1px; background:{T['border']}; margin:4px 6px; }}
+QMessageBox, QDialog {{ background:{T['surface']}; }}
+QMessageBox QLabel {{ color:{T['text']}; }}
+QMessageBox QPushButton, QDialogButtonBox QPushButton {{
+    background:{T['raised']}; border:1px solid {T['border_hi']}; border-radius:4px;
+    color:{T['text']}; padding:5px 14px; min-width:72px;
+}}
+QMessageBox QPushButton:hover, QDialogButtonBox QPushButton:hover {{ border-color:{T['accent']}; }}
+QMessageBox QPushButton:default, QDialogButtonBox QPushButton:default {{ border-color:{T['accent_dim']}; }}
+QComboBox QAbstractItemView {{
+    background:{T['surface']}; color:{T['text']}; border:1px solid {T['border_hi']};
+    selection-background-color:rgba(118,185,0,0.18); selection-color:{T['text']};
+}}
+"""
+
+
+def apply_theme(app: "QApplication") -> None:
+    """Palette + app-wide QSS. Called once from main()."""
+    pal = QPalette()
+    pal.setColor(QPalette.Window, QColor(T["bg"]))
+    pal.setColor(QPalette.WindowText, QColor(T["text2"]))
+    pal.setColor(QPalette.Base, QColor(T["surface"]))
+    pal.setColor(QPalette.AlternateBase, QColor(T["raised"]))
+    pal.setColor(QPalette.Text, QColor(T["text"]))
+    pal.setColor(QPalette.Button, QColor(T["surface"]))
+    pal.setColor(QPalette.ButtonText, QColor(T["text2"]))
+    pal.setColor(QPalette.Highlight, QColor(T["accent"]))
+    pal.setColor(QPalette.HighlightedText, QColor(0, 0, 0))
+    pal.setColor(QPalette.ToolTipBase, QColor(T["raised"]))
+    pal.setColor(QPalette.ToolTipText, QColor(T["text"]))
+    pal.setColor(QPalette.PlaceholderText, QColor(T["muted"]))
+    pal.setColor(QPalette.Link, QColor(T["accent"]))
+    app.setPalette(pal)
+    app.setStyleSheet(APP_QSS)
+
+
+# ============================================================================
+# Sidebar list delegate
+# ----------------------------------------------------------------------------
+# Draws every sidebar list (DRS settings, env vars, GPU archs, profiles) the
+# same way: a quiet category header with a "N set" count, and item rows with
+# a green dot + the current value previewed on the right. Replaces the old
+# red "─── Cat ───" text headers and per-item foreground colors.
+# ============================================================================
+
+ROLE_KIND  = Qt.UserRole + 10   # "header" | "item" | "special"
+ROLE_VALUE = Qt.UserRole + 11   # short value preview shown on the right
+ROLE_SET   = Qt.UserRole + 12   # bool: item is part of the output
+ROLE_COUNT = Qt.UserRole + 13   # header: how many of its items are set
+
+
+class SidebarDelegate(QStyledItemDelegate):
+    HEADER_H = 30
+    ITEM_H = 26
+
+    def sizeHint(self, option, index):
+        kind = index.data(ROLE_KIND)
+        return QSize(0, self.HEADER_H if kind == "header" else self.ITEM_H)
+
+    def paint(self, p: QPainter, option, index):
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing)
+        r = option.rect
+        kind = index.data(ROLE_KIND) or "item"
+        name = index.data(Qt.DisplayRole) or ""
+        base_font = QFont(option.font)
+
+        if kind == "header":
+            f = QFont(base_font)
+            f.setBold(True)
+            f.setPointSizeF(max(7.5, base_font.pointSizeF() - 0.5))
+            p.setFont(f)
+            fm = QFontMetrics(f)
+            text_rect = QRect(r.left() + 12, r.top() + 8, r.width() - 24, r.height() - 8)
+            p.setPen(QColor(T["muted"]))
+            p.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, name)
+            x0 = text_rect.left() + fm.horizontalAdvance(name) + 10
+            x1 = r.right() - 12
+            cnt = index.data(ROLE_COUNT) or 0
+            if cnt:
+                badge = f"{cnt} set"
+                bw = fm.horizontalAdvance(badge) + 12
+                br = QRect(x1 - bw, text_rect.center().y() - 8, bw, 16)
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(118, 185, 0, 36))
+                p.drawRoundedRect(br, 8, 8)
+                p.setPen(QColor(T["accent"]))
+                p.drawText(br, Qt.AlignCenter, badge)
+                x1 = br.left() - 8
+            if x1 > x0:
+                p.setPen(QPen(QColor(T["border"]), 1))
+                y = text_rect.center().y() + 1
+                p.drawLine(x0, y, x1, y)
+            p.restore()
+            return
+
+        selected = bool(option.state & QStyle.State_Selected)
+        hovered = bool(option.state & QStyle.State_MouseOver)
+        is_set = bool(index.data(ROLE_SET))
+
+        if selected:
+            p.fillRect(r, QColor(118, 185, 0, 26))
+            p.fillRect(QRect(r.left(), r.top(), 2, r.height()), QColor(T["accent"]))
+        elif hovered:
+            p.fillRect(r, QColor(T["surface"]))
+
+        if is_set:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(T["accent"]))
+            p.drawEllipse(QRect(r.left() + 11, r.center().y() - 3, 6, 6))
+
+        value = index.data(ROLE_VALUE) or ""
+        pad_l = r.left() + 24
+        avail = r.right() - 10 - pad_l
+        val_w = 0
+        if value:
+            vf = QFont(T["mono"])
+            vf.setStyleHint(QFont.Monospace)
+            vf.setPointSizeF(max(7.5, base_font.pointSizeF() - 0.5))
+            vfm = QFontMetrics(vf)
+            max_val = int(avail * 0.45)
+            shown = vfm.elidedText(value, Qt.ElideRight, max_val)
+            val_w = vfm.horizontalAdvance(shown)
+            p.setFont(vf)
+            p.setPen(QColor(T["accent"]) if is_set else QColor(T["muted"]))
+            p.drawText(QRect(r.right() - 10 - val_w, r.top(), val_w, r.height()),
+                       Qt.AlignRight | Qt.AlignVCenter, shown)
+
+        nf = QFont(base_font)
+        if is_set:
+            nf.setWeight(QFont.DemiBold)
+        p.setFont(nf)
+        nfm = QFontMetrics(nf)
+        name_w = avail - (val_w + 12 if val_w else 0)
+        if kind == "special":
+            color = QColor(T["warn"])
+        elif is_set or selected:
+            color = QColor(T["text"])
+        else:
+            color = QColor(T["text2"])
+        p.setPen(color)
+        p.drawText(QRect(pad_l, r.top(), max(0, name_w), r.height()),
+                   Qt.AlignLeft | Qt.AlignVCenter,
+                   nfm.elidedText(name, Qt.ElideRight, max(0, name_w)))
+        p.restore()
+
+
+SIDEBAR_LIST_QSS = f"""
+QListWidget {{ background:{T['bg']}; border:none; outline:none; }}
+QListWidget::item {{ border:none; }}
+"""
+
+
+def setup_sidebar_list(lw: QListWidget) -> None:
+    """Shared look/behaviour for every delegate-drawn sidebar list."""
+    lw.setItemDelegate(SidebarDelegate(lw))
+    lw.setAlternatingRowColors(False)
+    lw.setMouseTracking(True)
+    lw.viewport().setAttribute(Qt.WA_Hover, True)
+    lw.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    lw.setVerticalScrollMode(QListWidget.ScrollPerPixel)
+    lw.setStyleSheet(SIDEBAR_LIST_QSS)
+
+
+def make_header_item(text: str, count: int = 0) -> QListWidgetItem:
+    item = QListWidgetItem(text)
+    item.setFlags(Qt.NoItemFlags)
+    item.setData(ROLE_KIND, "header")
+    item.setData(ROLE_COUNT, count)
+    return item
+
+
+def make_list_item(text: str, key, is_set: bool = False, value: str = "",
+                   kind: str = "item") -> QListWidgetItem:
+    item = QListWidgetItem(text)
+    item.setData(Qt.UserRole, key)
+    item.setData(ROLE_KIND, kind)
+    item.setData(ROLE_SET, is_set)
+    item.setData(ROLE_VALUE, value)
+    return item
+
+
+def _fmt_drs_value(setting: "Setting", raw: str) -> str:
+    """Human label for a stored DRS value ('Latest', '4x', '0x3C' ...)."""
+    if raw is None:
+        return ""
+    try:
+        iv = int(raw, 16) if str(raw).lower().startswith("0x") else int(raw)
+    except (TypeError, ValueError):
+        return str(raw)
+    for v in setting.values:
+        try:
+            if int(v.val, 16) == iv:
+                return v.name
+        except ValueError:
+            pass
+    for pr in setting.presets:
+        try:
+            if int(pr.val, 16) == iv:
+                return pr.name
+        except ValueError:
+            pass
+    if setting.type == "numeric":
+        return str(iv)
+    return str(raw)
+
+
+# ============================================================================
+# Small reusable widgets
+# ============================================================================
+
+class ElidedLabel(QLabel):
+    """
+    QLabel that never widens the window: it elides its text to the space it
+    is given and keeps the full text for tooltip / copy. Clicking it copies
+    the full text (emits `copied`). Stylesheet boxes (border/padding) still
+    render because painting is left to QLabel — only the shown text changes.
+    """
+    copied = Signal(str)
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self._full = ""
+        self._copyable = True
+        self.setCursor(Qt.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setText(text)
+
+    def setText(self, text: str):          # noqa: N802
+        self._full = text or ""
+        self.setToolTip(self._full + ("\n\nClick to copy" if self._copyable and self._full else ""))
+        self._refresh()
+
+    def text(self) -> str:
+        return self._full
+
+    def set_copyable(self, on: bool):
+        self._copyable = on
+        self.setCursor(Qt.PointingHandCursor if on else Qt.ArrowCursor)
+
+    def _refresh(self):
+        avail = max(20, self.width() - 22)
+        shown = self.fontMetrics().elidedText(self._full, Qt.ElideRight, avail)
+        QLabel.setText(self, shown)
+
+    def resizeEvent(self, e):             # noqa: N802
+        super().resizeEvent(e)
+        self._refresh()
+
+    def minimumSizeHint(self):            # noqa: N802
+        return QSize(40, super().minimumSizeHint().height())
+
+    def sizeHint(self):                   # noqa: N802
+        return QSize(120, super().sizeHint().height())
+
+    def mousePressEvent(self, e):         # noqa: N802
+        if self._copyable and e.button() == Qt.LeftButton and self._full:
+            QApplication.clipboard().setText(self._full)
+            self.copied.emit(self._full)
+        super().mousePressEvent(e)
+
+
+class NavTab(QPushButton):
+    """Top navigation tab: title + a small live badge (counts / arch code)."""
+
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 0, 14, 0)
+        lay.setSpacing(7)
+        self._title = QLabel(title)
+        self._badge = QLabel()
+        for w in (self._title, self._badge):
+            w.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._badge.setFixedHeight(17)
+        lay.addWidget(self._title, 0, Qt.AlignVCenter)
+        lay.addWidget(self._badge, 0, Qt.AlignVCenter)
+        self._badge.hide()
+        self.setFixedHeight(38)
+        self.setStyleSheet(f"""
+QPushButton {{ background:transparent; border:none; border-bottom:2px solid transparent; }}
+QPushButton:hover {{ background:{T['surface']}; }}
+QPushButton:checked {{ border-bottom:2px solid {T['accent']}; }}
+""")
+        self.toggled.connect(self._restyle)
+        self._restyle(False)
+
+    def set_badge(self, text: str):
+        self._badge.setText(text)
+        self._badge.setVisible(bool(text))
+        self.updateGeometry()
+
+    def sizeHint(self):                   # noqa: N802
+        return self.layout().sizeHint().expandedTo(QSize(0, 38))
+
+    def minimumSizeHint(self):            # noqa: N802
+        return self.sizeHint()
+
+    def _restyle(self, checked: bool):
+        self._title.setStyleSheet(
+            f"color:{T['text'] if checked else T['muted']}; font-size:12px; font-weight:600;"
+            " background:transparent;")
+        self._badge.setStyleSheet(
+            f"color:{T['accent'] if checked else T['text2']};"
+            f" background:{'rgba(118,185,0,0.14)' if checked else T['raised']};"
+            " border-radius:8px; padding:0 7px; font-size:10px; font-weight:700;"
+            f" font-family:{T['mono']};")
+
+
+# ============================================================================
 # GPU Architectures
 # ============================================================================
 
 GPU_ARCHS = [
+    # Codes = exactly the strings dxvk-nvapi's DXVK_NVAPI_GPU_ARCH parser
+    # accepts (src/util/util_env.cpp, CHECK_ARCH list). Anything else is
+    # logged as "unrecognized" and ignored.
+    GPUArch("GeForce 600/700", "Kepler", "GK", "GK100", "GTX 780 Ti"),
+    GPUArch("GeForce 750", "Maxwell 1st gen", "GM", "GM000", "GTX 750 Ti"),
     GPUArch("GeForce 900", "Maxwell", "GM", "GM200", "GTX 980 Ti"),
     GPUArch("GeForce 10", "Pascal", "GP", "GP100", "GTX 1080"),
+    GPUArch("Titan V", "Volta", "GV", "GV100", "TITAN V"),
     GPUArch("GeForce 16/20", "Turing", "TU", "TU100", "RTX 2080 Ti"),
     GPUArch("RTX 30", "Ampere", "GA", "GA100", "RTX 3090"),
     GPUArch("RTX 40", "Ada", "AD", "AD100", "RTX 4090"),
@@ -730,11 +1095,9 @@ def create_all_settings() -> List[Setting]:
                 "DLSS-G Multi-Frame",
                 "Controls DLSS Frame Generation frame count.",
                 values=[
-                    SettingValue("Off", "0x0"), SettingValue("1", "0x1"),
-                    SettingValue("2", "0x2"), SettingValue("3", "0x3"),
-                    SettingValue("4", "0x4"), SettingValue("5", "0x5"),
-                    SettingValue("6", "0x6"), SettingValue("7", "0x7"),
-                    SettingValue("8", "0x8"), SettingValue("Max(15)", "0xf"),
+                    SettingValue("Off / App", "0x0"), SettingValue("2x", "0x1"),
+                    SettingValue("3x", "0x2"), SettingValue("4x", "0x3"),
+                    SettingValue("5x", "0x4"), SettingValue("6x", "0x5"),
                 ]),
         Setting("0x10308298", "DLSSG Mode", "DLSS / NGX", "enum", "0x0",
                 "DLSSG Mode",
@@ -746,14 +1109,25 @@ def create_all_settings() -> List[Setting]:
                     SettingValue("Auto", "0x3"),
                     SettingValue("Dynamic", "0x4"),
                 ]),
-        Setting("0x10562D0F", "DLSSG Dynamic Max", "DLSS / NGX", "numeric", "0",
+        Setting("0x10562D0F", "DLSSG Dynamic Max", "DLSS / NGX", "enum", "0x0",
                 "DLSSG Dynamic Max",
                 "Maximum DLSSG dynamic multi-frame count.",
-                min=0, max=16777215),
+                values=[
+                    SettingValue("Off", "0x0"), SettingValue("Up to 2x", "0x1"),
+                    SettingValue("Up to 3x", "0x2"), SettingValue("Up to 4x", "0x3"),
+                    SettingValue("Up to 5x", "0x4"), SettingValue("Up to 6x", "0x5"),
+                ]),
+        # Header: DISABLED=0, MIN=1, MAX=0x00FFFFFF, AUTO=0x01000000. The old
+        # range (min=1, max=0xFFFFFF) made both "disabled" and "auto"
+        # impossible to enter from the spin box.
         Setting("0x10CF4125", "DLSSG Target FPS", "DLSS / NGX", "numeric", "0x0",
                 "DLSSG Target FPS",
-                "Sets target FPS for DLSS Frame Generation. 60=0x3C, 120=0x78, auto=0x1000000",
-                min=1, max=16777215),   # Düzeltildi: header'dan min=1, max=0x00FFFFFF
+                "Sets target FPS for DLSS Frame Generation. 0 = disabled, 16777216 (0x1000000) = auto.",
+                presets=[Preset("Disabled", "0x0"), Preset("60", "0x3C"),
+                         Preset("120", "0x78"), Preset("144", "0x90"),
+                         Preset("165", "0xA5"), Preset("240", "0xF0"),
+                         Preset("Auto", "0x1000000")],
+                min=0, max=0x1000000),
         Setting("0x10AFB76C", "DLSS Ultra-Perf", "DLSS / NGX", "enum", "0x0",
                 "DLSS Ultra-Performance",
                 "Forces DLSS into Ultra Performance mode.",
@@ -779,67 +1153,17 @@ def create_all_settings() -> List[Setting]:
                 values=[
                     SettingValue("Off", "0x0"), SettingValue("A", "0x1"),
                     SettingValue("B", "0x2"), SettingValue("C", "0x3"),
-                    SettingValue("D", "0x4"), SettingValue("E", "0x5"),
-                    SettingValue("F", "0x6"), SettingValue("G", "0x7"),
-                    SettingValue("H", "0x8"), SettingValue("I", "0x9"),
-                    SettingValue("J", "0xa"), SettingValue("K", "0xb"),
-                    SettingValue("L", "0xc"), SettingValue("M", "0xd"),
-                    SettingValue("N", "0xe"), SettingValue("O", "0xf"),
+                    SettingValue("D", "0x4"),
                     SettingValue("Latest", "0xffffff"),
                 ]),
         Setting("0x10E41E05", "DLSS-NR SL Override", "DLSS / NGX", "enum", "0x0",
                 "DLSS-NR SL override",
                 "Enables override for DLSS Noise Reduction Super Lens.",
                 values=[SettingValue("Off", "0x0"), SettingValue("On", "0x1")]),
-        # ---- New: Streamline (SL) override (DXVK-NVAPI wiki, commit 6eccf85) ----
-        Setting("SL_DLSS_OVERRIDE", "Streamline (SL) Override", "DLSS / NGX", "enum", "0x0",
-                "Streamline Override",
-                "Master enable/disable for NVIDIA Streamline (SL) DLSS plugin override. "
-                "Streamline is NVIDIA's newer plugin framework superseding the legacy NGX "
-                "direct-integration path used by some newer titles. When 'On', DXVK-NVAPI "
-                "allows Streamline-routed DLSS calls to be overridden the same way as the "
-                "legacy NGX_DLSS_* settings. Named-key setting (no numeric DRS ID published "
-                "yet) — set via dedicated env var: DXVK_NVAPI_DRS_SL_DLSS_OVERRIDE=on",
+        Setting("0x10E41E06", "Streamline Override", "DLSS / NGX", "enum", "0x0",
+                "Enable Streamline override",
+                "Enables the driver-side override for Streamline-integrated DLSS.",
                 values=[SettingValue("Off", "0x0"), SettingValue("On", "0x1")]),
-        # ---- New: DLAA-specific dedicated override key (distinct from 0x10E41DF4) ----
-        Setting("NGX_DLAA_OVERRIDE", "DLAA Snippet Override", "DLSS / NGX", "enum", "0x0",
-                "DLAA Snippet Override",
-                "Enables the dedicated DLAA override snippet path, distinct from forcing "
-                "DLSS-SR Mode to DLAA (0x10E41DF4). 'DLAA_ON' forces DLAA snippet behavior "
-                "regardless of in-game DLSS mode selection. "
-                "Set via env var: DXVK_NVAPI_DRS_NGX_DLAA_OVERRIDE=dlaa_on",
-                values=[
-                    SettingValue("DLAA_DEFAULT", "dlaa_default"),
-                    SettingValue("DLAA_ON", "dlaa_on"),
-                    SettingValue("Default", "default"),
-                ]),
-        # ---- New: force Ultra-Performance via optimal-settings override ----
-        Setting("NGX_DLSS_OVERRIDE_OPTIMAL_SETTINGS", "DLSS-SR Force Ultra-Perf (optimal)", "DLSS / NGX", "enum", "0x0",
-                "DLSS-SR Optimal Settings Override",
-                "Forces DLSS-SR's internal 'optimal settings' resolver to report Ultra-"
-                "Performance scaling ('perf_to_9x') regardless of requested quality mode. "
-                "Different mechanism from DLSS-SR Mode / Scaling above — this overrides "
-                "what the game's optimal-settings query returns. "
-                "Set via env var: DXVK_NVAPI_DRS_NGX_DLSS_OVERRIDE_OPTIMAL_SETTINGS=perf_to_9x",
-                values=[
-                    SettingValue("NONE", "none"),
-                    SettingValue("PERF_TO_9X", "perf_to_9x"),
-                    SettingValue("Default", "default"),
-                ]),
-        # ---- New: DLSSG dynamic target frame rate as its own named setting ----
-        Setting("NGX_DLSSG_DYNAMIC_TARGET_FRAME_RATE", "DLSSG Dynamic Target FPS (named)", "DLSS / NGX", "enum", "0x0",
-                "DLSSG Dynamic Target Frame Rate",
-                "Named-form equivalent of DLSSG Target FPS (0x10CF4125) for the dedicated "
-                "env-var path. Sets the target output FPS DLSSG's Dynamic mode tries to "
-                "hit. 'AUTO' lets the driver pick; 'DISABLED' turns off dynamic targeting. "
-                "Set via env var: DXVK_NVAPI_DRS_NGX_DLSSG_DYNAMIC_TARGET_FRAME_RATE=240",
-                values=[
-                    SettingValue("DISABLED", "disabled"),
-                    SettingValue("AUTO", "auto"),
-                    SettingValue("MIN", "min"),
-                    SettingValue("MAX", "max"),
-                    SettingValue("Default", "default"),
-                ]),
     ])
 
     # ===== Power / Performance =====
@@ -877,6 +1201,9 @@ def create_all_settings() -> List[Setting]:
         Setting("0x10835002", "FPS Limiter", "Frame Rate", "numeric", "0x0",
                 "FPS Limiter",
                 "Hard frame rate cap. 60=0x3C, 120=0x78, 144=0x90",
+                presets=[Preset("Off", "0x0"), Preset("60", "0x3C"),
+                         Preset("120", "0x78"), Preset("144", "0x90"),
+                         Preset("165", "0xA5"), Preset("240", "0xF0")],
                 min=0, max=1023),  # Düzeltildi: header'dan FRL_FPS_MIN/MAX
         Setting("0x10835016", "Idle FPS Limit", "Frame Rate", "numeric", "0x14",
                 "Idle FPS Limit",
@@ -1670,9 +1997,10 @@ def create_all_settings() -> List[Setting]:
         "0x104D6667": (
             "Controls how many interpolated frames DLSS Frame Generation inserts "
             "between each rendered frame (Multi-Frame Generation / MFG). "
-            "'Off' (0) — standard DLSS FG (1 generated frame per rendered frame = 2× FPS). "
-            "'1'–'8' — generate 1 to 8 extra frames (2× to 9× perceived FPS). "
-            "'Max(15)' — maximum of 15 generated frames per rendered frame (16× perceived). "
+            "'Off / App' (0) — no override; the game's own FG setting applies. "
+            "'2x'–'6x' (1–5) — 1 to 5 generated frames per rendered frame. "
+            "The header allows up to 15 (16x) but dxvk-nvapi documents 5 (6x) as the "
+            "highest currently supported value, so larger values are not offered. "
             "Higher multipliers amplify latency proportionally; NVIDIA Reflex is "
             "strongly recommended to compensate. RTX 50 (Blackwell) supports MFG "
             "natively; earlier cards require DXVK_NVAPI_GPU_ARCH=GB200 spoofing."
@@ -1689,7 +2017,7 @@ def create_all_settings() -> List[Setting]:
         "0x10CF4125": (
             "Sets the target output frame rate for DLSS Frame Generation in Dynamic mode. "
             "The driver adjusts the MFG multiplier in real time to try to hit this FPS. "
-            "Specify in frames per second as a decimal integer: "
+            "0 disables it. Specify in frames per second as a decimal integer: "
             "60 = 0x3C, 120 = 0x78, 144 = 0x90, 240 = 0xF0. "
             "Special value 0x1000000 = automatic (driver picks the target). "
             "Only meaningful when DLSSG Mode is set to 'Dynamic'."
@@ -1698,7 +2026,7 @@ def create_all_settings() -> List[Setting]:
             "Maximum number of generated frames DLSS Frame Generation can insert per "
             "rendered frame when operating in Dynamic mode. Acts as a ceiling to prevent "
             "excessive latency even if the dynamic algorithm would otherwise go higher. "
-            "Range 0–16777215. Typical useful values are 2–8. "
+            "Values per the dxvk-nvapi wiki: 0 = off, 1 = up to 2x ... 5 = up to 6x. "
             "Only relevant when DLSSG Mode is 'Dynamic'."
         ),
         "0x10AFB76C": (
@@ -1723,9 +2051,17 @@ def create_all_settings() -> List[Setting]:
             "NGX NR interface. When 'On', preset and mode settings for NR take effect. "
             "This is a newer NGX feature; availability depends on game and driver version."
         ),
+        "0x10E41E06": (
+            "SL_DLSS_OVERRIDE (0x10E41E06). Enables the driver's override path for games "
+            "that integrate DLSS through NVIDIA Streamline rather than calling NGX "
+            "directly. Named key in dxvk-nvapi: DXVK_NVAPI_DRS_SL_DLSS_OVERRIDE=on. "
+            "Pair with the SR/RR/FG override switches and PROTON_ENABLE_NGX_UPDATER=1 "
+            "when forcing newer presets in Streamline titles."
+        ),
         "0x10E41DF8": (
             "Selects the neural network preset for DLSS Noise Reduction. "
-            "Same preset alphabet as DLSS-SR (A through O, Latest). "
+            "NVIDIA's header only defines presets A through D plus Latest for NR "
+            "(unlike SR/RR, which go up to O). "
             "See DLSS-SR Preset for descriptions of preset characteristics. "
             "Recommended: 'Latest' to always use NVIDIA's current best NR model."
         ),
@@ -2020,6 +2356,9 @@ class SettingsManager(QObject):
     # even though the set of saved profiles hadn't changed at all.
     profiles_changed = Signal()
     profile_save_error = Signal(str)
+    # Emitted after a profile was written successfully (drives the
+    # "unsaved changes" indicator back to clean).
+    profile_saved = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -2101,8 +2440,10 @@ class SettingsManager(QObject):
             "gamescope_flags": gamescope_flags.copy() if gamescope_flags else {},
         }
         self._current_profile = name
-        self._save_profiles()
+        ok = self._save_profiles()
         self.profiles_changed.emit()
+        if ok:
+            self.profile_saved.emit(name)
 
     def load_profile(self, name: str):
         if name not in self._profiles:
@@ -2214,141 +2555,140 @@ class SettingsManager(QObject):
 # ============================================================================
 
 class OutputBarWidget(QWidget):
+    """
+    The generated launch string, always visible above the tabs.
+    Left: one row per output (NVAPI arch + DRS string, env vars, gamescope),
+    each value elided to the available width and click-to-copy.
+    Right: Copy (with a Steam %command% variant), Save, Reset.
+    """
+    feedback = Signal(str)
+
     def __init__(self, settings_manager: SettingsManager, parent=None):
         super().__init__(parent)
         self.settings_manager = settings_manager
         self._env_widget: Optional['EnvVarsWidget'] = None  # set after construction
         self._gamescope_widget: Optional['GamescopeFlagsWidget'] = None  # set after construction
+        self._dirty = False
 
-        # Three rows: row1 NVAPI vars, row2 DXVK|VKD3D vars, row3 buttons
-        self.setFixedHeight(130)
-        self.setStyleSheet("background: #141720; border-bottom: 1px solid #1e2535;")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setObjectName("outputBar")
+        self.setStyleSheet(f"#outputBar {{ background:{T['surface']}; border-bottom:1px solid {T['border']}; }}")
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(10, 5, 10, 5)
-        root.setSpacing(3)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(12, 8, 12, 8)
+        root.setSpacing(12)
 
-        # ── Shared label style ────────────────────────────────────────────────
-        lbl_ss  = "font-family: monospace; font-size: 12px; color: #76b900; font-weight: 600;"
-        val_ss  = "font-family: monospace; font-size: 12px; color: #e8eaf0;"
-        box_ss  = ("QLabel{ background:#0d1016; border:1px solid #2b3444; border-radius:4px;"
-                   " padding:2px 8px; color:#f0f0f0; font-family:monospace; font-size:12px; }")
+        lbl_ss = (f"font-family:{T['mono']}; font-size:11px; color:{T['accent']};"
+                  " font-weight:600; background:transparent;")
+        box_ss = (f"QLabel{{ background:{T['bg']}; border:1px solid {T['border_hi']};"
+                  f" border-radius:4px; padding:3px 8px; color:{T['text']};"
+                  f" font-family:{T['mono']}; font-size:12px; }}"
+                  f"QLabel:hover{{ border-color:{T['accent_dim']}; }}")
 
-        # ── Row 1: DXVK_NVAPI_GPU_ARCH  |  DXVK_NVAPI_DRS_SETTINGS ──────────
-        row1 = QHBoxLayout()
-        row1.setSpacing(6)
-        row1.setContentsMargins(0, 0, 0, 0)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(5)
+        grid.setContentsMargins(0, 0, 0, 0)
 
-        lbl_arch = QLabel("DXVK_NVAPI_GPU_ARCH=")
-        lbl_arch.setStyleSheet(lbl_ss)
-        row1.addWidget(lbl_arch)
+        def key(text):
+            k = QLabel(text)
+            k.setStyleSheet(lbl_ss)
+            k.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            return k
 
-        self._arch_value = QLabel("not set")
-        self._arch_value.setStyleSheet(val_ss)
-        self._arch_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        row1.addWidget(self._arch_value)
+        def val(text):
+            v = ElidedLabel(text)
+            v.setStyleSheet(box_ss)
+            v.copied.connect(lambda _t: self._show_feedback("Copied"))
+            return v
 
-        sep1 = QFrame(); sep1.setFrameShape(QFrame.VLine)
-        sep1.setStyleSheet("border: none; border-left: 1px solid #1e2535;")
-        sep1.setMaximumWidth(1)
-        row1.addWidget(sep1)
+        # Row 0: GPU arch + DRS settings share a row
+        grid.addWidget(key("DXVK_NVAPI_GPU_ARCH="), 0, 0)
+        arch_row = QHBoxLayout()
+        arch_row.setSpacing(8)
+        self._arch_value = val("not set")
+        self._arch_value.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self._arch_value.setFixedWidth(84)
+        arch_row.addWidget(self._arch_value)
+        arch_row.addWidget(key("DXVK_NVAPI_DRS_SETTINGS="))
+        self._settings_value = val("none")
+        arch_row.addWidget(self._settings_value, 1)
+        grid.addLayout(arch_row, 0, 1)
 
-        lbl_drs = QLabel("DXVK_NVAPI_DRS_SETTINGS=")
-        lbl_drs.setStyleSheet(lbl_ss)
-        row1.addWidget(lbl_drs)
+        grid.addWidget(key("ENV VARS="), 1, 0)
+        self._env_value = val("none")
+        grid.addWidget(self._env_value, 1, 1)
 
-        self._settings_value = QLabel("none")
-        self._settings_value.setStyleSheet(box_ss)
-        self._settings_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self._settings_value.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        row1.addWidget(self._settings_value, 1)
+        grid.addWidget(key("GAMESCOPE="), 2, 0)
+        self._gamescope_value = val("disabled")
+        grid.addWidget(self._gamescope_value, 2, 1)
+        grid.setColumnStretch(1, 1)
+        root.addLayout(grid, 1)
 
-        root.addLayout(row1)
+        # ── Action column ────────────────────────────────────────────────
+        col = QVBoxLayout()
+        col.setSpacing(5)
+        col.setContentsMargins(0, 0, 0, 0)
 
-        # ── Row 2: DXVK | VKD3D-PROTON= <combined env value> ─────────────────
-        row2 = QHBoxLayout()
-        row2.setSpacing(6)
-        row2.setContentsMargins(0, 0, 0, 0)
+        btn_base = ("border-radius:4px; font-weight:600; font-size:12px;"
+                    " min-height:24px; padding:0 10px;")
+        self._btn_ss_primary = (
+            f"QToolButton,QPushButton{{background:{T['accent']};border:1px solid {T['accent']};"
+            f"color:#0b0d10;{btn_base}}}"
+            f"QToolButton:hover,QPushButton:hover{{background:{T['accent_hi']};}}"
+            "QToolButton::menu-button{border-left:1px solid rgba(0,0,0,0.25);width:18px;}"
+        )
+        self._btn_ss_quiet = (
+            f"QPushButton{{background:{T['raised']};border:1px solid {T['border_hi']};"
+            f"color:{T['text2']};{btn_base}}}"
+            f"QPushButton:hover{{border-color:{T['accent_dim']};color:{T['text']};}}"
+            f"QPushButton:disabled{{color:#4b5264;border-color:{T['border']};}}"
+        )
+        self._btn_ss_dirty = (
+            f"QPushButton{{background:rgba(210,160,60,0.14);border:1px solid {T['warn']};"
+            f"color:{T['warn']};{btn_base}}}"
+            f"QPushButton:hover{{background:rgba(210,160,60,0.24);}}"
+        )
+        btn_ss_danger = (
+            f"QPushButton{{background:transparent;border:1px solid {T['border_hi']};"
+            f"color:{T['danger']};{btn_base}}}"
+            f"QPushButton:hover{{border-color:{T['danger']};background:rgba(208,80,80,0.10);}}"
+        )
 
-        # Was "DXVK | VKD3D | __GL=" — the row now carries all 10 env
-        # categories (Proton, Wine, PRIME, FLM, ...), not just those three.
-        lbl_env = QLabel("ENV VARS=")
-        lbl_env.setStyleSheet(lbl_ss)
-        row2.addWidget(lbl_env)
-
-        self._env_value = QLabel("none")
-        self._env_value.setStyleSheet(box_ss)
-        self._env_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self._env_value.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        row2.addWidget(self._env_value, 1)
-
-        root.addLayout(row2)
-
-        # ── Row 2b: GAMESCOPE= <gamescope command, ending in '--'> ───────────
-        row2b = QHBoxLayout()
-        row2b.setSpacing(6)
-        row2b.setContentsMargins(0, 0, 0, 0)
-
-        lbl_gs = QLabel("GAMESCOPE=")
-        lbl_gs.setStyleSheet(lbl_ss)
-        row2b.addWidget(lbl_gs)
-
-        self._gamescope_value = QLabel("disabled")
-        self._gamescope_value.setStyleSheet(box_ss)
-        self._gamescope_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self._gamescope_value.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        row2b.addWidget(self._gamescope_value, 1)
-
-        root.addLayout(row2b)
-
-        # ── Row 3: stretch + Copy All | Save | Reset ──────────────────────────
-        row3 = QHBoxLayout()
-        row3.setSpacing(6)
-        row3.setContentsMargins(0, 0, 0, 0)
-        row3.addStretch(1)
-
-        btn_ss_green = """
-QPushButton{background:#379f47;border:1px solid #56bf69;border-radius:5px;
-    color:white;font-weight:600;font-size:12px;}
-QPushButton:hover{background:#43b755;}
-QPushButton:pressed{background:#2f8c3f;}"""
-
-        btn_ss_blue = """
-QPushButton{background:#2d6cdf;border:1px solid #4f87ea;border-radius:5px;
-    color:white;font-weight:600;font-size:12px;}
-QPushButton:hover{background:#3d7cf0;}
-QPushButton:pressed{background:#235cc2;}
-QPushButton:disabled{background:#222831;border:1px solid #333b46;color:#666;}"""
-
-        btn_ss_red = """
-QPushButton{background:#b93b3b;border:1px solid #e05b5b;border-radius:5px;
-    color:white;font-weight:600;font-size:12px;}
-QPushButton:hover{background:#cd4949;}
-QPushButton:pressed{background:#a13232;}"""
-
-        copy_all_btn = QPushButton("Copy All")
-        copy_all_btn.setFixedSize(80, 22)
-        copy_all_btn.setStyleSheet(btn_ss_green)
-        copy_all_btn.setToolTip("Copy full launch string to clipboard")
-        copy_all_btn.clicked.connect(self._copy_all)
-        row3.addWidget(copy_all_btn)
+        copy_btn = QToolButton()
+        copy_btn.setText("Copy all")
+        copy_btn.setToolTip("Copy the full launch string  (Ctrl+Shift+C)")
+        copy_btn.setPopupMode(QToolButton.MenuButtonPopup)
+        copy_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        copy_btn.setStyleSheet(self._btn_ss_primary)
+        copy_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        menu = QMenu(copy_btn)
+        act_plain = QAction("Copy as shell environment", menu)
+        act_plain.triggered.connect(lambda: self._copy_all(steam=False))
+        act_steam = QAction("Copy as Steam launch options  (… %command%)", menu)
+        act_steam.triggered.connect(lambda: self._copy_all(steam=True))
+        menu.addAction(act_plain)
+        menu.addAction(act_steam)
+        copy_btn.setMenu(menu)
+        copy_btn.clicked.connect(lambda: self._copy_all(steam=False))
+        col.addWidget(copy_btn)
 
         self._save_profile_btn = QPushButton("Save")
-        self._save_profile_btn.setFixedSize(70, 22)
-        self._save_profile_btn.setStyleSheet(btn_ss_blue)
-        self._save_profile_btn.setToolTip("Save current settings to profile")
+        self._save_profile_btn.setStyleSheet(self._btn_ss_quiet)
         self._save_profile_btn.setEnabled(False)
         self._save_profile_btn.clicked.connect(self._save_to_profile)
-        row3.addWidget(self._save_profile_btn)
+        col.addWidget(self._save_profile_btn)
 
         reset_btn = QPushButton("Reset")
-        reset_btn.setFixedSize(70, 22)
-        reset_btn.setStyleSheet(btn_ss_red)
-        reset_btn.setToolTip("Reset all settings to default")
+        reset_btn.setStyleSheet(btn_ss_danger)
+        reset_btn.setToolTip("Clear every DRS setting, the GPU arch, env vars and gamescope flags")
         reset_btn.clicked.connect(self._reset_all)
-        row3.addWidget(reset_btn)
+        col.addWidget(reset_btn)
 
-        root.addLayout(row3)
+        holder = QWidget()
+        holder.setLayout(col)
+        holder.setFixedWidth(128)
+        root.addWidget(holder, 0, Qt.AlignTop)
 
         self.settings_manager.settings_changed.connect(self._update)
         self.settings_manager.arch_changed.connect(self._update)
@@ -2356,22 +2696,26 @@ QPushButton:pressed{background:#a13232;}"""
         self.settings_manager.profiles_changed.connect(self._update)
         self._update()
 
+    def set_dirty(self, dirty: bool):
+        self._dirty = dirty
+        self._update()
+
     def _update(self):
         arch = self.settings_manager.get_arch()
         if arch:
             self._arch_value.setText(arch.code)
-            self._arch_value.setToolTip(f"GPU Architecture: {arch.code} ({arch.name})")
+
         else:
             self._arch_value.setText("not set")
-            self._arch_value.setToolTip("GPU Architecture: not set")
+
 
         settings_str = self.settings_manager.get_settings_string()
         if settings_str:
             self._settings_value.setText(settings_str)
-            self._settings_value.setToolTip(f"DRS Settings: {settings_str}")
+
         else:
             self._settings_value.setText("none")
-            self._settings_value.setToolTip("DRS Settings: none")
+
 
         # Row 2: env vars string
         if self._env_widget is not None:
@@ -2379,45 +2723,56 @@ QPushButton:pressed{background:#a13232;}"""
         else:
             env_str = ""
         self._env_value.setText(env_str if env_str else "none")
-        self._env_value.setToolTip(env_str if env_str else "No DXVK/VKD3D-Proton env vars set")
+
 
         # Row 2b: gamescope command (CLI flags, ends in '--' — no %command%
         # or launcher assumed; the person appends their own launch command)
         if self._gamescope_widget is not None and self._gamescope_widget.is_enabled():
             gs_str = self._gamescope_widget.build_command()
             self._gamescope_value.setText(gs_str)
-            self._gamescope_value.setToolTip(gs_str)
+
         else:
             self._gamescope_value.setText("disabled")
-            self._gamescope_value.setToolTip(
-                "Gamescope wrapper is disabled — enable it from the "
-                "\"Gamescope Launch Flags\" item in the Env Vars sidebar."
-            )
+
 
         current = self.settings_manager.get_current_profile()
         self._save_profile_btn.setEnabled(current is not None)
+        dirty = bool(current) and self._dirty
+        self._save_profile_btn.setText("Save •" if dirty else "Save")
+        self._save_profile_btn.setStyleSheet(self._btn_ss_dirty if dirty else self._btn_ss_quiet)
         if current:
-            self._save_profile_btn.setToolTip(f"Save to profile: {current}")
+            self._save_profile_btn.setToolTip(
+                f"Save to profile \"{current}\"  (Ctrl+S)"
+                + ("\nThere are unsaved changes." if dirty else ""))
         else:
-            self._save_profile_btn.setToolTip("Load a profile first to enable saving")
+            self._save_profile_btn.setToolTip(
+                "Load or create a profile in the Profiles tab first")
 
     def _on_profile_loaded(self, name):
         self._update()
 
-    def _copy_all(self):
+    def build_launch_string(self, steam: bool = False) -> str:
         if self._env_widget is not None:
             text = self._env_widget.get_full_combined_string()
         else:
             text = self.settings_manager.get_full_env_string()
-
         if self._gamescope_widget is not None and self._gamescope_widget.is_enabled():
             gs_str = self._gamescope_widget.build_command()
             if gs_str:
                 text = f"{text} {gs_str}" if text else gs_str
+        if steam:
+            # gamescope's command already ends in "--" (plus mangohud if
+            # enabled), so %command% slots straight in after it.
+            text = f"{text} %command%" if text else "%command%"
+        return text
 
-        if text:
+    def _copy_all(self, steam: bool = False):
+        text = self.build_launch_string(steam)
+        if text and text != "%command%":
             QApplication.clipboard().setText(text)
-            self._show_feedback("All copied!")
+            self._show_feedback("Copied Steam launch options" if steam else "Copied launch string")
+        else:
+            self._show_feedback("Nothing to copy yet")
 
     def _save_to_profile(self):
         current = self.settings_manager.get_current_profile()
@@ -2458,7 +2813,6 @@ QPushButton:pressed{background:#a13232;}"""
                 # Clear env editor right panel
                 if hasattr(win, '_env_editor'):
                     win._env_editor.discard_pending_edit()
-                    win._env_editor.hide()
                 # Reset window title
                 win.setWindowTitle(APP_TITLE)
                 # Forget remembered right-panel state per tab — otherwise
@@ -2483,7 +2837,7 @@ QPushButton:pressed{background:#a13232;}"""
             self._show_feedback("All settings reset!")
 
     def _show_feedback(self, msg):
-        self.window().statusBar().showMessage(msg, 1500)
+        self.window().statusBar().showMessage(msg, 2000)
 
 
 # ============================================================================
@@ -2860,6 +3214,31 @@ QSpinBox:hover{
         hbox.addStretch()
         self._control_layout.addLayout(hbox)
 
+        # Optional one-click values (e.g. common refresh rates, "Auto").
+        if s.presets:
+            quick = QHBoxLayout()
+            quick.setSpacing(4)
+            cur_int = spin.value() if cur is not None else None
+            for pr in s.presets:
+                try:
+                    pv = int(pr.val, 16)
+                except ValueError:
+                    continue
+                b = QPushButton(pr.name)
+                b.setCheckable(True)
+                b.setChecked(cur_int is not None and pv == cur_int)
+                b.setFixedHeight(28)
+                b.setStyleSheet(f"""
+QPushButton{{background:{T['raised']};border:1px solid {T['border_hi']};border-radius:6px;
+    color:{T['text2']};padding:0 12px;font-size:11px;font-weight:600;}}
+QPushButton:hover{{border-color:{T['accent']};}}
+QPushButton:checked{{background:rgba(118,185,0,0.12);border-color:{T['accent']};color:{T['accent']};}}
+""")
+                b.clicked.connect(lambda _c=False, v=pv, sid=s.id: self._apply_numeric_preset(sid, v))
+                quick.addWidget(b)
+            quick.addStretch()
+            self._control_layout.addLayout(quick)
+
     def _build_dec_hex_control(self, s: Setting, cur: Optional[str]):
         grid = QGridLayout()
         grid.setSpacing(6)
@@ -3074,6 +3453,15 @@ QLineEdit:hover{
         hex_val = f"0x{value:X}"
         self.settings_manager.set_setting(setting_id, hex_val)
 
+    def _apply_numeric_preset(self, setting_id: str, value: int):
+        # The clicked button keeps focus inside the control area, which makes
+        # _update_display() take its "user is typing" shortcut and skip the
+        # rebuild — so the spin box and button highlight would go stale.
+        # A preset click is a discrete choice: rebuild explicitly.
+        self._set_numeric(setting_id, value)
+        self._current_value = self.settings_manager.get_setting(setting_id)
+        self._build_editor()
+
     def _set_dec_hex(self, setting_id: str, value: int):
         hex_val = f"0x{value:X}"
         self.settings_manager.set_setting(setting_id, hex_val)
@@ -3164,99 +3552,27 @@ QLineEdit:hover{
 # ============================================================================
 
 class ArchListWidget(QListWidget):
-    """List of GPU architectures styled exactly like the Settings list."""
+    """List of GPU architectures, drawn by the shared SidebarDelegate."""
     arch_selected = Signal(object)  # emits GPUArch
 
     def __init__(self):
         super().__init__()
         self.setSelectionMode(QListWidget.SingleSelection)
-        self.setAlternatingRowColors(True)
         self.itemClicked.connect(self._on_item_clicked)
         self.currentItemChanged.connect(self._on_current_item_changed)
-        self.setFont(QFont("Segoe UI", 9))
-
-        self.setStyleSheet("""
-QListWidget{
-    background:#0d0f12;
-    border:none;
-    outline:none;
-}
-
-QListWidget::item{
-    background:transparent;
-    border-radius:0px;
-    padding:4px 12px;
-    margin:0px;
-    font-size:12px;
-    font-weight:400;
-    border-left:2px solid transparent;
-}
-
-QListWidget::item:hover{
-    background:#141720;
-    color:#e8eaf0;
-}
-
-QListWidget::item:selected{
-    background:rgba(118, 185, 0, 0.07);
-    color:#e8eaf0;
-    border-left:2px solid #76b900;
-}
-
-QScrollBar:vertical{
-    background:#0d0f12;
-    width:5px;
-}
-
-QScrollBar::handle:vertical{
-    background:#1e2535;
-    border-radius:3px;
-}
-
-QScrollBar::handle:vertical:hover{
-    background:#5a6070;
-}
-
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical{
-    height:0px;
-}
-
-QScrollBar::add-page:vertical,
-QScrollBar::sub-page:vertical{
-    background:none;
-}
-""")
+        setup_sidebar_list(self)
 
     def populate(self, archs: List[GPUArch], selected_arch: Optional[GPUArch]):
         """Fill the list with architecture items, highlighting the selected one."""
-        # Block currentItemChanged for the rebuild - same reasoning as
-        # SettingsListWidget.populate: clear()+re-add can fire spurious
-        # selection-changed signals we don't want driving navigation here.
+        # Block currentItemChanged for the rebuild - clear()+re-add can fire
+        # spurious selection-changed signals we don't want driving navigation.
         self.blockSignals(True)
         self.clear()
-        # Add a category header (non-selectable)
-        cat_item = QListWidgetItem("─── GPU Architectures ───")
-        cat_item.setFlags(Qt.NoItemFlags)
-        font = cat_item.font()
-        font.setBold(True)
-        font.setPointSize(8)
-        font.setFamily("Segoe UI")
-        cat_item.setFont(font)
-        cat_item.setForeground(QColor(185, 59, 59))
-        self.addItem(cat_item)
-
+        self.addItem(make_header_item("GPU architectures", 1 if selected_arch else 0))
         for arch in archs:
-            item = QListWidgetItem(arch.name)
-            item.setData(Qt.UserRole, arch)
-            if selected_arch and arch.code == selected_arch.code:
-                font = item.font()
-                font.setBold(True)
-                item.setFont(font)
-                item.setForeground(QColor(118, 185, 0))
-            else:
-                item.setForeground(QColor(200, 205, 216))
-            self.addItem(item)
+            is_sel = bool(selected_arch and arch.code == selected_arch.code)
+            self.addItem(make_list_item(f"{arch.name}  ·  {arch.arch}", arch,
+                                        is_set=is_sel, value=arch.code))
         self.blockSignals(False)
 
     def _on_item_clicked(self, item):
@@ -3312,8 +3628,10 @@ QLabel{
 
         # Short description
         self._desc_label = QLabel(
-            "Select this architecture to enable GPU‑specific optimizations "
-            "in DXVK‑NVAPI."
+            "Makes DXVK-NVAPI report this architecture instead of your real "
+            "GPU's (DXVK_NVAPI_GPU_ARCH). It is a spoof meant for "
+            "troubleshooting or unlocking features a game gates on a newer "
+            "generation — leave it unset to report the real card."
         )
         self._desc_label.setWordWrap(True)
         self._desc_label.setStyleSheet("color: #a7afbc; font-size: 13px;")
@@ -3366,16 +3684,17 @@ DXVK_ENV_VARS: List[EnvVarDef] = [
     EnvVarDef("DXVK_HUD", "DXVK", "flags", "",
               "In-game HUD overlay. Comma-separated list of elements to display.",
               options=["devinfo", "fps", "frametimes", "submissions", "drawcalls",
-                       "pipelines", "memory", "gpuload", "version", "api", "compiler",
-                       "samplers", "descriptors", "scale=N", "1", "full"],
+                       "pipelines", "descriptors", "memory", "allocations", "gpuload",
+                       "version", "api", "cs", "compiler", "samplers", "swvp",
+                       "1", "full", "scale=N", "opacity=N"],
               placeholder="e.g. devinfo,fps,memory"),
     # ── Frame Rate ───────────────────────────────────────────────────────────
     EnvVarDef("DXVK_FRAME_RATE", "DXVK", "int", "0",
-              # NOTE: Removed upstream in vkd3d-proton 3.0 (Sep 2026) "to align with
-              # DXVK's removal" of this var. For D3D12/VKD3D-Proton titles use
-              # VKD3D_FRAME_RATE instead. Still valid for pure DXVK (D3D9/10/11) titles;
-              # kept here for that reason, not because it's still supported everywhere.
-              "Frame rate limiter. 0 = uncapped. Positive value limits to N FPS.",
+              "Frame rate limiter. 0 = uncapped. Positive value limits to N FPS.\n"
+              "REMOVED in upstream DXVK 3.0 — the variable is no longer read there. "
+              "Still honoured by DXVK <= 2.7 and forks such as dxvk-low-latency. "
+              "On DXVK 3.x use DXVK_CONFIG=\"dxvk.maxFrameRate = 60\" instead, or an "
+              "external limiter (gamescope -r, MangoHud, vk_flip_meter).",
               placeholder="e.g. 60"),
     # ── Logging ──────────────────────────────────────────────────────────────
     EnvVarDef("DXVK_LOG_LEVEL", "DXVK", "enum", "",
@@ -3392,10 +3711,14 @@ DXVK_ENV_VARS: List[EnvVarDef] = [
               "Override the shader pipeline state cache directory.",
               placeholder="/path/to/cache"),
     EnvVarDef("DXVK_STATE_CACHE", "DXVK", "enum", "",
-              "Pipeline state cache control. Set to 0 to disable.",
+              "[Legacy] Pipeline state cache control. Set to 0 to disable. Not read by "
+              "current upstream DXVK (the state cache is gone; DXVK 3.x caches compiled "
+              "shaders instead — see DXVK_SHADER_CACHE). Kept for older builds and "
+              "DXVK-Sarek (1.10-based).",
               options=["0", "1"]),
     EnvVarDef("DXVK_STATE_CACHE_PATH", "DXVK", "string", "",
-              "Directory for pipeline state cache files.",
+              "[Legacy] Directory for pipeline state cache files. Same caveat as "
+              "DXVK_STATE_CACHE — use DXVK_SHADER_CACHE_PATH on DXVK 3.x.",
               placeholder="/path/to/cache"),
     # ── Device Selection ─────────────────────────────────────────────────────
     EnvVarDef("DXVK_FILTER_DEVICE_NAME", "DXVK", "string", "",
@@ -3411,8 +3734,21 @@ DXVK_ENV_VARS: List[EnvVarDef] = [
               options=["0", "1"]),
     # ── Debug ────────────────────────────────────────────────────────────────
     EnvVarDef("DXVK_DEBUG", "DXVK", "enum", "",
-              "Enables DXVK debug utilities (e.g. D3D annotation markers for RenderDoc).",
-              options=["markers"]),
+              "Enables one DXVK debugging mode.\n"
+              "capture: debug names and markers for render passes/shaders (default under "
+              "some capture tools).\n"
+              "hang: detects GPU hangs / VK_ERROR_DEVICE_LOST and logs the failing "
+              "command(s) — attach the log to bug reports.\n"
+              "markers: forwards application-provided resource names and markers via "
+              "VK_EXT_debug_utils.\n"
+              "validation: enables the validation callback; also needs "
+              "VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation.",
+              options=["capture", "hang", "markers", "validation"]),
+    EnvVarDef("DXVK_CAPTURE_FRAMES", "DXVK", "string", "",
+              "Triggers a frame capture (RenderDoc) for a range of frames: "
+              "'first' or 'first:count'. E.g. 500:3 captures frames 500-502. Malformed "
+              "values are logged and ignored. Debugging only.",
+              placeholder="e.g. 500:3"),
     EnvVarDef("DXVK_ASYNC", "DXVK", "enum", "",
               "Async shader compilation (unofficial/patched builds). 1 = enable.",
               options=["0", "1"]),
@@ -3430,7 +3766,9 @@ DXVK_ENV_VARS: List[EnvVarDef] = [
               "a positive number enforces that exact thread count. Some threads are "
               "reserved for high-priority work when the graphics pipeline library "
               "feature is enabled. Set to 1 to force fully single-threaded shader "
-              "compilation (deterministic, but slower cold-start compiles).",
+              "compilation (deterministic, but slower cold-start compiles).\n"
+              "Note: upstream DXVK 3.x does not read this variable — use "
+              "DXVK_CONFIG=\"dxvk.numCompilerThreads = N\" there.",
               placeholder="0 = all cores, or e.g. 1"),
     # ── Inline Config Override ───────────────────────────────────────────────
     EnvVarDef("DXVK_CONFIG_FILE", "DXVK", "string", "",
@@ -3508,7 +3846,6 @@ VKD3D_CONFIG_DESCS: Dict[str, str] = {
     # ── PSO / Pipeline Cache ──────────────────────────────────────────────────
     "pipeline_library_ignore_mismatch_driver": "Ignore driver-version mismatch when loading the pipeline library cache. Useful after driver updates to avoid cold compiles. Auto-applied for Elden Ring.",
     "retain_psos":                          "Keep PSOs (pipeline state objects) alive instead of freeing them immediately. Prevents use-after-free crashes in FFVII Rebirth, Ark Ascended, and REANIMAL.",
-    "pipeline_library_app_cache":           "Alternative to VKD3D_SHADER_CACHE_PATH=0: makes ID3D12PipelineLibrary the real cache (storing full SPIR-V + driver PSO blobs) instead of vkd3d-proton's own internal shader cache. Useful for games whose own pipeline-library management is more efficient than vkd3d-proton's default caching.",
     # ── Descriptor Heap (2026) ────────────────────────────────────────────────
     "descriptor_heap":                      "Enable the new VK_EXT_descriptor_heap code path (merged May 2026). Requires Mesa ≥ 26.1 or NVIDIA driver with descriptor heap support. Fixes Xid 109 crashes and Crimson Desert hang on Blackwell.",
     # ── CBV / SRV Binding Workarounds ────────────────────────────────────────
@@ -3535,10 +3872,6 @@ VKD3D_CONFIG_DESCS: Dict[str, str] = {
     "vk_debug":                            "Enable Vulkan debug extensions and loads validation layer.",
     "skip_application_workarounds":        "Skip all application-specific workarounds. For debugging only.",
     "force_host_cached":                   "Force all host-visible allocations to CACHED. Speeds up GPU captures with RenderDoc.",
-    "descriptor_qa_checks":                "Requires a build with -Denable_descriptor_qa=true. Instruments all shaders to check for invalid descriptor-heap access at runtime (GPU-assisted debugging) — catches out-of-bounds heap index, mismatched descriptor type, and use of a destroyed resource, and logs the faulting shader hash/instruction. Developer/QA use only; adds overhead.",
-    "instruction_qa_checks":                "Requires a build with descriptor QA instrumentation enabled. Adds fine-grained, per-shader QA checks that flag NaN/Inf values generated during shader execution. Internal QA/debug use only.",
-    # ── Swapchain (new, from CHANGELOG 2.8+) ─────────────────────────────────
-    "swapchain_legacy":                    "Force the old pre-2.8 swapchain implementation instead of the VK_KHR_present_wait-based one. Debug/triage flag only — use if you suspect a regression from the newer swapchain path (e.g. odd frame pacing or a hang tied to present_wait).",
 }
 
 VKD3D_ENV_VARS: List[EnvVarDef] = [
@@ -3567,7 +3900,6 @@ VKD3D_ENV_VARS: List[EnvVarDef] = [
                   # PSO / Pipeline Cache
                   "pipeline_library_ignore_mismatch_driver",
                   "retain_psos",
-                  "pipeline_library_app_cache",
                   # Descriptor Heap (2026)
                   "descriptor_heap",
                   # CBV / SRV Binding
@@ -3594,10 +3926,6 @@ VKD3D_ENV_VARS: List[EnvVarDef] = [
                   "vk_debug",
                   "skip_application_workarounds",
                   "force_host_cached",
-                  "descriptor_qa_checks",
-                  "instruction_qa_checks",
-                  # Swapchain
-                  "swapchain_legacy",
               ],
               placeholder="e.g. dxr,retain_descriptor_heaps"),
     # ── Frame Rate ───────────────────────────────────────────────────────────
@@ -4412,14 +4740,38 @@ PROTON_ENV_VARS: List[EnvVarDef] = [
               "nvapiHack config, which only affects reporting from Direct3D.",
               options=["0", "1"]),
     EnvVarDef("PROTON_ENABLE_NVAPI", "Proton", "enum", "",
-              "Enable NVIDIA's NVAPI GPU support library inside the Wine prefix. Required for "
-              "DLSS, Reflex, and MFG in titles that aren't already on Proton's built-in NVAPI "
-              "allow-list. Usually paired with PROTON_HIDE_NVIDIA_GPU=0.",
+              "Enable NVIDIA's NVAPI GPU support library inside the Wine prefix. Needed on "
+              "older Proton (<= 9) and some forks. Valve Proton 10 copies nvapi64.dll into "
+              "the prefix by default unless the game is marked 'disablenvapi' — there, use "
+              "PROTON_FORCE_NVAPI=1 to override such a per-game block instead. "
+              "Usually paired with PROTON_HIDE_NVIDIA_GPU=0.",
               options=["0", "1"]),
     EnvVarDef("PROTON_DISABLE_NVAPI", "Proton", "enum", "",
               "Disable NVIDIA's NVAPI GPU support library. Occasionally fixes crashes or low "
               "performance in titles that have buggy NVAPI code paths on Linux.",
               options=["0", "1"]),
+    EnvVarDef("PROTON_FORCE_NVAPI", "Proton", "enum", "",
+              "Proton 10: forces NVAPI on even for titles Proton disables it for by "
+              "default (maps to the 'forcenvapi' compat flag, which wins over "
+              "'disablenvapi'). Use when DLSS/Reflex is missing in a game Proton "
+              "blocks NVAPI for.",
+              options=["1"]),
+    EnvVarDef("PROTON_HIDE_APU", "Proton", "enum", "",
+              "Hides an AMD APU's integrated GPU from the game (Proton sets "
+              "WINE_HIDE_APU=1). On hybrid laptops (Ryzen iGPU + NVIDIA dGPU) this "
+              "stops games that enumerate adapters from picking or mis-detecting the "
+              "iGPU. Proton applies it automatically for a few titles (e.g. Deathloop).",
+              options=["1"]),
+    EnvVarDef("PROTON_LIMIT_RESOLUTIONS", "Proton", "int", "",
+              "Caps how many display modes Wine reports to the game. Some titles crash "
+              "or misbehave with very long mode lists on high-refresh panels; Proton "
+              "sets 16/32 automatically for e.g. Sekiro, Nier: Automata, Dark Souls III.",
+              placeholder="e.g. 32"),
+    EnvVarDef("PROTON_CPU_TOPOLOGY", "Proton", "string", "",
+              "Proton alias for WINE_CPU_TOPOLOGY ('N:i,j,k,...'); copied into "
+              "WINE_CPU_TOPOLOGY by the Proton script. Useful for pinning a game to "
+              "specific cores (e.g. one CCD / the V-Cache CCD).",
+              placeholder="e.g. 8:0,1,2,3,4,5,6,7"),
     EnvVarDef("PROTON_NVAPI_BYPASS", "Proton", "enum", "",
               "Not a documented Proton/DXVK/VKD3D variable — no official source for this "
               "exact name was found. Most likely a mix-up with PROTON_DISABLE_NVAPI or "
@@ -4729,9 +5081,11 @@ DXVK_NVAPI_ENV_VARS: List[EnvVarDef] = [
               options=["none", "error", "warn", "info", "debug", "trace"]),
     # ── General Logging / Driver Reporting ───────────────────────────────────
     EnvVarDef("DXVK_NVAPI_LOG_LEVEL", "DXVK-NVAPI", "enum", "",
-              "Log verbosity for DXVK-NVAPI itself. In most released versions only 'info' "
-              "produces output (no other level does anything); logging is off by default.",
-              options=["none", "info"]),
+              "Log verbosity for DXVK-NVAPI itself; logging is off by default. "
+              "'info' logs the normal messages (incl. which DRS settings the game "
+              "requested). 'trace' (newer releases) logs every entry point enter/exit — "
+              "heavy on performance and log size.",
+              options=["none", "info", "trace"]),
     EnvVarDef("DXVK_NVAPI_LOG_PATH", "DXVK-NVAPI", "string", "",
               "Also write DXVK-NVAPI's log to dxvk-nvapi.log in this directory, in addition "
               "to console output. Entries are appended to an existing file.",
@@ -4743,6 +5097,18 @@ DXVK_NVAPI_ENV_VARS: List[EnvVarDef] = [
     EnvVarDef("DXVK_NVAPI_ALLOW_OTHER_DRIVERS", "DXVK-NVAPI", "enum", "",
               "Allow using DXVK-NVAPI without an NVIDIA GPU on the proprietary driver. Useful "
               "for exercising NVAPI D3D11 extensions on a non-NVIDIA GPU (e.g. Mesa/NVK).",
+              options=["0", "1"]),
+    EnvVarDef("DXVK_NVAPI_DISABLE_ENTRYPOINTS", "DXVK-NVAPI", "string", "",
+              "Comma-separated NVAPI entry point names to hide from the game — the "
+              "game then sees those functions as unavailable. Workaround tool for "
+              "titles that crash in one specific NVAPI path.",
+              placeholder="e.g. NvAPI_D3D11_BeginUAVOverlap,NvAPI_D3D11_EndUAVOverlap"),
+    EnvVarDef("DXVK_NVAPI_FAKE_VKREFLEX", "DXVK-NVAPI", "enum", "",
+              "1 = let Vulkan Reflex initialise successfully even when the dxvk-nvapi "
+              "Vulkan Reflex layer is NOT installed (fake success, no latency "
+              "reduction). 0 = never fake. Enabled automatically for DOOM: The Dark "
+              "Ages to avoid its pink-tint bug. For real Reflex install the layer and "
+              "use DXVK_NVAPI_VKREFLEX=1.",
               options=["0", "1"]),
 ]
 
@@ -5252,6 +5618,14 @@ ALL_ENV_VARS = (DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS + NVIDIA_PRIME_ENV_
                  SYS_ENV_VARS + FLM_ENV_VARS + GAMESCOPE_ENV_VARS +
                  FORK_ENV_VARS)
 
+# Sidebar display order for the Environment tab. Forks sit right under the
+# upstream project they patch.
+ENV_CATEGORY_ORDER = [
+    "DXVK", "DXVK Forks", "VKD3D-Proton", "VKD3D Forks", "DXVK-NVAPI",
+    "NVIDIA __GL", "NVIDIA PRIME", "NVIDIA Smooth Motion",
+    "Proton", "Wine", "System / Loader", "vk_flip_meter", "Gamescope",
+]
+
 
 # ============================================================================
 # Env Vars Tab Widget
@@ -5263,141 +5637,92 @@ ALL_ENV_VARS = (DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS + NVIDIA_PRIME_ENV_
 
 class EnvVarsWidget(QListWidget):
     """
-    Left-sidebar list of DXVK / VKD3D-Proton env vars.
-    Styled identically to SettingsListWidget: red category headers,
-    green highlight for set vars.
+    Left-sidebar list of every env var category (DXVK, VKD3D-Proton, forks,
+    NVIDIA, Proton, Wine, FLM, Gamescope, ...). Drawn by SidebarDelegate:
+    set vars get a green dot and their value previewed on the right.
     """
     env_var_selected = Signal(str)   # emits var name
     env_changed = Signal()           # emits when a value changes (forwarded from editor)
+
+    GAMESCOPE_KEY = "__GAMESCOPE_FLAGS__"
 
     def __init__(self, settings_manager: SettingsManager, parent=None):
         super().__init__(parent)
         self.settings_manager = settings_manager
         # { var_name: current_value_str }  — single source of truth
         self._values: Dict[str, str] = {}
+        self._gamescope_on = False
 
         self.setSelectionMode(QListWidget.SingleSelection)
-        self.setAlternatingRowColors(True)
         self.itemClicked.connect(self._on_item_clicked)
         self.currentItemChanged.connect(self._on_current_item_changed)
-        self.setFont(QFont("Segoe UI", 9))
-        self.setStyleSheet("""
-QListWidget{
-    background:#0d0f12;
-    border:none;
-    outline:none;
-}
-QListWidget::item{
-    background:transparent;
-    border-radius:0px;
-    padding:4px 12px;
-    margin:0px;
-    font-size:12px;
-    font-weight:400;
-    border-left:2px solid transparent;
-}
-QListWidget::item:hover{
-    background:#141720;
-    color:#e8eaf0;
-}
-QListWidget::item:selected{
-    background:rgba(118, 185, 0, 0.07);
-    color:#e8eaf0;
-    border-left:2px solid #76b900;
-}
-QScrollBar:vertical{
-    background:#0d0f12;
-    width:5px;
-}
-QScrollBar::handle:vertical{
-    background:#1e2535;
-    border-radius:3px;
-}
-QScrollBar::handle:vertical:hover{
-    background:#5a6070;
-}
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical{
-    height:0px;
-}
-QScrollBar::add-page:vertical,
-QScrollBar::sub-page:vertical{
-    background:none;
-}
-""")
+        setup_sidebar_list(self)
         self.populate()
+
+    @staticmethod
+    def _categories() -> List[tuple]:
+        """
+        (label, [EnvVarDef]) in display order, derived from ALL_ENV_VARS.
+        This used to be a hand-written list that silently left out the
+        "DXVK Forks" / "VKD3D Forks" categories, so those vars existed in the
+        catalog (and in profiles / Lutris sync) but never showed up here.
+        Any category not named in ENV_CATEGORY_ORDER is appended at the end
+        rather than dropped.
+        """
+        groups: Dict[str, List[EnvVarDef]] = {}
+        for ev in ALL_ENV_VARS:
+            groups.setdefault(ev.cat, []).append(ev)
+        order = [c for c in ENV_CATEGORY_ORDER if c in groups]
+        order += [c for c in groups if c not in order]
+        return [(c, groups[c]) for c in order]
 
     def populate(self, filter_text: str = ""):
         """
-        (Re)build the list. When filter_text is given, only env vars whose
-        name, category, or description match (case-insensitive substring)
-        are shown; a category header is only added if it has at least one
-        matching var. Mirrors SettingsListWidget.populate()'s filtering so
-        the search box works the same way on both tabs.
+        (Re)build the list. With filter_text, only vars whose name, category,
+        description or current value match are shown; empty categories are
+        skipped entirely.
         """
         current_item = self.currentItem()
         current_name = current_item.data(Qt.UserRole) if current_item else None
 
-        # Block currentItemChanged for the rebuild - same reasoning as
-        # SettingsListWidget.populate: clear()+re-add can fire spurious
-        # selection-changed signals while typing in the search box.
+        # clear()+re-add can fire spurious selection-changed signals while
+        # typing in the search box — block them for the rebuild.
         self.blockSignals(True)
         self.clear()
         filter_lower = filter_text.lower()
 
-        for cat_label, env_list in [("DXVK", DXVK_ENV_VARS),
-                                     ("VKD3D-Proton", VKD3D_ENV_VARS),
-                                     ("NVIDIA __GL", NV_ENV_VARS),
-                                     ("NVIDIA PRIME", NVIDIA_PRIME_ENV_VARS),
-                                     ("Proton", PROTON_ENV_VARS),
-                                     ("Wine", WINE_ENV_VARS),
-                                     ("DXVK-NVAPI", DXVK_NVAPI_ENV_VARS),
-                                     ("NVIDIA Smooth Motion", NVPRESENT_ENV_VARS),
-                                     ("System / Loader", SYS_ENV_VARS),
-                                     ("vk_flip_meter", FLM_ENV_VARS),
-                                     ("Gamescope", GAMESCOPE_ENV_VARS)]:
+        for cat_label, env_list in self._categories():
             if filter_text:
                 matching = [
                     ev for ev in env_list
                     if filter_lower in ev.name.lower()
                     or filter_lower in ev.cat.lower()
                     or filter_lower in ev.desc.lower()
+                    or filter_lower in self._values.get(ev.name, "").lower()
                 ]
+                show_gs = cat_label == "Gamescope" and "gamescope" in filter_lower
             else:
                 matching = env_list
-            if not matching:
+                show_gs = cat_label == "Gamescope"
+            if not matching and not show_gs:
                 continue
 
-            hdr = QListWidgetItem(f"─── {cat_label} ───")
-            hdr.setFlags(Qt.NoItemFlags)
-            font = hdr.font()
-            font.setBold(True)
-            font.setPointSize(8)
-            font.setFamily("Segoe UI")
-            hdr.setFont(font)
-            hdr.setForeground(QColor(185, 59, 59))
-            self.addItem(hdr)
+            n_set = sum(1 for ev in matching if ev.name in self._values)
+            if show_gs and self._gamescope_on:
+                n_set += 1
+            self.addItem(make_header_item(cat_label, n_set))
 
-            if cat_label == "Gamescope":
-                gs_item = QListWidgetItem("  ⚙ Gamescope Launch Flags (CLI builder)")
-                gs_item.setData(Qt.UserRole, "__GAMESCOPE_FLAGS__")
-                f = gs_item.font()
-                f.setBold(True)
-                gs_item.setFont(f)
-                gs_item.setForeground(QColor(210, 160, 60))
-                self.addItem(gs_item)
+            if show_gs:
+                self.addItem(make_list_item(
+                    "Gamescope launch flags", self.GAMESCOPE_KEY,
+                    is_set=self._gamescope_on,
+                    value="on" if self._gamescope_on else "CLI builder",
+                    kind="special"))
 
             for ev in matching:
-                item = QListWidgetItem(f"  {ev.name}")
-                item.setData(Qt.UserRole, ev.name)
-                if ev.name in self._values:
-                    f = item.font()
-                    f.setBold(True)
-                    item.setFont(f)
-                    item.setForeground(QColor(118, 185, 0))
-                else:
-                    item.setForeground(QColor(200, 205, 216))
-                self.addItem(item)
+                val = self._values.get(ev.name)
+                self.addItem(make_list_item(ev.name, ev.name,
+                                            is_set=val is not None, value=val or ""))
 
         if current_name:
             for i in range(self.count()):
@@ -5407,23 +5732,35 @@ QScrollBar::sub-page:vertical{
                     break
         self.blockSignals(False)
 
+    def set_gamescope_enabled(self, on: bool):
+        if on != self._gamescope_on:
+            self._gamescope_on = on
+            self.refresh_colors()
+
     def refresh_colors(self):
-        """Re-color items to reflect current set/unset state."""
+        """Refresh set-state, value previews and header counts in place."""
+        header = None
+        count = 0
         for i in range(self.count()):
             item = self.item(i)
-            name = item.data(Qt.UserRole)
-            if not name or name == "__GAMESCOPE_FLAGS__":
+            if item.data(ROLE_KIND) == "header":
+                if header is not None:
+                    header.setData(ROLE_COUNT, count)
+                header, count = item, 0
                 continue
-            if name in self._values:
-                f = item.font()
-                f.setBold(True)
-                item.setFont(f)
-                item.setForeground(QColor(118, 185, 0))
-            else:
-                f = item.font()
-                f.setBold(False)
-                item.setFont(f)
-                item.setForeground(QColor(200, 205, 216))
+            name = item.data(Qt.UserRole)
+            if name == self.GAMESCOPE_KEY:
+                item.setData(ROLE_SET, self._gamescope_on)
+                item.setData(ROLE_VALUE, "on" if self._gamescope_on else "CLI builder")
+                count += 1 if self._gamescope_on else 0
+                continue
+            val = self._values.get(name)
+            item.setData(ROLE_SET, val is not None)
+            item.setData(ROLE_VALUE, val or "")
+            if val is not None:
+                count += 1
+        if header is not None:
+            header.setData(ROLE_COUNT, count)
 
     def _on_item_clicked(self, item):
         name = item.data(Qt.UserRole)
@@ -5993,78 +6330,19 @@ class SettingsListWidget(QListWidget):
     def __init__(self):
         super().__init__()
         self.setSelectionMode(QListWidget.SingleSelection)
-        self.setAlternatingRowColors(True)
         self.itemClicked.connect(self._on_item_clicked)
-        # currentItemChanged also fires on keyboard Up/Down navigation (not
-        # just mouse clicks), so arrowing through the list opens each
-        # setting's detail the same way clicking it does. Category headers
-        # have Qt.NoItemFlags (not selectable), so Qt's keyboard handling
-        # already skips over them when arrowing past.
+        # currentItemChanged also fires on keyboard Up/Down navigation, so
+        # arrowing through the list opens each setting like a click does.
+        # Headers have Qt.NoItemFlags, so keyboard navigation skips them.
         self.currentItemChanged.connect(self._on_current_item_changed)
-        self.setFont(QFont("Segoe UI", 9))
-
-        self.setStyleSheet("""
-QListWidget{
-    background:#0d0f12;
-    border:none;
-    outline:none;
-}
-
-QListWidget::item{
-    background:transparent;
-    border-radius:0px;
-    padding:4px 12px;
-    margin:0px;
-    font-size:12px;
-    font-weight:400;
-    border-left:2px solid transparent;
-}
-
-QListWidget::item:hover{
-    background:#141720;
-    color:#e8eaf0;
-}
-
-QListWidget::item:selected{
-    background:rgba(118, 185, 0, 0.07);
-    color:#e8eaf0;
-    border-left:2px solid #76b900;
-}
-
-QScrollBar:vertical{
-    background:#0d0f12;
-    width:5px;
-}
-
-QScrollBar::handle:vertical{
-    background:#1e2535;
-    border-radius:3px;
-}
-
-QScrollBar::handle:vertical:hover{
-    background:#5a6070;
-}
-
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical{
-    height:0px;
-}
-
-QScrollBar::add-page:vertical,
-QScrollBar::sub-page:vertical{
-    background:none;
-}
-""")
+        setup_sidebar_list(self)
+        self._by_id: Dict[str, Setting] = {}
 
     def populate(self, settings: List[Setting], current_state: Dict[str, str], filter_text: str = ""):
-        # Rebuilding the list (clear + re-add) can make Qt fire
-        # currentItemChanged on its own as items are removed/added - that
-        # would spuriously re-trigger setting_selected on every keystroke
-        # while typing in the search box, fighting with whatever the user
-        # actually has open in the right panel. Block it for the rebuild;
-        # real user navigation (clicks, arrow keys) re-enables it right after.
+        # Block selection signals for the rebuild (see EnvVarsWidget.populate).
         self.blockSignals(True)
         self.clear()
+        self._by_id = {s.id: s for s in settings}
         filter_lower = filter_text.lower()
 
         categories: Dict[str, List[Setting]] = {}
@@ -6072,62 +6350,45 @@ QScrollBar::sub-page:vertical{
             if filter_text and not (
                 filter_lower in s.name.lower() or
                 filter_lower in s.id.lower() or
-                filter_lower in s.cat.lower()
+                filter_lower in s.cat.lower() or
+                filter_lower in s.desc.lower()
             ):
                 continue
-            if s.cat not in categories:
-                categories[s.cat] = []
-            categories[s.cat].append(s)
+            categories.setdefault(s.cat, []).append(s)
 
         for cat, items in categories.items():
-            item = QListWidgetItem(f"─── {cat} ───")
-            item.setFlags(Qt.NoItemFlags)
-            font = item.font()
-            font.setBold(True)
-            font.setPointSize(8)
-            font.setFamily("Segoe UI")
-            item.setFont(font)
-            item.setForeground(QColor(185, 59, 59))
-            self.addItem(item)
-
+            n_set = sum(1 for s in items if s.id in current_state)
+            self.addItem(make_header_item(cat, n_set))
             for s in items:
-                item = QListWidgetItem(f"  {s.name}")
-                item.setData(Qt.UserRole, s.id)
-
-                if s.id in current_state:
-                    font = item.font()
-                    font.setBold(True)
-                    item.setFont(font)
-                    item.setForeground(QColor(118, 185, 0))
-                else:
-                    item.setForeground(QColor(200, 205, 216))
-
-                self.addItem(item)
-
+                cur = current_state.get(s.id)
+                self.addItem(make_list_item(
+                    s.name, s.id, is_set=cur is not None,
+                    value=_fmt_drs_value(s, cur) if cur is not None else ""))
         self.blockSignals(False)
 
     def refresh_colors(self, current_state: Dict[str, str]):
         """
-        Re-color items to reflect which settings are currently configured,
-        without clearing and rebuilding the whole list. Same pattern as
-        EnvVarsWidget.refresh_colors(). Use this for value-only changes;
-        use populate() only when the actual set of visible items changes
-        (i.e. the filter text changed).
+        Refresh set-state, value previews and header counts in place, without
+        rebuilding the list. Use populate() only when the filter changes.
         """
+        header = None
+        count = 0
         for i in range(self.count()):
             item = self.item(i)
-            setting_id = item.data(Qt.UserRole)
-            if not setting_id:
-                continue  # category header, no UserRole data
-            font = item.font()
-            if setting_id in current_state:
-                font.setBold(True)
-                item.setFont(font)
-                item.setForeground(QColor(118, 185, 0))
-            else:
-                font.setBold(False)
-                item.setFont(font)
-                item.setForeground(QColor(200, 205, 216))
+            if item.data(ROLE_KIND) == "header":
+                if header is not None:
+                    header.setData(ROLE_COUNT, count)
+                header, count = item, 0
+                continue
+            sid = item.data(Qt.UserRole)
+            cur = current_state.get(sid)
+            item.setData(ROLE_SET, cur is not None)
+            s = self._by_id.get(sid)
+            item.setData(ROLE_VALUE, _fmt_drs_value(s, cur) if (s and cur is not None) else "")
+            if cur is not None:
+                count += 1
+        if header is not None:
+            header.setData(ROLE_COUNT, count)
 
     def _on_item_clicked(self, item: QListWidgetItem):
         setting_id = item.data(Qt.UserRole)
@@ -6200,6 +6461,10 @@ class ProfileManagerWidget(QWidget):
         layout.addLayout(create_layout)
 
         self._profile_list = QListWidget()
+        self._profile_list.setItemDelegate(SidebarDelegate(self._profile_list))
+        self._profile_list.setMouseTracking(True)
+        self._profile_list.viewport().setAttribute(Qt.WA_Hover, True)
+        self._profile_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._profile_list.setStyleSheet("""
             QListWidget {
                 background: #141720;
@@ -6274,6 +6539,14 @@ class ProfileManagerWidget(QWidget):
 
     def _create_profile(self):
         name = self._profile_name.text().strip()
+        if name and name in self.settings_manager.get_profiles():
+            reply = QMessageBox.question(
+                self, "Overwrite profile",
+                f'A profile named "{name}" already exists.\n\n'
+                "Replace it with the current settings?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
         if name:
             # Collect env vars from MainWindow's env_widget if available
             env_vars = {}
@@ -6295,7 +6568,7 @@ class ProfileManagerWidget(QWidget):
 
     def _load_selected(self):
         item = self._profile_list.currentItem()
-        if item:
+        if item and item.data(Qt.UserRole):
             name = item.text()
             self.settings_manager.load_profile(name)
             self.profile_loaded.emit(name)
@@ -6303,7 +6576,7 @@ class ProfileManagerWidget(QWidget):
 
     def _delete_selected(self):
         item = self._profile_list.currentItem()
-        if item:
+        if item and item.data(Qt.UserRole):
             reply = QMessageBox.question(self, "Delete", f'Delete "{item.text()}"?',
                                         QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
@@ -6315,14 +6588,33 @@ class ProfileManagerWidget(QWidget):
         profiles = self.settings_manager.get_profiles()
         current = self.settings_manager.get_current_profile()
 
-        for name in profiles:
-            item = QListWidgetItem(name)
-            if name == current:
-                font = item.font()
-                font.setBold(True)
-                item.setFont(font)
-                item.setForeground(QColor(118, 185, 0))
+        if not profiles:
+            hint = make_header_item("No profiles yet — name one above and save")
+            self._profile_list.addItem(hint)
+            return
+        for name in sorted(profiles, key=str.lower):
+            prof = profiles.get(name)
+            summary, tip = self._summarize(prof)
+            item = make_list_item(name, name, is_set=(name == current), value=summary)
+            item.setToolTip(tip)
             self._profile_list.addItem(item)
+
+    @staticmethod
+    def _summarize(prof) -> tuple:
+        if not isinstance(prof, dict):
+            return "malformed", "This entry in profiles.json is not a valid profile."
+        n_drs = len(prof.get("settings") or {})
+        n_env = len(prof.get("env_vars") or {})
+        arch = prof.get("arch") or ""
+        gs = bool(prof.get("gamescope_enabled"))
+        short = " ".join(p for p in (
+            f"{n_drs} drs" if n_drs else "",
+            f"{n_env} env" if n_env else "",
+            arch, "gs" if gs else "") if p)
+        tip = (f"{n_drs} DRS setting(s), {n_env} env var(s)\n"
+               f"GPU arch: {arch or 'not set'}\n"
+               f"Gamescope: {'on' if gs else 'off'}\n\nDouble-click to load.")
+        return short or "empty", tip
 
 
 # ============================================================================
@@ -9080,24 +9372,37 @@ QTabBar::tab:hover { color: #c8cdd8; }
 # ============================================================================
 
 class MainWindow(QMainWindow):
+    # Tab indices (sidebar stack pages). Nav order on screen matches.
+    TAB_DRS, TAB_ARCH, TAB_ENV, TAB_TOOLS, TAB_PROFILES = range(5)
+    # Right-stack pages
+    PAGE_EMPTY, PAGE_SETTING, PAGE_ARCH, PAGE_ENV, PAGE_GAMESCOPE, PAGE_TOOLS, PAGE_LUTRIS = range(7)
+
+    EMPTY_HINTS = {
+        0: "Pick a DRS setting on the left.\nGreen dots mark settings already in the launch string.",
+        1: "Pick your GPU generation on the left.\nIt sets DXVK_NVAPI_GPU_ARCH.",
+        2: "Pick a variable on the left.\nGreen dots mark variables that are set; their value is shown on the right.",
+        4: "",
+    }
+
     def __init__(self):
         super().__init__()
         self.settings_manager = SettingsManager()
         self.all_settings = ALL_SETTINGS
+        self._dirty = False
+        self._qsettings = QSettings(APP_ID, APP_ID)
 
         self.setWindowTitle(APP_TITLE)
         if ICON_PATH.is_file():
             self.setWindowIcon(QIcon(str(ICON_PATH)))
-        self.setMinimumSize(900, 600)
-        self.setStyleSheet("""
-            QMainWindow { background: #0d0f12; }
-            QSplitter::handle:horizontal { background: #1e2535; width: 4px; }
-            QSplitter::handle:horizontal:hover { background: #4a7300; }
+        self.setMinimumSize(980, 640)
+        self.setStyleSheet(f"""
+            QMainWindow {{ background: {T['bg']}; }}
+            QSplitter::handle:horizontal {{ background: {T['border']}; width: 4px; }}
+            QSplitter::handle:horizontal:hover {{ background: {T['accent_dim']}; }}
         """)
 
         central = QWidget()
         self.setCentralWidget(central)
-
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
@@ -9105,95 +9410,78 @@ class MainWindow(QMainWindow):
         self._output_bar = OutputBarWidget(self.settings_manager, self)
         main_layout.addWidget(self._output_bar)
 
+        # ===== Top navigation =====
+        # Used to be five buttons squeezed into the 320px sidebar, where the
+        # labels were clipped ("S Settin", "PU Arch"). Now a full-width bar
+        # with live badges (how many things each tab contributes).
+        nav = QWidget()
+        nav.setObjectName("navBar")
+        nav.setAttribute(Qt.WA_StyledBackground, True)
+        nav.setStyleSheet(f"#navBar {{ background:{T['bg']}; border-bottom:1px solid {T['border']}; }}")
+        nav_layout = QHBoxLayout(nav)
+        nav_layout.setContentsMargins(6, 0, 12, 0)
+        nav_layout.setSpacing(0)
+
+        self._settings_tab = NavTab("DRS Settings")
+        self._arch_tab = NavTab("GPU Arch")
+        self._env_tab = NavTab("Environment")
+        self._env_tab.setToolTip("DXVK, VKD3D-Proton, forks, DXVK-NVAPI, NVIDIA, Proton, "
+                                 "Wine, vk_flip_meter and Gamescope")
+        self._flm_tab = NavTab("Extra Tools")
+        self._profiles_tab = NavTab("Profiles")
+        self._nav_tabs = [self._settings_tab, self._arch_tab, self._env_tab,
+                          self._flm_tab, self._profiles_tab]
+        for idx, btn in enumerate(self._nav_tabs):
+            btn.clicked.connect(lambda _c=False, i=idx: self._switch_tab(i))
+            btn.setToolTip((btn.toolTip() + "\n" if btn.toolTip() else "") + f"Ctrl+{idx + 1}")
+            nav_layout.addWidget(btn)
+        self._settings_tab.setChecked(True)
+        nav_layout.addStretch(1)
+
+        self._profile_chip = QLabel()
+        self._profile_chip.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        nav_layout.addWidget(self._profile_chip)
+        main_layout.addWidget(nav)
+
         splitter = QSplitter(Qt.Horizontal)
-        # The sidebar is a single shared widget behind every tab, so if the
-        # splitter is allowed to collapse it to width 0 (default behaviour,
-        # and easy to do by accident because the handle used to be a 1px
-        # sliver indistinguishable from the sidebar's border) every tab's
-        # left pane goes blank at once with no visible handle to drag back —
-        # the only way out was restarting the app.
+        self._splitter = splitter
+        # The sidebar is one shared widget behind every tab: if the splitter
+        # could collapse it to 0 every tab's left pane would vanish at once
+        # with no visible handle to drag it back.
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(4)
 
         # ===== Sidebar =====
         sidebar = QWidget()
-        sidebar.setStyleSheet("background: #0d0f12; border-right: 1px solid #1e2535;")
-        sidebar.setMinimumWidth(240)
+        sidebar.setObjectName("sidebar")
+        sidebar.setAttribute(Qt.WA_StyledBackground, True)
+        sidebar.setStyleSheet(f"#sidebar {{ background:{T['bg']}; }}")
+        sidebar.setMinimumWidth(260)
         sidebar.setMaximumWidth(900)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(6, 6, 6, 6)
-        sidebar_layout.setSpacing(4)
+        sidebar_layout.setContentsMargins(8, 8, 4, 6)
+        sidebar_layout.setSpacing(6)
 
         self._search = QLineEdit()
-        self._search.setPlaceholderText("🔍 Filter...")
-        self._search.setStyleSheet("""
-            QLineEdit {
-                background: #141720;
-                border: 1px solid #1e2535;
-                color: #e8eaf0;
-                font-size: 12px;
-                padding: 3px 8px;
-                border-radius: 3px;
-                min-height: 28px;
-            }
-            QLineEdit:focus {
-                border-color: #4a7300;
-            }
+        self._search.setPlaceholderText("Filter  (Ctrl+F)")
+        self._search.setClearButtonEnabled(True)
+        self._search.setStyleSheet(f"""
+            QLineEdit {{
+                background: {T['surface']}; border: 1px solid {T['border']};
+                color: {T['text']}; font-size: 12px; padding: 3px 8px;
+                border-radius: 4px; min-height: 28px;
+            }}
+            QLineEdit:focus {{ border-color: {T['accent_dim']}; }}
+            QLineEdit:disabled {{ color: {T['muted']}; background: {T['bg']}; }}
         """)
-        self._search.textChanged.connect(self._filter)
+        # Debounced: every keystroke used to rebuild a ~250-item list.
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(120)
+        self._filter_timer.timeout.connect(lambda: self._filter(self._search.text()))
+        self._search.textChanged.connect(lambda _t: self._filter_timer.start())
         sidebar_layout.addWidget(self._search)
 
-        # Tab buttons  (Settings | GPU Arch | Env Vars | vk_flip_meter | Profiles)
-        tab_layout = QHBoxLayout()
-        tab_layout.setSpacing(2)
-
-        self._settings_tab = QPushButton("DRS Settings")
-        self._settings_tab.setCheckable(True)
-        self._settings_tab.setChecked(True)
-        self._settings_tab.clicked.connect(lambda: self._switch_tab(0))
-
-        self._arch_tab = QPushButton("GPU Arch")
-        self._arch_tab.setCheckable(True)
-        self._arch_tab.clicked.connect(lambda: self._switch_tab(1))
-
-        self._env_tab = QPushButton("DXVK / VKD3D / NV / FLM / Gamescope")
-        self._env_tab.setCheckable(True)
-        self._env_tab.clicked.connect(lambda: self._switch_tab(2))
-
-        self._profiles_tab = QPushButton("Profiles")
-        self._profiles_tab.setCheckable(True)
-        self._profiles_tab.clicked.connect(lambda: self._switch_tab(4))
-
-        self._flm_tab = QPushButton("Extra Tools")
-        self._flm_tab.setCheckable(True)
-        self._flm_tab.clicked.connect(lambda: self._switch_tab(3))
-
-        tab_style = """
-            QPushButton {
-                border: 1px solid #1e2535;
-                border-radius: 3px;
-                padding: 3px 5px;
-                background: transparent;
-                color: #8a92a5;
-                font-size: 11px;
-                font-weight: 600;
-            }
-            QPushButton:checked {
-                background: #1a1f2e;
-                color: #e8eaf0;
-                border-color: #4a7300;
-            }
-            QPushButton:hover {
-                border-color: #4a7300;
-            }
-        """
-        for btn in [self._settings_tab, self._arch_tab, self._env_tab, self._flm_tab, self._profiles_tab]:
-            btn.setStyleSheet(tab_style)
-            tab_layout.addWidget(btn)
-
-        sidebar_layout.addLayout(tab_layout)
-
-        # Stacked widget for sidebar pages
         self._sidebar_stack = QStackedWidget()
         sidebar_layout.addWidget(self._sidebar_stack)
 
@@ -9207,7 +9495,7 @@ class MainWindow(QMainWindow):
         self._arch_list.arch_selected.connect(self._select_architecture)
         self._sidebar_stack.addWidget(self._arch_list)
 
-        # Page 2: Env Vars list (DXVK / VKD3D-Proton)
+        # Page 2: Env Vars list
         self._env_widget = EnvVarsWidget(self.settings_manager)
         self._env_widget.env_var_selected.connect(self._open_env_var)
         self._env_widget.env_changed.connect(self._on_env_changed)
@@ -9217,59 +9505,46 @@ class MainWindow(QMainWindow):
         self._flm_sidebar = ExtraToolsSidebarWidget()
         self._sidebar_stack.addWidget(self._flm_sidebar)
 
-        # Page 4: Profile manager
+        # Page 4: Saved profiles (sidebar) — Lutris Sync lives on the right
+        # now; it used to be a sub-tab squeezed into this narrow column while
+        # the whole right panel sat empty.
         self._profiles_widget = ProfileManagerWidget(self.settings_manager)
         self._profiles_widget.profile_loaded.connect(self._on_profile_loaded)
         profiles_scroll = QScrollArea()
         profiles_scroll.setWidgetResizable(True)
         profiles_scroll.setWidget(self._profiles_widget)
-        profiles_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        profiles_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+        self._sidebar_stack.addWidget(profiles_scroll)
 
         self._lutris_sync_widget = LutrisSyncWidget(self.settings_manager)
         self._env_widget.env_changed.connect(self._lutris_sync_widget._update_preview)
         lutris_scroll = QScrollArea()
         lutris_scroll.setWidgetResizable(True)
         lutris_scroll.setWidget(self._lutris_sync_widget)
-        lutris_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-
-        profiles_subtabs = QTabWidget()
-        profiles_subtabs.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #1e2535; top: -1px; }
-            QTabBar::tab {
-                background: #141720; color: #a8adb8;
-                border: 1px solid #1e2535; border-bottom: none;
-                padding: 4px 10px; font-size: 11px; font-weight: 600;
-            }
-            QTabBar::tab:selected { background: #1a1f2e; color: #e8eaf0; border-color: #4a7300; }
-            QTabBar::tab:hover { color: #c8cdd8; }
-        """)
-        profiles_subtabs.addTab(profiles_scroll, "Saved Profiles")
-        profiles_subtabs.addTab(lutris_scroll, "Lutris Sync")
-        self._sidebar_stack.addWidget(profiles_subtabs)
+        lutris_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
 
         splitter.addWidget(sidebar)
 
         # ===== Right side (editor area) =====
         editor = QWidget()
-        editor.setStyleSheet("background: #0d0f12;")
+        editor.setObjectName("editorPane")
+        editor.setAttribute(Qt.WA_StyledBackground, True)
+        editor.setStyleSheet(f"#editorPane {{ background:{T['bg']}; border-left:1px solid {T['border']}; }}")
         editor_layout = QVBoxLayout(editor)
-        editor_layout.setContentsMargins(16, 16, 16, 16)
+        editor_layout.setContentsMargins(20, 16, 20, 16)
         editor_layout.setSpacing(0)
 
-        # Stack for placeholder / setting editor / arch detail
         self._right_stack = QStackedWidget()
         editor_layout.addWidget(self._right_stack)
 
-        # Page 0: Placeholder
-        self._placeholder = QLabel("Select a setting or an architecture from the sidebar")
+        # Page 0: Empty state (text depends on the active tab)
+        self._placeholder = QLabel(self.EMPTY_HINTS[0])
         self._placeholder.setAlignment(Qt.AlignCenter)
-        self._placeholder.setStyleSheet("color: #8a92a5; font-size: 14px;")
+        self._placeholder.setWordWrap(True)
+        self._placeholder.setStyleSheet(f"color: {T['muted']}; font-size: 13px; line-height: 150%;")
         self._right_stack.addWidget(self._placeholder)
 
         # Page 1: Setting editor
-        # (no longer connects a separate setting_changed signal here — it was
-        # a duplicate of settings_manager.settings_changed, connected below,
-        # and doubled every sidebar/editor rebuild on each click)
         self._setting_editor = SettingEditorWidget(self.settings_manager)
         self._setting_editor.cleared.connect(self._on_setting_cleared)
         self._right_stack.addWidget(self._setting_editor)
@@ -9284,10 +9559,7 @@ class MainWindow(QMainWindow):
         self._env_editor.set_list_widget(self._env_widget)
         self._right_stack.addWidget(self._env_editor)
 
-        # Page 4: Gamescope CLI-flag builder (opened from the "Gamescope"
-        # category's sentinel item in the same Env Vars sidebar — gamescope's
-        # settings are real argv flags, not env vars, so they get their own
-        # panel here instead of the per-var KEY=VALUE editor).
+        # Page 4: Gamescope CLI-flag builder (real argv flags, not env vars)
         self._gamescope = GamescopeFlagsWidget()
         gamescope_scroll = QScrollArea()
         gamescope_scroll.setWidgetResizable(True)
@@ -9299,42 +9571,49 @@ class MainWindow(QMainWindow):
         self._extra_tools = ExtraToolsWidget()
         self._right_stack.addWidget(self._extra_tools)
 
+        # Page 6: Lutris Sync (Profiles tab)
+        self._right_stack.addWidget(lutris_scroll)
+
         # Wire the Gamescope CLI-flag builder into the Lutris sync mapping
         self._lutris_sync_widget.set_gamescope_widget(self._gamescope)
         self._gamescope.changed.connect(self._lutris_sync_widget._update_preview)
 
-        # Show placeholder initially
-        self._right_stack.setCurrentIndex(0)
+        self._right_stack.setCurrentIndex(self.PAGE_EMPTY)
 
         splitter.addWidget(editor)
-        # setSizes() must run *after* both panes are in the splitter — the
-        # old call sat right after addWidget(sidebar), when the splitter
-        # still held a single widget, so the second value was discarded and
-        # the requested 220/680 split never actually applied.
+        # setSizes() must run after both panes are in the splitter.
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([320, 880])
-        main_layout.addWidget(splitter)
+        splitter.setSizes([340, 900])
+        main_layout.addWidget(splitter, 1)
 
         # Status bar
         status_bar = QStatusBar()
         self.setStatusBar(status_bar)
-        status_bar.setStyleSheet("""
-            QStatusBar {
-                background: #0d0f12;
-                color: #8a92a5;
-                font-size: 11px;
-                border-top: 1px solid #1e2535;
-                min-height: 24px;
-            }
+        status_bar.setStyleSheet(f"""
+            QStatusBar {{
+                background: {T['bg']}; color: {T['muted']}; font-size: 11px;
+                border-top: 1px solid {T['border']}; min-height: 24px;
+            }}
         """)
         status_bar.showMessage("Ready")
 
         # Signals
         self.settings_manager.settings_changed.connect(self._on_setting_changed)
         self.settings_manager.arch_changed.connect(self._update_arch_ui)
-        self.settings_manager.profile_loaded.connect(self._update_window_title)
+        self.settings_manager.profile_loaded.connect(lambda _n: self._update_window_title())
         self.settings_manager.profile_save_error.connect(self._on_profile_save_error)
+        self.settings_manager.profile_saved.connect(lambda _n: self._set_dirty(False))
+        self.settings_manager.profiles_changed.connect(self._refresh_badges)
+        self.settings_manager.profiles_changed.connect(self._update_window_title)
+
+        # Anything that changes the output marks a loaded profile dirty.
+        self.settings_manager.settings_changed.connect(self._mark_dirty)
+        self._env_widget.env_changed.connect(self._mark_dirty)
+        self._gamescope.changed.connect(self._mark_dirty)
+        self._gamescope.changed.connect(
+            lambda: self._env_widget.set_gamescope_enabled(self._gamescope.is_enabled()))
+        self._gamescope.changed.connect(self._refresh_badges)
 
         # Initial population
         self._populate_settings()
@@ -9344,8 +9623,93 @@ class MainWindow(QMainWindow):
         self._output_bar._env_widget = self._env_widget
         self._output_bar._gamescope_widget = self._gamescope
         self._gamescope.changed.connect(self._output_bar._update)
+        self._output_bar._update()
         # Per-tab right-panel memory
         self._tab_right_memory: Dict[int, int] = {}
+
+        self._install_shortcuts()
+        self._refresh_badges()
+        self._update_window_title()
+        self._restore_ui_state()
+
+    # ===== Shortcuts / persisted UI state =====
+    def _install_shortcuts(self):
+        def sc(seq, fn, parent=None, ctx=Qt.WindowShortcut):
+            s_ = QShortcut(QKeySequence(seq), parent or self)
+            s_.setContext(ctx)
+            s_.activated.connect(fn)
+            return s_
+
+        sc("Ctrl+F", self._focus_search)
+        sc("Escape", self._clear_search, self._search, Qt.WidgetShortcut)
+        for i in range(5):
+            sc(f"Ctrl+{i + 1}", lambda i=i: self._switch_tab(i))
+        sc("Ctrl+S", self._shortcut_save)
+        sc("Ctrl+Shift+C", lambda: self._output_bar._copy_all(steam=False))
+
+    def _focus_search(self):
+        if self._search.isEnabled():
+            self._search.setFocus()
+            self._search.selectAll()
+
+    def _clear_search(self):
+        self._search.clear()
+        self._filter("")
+
+    def _shortcut_save(self):
+        if self.settings_manager.get_current_profile():
+            self._output_bar._save_to_profile()
+        else:
+            self._switch_tab(self.TAB_PROFILES)
+            self._profiles_widget._profile_name.setFocus()
+            self.statusBar().showMessage("No profile loaded — type a name and press Enter to save one", 4000)
+
+    def _restore_ui_state(self):
+        try:
+            geo = self._qsettings.value("window/geometry")
+            if geo is not None:
+                self.restoreGeometry(geo)
+            else:
+                self.resize(1440, 900)
+            split = self._qsettings.value("window/splitter")
+            if split is not None:
+                self._splitter.restoreState(split)
+            tab = int(self._qsettings.value("window/tab", 0))
+            if 0 <= tab < 5 and tab != 0:
+                self._switch_tab(tab)
+        except Exception:
+            self.resize(1440, 900)
+
+    def closeEvent(self, event):          # noqa: N802
+        try:
+            self._qsettings.setValue("window/geometry", self.saveGeometry())
+            self._qsettings.setValue("window/splitter", self._splitter.saveState())
+            self._qsettings.setValue("window/tab", self._sidebar_stack.currentIndex())
+        except Exception:
+            pass
+        super().closeEvent(event)
+
+    # ===== Dirty tracking / badges =====
+    def _mark_dirty(self, *_):
+        if self.settings_manager.get_current_profile() and not self._dirty:
+            self._set_dirty(True)
+
+    def _set_dirty(self, dirty: bool):
+        self._dirty = dirty
+        self._output_bar.set_dirty(dirty)
+        self._update_window_title()
+
+    def _refresh_badges(self, *_):
+        n_drs = len(self.settings_manager.get_settings_list())
+        self._settings_tab.set_badge(str(n_drs) if n_drs else "")
+        arch = self.settings_manager.get_arch()
+        self._arch_tab.set_badge(arch.code if arch else "")
+        n_env = len(self._env_widget.get_env_dict())
+        if self._gamescope.is_enabled():
+            n_env += 1
+        self._env_tab.set_badge(str(n_env) if n_env else "")
+        n_prof = len(self.settings_manager.get_profiles())
+        self._profiles_tab.set_badge(str(n_prof) if n_prof else "")
 
     # ===== Tab switching =====
     def _switch_tab(self, idx):
@@ -9354,36 +9718,39 @@ class MainWindow(QMainWindow):
         self._tab_right_memory[prev] = self._right_stack.currentIndex()
 
         self._sidebar_stack.setCurrentIndex(idx)
-        for i, btn in enumerate([self._settings_tab, self._arch_tab, self._env_tab, self._flm_tab, self._profiles_tab]):
+        for i, btn in enumerate(self._nav_tabs):
             btn.setChecked(i == idx)
 
-        # Re-apply whatever is currently typed in the search box to the list
-        # we just switched to, so a filter typed on one tab doesn't leave the
-        # other tab's list either stuck on stale filtering or unfiltered.
-        if idx == 0:
+        # The filter only applies to the two long lists.
+        filterable = idx in (self.TAB_DRS, self.TAB_ENV)
+        self._search.setEnabled(filterable)
+        self._search.setVisible(filterable)
+
+        # Re-apply whatever is typed in the search box to the list we just
+        # switched to, so filtering never looks stale across tabs.
+        if idx == self.TAB_DRS:
             self._populate_settings(self._search.text())
-        elif idx == 2:
+        elif idx == self.TAB_ENV:
             self._env_widget.populate(self._search.text())
 
-        if idx == 4:
-            # Profiles tab — always blank right panel
-            self._right_stack.setCurrentIndex(0)
+        self._placeholder.setText(self.EMPTY_HINTS.get(idx, ""))
+
+        if idx == self.TAB_PROFILES:
+            self._right_stack.setCurrentIndex(self.PAGE_LUTRIS)
         elif idx in self._tab_right_memory:
-            # Restore remembered right panel for this tab
             self._right_stack.setCurrentIndex(self._tab_right_memory[idx])
         else:
-            # First visit defaults
-            if idx == 1:
+            if idx == self.TAB_ARCH:
                 arch = self.settings_manager.get_arch()
                 if arch:
                     self._arch_detail.set_arch(arch)
-                    self._right_stack.setCurrentIndex(2)
+                    self._right_stack.setCurrentIndex(self.PAGE_ARCH)
                 else:
-                    self._right_stack.setCurrentIndex(0)
-            elif idx == 3:
-                self._right_stack.setCurrentIndex(5)
+                    self._right_stack.setCurrentIndex(self.PAGE_EMPTY)
+            elif idx == self.TAB_TOOLS:
+                self._right_stack.setCurrentIndex(self.PAGE_TOOLS)
             else:
-                self._right_stack.setCurrentIndex(0)
+                self._right_stack.setCurrentIndex(self.PAGE_EMPTY)
 
     # ===== Settings =====
     def _populate_settings(self, filter_text: str = ""):
@@ -9406,9 +9773,9 @@ class MainWindow(QMainWindow):
         # list even while on the Env Vars tab — so filtering silently did
         # nothing for the 62 DXVK/VKD3D/NVIDIA __GL vars.
         active = self._sidebar_stack.currentIndex()
-        if active == 2:
+        if active == self.TAB_ENV:
             self._env_widget.populate(text)
-        else:
+        elif active == self.TAB_DRS:
             self._populate_settings(text)
 
     def _open_setting(self, setting_id):
@@ -9423,8 +9790,8 @@ class MainWindow(QMainWindow):
             # while the user is looking at a completely different tab, like
             # Profiles. The editor's content is still kept up to date above;
             # we just don't force it on screen.
-            if self._sidebar_stack.currentIndex() == 0:
-                self._right_stack.setCurrentIndex(1)
+            if self._sidebar_stack.currentIndex() == self.TAB_DRS:
+                self._right_stack.setCurrentIndex(self.PAGE_SETTING)
 
     def _on_setting_cleared(self):
         # Fired when the currently-open setting's value is removed (via the
@@ -9435,7 +9802,7 @@ class MainWindow(QMainWindow):
         pass
 
     def _open_env_var(self, var_name: str):
-        if var_name == "__GAMESCOPE_FLAGS__":
+        if var_name == EnvVarsWidget.GAMESCOPE_KEY:
             # Gamescope's settings are real argv flags, not KEY=VALUE env
             # vars — show the CLI-flag builder panel instead.
             if self._sidebar_stack.currentIndex() == 2:
@@ -9498,6 +9865,7 @@ class MainWindow(QMainWindow):
         env_str = f" · {env_count} env var{'s' if env_count != 1 else ''}" if env_count else ""
         self.statusBar().showMessage(f"{count} setting{'s' if count != 1 else ''} configured{arch_str}{env_str}")
         self._settings_list.refresh_colors(self.settings_manager.get_settings_list())
+        self._refresh_badges()
 
     def _on_env_changed(self):
         env_count = len(self._env_widget.get_env_dict())
@@ -9510,6 +9878,7 @@ class MainWindow(QMainWindow):
         )
         # Keep output bar Copy All up to date
         self._output_bar._update()
+        self._refresh_badges()
 
     def _on_profile_loaded(self, name):
         # 1. Reset and reload env vars from profile
@@ -9538,17 +9907,35 @@ class MainWindow(QMainWindow):
                 self._right_stack.setCurrentIndex(2)
             else:
                 self._right_stack.setCurrentIndex(0)
-        elif active_tab == 4:
-            self._right_stack.setCurrentIndex(0)
+        elif active_tab == self.TAB_PROFILES:
+            self._right_stack.setCurrentIndex(self.PAGE_LUTRIS)
+        elif active_tab == self.TAB_TOOLS:
+            self._right_stack.setCurrentIndex(self.PAGE_TOOLS)
         else:
-            self._right_stack.setCurrentIndex(0)
+            self._right_stack.setCurrentIndex(self.PAGE_EMPTY)
+        self._env_widget.set_gamescope_enabled(self._gamescope.is_enabled())
+        self._refresh_badges()
+        # Loading replays settings/env/gamescope changes; none of that is an
+        # unsaved edit.
+        self._set_dirty(False)
         self.statusBar().showMessage(f"Loaded profile: {name}")
 
-    def _update_window_title(self, profile_name):
-        if profile_name:
-            self.setWindowTitle(f"{APP_TITLE} — {profile_name}")
-        else:
+    def _update_window_title(self, *_):
+        name = self.settings_manager.get_current_profile()
+        if not name:
+            self._dirty = False
             self.setWindowTitle(APP_TITLE)
+            self._profile_chip.setText("No profile loaded")
+            self._profile_chip.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+            return
+        mark = " •" if self._dirty else ""
+        self.setWindowTitle(f"{APP_TITLE} — {name}{mark}")
+        if self._dirty:
+            self._profile_chip.setText(f"{name} (unsaved changes)")
+            self._profile_chip.setStyleSheet(f"color:{T['warn']}; font-size:12px; font-weight:600;")
+        else:
+            self._profile_chip.setText(name)
+            self._profile_chip.setStyleSheet(f"color:{T['text2']}; font-size:12px; font-weight:600;")
 
     def _on_profile_save_error(self, message: str):
         # Profile persistence failures are silent data-loss risks (the user
@@ -9602,17 +9989,7 @@ def main():
     # "python3" üzerinden türetiyor ve StartupWMClass eşleşmesi bozuluyor —
     # sonuç: başlangıçta doğru ikon, pencere map olunca jenerik "W" ikonu.
 
-    palette = QPalette()
-    palette.setColor(QPalette.Window, QColor(13, 15, 18))
-    palette.setColor(QPalette.WindowText, QColor(200, 205, 216))
-    palette.setColor(QPalette.Base, QColor(20, 23, 32))
-    palette.setColor(QPalette.AlternateBase, QColor(26, 31, 46))
-    palette.setColor(QPalette.Text, QColor(232, 234, 240))
-    palette.setColor(QPalette.Button, QColor(20, 23, 32))
-    palette.setColor(QPalette.ButtonText, QColor(200, 205, 216))
-    palette.setColor(QPalette.Highlight, QColor(118, 185, 0))
-    palette.setColor(QPalette.HighlightedText, QColor(0, 0, 0))
-    app.setPalette(palette)
+    apply_theme(app)
 
     window = MainWindow()
     window.show()

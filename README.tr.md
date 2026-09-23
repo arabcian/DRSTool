@@ -65,15 +65,17 @@ Mevcut durumun tamamını (DRS ayarları, GPU mimarisi ve tüm çevre değişken
 ### 5. vk_flip_meter
 Bu depoda bir alt proje (subproject) olarak paketlenmiş vk_flip_meter Vulkan katmanı için bir derleme/yükleme panelidir. Katmanın kaynak kodunun yerini tespit eder veya seçmenizi sağlar, ardından yetkisiz (unprivileged) bir cmake yapılandırması ve derlemesi çalıştırır. Yalnızca gerçekten root yetkisi gerektiren iki adım için pkexec aşamasına geçer: cmake --install ve manifest kütüphane yolu düzeltmesi. Bu sayede neredeyse tüm derleme hattı normal kullanıcınız olarak çalışır ve şifre istemi (grafiksel bir polkit iletişim kutusu aracılığıyla) yalnızca mümkün olan en son anda tetiklenir.
 
-*Katmanın çalışma zamanı ince ayarları (FLM_MODE, FLM_TARGET_FPS vb.) bu sekmeden yapılmaz.* Bu ayarlara "DXVK / VKD3D / NV / FLM" sekmesinden tek tıkla ulaşılabilir, her şeyle aynı editör kullanılır ve nihai çıktı dizgisine otomatik olarak dahil edilir.
+*Katmanın çalışma zamanı ince ayarları (FLM_MODE, FLM_TARGET_FPS vb.) bu sekmeden yapılmaz.* Bu ayarlara "Environment" sekmesinden tek tıkla ulaşılabilir, her şeyle aynı editör kullanılır ve nihai çıktı dizgisine otomatik olarak dahil edilir.
 
 ## Çıktı Çubuğu (Output Bar)
 
-Pencerenin üst kısmı boyunca DRSTool; mevcut DRS ayarlarınızdan, GPU mimarinizden ve çevre değişkenlerinizden oluşturulan birleşik çevre dizgisini ve bir "Kopyala" (Copy) eylemini sürekli olarak gösterir. Buradan doğrudan bir Lutris/Steam başlatma seçenekleri alanına veya bir shell betiğine yapıştırmaya hazırdır.
+Pencerenin üst kısmı boyunca DRSTool; mevcut DRS ayarlarınızdan, GPU mimarinizden ve çevre değişkenlerinizden oluşturulan birleşik çevre dizgisini ve bir "Copy all" eylemini (düz shell biçimi veya `%command%` ile biten Steam başlatma seçenekleri) sürekli olarak gösterir. Her değer kutusu tıklayınca kopyalanır; uzun dizgiler pencereyi genişletmek yerine kısaltılır. Buradan doğrudan bir Lutris/Steam başlatma seçenekleri alanına veya bir shell betiğine yapıştırmaya hazırdır.
 
 ## Tasarım Notları
 
 * Sinyal Odaklı Durum (Signal-driven state): Merkezi bir SettingsManager (bir QObject), DRS ayarları, GPU mimarisi ve profiller için tek doğruluk kaynağıdır (source of truth). Belirli Qt sinyalleri (settings_changed, arch_changed, profiles_changed, profile_loaded) yayar, böylece UI widget'ları yalnızca gerçekten değişen kısımları yeniden oluşturur. Örneğin; profil listesi her ayar düzenlemesinde değil, yalnızca profiles_changed sinyali geldiğinde yenilenir.
 * Atomik Profil Yazımları: Profiller geçici bir dosyaya yazılır ve öncesinde bir fsync() çağrılarak os.replace() ile yerine yerleştirilir; böylece kaydetme sırasındaki bir çökme profil dosyasını bozamaz.
 * Shell Uyumlu Çıktı: Birleşik çevre dizgisi shlex.quote() ile oluşturulur. Böylece boşluk veya özel karakter içeren değerler, bir shell'e yapıştırıldığında sessizce bozulmak yerine doğru şekilde tırnak içine alınır.
+* Klavye kısayolları: Ctrl+F filtre, Esc filtreyi temizle, Ctrl+1…5 sekmeler, Ctrl+S yüklü profile kaydet, Ctrl+Shift+C başlatma dizgisini kopyala. Pencere boyutu, splitter konumu ve son sekme hatırlanır.
+* Kaydedilmemiş değişiklik göstergesi: bir profil yüklüyken yapılan her değişiklik pencere başlığında "•", vurgulu Save butonu ve sekme çubuğundaki profil adıyla gösterilir.
 * Arayüz Tasarımı: Paylaşılan Qt stil sayfaları (stylesheets) aracılığıyla tüm sekmelerde (liste başlıkları, seçim vurgulamaları, kaydırma çubukları) tutarlı bir şekilde uygulanan koyu tema ve NVIDIA yeşili vurgulu kullanıcı arayüzü.
