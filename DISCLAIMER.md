@@ -1,92 +1,61 @@
-# DISCLAIMER & RISK ACKNOWLEDGMENT
+# ⚠️ Disclaimer — read this before using Legion Power Manager
 
-## ⚠️ CRITICAL: USE AT YOUR OWN RISK
+**If you do not know what a memory timing, an embedded controller, or a UEFI variable is, do not use the write features of this tool.** Use the vendor's own software, or leave your machine at its factory settings. Everything below exists for experienced users who understand the hardware and accept the consequences.
 
-**This software is provided as-is without any warranty, express or implied.** By downloading, installing, or using DRSTool, you explicitly acknowledge and agree to the following:
+## What this tool does
 
-### 1. Acceptance of Risk
+Legion Power Manager changes low-level hardware settings that the manufacturer normally controls. It does not use a vendor-supported interface, because Lenovo does not publish one for Linux. Everything was found by reverse-engineering the firmware of **one** laptop model (Lenovo Legion Pro 7 16AFR10H, BIOS SMCN19WW/SMCN20WW) and tested on that machine only.
 
-- You use this software entirely at your own risk.
-- You accept full responsibility for any consequences of using this tool, including but not limited to:
-  - Driver crashes and system instability
-  - GPU hangs, thermal throttling, or thermal runaway
-  - Data loss or corruption
-  - Hardware damage (GPU, memory, or power delivery)
-  - System freezes requiring hard resets
-  - Loss of display output
-  - Device bricking in extreme cases
+Depending on the feature, it writes to:
 
-### 2. No Warranty or Guarantee
+- **Embedded controller (EC) registers**, through ACPI/WMI methods: fan curves, fan speeds, power and thermal limits.
+- **CPU and GPU power-management interfaces**: power limits, undervolt and Curve Optimizer offsets, GPU power targets.
+- **UEFI firmware variables** read by the BIOS at boot: DRAM timings (memory overclocking).
 
-- This software is provided with no warranty of any kind — not for fitness for a particular purpose, merchantability, non-infringement, or accuracy.
-- We make no promises that:
-  - The settings it generates are correct or safe
-  - The values it suggests will work with your hardware
-  - The UI accurately represents underlying driver behavior
-  - A change won't cause immediate or delayed hardware failure
+## Risks
 
-### 3. AI Assistance Acknowledgment
+Using the write features can cause, among other things:
 
-- **This project was developed with AI assistance** using Claude (Anthropic).
-- While AI-generated code has been reviewed and tested, it may contain:
-  - Subtle bugs or logic errors not caught in testing
-  - Edge cases not anticipated by the developers
-  - Security issues or unsafe patterns
-  - Performance regressions or memory leaks
-  - Incorrect assumptions about API behavior
+- **A machine that does not boot.** Wrong memory timings can make DRAM training fail at POST. Recovery may need a CMOS/EC reset, reflashing the BIOS, or a repair service.
+- **Silent data corruption.** Memory that is slightly unstable can boot and seem fine while corrupting files, filesystems, and backups over time, without any crash or warning.
+- **Overheating and hardware damage.** A fan curve that is too slow, or thermal and power limits set too high, can overheat the CPU, GPU, VRMs, or battery, shorten component life, or cause permanent damage.
+- **System instability**: freezes, crashes, kernel panics, and lost unsaved work.
+- **Loss of warranty.** Overclocking, undervolting, and changing firmware settings are generally not covered by the manufacturer's warranty. The BIOS itself states this.
+- **Behaviour that changes with firmware updates.** A BIOS or EC update can move, rename, or change the meaning of any value this tool touches. A setting that is safe today may do something different after an update.
 
-### 4. Driver Settings Complexity
+## Limits of the safety checks
 
-- NVIDIA driver settings are **low-level and undocumented**. Incorrect values can:
-  - Cause immediate GPU hangs requiring a hard reset
-  - Corrupt video memory or VRAM state
-  - Trigger thermal protection (and potentially permanent thermal damage if throttling is disabled)
-  - Interact unexpectedly with other driver settings or system configuration
-  - Break DXVK-NVAPI's internal state, causing subsequent crashes even with the tool closed
+The tool tries to protect you:
 
-### 5. No Liability
+- It refuses to write on machines and firmware it has not been verified on.
+- It checks values against ranges, and checks firmware variables against the running hardware before writing them.
+- It backs up firmware variables before every change.
+- It reads values back after writing them.
 
-- **The developers, contributors, and AI assistants assume NO liability** for:
-  - Direct or indirect damages from using this software
-  - Loss of data or corrupted files
-  - Cost of hardware repair or replacement
-  - Business interruption or lost productivity
-  - Consequential, incidental, or special damages
+These checks **reduce** risk; they do not remove it. A value inside the allowed range can still be unstable on **your** particular CPU, memory modules, or cooling. Silicon differs from chip to chip. A setting that is stable on the author's machine can fail on yours.
 
-### 6. Testing Recommendations
+Features marked as model-specific (memory timing editing, fan-curve control) have been confirmed on **one** machine only. On any other model, even in the same product line, their behaviour is unknown.
 
-**Before using DRSTool with any serious hardware or system:**
+## Firmware protections
 
-1. **Test on a non-critical system first** (an old laptop, VM, or spare desktop)
-2. **Start with a minimal configuration** — enable one or two settings and verify stability before adding more
-3. **Have a recovery plan:**
-   - Know how to unset all environment variables from a terminal
-   - Keep a live USB/recovery medium available
-   - Be prepared to hard-reset if needed
-4. **Monitor temperatures and power:** Watch for unexpected thermal behavior or power spikes
-5. **Log your changes:** Keep a record of which settings you modified so you can revert them
+Some firmware versions protect their settings from being changed by the operating system, for example **AMD Variable Protection**. When that protection is on, this tool cannot change those settings, and it will not try to get around it. Disabling firmware protections is your own decision and your own responsibility. Do not use exploits or modified firmware to force changes; this project does not support that and will not help with it.
 
-### 7. Recovery from Issues
+## Recovery
 
-If you experience driver crashes, hangs, or display corruption:
+Before you change anything:
 
-1. **Completely unset the environment variables** created by DRSTool
-2. **Restart your display server** (e.g., `systemctl restart sddm` or reboot)
-3. **If X/Wayland won't start:** Boot to a TTY and unset all `DXVK_*`, `VKD3D_*`, and `__GL_*` variables, then re-login
-4. **Last resort:** Boot into recovery/maintenance mode and manually edit your launch scripts to remove DRSTool's environment strings
+- Know how to reset your machine's firmware settings. On the tested Legion, holding the power button for 8–15 seconds restores the default overclocking parameters.
+- Keep the firmware variable backups the tool writes to `/var/lib/legion-power-manager/`.
+- Have a current backup of your data.
 
-### 8. Legal Jurisdiction
+After a memory timing change, test stability properly before trusting the system with real work. Use memory stress tests over several hours, not just a successful boot.
 
-This disclaimer is not legal advice. The exact enforceability of liability waivers varies by jurisdiction. In jurisdictions where liability cannot be fully waived (e.g., for gross negligence), liability is limited to the fullest extent permitted by law.
+## No warranty, no liability
 
----
+This software is provided **"as is", without warranty of any kind**, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and non-infringement. See the LICENSE file for the full terms.
 
-## Summary
+In no event shall the authors or contributors be liable for any claim, damages, data loss, hardware damage, or other liability, whether in an action of contract, tort, or otherwise, arising from, out of, or in connection with the software or its use.
 
-**Do not use this tool if you are not comfortable with:**
-- The risk of a system crash or GPU damage
-- Troubleshooting driver issues
-- Potentially losing access to your display/system
-- Accepting that we cannot help if something goes wrong
+This project is not affiliated with, endorsed by, or supported by Lenovo, AMD, NVIDIA, or any other hardware or firmware vendor. All trademarks belong to their respective owners.
 
-**If you proceed, you do so knowingly and voluntarily assume all risk.**
+**By using the write features of this tool you confirm that you understand these risks and accept full responsibility for the result.**
