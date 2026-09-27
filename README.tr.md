@@ -1,81 +1,182 @@
-# ⚠️ SORUMLULUK REDDI
+# DRSTool
 
-**KENDİ RİSKİNİZDE KULLANIN.** Bu yazılım herhangi bir garantı olmaksızın olduğu gibi sunulmaktadır. DRSTool'u kullanarak şunları kabul etmiş olursunuz:
+**Linux'ta Proton/DXVK ile oynadığın oyunlar için NVIDIA sürücü ayarlarını ve oyun ortam değişkenlerini tıklayarak ayarlamanı sağlayan masaüstü aracı.**
 
-1. **Tüm sorumluluğu kabul etmiş olursunuz** — Bu aracı kullanmanın neden olabileceği herhangi bir hasar, veri kaybı, sistem istikrarsızlığı veya donanım hasarından.
-2. **Sürücü ayarlarını değiştirmek ciddi sorunlara yol açabilir** — Sürücü çökmesi, GPU'nun asılı kalması, sistem donması veya yanlış yapılandırılırsa GPU hasarı.
-3. **Bu proje yapay zeka yardımıyla geliştirilmiştir.** Kod incelense ve test edilse de, yapay zeka destekli geliştirme teste tabi olmayan incelikli hataları veya uç durumları içerebilir.
-4. **Sorumluluk reddedilir.** Geliştirici ve katkıda bulunanlar bu yazılımdan kaynaklanan doğrudan veya dolaylı hasarlardan hiçbir şekilde sorumlu değildir.
+Windows'taki **NVIDIA Profile Inspector**'ı düşün: DRSTool onun Linux karşılığıdır. Ek olarak DXVK, VKD3D-Proton, Proton, Wine, gamescope ve daha birçok bileşenin ayarlarını da tek pencerede toplar.
 
-**Kullanmadan önce:** Ayarları kritik olmayan sistemlerde test edin, çalışan yapılandırmanızı yedekleyin ve kurtarma yöntemi hazır bulundurun. Sürücü sorunları yaşarsanız tüm ortam değişkenlerini tamamen kaldırın ve görüntü sunucusunu/sistemi yeniden başlatın.
+> ⚠️ **Kendi riskinde kullan.** Sürücü ayarlarıyla oynamak çökme, donma veya görüntü sorunlarına yol açabilir. Bir şey ters giderse eklediğin değişkenleri kaldırıp oyunu yeniden başlatman yeterlidir. Ayrıntılar: [DISCLAIMER.md](DISCLAIMER.md)
+
+<img width="1970" height="1467" alt="DRSTool ekran görüntüsü" src="https://github.com/user-attachments/assets/8e3e741d-17a7-4ce1-818b-3bedc1da8c81" />
 
 ---
 
-# DRSTool
+## Neden var?
 
-DRSTool, Linux üzerinde DXVK_NVAPI_DRS_SETTINGS dizgileri (strings) oluşturmak için geliştirilmiş PySide6 tabanlı bir masaüstü arayüzüdür (GUI). Windows'taki NVIDIA Profile Inspector'ın DXVK-NVAPI eşdeğeridir. Bu aracın geliştirilme amacı; Linux'ta Proton/DXVK üzerinden çalışan bir oyun için NVIDIA sürücü davranışını ince ayar yapmanın, normalde hafızadan veya dağınık wiki sayfalarından uzun ve hataya açık çevre değişkeni (environment variable) dizgilerini elle yazmayı gerektirmesidir. DRSTool bu süreci aranabilir, belgelendirilmiş, tıkla-seç mantığında çalışan bir editöre dönüştürür ve sonucu oyun başına yeniden kullanılabilir bir profil olarak kaydetmenizi sağlar.
+Linux'ta bir oyunun NVIDIA davranışını değiştirmek normalde şöyle bir satırı elle yazmak demektir:
 
-## Ne İşe Yarar?
+```
+DXVK_NVAPI_DRS_SETTINGS=0x10E41DF3=0xffffff,0x10E41DF7=0xffffff DXVK_NVAPI_GPU_ARCH=GB200 VKD3D_CONFIG=dxr ... %command%
+```
 
-DRSTool ile şunları yapabilirsiniz:
-* NVIDIA Sürücü Ayarlarına (DRS) Göz Atın ve Yapılandırın: Windows'ta NVIDIA Profile Inspector'ın sunduğu alt seviye (low-level) ayarların aynısı, burada dxvk-nvapi'nin DXVK_NVAPI_DRS_SETTINGS çevre değişkeni için yeniden uygulandı.
-* GPU Mimarisi Seçin: DRSTool'un ekran kartınız için doğru DXVK_NVAPI_GPU_ARCH değerini üretmesini sağlayın.
-* Çevre Değişkenlerini Yönetin: DXVK, VKD3D-Proton ve NVIDIA __GL_* çevre değişkenlerini, değişken adlarını ve geçerli değerlerini ezberlemek zorunda kalmadan aynı aranabilir ve belgelenmiş arayüz üzerinden yapılandırın.
-* Frame-Pacing Katmanını Yönetin: vk_flip_meter (FLM) frame-pacing katmanının çalışma zamanı (runtime) değişkenlerini yapılandırın ve katmanın kendisini kaynak kodundan derleyip yükleyin.
-* Profilleri Kaydedin ve Yükleyin: Oyun başına tam bir profil anlık görüntüsü (DRS ayarları + GPU mimarisi + çevre değişkenleri) kaydedip daha sonra yeniden yükleyin. Oluşturulan nihai ANAHTAR=DEĞER ... kombinasyonunu kopyalayarak bir başlatma betiğine, Steam başlatma seçeneklerine veya bir Lutris konfigürasyonuna doğrudan yapıştırın.
+Hex kodlarını ezberlemek, hangi değişkenin ne işe yaradığını wiki'lerde aramak, bir harf hatası yüzünden ayarın hiç çalışmaması... DRSTool bunun yerine sana:
 
-Kısacası: Sürücü ayarlarını elle hex kodlarıyla yazmak yerine; işaret edin, tıklayın, açıklamasını görün ve kopyalayın.
+- **Okunabilir isimler** ("DLSS-SR Preset" gibi) ve her ayar için **açıklama** gösterir,
+- Değeri **butonla / listeden seçtirir**, yanlış değer girmeni zorlaştırır,
+- Sonucu **tek tıkla kopyalanabilir** hazır bir satıra çevirir,
+- Her oyun için **profil** olarak kaydeder, istersen doğrudan **Lutris** ayarına yazar.
 
-## Neden Var?
+---
 
-Windows'ta NVIDIA Profile Inspector, NVIDIA Denetim Masası'nın sunduğu ayarların ötesine geçerek oyun başına sürücü davranışını ince ayar yapmak için standart araçtır. Linux tarafında ise Proton/Wine oyunları için bu hassas kontrolü yeniden üretmenizi sağlayacak dxvk-nvapi ayarlarına yönelik eşdeğer bir GUI bulunmuyordu; hex ayar kimliklerini (ID) ve geçerli değerleri önceden bilmeniz gerekiyordu. DRSTool; insan tarafından okunabilir adlar, açıklamalar ve her ayara özel düzenleyiciler sunarak Linux oyun yığını (DXVK, VKD3D-Proton, dxvk-nvapi, vk_flip_meter) için özel olarak bu boşluğu doldurur.
+## Neler yapabilirsin?
 
-## Gereksinimler
+| | |
+|---|---|
+| 🎛️ **NVIDIA sürücü ayarları (DRS)** | DLSS preset/mod, Frame Generation, Ray Reconstruction, V-Sync, G-Sync, anti-aliasing, doku filtreleme ve daha fazlası — 118 ayar, açıklamalarıyla. |
+| 🖥️ **GPU mimarisi** | Kartının mimarisini (Maxwell → Blackwell) seç; bazı ayarlar ancak bununla doğru çalışır. |
+| 🌿 **Ortam değişkenleri** | 250'den fazla değişken: DXVK, VKD3D-Proton, DXVK-NVAPI, NVIDIA `__GL_*`, NVIDIA PRIME, Proton, Wine, gamescope, vk_flip_meter ve bazı fork'lar (GE, CachyOS, EM vb. — hangi fork'a ait olduğu yazılı). |
+| 🎮 **gamescope komut oluşturucu** | Çözünürlük, HDR, VRR, FSR/NIS/SGSR, FPS limiti, MangoApp gibi gamescope bayraklarını seçerek hazır komut üretir. |
+| 💾 **Profiller** | Oyun başına tüm ayarları kaydet, sonra tek tıkla geri yükle. |
+| 🔄 **Lutris senkronizasyonu** | Ayarları seçtiğin oyunun Lutris yapılandırmasına yaz ya da oradan içeri aktar. |
+| ⏱️ **vk_flip_meter** | Frame-pacing (kare zamanlaması) katmanını kaynaktan derleyip kur, çalışırken ayarla. |
+| ⚙️ **lutris-game-tune** | Oyun açılırken sistemi oyun moduna alan, kapanınca eski haline döndüren yardımcıyı yönet. |
 
-* Python >= 3.7
-* PySide6 >= 6.10
-* vk_flip_meter derleme/yükleme özelliği için: Sistemde cmake, bir C++ derleyicisi ve pkexec (PolicyKit) bulunmalıdır.
+---
 
-## Çalıştırma
+## Kurulum
 
+### Gereksinimler
+
+- Python 3.12 veya üstü
+- PySide6 (Qt 6)
+- PyYAML (Lutris özelliği için)
+- *(İsteğe bağlı)* `setproctitle` — görev çubuğunda doğru simge/isim için
+- *(İsteğe bağlı)* vk_flip_meter derlemek için: `cmake`, C++ derleyici, Vulkan başlık dosyaları ve `pkexec`
+
+### Hızlı başlangıç
+
+```bash
+git clone https://github.com/arabcian/DRSTool.git
+cd DRSTool
+pip install --user PySide6 pyyaml
 python3 DRSTool.py
+```
 
-## Arayüze Genel Bakış
+### Gentoo
 
-Uygulama; sol kenar çubuğu (liste/navigasyon) ve sağ editör paneli olarak ikiye bölünmüş tek bir pencereden oluşur. Pencerenin üst kısmında ise o an üretilen çevre değişkeni dizgisini gösteren kalıcı bir çıktı çubuğu yer alır. Kenar çubuğu ve editörün ne göstereceğini beş sekme belirler:
+Depodaki `drstool-9999.ebuild` ile kurabilirsin. USE bayrakları:
 
-### 1. DRS Settings (DRS Ayarları)
-OpenGL, Anti-Aliasing, Texture Filtering, VSync/Flip, Frame Rate, Power, SLI, Stereo, VRR/G-Sync, DLSS/NGX, Ansel, FXAA, AO, Optimus ve Misc gibi kategoriler altında toplanmış, aranabilir 117 sürücü ayarından oluşan bir listedir. Her ayarın kısa bir açıklaması, daha detaylı uzun bir açıklaması ve arka plandaki değerin gerçekte nasıl kodlandığıyla eşleşen doğru kontrol türü (enum açılır menüsü, sayısal yukarı/aşağı sayacı veya bit alanı onay kutuları) bulunur. Bir ayar seçildiğinde sağ tarafta editörü açılır; bir değer atandığında çıktı çubuğu güncellenir ve ilgili ayar sol listede yeşil renkle vurgulanır.
+| USE | Ne yapar |
+|---|---|
+| `flip-meter` *(varsayılan açık)* | vk_flip_meter Vulkan katmanını derler ve kurar |
+| `lutris-tune` *(varsayılan açık)* | lutris-game-tune yardımcısını kurar |
+| `lto` | Katmanı LTO ile derler |
+| `pgo` | Katmanı iki aşamalı PGO ile derler (talimatlar kurulum sonunda gösterilir) |
 
-### 2. GPU Arch (GPU Mimarisi)
-NVIDIA GPU mimari ailelerinin (GeForce 900 serisinden RTX 50 serisine kadar, yani Maxwell'den Blackwell'e) ve her biri için örnek kartların listesidir. Bir mimari seçildiğinde çıktı dizgisine DXVK_NVAPI_GPU_ARCH eklenir; çünkü bazı DRS ayarları yalnızca sürücü hangi mimariyle çalıştığını bildiğinde doğru şekilde uygulanır.
+---
 
-### 3. DXVK / VKD3D / NV / FLM
-Aşağıdaki bileşenleri kapsayan tek bir birleştirilmiş, kategorize edilmiş ve aranabilir listedir:
-* DXVK çevre değişkenleri: (HUD bayrakları, günlük kaydı (logging), cihaz/kare ile ilgili seçenekler vb.) — 15 değişken
-* VKD3D-Proton çevre değişkenleri: (VKD3D_CONFIG bayrak matrisi dahil) — 16 değişken
-* NVIDIA __GL_* değişkenleri: — 31 değişken
-* vk_flip_meter (FLM) çalışma zamanı değişkenleri: (FLM_MODE, FLM_TARGET_FPS, FLM_MFG_MULTIPLIER vb.) — 16 değişken
+## Nasıl kullanılır? (5 adımda)
 
-Her değişkenin türü belirlenmiştir (string, enum, bool, integer veya bayrak kümesi) ve uygun düzenleyici kontrolünü alır (metin alanı, açılır menü, onay kutusu veya DXVK_HUD ve VKD3D_CONFIG gibi çoklu bayrak değişkenleri için bir onay kutusu matrisi). Burada belirlediğiniz değerler, DRS ayarlarıyla birlikte aynı birleşik çıktı dizgisinde birleştirilir.
+1. **DRS Settings** sekmesinde değiştirmek istediğin ayarı bul (üstteki arama kutusu işini kolaylaştırır), sağda değerini seç. Ayarlanan satırlar solda **yeşil** görünür.
+2. **GPU Arch** sekmesinden ekran kartının mimarisini seç.
+3. **Environment** sekmesinden istediğin ortam değişkenlerini ayarla. gamescope kullanacaksan listedeki **"Gamescope launch flags"** satırına tıkla.
+4. Pencerenin üstündeki **çıktı çubuğunda** oluşan satırı **Copy all** ile kopyala:
+   - Terminal / betik için düz biçim,
+   - veya Steam için sonu `%command%` ile biten **Steam launch options** biçimi.
+5. Beğendiğin ayarları **Profiles** sekmesinde bir isimle kaydet.
 
-### 4. Profiles (Profiller)
-Mevcut durumun tamamını (DRS ayarları, GPU mimarisi ve tüm çevre değişkenleri) bir isim altında kaydedin, ardından daha sonra yeniden yükleyin veya silin. Profiller, çökme veya güç kesintisi durumunda bozulmayı önlemek için atomik olarak yazılan $XDG_CONFIG_HOME/drstool/profiles.json (alternatif olarak ~/.config/drstool/profiles.json) altındaki JSON dosyasında saklanır. Eski ~/.drs_configurator_profiles.json konumunu kullanan mevcut kurulumlar, ilk çalıştırmada otomatik olarak yeni konuma taşınır.
+Steam'de: Oyuna sağ tık → **Özellikler** → **Başlatma Seçenekleri** kutusuna yapıştır.
 
-### 5. vk_flip_meter
-Bu depoda bir alt proje (subproject) olarak paketlenmiş vk_flip_meter Vulkan katmanı için bir derleme/yükleme panelidir. Katmanın kaynak kodunun yerini tespit eder veya seçmenizi sağlar, ardından yetkisiz (unprivileged) bir cmake yapılandırması ve derlemesi çalıştırır. Yalnızca gerçekten root yetkisi gerektiren iki adım için pkexec aşamasına geçer: cmake --install ve manifest kütüphane yolu düzeltmesi. Bu sayede neredeyse tüm derleme hattı normal kullanıcınız olarak çalışır ve şifre istemi (grafiksel bir polkit iletişim kutusu aracılığıyla) yalnızca mümkün olan en son anda tetiklenir.
+---
 
-*Katmanın çalışma zamanı ince ayarları (FLM_MODE, FLM_TARGET_FPS vb.) bu sekmeden yapılmaz.* Bu ayarlara "Environment" sekmesinden tek tıkla ulaşılabilir, her şeyle aynı editör kullanılır ve nihai çıktı dizgisine otomatik olarak dahil edilir.
+## Sekmeler
 
-## Çıktı Çubuğu (Output Bar)
+### 1. DRS Settings
+NVIDIA sürücü ayarları kategorilere ayrılmış halde listelenir (DLSS/NGX, V-Sync, G-Sync/VRR, Anti-Aliasing, doku filtreleme, güç, OpenGL...). Her ayarın kısa ve uzun açıklaması vardır. Değer tipine göre uygun kontrol gelir: seçenek butonları, sayı alanı veya bit kutucukları.
 
-Pencerenin üst kısmı boyunca DRSTool; mevcut DRS ayarlarınızdan, GPU mimarinizden ve çevre değişkenlerinizden oluşturulan birleşik çevre dizgisini ve bir "Copy all" eylemini (düz shell biçimi veya `%command%` ile biten Steam başlatma seçenekleri) sürekli olarak gösterir. Her değer kutusu tıklayınca kopyalanır; uzun dizgiler pencereyi genişletmek yerine kısaltılır. Buradan doğrudan bir Lutris/Steam başlatma seçenekleri alanına veya bir shell betiğine yapıştırmaya hazırdır.
+### 2. GPU Arch
+Kartının mimarisini seçersin; çıktıya `DXVK_NVAPI_GPU_ARCH` eklenir. Her mimari için örnek kart modelleri gösterilir.
 
-## Tasarım Notları
+### 3. Environment
+Tüm ortam değişkenleri tek listede, kategorilere ayrılmış olarak durur. Öne çıkan kolaylıklar:
 
-* Sinyal Odaklı Durum (Signal-driven state): Merkezi bir SettingsManager (bir QObject), DRS ayarları, GPU mimarisi ve profiller için tek doğruluk kaynağıdır (source of truth). Belirli Qt sinyalleri (settings_changed, arch_changed, profiles_changed, profile_loaded) yayar, böylece UI widget'ları yalnızca gerçekten değişen kısımları yeniden oluşturur. Örneğin; profil listesi her ayar düzenlemesinde değil, yalnızca profiles_changed sinyali geldiğinde yenilenir.
-* Atomik Profil Yazımları: Profiller geçici bir dosyaya yazılır ve öncesinde bir fsync() çağrılarak os.replace() ile yerine yerleştirilir; böylece kaydetme sırasındaki bir çökme profil dosyasını bozamaz.
-* Shell Uyumlu Çıktı: Birleşik çevre dizgisi shlex.quote() ile oluşturulur. Böylece boşluk veya özel karakter içeren değerler, bir shell'e yapıştırıldığında sessizce bozulmak yerine doğru şekilde tırnak içine alınır.
-* Klavye kısayolları: Ctrl+F filtre, Esc filtreyi temizle, Ctrl+1…5 sekmeler, Ctrl+S yüklü profile kaydet, Ctrl+Shift+C başlatma dizgisini kopyala. Pencere boyutu, splitter konumu ve son sekme hatırlanır.
-* Kaydedilmemiş değişiklik göstergesi: bir profil yüklüyken yapılan her değişiklik pencere başlığında "•", vurgulu Save butonu ve sekme çubuğundaki profil adıyla gösterilir.
-* Arayüz Tasarımı: Paylaşılan Qt stil sayfaları (stylesheets) aracılığıyla tüm sekmelerde (liste başlıkları, seçim vurgulamaları, kaydırma çubukları) tutarlı bir şekilde uygulanan koyu tema ve NVIDIA yeşili vurgulu kullanıcı arayüzü.
+- **DXVK_HUD** ve **VKD3D_CONFIG**: bayrakları tek tek butonla aç/kapat, her birinin açıklaması yanında.
+- **DXVK_CONFIG**: dxvk.conf ayarlarını tablodan seç. Örneğin:
+  - `dxvk.latencySleep` — DXVK'nın düşük gecikme / Reflex modu
+  - `dxvk.maxFrameRate` — FPS sınırı
+  - `dxgi.syncInterval` — V-Sync'i zorla aç/kapat
+  - `dxgi.hideNvidiaGpu` — DLSS/Reflex için NVIDIA'yı gizleme
+  - Tabloda olmayan anahtarları "Other entries" alanına yazabilirsin, silinmez.
+- **gamescope launch flags**: gamescope komutunu bayrakları işaretleyerek oluşturur.
+
+> 💡 Tanımadığın bir değer bir profilde kaldıysa (ör. vkd3d-proton'dan kaldırılmış eski bir bayrak), DRSTool onu **silmez**, sarı bir notla gösterir.
+
+### 4. Extra Tools
+- **vk_flip_meter**: Katmanı kaynaktan derleyip kurar. Derleme normal kullanıcınla yapılır; şifre sadece sisteme kopyalama adımında (`pkexec`) istenir. Oyun çalışırken ayarları **Live Tuning** bölümünden anında değiştirebilirsin.
+- **lutris-game-tune**: Oyun başlarken CPU/sistem ayarlarını oyun moduna alan, oyun kapanınca geri yükleyen aracı kurar, durumunu ve günlüğünü gösterir.
+
+### 5. Profiles + Lutris Game Sync
+- **Solda** profillerin: kaydet, yükle, sil.
+- **Sağda** Lutris senkronizasyonu:
+  1. Listeden oyununu seç.
+  2. **Load from selected game** ile o oyunun mevcut ayarlarını DRSTool'a aktar.
+  3. İstediğin değişiklikleri yap.
+  4. **Write to Lutris config** ile yaz. Yazmadan önce neyin ekleneceğini ve **neyin silineceğini** gösteren bir onay penceresi çıkar. Her yazmada otomatik yedek alınır.
+
+> ⚠️ **Önemli:** DRSTool, katalogundaki değişkenlerin "sahibi" gibi davranır — ekranda boş olan bir değişkeni Lutris dosyasından siler. Bu yüzden bir oyuna yazmadan önce **mutlaka önce "Load from selected game"** yap. Katalogda olmayan, kendi elinle yazdığın değişkenlere dokunulmaz.
+
+---
+
+## Kısayollar
+
+| Tuş | İşlev |
+|---|---|
+| `Ctrl+F` | Aramaya odaklan |
+| `Esc` | Aramayı temizle |
+| `Ctrl+1` … `Ctrl+5` | Sekmeler arasında geç |
+| `Ctrl+S` | Yüklü profili kaydet |
+| `Ctrl+Shift+C` | Oluşan satırın tamamını kopyala |
+
+Profil yüklüyken değişiklik yaparsan pencere başlığında **•** işareti belirir; kaydetmeyi unutmazsın.
+
+---
+
+## Ayarlar nerede saklanıyor?
+
+- Profiller: `~/.config/drstool/profiles.json` (veya `$XDG_CONFIG_HOME/drstool/profiles.json`)
+- Dosya güvenli şekilde yazılır; kayıt sırasında elektrik gitse bile bozulmaz.
+- Eski `~/.drs_configurator_profiles.json` dosyası ilk açılışta otomatik taşınır.
+
+---
+
+## Sık sorulan sorular
+
+**Ayarım etki etmiyor gibi, ne yapmalıyım?**
+DRS ayarlarının çoğu yalnızca **dxvk-nvapi etkinken** çalışır. Proton'da `PROTON_ENABLE_NVAPI=1` gerekebilir. DLSS ile ilgili ayarlar için oyunun DLSS'i gerçekten kullanıyor olması gerekir.
+
+**DLSS preset olarak ne seçmeliyim?**
+Emin değilsen **"Latest"** seç; sürücü her mod için önerilen preset'i kullanır.
+
+**Bir şey bozuldu, nasıl geri alırım?**
+Çıktı çubuğundaki **Reset** ile hepsini sıfırla, ya da Steam/Lutris'teki başlatma seçeneklerini sil. Lutris için DRSTool'un aldığı yedek dosyası oyunun `.yml` dosyasının yanında durur.
+
+**Hangi değişkenin hangi Proton sürümünde çalıştığını nasıl bilirim?**
+Fork'a özgü değişkenlerin açıklamasında hangi fork'a (GE-Proton, Proton-CachyOS, Proton-EM...) ait oldukları yazar. Upstream'den kaldırılmış olanlar da açıklamada belirtilir.
+
+---
+
+## Kapsanan projeler
+
+DRSTool'daki ayar ve açıklamalar şu projelerin güncel kaynak kodlarından derlenmiştir (son eşitleme: Eylül 2026):
+
+- [DXVK](https://github.com/doitsujin/dxvk)
+- [VKD3D-Proton](https://github.com/HansKristian-Work/vkd3d-proton)
+- [DXVK-NVAPI](https://github.com/jp7677/dxvk-nvapi)
+- [NVIDIA NVAPI başlıkları](https://github.com/NVIDIA/nvapi)
+- [gamescope](https://github.com/ValveSoftware/gamescope)
+- [Proton](https://github.com/ValveSoftware/Proton)
+
+---
+
+## Lisans
+
+MIT — ayrıntılar için [LICENSE](LICENSE). Bu proje yapay zeka yardımıyla geliştirilmiştir; bkz. [DISCLAIMER.md](DISCLAIMER.md).
