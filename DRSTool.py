@@ -3685,7 +3685,7 @@ DXVK_ENV_VARS: List[EnvVarDef] = [
               "In-game HUD overlay. Comma-separated list of elements to display.",
               options=["devinfo", "fps", "frametimes", "submissions", "drawcalls",
                        "pipelines", "descriptors", "memory", "allocations", "gpuload",
-                       "version", "api", "cs", "compiler", "samplers", "swvp",
+                       "version", "api", "cs", "compiler", "samplers", "swvp", "latency",
                        "1", "full", "scale=N", "opacity=N"],
               placeholder="e.g. devinfo,fps,memory"),
     # ── Frame Rate ───────────────────────────────────────────────────────────
@@ -3776,13 +3776,16 @@ DXVK_ENV_VARS: List[EnvVarDef] = [
               "for dxvk.conf in the working directory (usually the game's exe folder). "
               "Useful for keeping a shared config outside a Windows-only game folder.",
               placeholder="/home/user/dxvk.conf"),
-    EnvVarDef("DXVK_CONFIG", "DXVK", "string", "",
+    EnvVarDef("DXVK_CONFIG", "DXVK", "dxvk_config", "",
               "Sets one or more dxvk.conf keys directly through the environment instead of "
               "a config file, using the same key = value syntax, with ; as a separator "
               "between entries. Any key documented in dxvk.conf can be set this way "
               "(dxgi.*, d3d9.*, d3d11.*, dxvk.*), e.g. dxgi.maxFrameLatency, dxgi.hideNvidiaGpu, "
               "dxvk.enableGraphicsPipelineLibrary, d3d11.samplerAnisotropy. Takes priority "
-              "over an on-disk dxvk.conf for the keys it sets.",
+              "over an on-disk dxvk.conf for the keys it sets.\n"
+              "The picker below covers the latency/Reflex, present, pipeline, NVIDIA and "
+              "filtering keys from upstream dxvk.conf; any other key goes into "
+              "'Other entries' and is kept verbatim.",
               placeholder="dxgi.hideAmdGpu = True; dxgi.syncInterval = 0"),
     EnvVarDef("DXVK_WSI_DRIVER", "DXVK", "enum", "",
               "Selects the windowing backend DXVK talks to. On Linux builds this is NOT "
@@ -3824,11 +3827,86 @@ DXVK_ENV_VARS: List[EnvVarDef] = [
 ]
 
 # Per-flag descriptions for VKD3D_CONFIG checkbox UI
+# ============================================================================
+# DXVK_CONFIG key picker — curated dxvk.conf keys (upstream dxvk.conf, 2026-09)
+# (key, kind, options-or-placeholder, description)
+#   kind "enum": options list; "" (unset) is always added as first choice
+#   kind "num" : free numeric text (ints, floats or negatives allowed)
+# Keys not listed here are preserved verbatim in the "Other entries" field.
+# ============================================================================
+_TRI = ["Auto", "True", "False"]
+_BOOL = ["True", "False"]
+DXVK_CONFIG_KEYS = [
+    # ── Latency / Reflex ────────────────────────────────────────────────────
+    ("dxvk.latencySleep", "enum", _TRI,
+     "Latency sleep / Reflex. Auto: Reflex only in D3D11 games that use it, with "
+     "VK_NV_low_latency2 + dxvk-nvapi. True: DXVK's built-in latency reduction for "
+     "every game (no effect with in-game/external limiters). False: disable both."),
+    ("dxvk.latencyTolerance", "num", "1000",
+     "Latency-sleep heuristic tolerance in µs. Higher = more latency, maybe smoother "
+     "pacing. No effect when VK_NV_low_latency2 is used."),
+    ("dxvk.disableNvLowLatency2", "enum", _TRI,
+     "Don't use VK_NV_low_latency2 (Reflex unavailable; latencySleep=True then uses "
+     "the custom algorithm). Auto disables it for 32-bit games only."),
+    # ── Frame pacing / present ──────────────────────────────────────────────
+    ("dxvk.maxFrameRate", "num", "0",
+     "Frame rate limit (0 = off). DXVK 3.x replacement for DXVK_FRAME_RATE."),
+    ("dxgi.maxFrameLatency", "num", "0",
+     "Enforce stricter max frame latency (0 = app value, 1-16)."),
+    ("dxgi.syncInterval", "num", "-1",
+     "Override Vsync for D3D10/11/12: 0 = off, n = on (every n-th vblank), -1 = app."),
+    ("d3d9.presentInterval", "num", "-1",
+     "Override Vsync for D3D9: 0 = off, n = on, -1 = app."),
+    ("dxvk.tearFree", "enum", _TRI,
+     "True: mailbox when in-game Vsync is off (no tearing). False: FIFO_RELAXED when "
+     "Vsync is on (tears instead of stuttering below refresh)."),
+    ("dxvk.enablePresentTiming", "enum", _BOOL,
+     "Present-timing features (non-native refresh emulation, frame limiter). "
+     "Default True; disable only for debugging."),
+    ("dxgi.forceRefreshRate", "num", "0",
+     "Only expose display modes with this refresh rate (0 = off). Use with caution."),
+    # ── Pipelines / descriptors ─────────────────────────────────────────────
+    ("dxvk.enableGraphicsPipelineLibrary", "enum", _TRI,
+     "Auto: GPL + optimized pipelines in background. True: GPL only. False: off "
+     "(more stutter). Debug option."),
+    ("dxvk.enableDescriptorHeap", "enum", _TRI,
+     "VK_EXT_descriptor_heap. Auto: known-good drivers only. True: force if supported."),
+    ("dxvk.enableDescriptorBuffer", "enum", _TRI,
+     "VK_EXT_descriptor_buffer (descriptor heap takes precedence when both are on)."),
+    ("dxvk.numCompilerThreads", "num", "0",
+     "Pipeline compiler threads (0 = all cores). Lower it to cut compile-time "
+     "CPU contention on high-core CPUs."),
+    ("dxvk.enableMemoryDefrag", "enum", _TRI,
+     "Video-memory defragmentation. Debug option."),
+    # ── NVIDIA / GPU exposure ───────────────────────────────────────────────
+    ("dxgi.hideNvidiaGpu", "enum", _TRI,
+     "Report NVIDIA GPUs as AMD. Auto hides unless NVAPI is enabled in Proton — "
+     "set False when you need DLSS/Reflex via dxvk-nvapi."),
+    ("dxvk.enableNvCudaInterop", "enum", _BOOL,
+     "VK_NVX_* CUDA-interop extensions required for DLSS (default True on 64-bit NVIDIA)."),
+    ("dxvk.hideIntegratedGraphics", "enum", _BOOL,
+     "Hide the iGPU when a dGPU exists. Prefer DXVK_FILTER_DEVICE_NAME if possible."),
+    ("dxgi.maxDeviceMemory", "num", "0",
+     "Override reported VRAM in MB (0 = off). Fixes texture streaming in games "
+     "that mis-handle large VRAM. Not a hard cap."),
+    ("dxgi.enableHDR", "enum", _BOOL,
+     "Expose the HDR10 colour space (defaults to DXVK_HDR)."),
+    # ── Texture filtering ───────────────────────────────────────────────────
+    ("d3d11.samplerAnisotropy", "num", "-1",
+     "Force AF for all D3D11 samplers (0-16, -1 = app). Can break bilinear-dependent passes."),
+    ("d3d9.samplerAnisotropy", "num", "-1",
+     "Force AF for all D3D9 samplers (0-16, -1 = app)."),
+    ("d3d11.samplerLodBias", "num", "0.0",
+     "Add to the app's mip LOD bias (-2.0 .. 1.0). Negative = sharper + shimmer."),
+    ("d3d11.clampNegativeLodBias", "enum", _BOOL,
+     "Clamp negative LOD bias to 0 (after samplerLodBias)."),
+]
+DXVK_CONFIG_KEY_NAMES = [k[0] for k in DXVK_CONFIG_KEYS]
+
 VKD3D_CONFIG_DESCS: Dict[str, str] = {
     # ── Raytracing ────────────────────────────────────────────────────────────
     "nodxr":                                "Disable DXR (raytracing) support entirely.",
     "dxr":                                  "Force-enable DXR even when considered unsafe (auto-enabled since v2.11).",
-    "dxr11":                                "Force-enable DXR 1.1 explicitly. Compat alias — 'dxr' also enables DXR 1.1 now. Historically needed for Cyberpunk 2077 DXR.",
     "dxr12":                                "Experimental DXR 1.2 support (requires VK_EXT_opacity_micromap).",
     "allow_sbt_collection":                "Allow shader-binding-table collection for DXR pipelines. Required for Cyberpunk 2077 DXR to function correctly.",
     # ── Performance / ReBAR / Memory ─────────────────────────────────────────
@@ -3838,8 +3916,7 @@ VKD3D_CONFIG_DESCS: Dict[str, str] = {
     "small_vram_rebar":                     "Use a conservative ReBAR budget (good for 8 GB GPUs). Auto-applied for Serious Sam 4 and all Unreal Engine 5 games (-Win64-Shipping.exe).",
     "recycle_command_pools":                "Recycle Vulkan command pools instead of freeing them. Reduces memory fragmentation. Auto-applied for Elden Ring.",
     "memory_allocator_skip_clear":          "Skip zeroing newly allocated committed memory. Reduces stutter in allocation-heavy games. Auto-applied for Elden Ring. Use only if game initializes its own buffers.",
-    "use_host_import_fallback":            "Use a fallback path for host-memory import instead of the primary DMA path. Workaround for amdgpu kernel bug with concurrent submissions. Auto-applied for Halo Infinite, A Plague Tale Requiem.",
-    "force_dedicated_image_allocation":    "Force every image to be allocated in its own dedicated Vulkan memory allocation. Fixes memory aliasing/corruption bugs. Auto-applied for Dead Space (2023).",
+    "host_import_fallback":                "Use a fallback path for host-memory import instead of the primary DMA path. Workaround for amdgpu kernel bug with concurrent submissions. Auto-applied for Halo Infinite, A Plague Tale Requiem.",
     # ── Submission / Frame Timing ─────────────────────────────────────────────
     "no_staggered_submit":                  "Disable staggered command-buffer submission. Auto-applied for all UE5 games and TLOU Part I. Reduces frame-time spikes in affected titles.",
     "one_time_submit":                      "Force one-shot command-buffer submission mode. Workaround for GPU hang in Star Wars Outlaws.",
@@ -3852,7 +3929,6 @@ VKD3D_CONFIG_DESCS: Dict[str, str] = {
     "force_raw_va_cbv":                    "Force constant-buffer views to use raw GPU virtual addresses instead of descriptor-based binding. Fixes GPU hangs or corruption in Halo Infinite, Eve Online, Guardians of the Galaxy.",
     "preallocate_srv_mip_clamps":          "Pre-allocate mip-clamp descriptors for all SRVs at resource creation time. Workaround for a descriptor aliasing bug. Auto-applied for Halo Infinite.",
     # ── Rendering / Compression Workarounds ──────────────────────────────────
-    "retain_descriptor_heaps":             "Keep descriptor heaps alive longer instead of freeing them immediately. Fixes GCVM L2 faults / GPU hangs on AMD RDNA3 (Arma Reforger, others). Auto-applied for Ark Ascended.",
     "no_invariant_position":               "Disable the invariant-position workaround (ON by default). Try if you see Z-fighting or vertex-position artifacts.",
     "disable_uav_compression":             "Disable UAV texture compression for all images. Fixes rendering corruption in A Plague Tale Requiem, Shadow of Tomb Raider, Marvel's Spider-Man.",
     "disable_simultaneous_uav_compression": "Disable compression only for resources with simultaneous-access flag. More targeted than disable_uav_compression. Auto-applied for Witcher 3.",
@@ -3861,17 +3937,37 @@ VKD3D_CONFIG_DESCS: Dict[str, str] = {
     "defer_resource_destruction":          "Defer resource destruction to avoid GPU use-after-free bugs with sparse resources. Auto-applied for AC: Valhalla.",
     "prefer_thin_uav_tiling":             "Use thin image tiling for 3D UAV textures, which can help performance on some titles. Auto-applied for The Last of Us Part I.",
     "skip_null_sparse_tiles":             "Skip GPU map operations for null/empty sparse tiles. Workaround for driver crash or hang with sparse textures. Auto-applied for Monster Hunter Wilds.",
-    "placed_texture_aliasing":            "Allow placed-resource texture aliasing using VK_IMAGE_CREATE_ALIAS_BIT. Workaround for games that alias textures via placed heaps. Auto-applied for Wreckfest 2.",
     "force_dynamic_msaa":                 "Force dynamic MSAA resolve mode. Workaround for MSAA rendering artifacts. Auto-applied for World of Warcraft.",
-    # ── NVIDIA DGC / Alignment ────────────────────────────────────────────────
-    "huge_nv_dgc_buffers":                "Allocate oversized buffers for NVIDIA device-generated commands (DGC). Workaround for buffer overrun causing GPU hangs in Starfield on NVIDIA.",
+    # ── Alignment ────────────────────────────────────────────────
     "reject_padded_small_resource_alignment": "Reject the padded small-resource alignment path. Workaround for memory alignment bugs in Starfield.",
     # ── Shader / Subgroup ─────────────────────────────────────────────────────
-    "force_minimum_subgroup_size":         "Force the minimum supported subgroup (warp/wavefront) size for compute shaders. Fixes hangs or incorrect results in benchmarks/games that assume a larger subgroup. Auto-applied for GravityMark.",
     # ── Debug (informational) ─────────────────────────────────────────────────
     "vk_debug":                            "Enable Vulkan debug extensions and loads validation layer.",
     "skip_application_workarounds":        "Skip all application-specific workarounds. For debugging only.",
     "force_host_cached":                   "Force all host-visible allocations to CACHED. Speeds up GPU captures with RenderDoc.",
+    # ── Added from upstream config_flag_decl.h (2026-09) ─────────────────
+    "extra_rtas_sync":                     "Insert extra barriers around acceleration-structure builds. Try for DXR flicker/corruption or RT GPU hangs.",
+    "rtas_allow_blas_rebuild_sizes":       "Size BLAS allocations for full rebuilds instead of updates. Auto-applied for some RT titles; fixes RT hangs/corruption.",
+    "zero_fill_blp":                       "Zero-fill build-layout prebuild scratch memory for RT builds. Debug/workaround for garbage RT geometry.",
+    "no_gpu_upload_heap":                  "Don't expose D3D12 GPU upload heaps (ReBAR-backed). Try if a game that uses GPU upload heaps stutters or runs out of VRAM.",
+    "memory_allocator_skip_image_heap_clear": "Skip zeroing heaps used for placed textures. Less allocation stutter; can expose garbage in games that read uninitialised memory.",
+    "disallow_committed_texture_suballocation": "Give each committed texture its own allocation (better driver memory priorities, higher CPU cost). Default suballocates because Diablo 4 regresses badly otherwise.",
+    "allow_image_heap_suballocation":      "Suballocate image heaps even when the driver supports dynamic memory priorities. Lower allocation overhead, worse paging under VRAM pressure.",
+    "avoid_image_buffer_aliasing":         "Avoid aliasing images and buffers in the same memory. Auto-applied for World of Warcraft; fixes corruption in heap-aliasing games.",
+    "no_clear_uav_sync":                   "Skip the extra sync after UAV clears. Small perf gain; may cause flicker in games that depend on it.",
+    "pipeline_library_app_cache":          "Use only the game's own ID3D12PipelineLibrary cache, not vkd3d-proton's internal cache.",
+    "global_pipeline_cache":               "Use one global VkPipelineCache instead of per-PSO caches. Useful when the game creates PSOs very late.",
+    "shader_cache_sync":                   "Write the vkd3d-proton shader cache synchronously. For debugging cache corruption only; causes hitching.",
+    "disable_depth_compression":           "Disable depth/stencil compression. Workaround for depth corruption / shadow artifacts.",
+    "no_nvx":                              "Don't use NVX_binary_import / NVX_image_view_handle. These NVIDIA extensions are what DLSS/NGX uses — only disable for debugging (DLSS will stop working).",
+    "skip_driver_workarounds":             "Skip vkd3d-proton's built-in per-driver bug workarounds. Debug only.",
+    "enable_experimental_features":        "Expose experimental features (e.g. work graphs, maintenance8 paths) even when not considered production-ready.",
+    "ignore_shared_fence":                 "Treat D3D12_FENCE_FLAG_SHARED fences as regular fences. Workaround for games/overlays that break on shared fences.",
+    "breadcrumbs":                         "Enable GPU breadcrumbs: on device lost, vkd3d-proton logs which command list / dispatch hung. Small overhead.",
+    "breadcrumbs_sync":                    "Breadcrumbs + synchronous submission for exact hang location. Large overhead; debug GPU hangs only.",
+    "breadcrumbs_trace":                   "Breadcrumbs + full trace logging of every command. Very slow; debug only.",
+    "log_memory_budget":                   "Log VRAM / ReBAR budget decisions and allocations to the vkd3d log. Handy for diagnosing VRAM-limited stutter.",
+    "debug_utils":                         "Enable VK_EXT_debug_utils labels (object names/markers) for RenderDoc/Nsight captures.",
 }
 
 VKD3D_ENV_VARS: List[EnvVarDef] = [
@@ -3882,48 +3978,63 @@ VKD3D_ENV_VARS: List[EnvVarDef] = [
                   # Raytracing
                   "nodxr",
                   "dxr",
-                  "dxr11",
                   "dxr12",
                   "allow_sbt_collection",
+                  "extra_rtas_sync",
+                  "rtas_allow_blas_rebuild_sizes",
+                  "zero_fill_blp",
                   # Performance / ReBAR / Memory
                   "force_static_cbv",
                   "single_queue",
                   "no_upload_hvv",
+                  "no_gpu_upload_heap",
                   "small_vram_rebar",
                   "recycle_command_pools",
                   "memory_allocator_skip_clear",
-                  "use_host_import_fallback",
-                  "force_dedicated_image_allocation",
+                  "memory_allocator_skip_image_heap_clear",
+                  "host_import_fallback",
+                  "disallow_committed_texture_suballocation",
+                  "allow_image_heap_suballocation",
+                  "avoid_image_buffer_aliasing",
                   # Submission / Frame Timing
                   "no_staggered_submit",
                   "one_time_submit",
+                  "no_clear_uav_sync",
                   # PSO / Pipeline Cache
                   "pipeline_library_ignore_mismatch_driver",
+                  "pipeline_library_app_cache",
+                  "global_pipeline_cache",
+                  "shader_cache_sync",
                   "retain_psos",
-                  # Descriptor Heap (2026)
+                  # Descriptor Heap
                   "descriptor_heap",
                   # CBV / SRV Binding
                   "force_raw_va_cbv",
                   "preallocate_srv_mip_clamps",
                   # Rendering / Compression Workarounds
-                  "retain_descriptor_heaps",
                   "no_invariant_position",
                   "disable_uav_compression",
                   "disable_simultaneous_uav_compression",
                   "disable_color_compression",
+                  "disable_depth_compression",
                   "force_initial_transition",
                   "defer_resource_destruction",
                   "prefer_thin_uav_tiling",
                   "skip_null_sparse_tiles",
-                  "placed_texture_aliasing",
                   "force_dynamic_msaa",
-                  # NVIDIA DGC / Alignment
-                  "huge_nv_dgc_buffers",
                   "reject_padded_small_resource_alignment",
-                  # Shader / Subgroup
-                  "force_minimum_subgroup_size",
-                  # Debug
+                  # NVIDIA / Driver
+                  "no_nvx",
+                  "skip_driver_workarounds",
+                  "enable_experimental_features",
+                  "ignore_shared_fence",
+                  # Debug / Crash diagnostics
+                  "breadcrumbs",
+                  "breadcrumbs_sync",
+                  "breadcrumbs_trace",
+                  "log_memory_budget",
                   "vk_debug",
+                  "debug_utils",
                   "skip_application_workarounds",
                   "force_host_cached",
               ],
@@ -4925,6 +5036,45 @@ PROTON_ENV_VARS: List[EnvVarDef] = [
               "BattlEye-protected games that don't auto-detect it. Same idea as "
               "PROTON_EAC_RUNTIME — install the Steam Tools depot, then point here.",
               placeholder='"/home/user/.steam/steam/steamapps/common/Proton BattlEye Runtime/"'),
+
+    # ── Added from Proton 10 / experimental proton script (2026-09) ────────
+    EnvVarDef("PROTON_DXVK_D3D8", "Proton", "enum", "",
+              "Use DXVK's d3d8 implementation instead of wined3d for Direct3D 8 games.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NO_D3D10", "Proton", "enum", "",
+              "Disable d3d10 / d3d10_1 AND dxgi DLL overrides (blank override = not loaded). "
+              "Forces games with another renderer to fall back to it.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NO_D3D11", "Proton", "enum", "",
+              "Disable the d3d11 DLL (blank override). Forces games with a D3D9/D3D12 renderer "
+              "to pick another API.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_USE_WINED3D11", "Proton", "enum", "",
+              "Use wined3d (OpenGL) for d3d11 only, keeping DXVK for the rest. Debug/compat.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_HEAP_ZERO_MEMORY", "Proton", "enum", "",
+              "Zero all Win32 heap allocations (sets WINE_HEAP_ZERO_MEMORY=1). Fixes crashes "
+              "in games that read uninitialised heap memory; small CPU cost.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_LIMIT_ADDRESS_SPACE", "Proton", "enum", "",
+              "Limit the process's usable virtual address space (read by Proton's Wine). "
+              "Proton auto-sets it for AppIDs 1282270 and 2963870; try it for games that crash "
+              "when given a very large address space.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_USE_XALIA", "Proton", "enum", "",
+              "Xalia: controller-navigable UI for launchers/dialogs without gamepad support. "
+              "Proton enables it by default (only for supported apps). Set 0 if it grabs "
+              "input or adds an overlay you don't want.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_DISABLE_HIDRAW", "Proton", "string", "",
+              "Comma-separated VID/PID list of controllers that must NOT be exposed through "
+              "hidraw (they fall back to SDL/evdev). Proton sets Sony DS4/DualSense IDs by "
+              "default for some games.",
+              placeholder="e.g. 0x054C/0x0CE6,0x054C/0x0DF2"),
+    EnvVarDef("PROTON_CRASH_REPORT_DIR", "Proton", "string", "",
+              "Write Wine crash reports (minidumps) to this directory "
+              "(sets WINE_CRASH_REPORT_DIR).",
+              placeholder="e.g. /tmp/proton-crashes"),
 ]
 
 # ============================================================================
@@ -5110,6 +5260,17 @@ DXVK_NVAPI_ENV_VARS: List[EnvVarDef] = [
               "Ages to avoid its pink-tint bug. For real Reflex install the layer and "
               "use DXVK_NVAPI_VKREFLEX=1.",
               options=["0", "1"]),
+
+    EnvVarDef("DXVK_NVAPI_VKREFLEX_INJECT_SUBMIT_FRAME_IDS", "DXVK-NVAPI", "enum", "",
+              "VK Reflex layer: inject frame IDs (from NvAPI_Vulkan_SetLatencyMarker) into "
+              "vkQueueSubmit* calls, helping the driver correlate submits with frames. Enables "
+              "VK_KHR_present_id. May interfere with the game's own present IDs. "
+              "Requires DXVK_NVAPI_VKREFLEX=1.",
+              options=["0", "1"]),
+    EnvVarDef("DXVK_NVAPI_VKREFLEX_INJECT_PRESENT_FRAME_IDS", "DXVK-NVAPI", "enum", "",
+              "VK Reflex layer: inject frame IDs into vkQueuePresentKHR. Same caveats as "
+              "..._INJECT_SUBMIT_FRAME_IDS. Requires DXVK_NVAPI_VKREFLEX=1.",
+              options=["0", "1"]),
 ]
 
 # ============================================================================
@@ -5291,6 +5452,42 @@ GAMESCOPE_ENV_VARS: List[EnvVarDef] = [
               "not in gamescope --help. "
               "Example: STEAM_GAMESCOPE_VRR_SUPPORTED=1",
               options=["0", "1"]),
+
+    # ── Added from gamescope getenv() calls (2026-09) ──────────────────────
+    EnvVarDef("GAMESCOPE_WSI_MIN_IMAGE_COUNT", "Gamescope", "int", "3",
+              "Minimum swapchain image count the gamescope WSI layer reports to the game "
+              "(default 3). Lower = less queued latency but more risk of stalls; "
+              "higher = smoother under load. Also honours vk_wsi_override_min_image_count. "
+              "Takes effect only with the WSI layer active (ENABLE_GAMESCOPE_WSI).",
+              placeholder="e.g. 2"),
+    EnvVarDef("GAMESCOPE_WSI_ENSURE_MIN_IMAGE_COUNT", "Gamescope", "enum", "",
+              "Force the game's swapchain to use at least GAMESCOPE_WSI_MIN_IMAGE_COUNT "
+              "images even if it asks for fewer.",
+              options=["0", "1"]),
+    EnvVarDef("GAMESCOPE_WSI_FORCE_BYPASS", "Gamescope", "enum", "",
+              "Ask gamescope to bypass composition (direct scanout) for this client whenever "
+              "possible. Lowest latency path; may break overlays.",
+              options=["0", "1"]),
+    EnvVarDef("GAMESCOPE_WSI_FRAME_LIMITER_AWARE", "Gamescope", "enum", "",
+              "Tell gamescope the game's swapchain handles the gamescope frame limiter itself. "
+              "Auto-enabled for DXVK >= 2.3 and vkd3d >= 2.12; set 1 for native Vulkan games "
+              "that pace correctly, 0 to force gamescope-side limiting.",
+              options=["0", "1"]),
+    EnvVarDef("GAMESCOPE_DISABLE_ASYNC_FLIPS", "Gamescope", "enum", "",
+              "DRM backend: never use async (tearing) page flips. Workaround for "
+              "flicker/corruption with --immediate-flips on some drivers.",
+              options=["0", "1"]),
+    EnvVarDef("GAMESCOPE_FORCE_GENERAL_QUEUE", "Gamescope", "enum", "",
+              "Run gamescope's compositing on the general graphics queue instead of an async "
+              "compute queue. Workaround for driver issues; may add latency.",
+              options=["0", "1"]),
+    EnvVarDef("GAMESCOPE_DISABLE_TIMERFD", "Gamescope", "enum", "",
+              "Use the fallback sleep-based vblank timer instead of timerfd. Debug only.",
+              options=["0", "1"]),
+    EnvVarDef("GAMESCOPE_LIFTOFF_CACHE_DISABLE", "Gamescope", "enum", "",
+              "DRM backend: disable libliftoff's plane-allocation cache. Debug for "
+              "direct-scanout / overlay-plane glitches.",
+              options=["0", "1"]),
 ]
 
 # ============================================================================
@@ -5345,7 +5542,7 @@ GAMESCOPE_FLAGS: List[GamescopeFlagDef] = [
     GamescopeFlagDef("Upscale Filter", "--filter", "Upscaling", "enum",
                       "Upscaler filter. fsr = AMD FidelityFX Super Resolution 1.0. "
                       "nis = NVIDIA Image Scaling v1.0.3.",
-                      short="-F", options=["linear", "nearest", "fsr", "nis", "pixel"]),
+                      short="-F", options=["linear", "nearest", "fsr", "nis", "pixel", "sgsr"]),
     GamescopeFlagDef("Sharpness", "--sharpness", "Upscaling", "int",
                       "Upscaler sharpness, 0 (max) to 20 (min). Alias: --fsr-sharpness.",
                       placeholder="0-20"),
@@ -5486,6 +5683,31 @@ GAMESCOPE_FLAGS: List[GamescopeFlagDef] = [
                       "looks very wrong if the display genuinely can't do it."),
     GamescopeFlagDef("HDR Debug Heatmap", "--hdr-debug-heatmap", "Debug", "toggle",
                       "Display a heatmap-style debug view of HDR luminance across the scene."),
+
+    # ── Added from gamescope main.cpp (2026-09) ─────────────────────────────
+    GamescopeFlagDef("MangoApp Overlay", "--mangoapp", "Session", "toggle",
+                      "Launch with the mangoapp (MangoHud) performance overlay. gamescope's "
+                      "recommended way to get MangoHud: use this instead of MANGOHUD=1 on the "
+                      "game or on gamescope itself (avoids double overlays and the extra "
+                      "present hook on the game's swapchain). Don't combine with the "
+                      "'MangoHud' prefix toggle in this builder — that runs a second "
+                      "MangoHud instance on the game."),
+    GamescopeFlagDef("Mouse Sensitivity", "--mouse-sensitivity", "Input", "string",
+                      "Multiply mouse movement by the given decimal number (e.g. 0.5, 1.25). "
+                      "Useful when the game renders at a lower -w/-h than the output.",
+                      short="-s", placeholder="e.g. 1.0"),
+    GamescopeFlagDef("Cursor Hotspot", "--cursor-hotspot", "Input", "string",
+                      "Hotspot of the default cursor image set with --cursor, as x,y.",
+                      placeholder="e.g. 0,0"),
+    GamescopeFlagDef("Force Touch Pointer Emulation", "--xwayland-force-touch-pointer-emulation",
+                      "Input", "toggle",
+                      "Force XWayland to emulate pointer events from touch input."),
+    GamescopeFlagDef("Fade-out Duration", "--fade-out-duration", "Session", "int",
+                      "Duration in ms of the fade-out when switching between windows/apps.",
+                      placeholder="e.g. 200"),
+    GamescopeFlagDef("Force Composition Rotation", "--force-composition-rotation", "Debug", "toggle",
+                      "Always rotate the output in the compositor instead of at scanout "
+                      "(autodetected otherwise). Costs a composite pass every frame."),
 ]
 
 
@@ -6009,6 +6231,8 @@ QPushButton:pressed{ background:#a73434; }
             self._build_enum(ev, cur)
         elif ev.vtype == "vkd3d_config":
             self._build_vkd3d_config(ev, cur)
+        elif ev.vtype == "dxvk_config":
+            self._build_dxvk_config(ev, cur)
         elif ev.vtype == "flags" and ev.options:
             self._build_flags(ev, cur)
         else:
@@ -6102,7 +6326,12 @@ QPushButton:checked{
         Active flags are parsed from the comma/semicolon-separated cur value.
         Toggling any button rebuilds the value string and emits it.
         """
-        active = set(f.strip() for f in cur.replace(";", ",").split(",") if f.strip()) if cur else set()
+        tokens = [f.strip() for f in cur.replace(";", ",").split(",") if f.strip()] if cur else []
+        active = set(tokens)
+        # Tokens the grid doesn't know (flags removed/renamed upstream, fork
+        # flags, typos) used to be dropped on the next toggle. Keep them
+        # verbatim and append them after the grid's flags.
+        self._vkd3d_extra = [t for t in tokens if t not in ev.options]
 
         # We keep a local dict so toggle logic can read state without re-querying widgets
         self._vkd3d_btns: Dict[str, QPushButton] = {}
@@ -6145,6 +6374,119 @@ QPushButton:checked{
             grid.addWidget(desc_lbl, r_idx + 2, 1)
 
         self._control_layout.addLayout(grid)
+        if self._vkd3d_extra:
+            note = QLabel("Kept as-is (not a current upstream flag — no effect unless your "
+                          "vkd3d-proton build/fork knows it): " + ", ".join(self._vkd3d_extra))
+            note.setWordWrap(True)
+            note.setStyleSheet("color:#c9a227; font-size:10px;")
+            self._control_layout.addWidget(note)
+
+    # ── DXVK_CONFIG key picker ───────────────────────────────────────────
+    @staticmethod
+    def _parse_dxvk_config(cur: str):
+        """'a = 1; b = 2' -> ([(key, value), ...] in order). Entries without '='
+        are kept with value None so they round-trip verbatim."""
+        out = []
+        for part in (cur or "").split(";"):
+            part = part.strip()
+            if not part:
+                continue
+            if "=" in part:
+                k, v = part.split("=", 1)
+                out.append((k.strip(), v.strip()))
+            else:
+                out.append((part, None))
+        return out
+
+    def _build_dxvk_config(self, ev: EnvVarDef, cur: str):
+        """
+        DXVK_CONFIG: one row per curated dxvk.conf key (combo for Auto/True/False
+        style keys, line edit for numbers). Unset rows are simply omitted from
+        the value. Anything not in DXVK_CONFIG_KEYS stays in 'Other entries'
+        verbatim, so hand-written keys are never lost.
+        """
+        entries = self._parse_dxvk_config(cur)
+        known = {k: v for k, v in entries if k in DXVK_CONFIG_KEY_NAMES and v is not None}
+        extras = [(f"{k} = {v}" if v is not None else k) for k, v in entries
+                  if not (k in DXVK_CONFIG_KEY_NAMES and v is not None)]
+
+        self._dxvkcfg_widgets: Dict[str, QWidget] = {}
+        grid = QGridLayout()
+        grid.setSpacing(6)
+        grid.setColumnStretch(2, 1)
+        for c, t in enumerate(("Key", "Value", "Description")):
+            h = QLabel(t)
+            h.setStyleSheet("color:#8a92a5; font-size:10px; font-weight:600;")
+            grid.addWidget(h, 0, c)
+
+        combo_ss = ("QComboBox{background:#1a1f28;border:1px solid #323c4b;border-radius:6px;"
+                    "color:#d8d8d8;padding:3px 8px;font-size:11px;}"
+                    "QComboBox:hover{border:1px solid #76b900;}")
+        for r, (key, kind, opt, desc) in enumerate(DXVK_CONFIG_KEYS, start=1):
+            lbl = QLabel(key)
+            lbl.setStyleSheet("color:#d8d8d8; font-family:monospace; font-size:11px;")
+            val = known.get(key, "")
+            if kind == "enum":
+                w = QComboBox()
+                w.addItem("")
+                w.addItems(opt)
+                # case-insensitive match (dxvk accepts true/True)
+                for i in range(w.count()):
+                    if w.itemText(i).lower() == val.lower():
+                        w.setCurrentIndex(i)
+                        break
+                else:
+                    if val:
+                        w.addItem(val)
+                        w.setCurrentText(val)
+                w.setStyleSheet(combo_ss)
+                w.setFixedHeight(28)
+                w.setMinimumWidth(90)
+                w.installEventFilter(_NO_SCROLL_FILTER)
+                w.currentIndexChanged.connect(lambda _i: self._set_value(self._dxvkcfg_value()))
+            else:
+                w = QLineEdit(val)
+                w.setStyleSheet(self._EDIT_SS)
+                w.setPlaceholderText(opt)
+                w.setFixedHeight(28)
+                w.setMinimumWidth(90)
+                w.textChanged.connect(lambda _t: self._on_dxvkcfg_text())
+            self._dxvkcfg_widgets[key] = w
+            d = QLabel(desc)
+            d.setWordWrap(True)
+            d.setStyleSheet("color:#a7afbc; font-size:11px;")
+            grid.addWidget(lbl, r, 0)
+            grid.addWidget(w, r, 1)
+            grid.addWidget(d, r, 2)
+        self._control_layout.addLayout(grid)
+
+        hint = QLabel("Other entries (any other dxvk.conf key, ; separated):")
+        hint.setStyleSheet("color:#8a92a5; font-size:10px; font-weight:600;")
+        self._control_layout.addWidget(hint)
+        self._dxvkcfg_extra = QLineEdit("; ".join(extras))
+        self._dxvkcfg_extra.setStyleSheet(self._EDIT_SS)
+        self._dxvkcfg_extra.setPlaceholderText(ev.placeholder)
+        self._dxvkcfg_extra.setFixedHeight(32)
+        self._dxvkcfg_extra.textChanged.connect(lambda _t: self._on_dxvkcfg_text())
+        self._control_layout.addWidget(self._dxvkcfg_extra)
+
+    def _dxvkcfg_value(self) -> str:
+        parts = []
+        for key in DXVK_CONFIG_KEY_NAMES:
+            w = self._dxvkcfg_widgets.get(key)
+            v = (w.currentText() if isinstance(w, QComboBox) else w.text()).strip() if w else ""
+            if v:
+                parts.append(f"{key} = {v}")
+        extra = self._dxvkcfg_extra.text().strip() if hasattr(self, "_dxvkcfg_extra") else ""
+        parts += [p.strip() for p in extra.split(";") if p.strip()]
+        return "; ".join(parts)
+
+    def _on_dxvkcfg_text(self):
+        """Text rows: debounce like other free-text fields."""
+        v = self._dxvkcfg_value()
+        self._update_value_badge(v)
+        self._pending_value = v
+        self._debounce_timer.start(200)
 
     def _apply_flag_btn_style(self, btn: QPushButton):
         btn.setStyleSheet("""
@@ -6174,7 +6516,7 @@ QPushButton:checked{
         if not hasattr(self, '_vkd3d_btns'):
             return
         active = [f for f, btn in self._vkd3d_btns.items() if btn.isChecked()]
-        self._set_value(",".join(active))
+        self._set_value(",".join(active + getattr(self, "_vkd3d_extra", [])))
 
     def _build_flags(self, ev: EnvVarDef, cur: str):
         """
