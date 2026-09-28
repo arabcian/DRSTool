@@ -1,94 +1,175 @@
-# ⚠️ DISCLAIMER
+# Legion Power Manager
 
-**USE AT YOUR OWN RISK.** This software is provided as-is without warranty of any kind. By using DRSTool, you acknowledge that:
+**Legion Space / Vantage for Linux — and then some.**
+One tray app for Lenovo Legion laptops: power profiles, firmware power limits,
+fan curves, CPU and GPU undervolting, per-key RGB, system tuning for games,
+and *Scenes* that switch all of it with one click or when you plug in the charger.
 
-1. **You accept all responsibility** for any damage, data loss, system instability, or hardware damage that may result from using this tool.
-2. **Modifying driver settings can cause serious issues** including driver crashes, GPU hangs, system freezes, or GPU damage if incorrectly configured.
-3. **This project was developed with AI assistance.** While the code has been reviewed and tested, AI-assisted development may contain subtle bugs or edge cases not caught during testing.
-4. **No liability.** The developers and contributors assume no liability for direct or indirect damages caused by this software.
+Native Qt6 GUI, privileged work in small Rust helpers, no background daemon
+required, no telemetry, works on OpenRC and systemd.
 
-**Before using:** Test settings on non-critical systems first, back up your working configuration, and keep a recovery method available. If you experience driver issues, completely unset the environment variables and restart your display server/system.
+> ⚠️ This tool writes low-level hardware and firmware settings.
+> Read [DISCLAIMER.md](DISCLAIMER.md) before using it.
 
----
+## Features
 
-                                                              SCREENSHOTS
+| Tab | What you get |
+|---|---|
+| **Home** | Power profile (Quiet → Performance → Custom), live sensors (CPU per-CCD, dGPU, iGPU, fans, NVMe, power, battery), fan control and custom fan curve, battery charge mode, GPU mode (Hybrid / dGPU only), Fn-lock, camera, USB charging, memory timings viewer |
+| **Scenes** | One name for the whole machine — power profile, firmware limits, CPU/GPU curves, tuning preset, keyboard lighting, a custom command. Automatic AC / battery switching, game-start scene, export / import |
+| **Firmware Attributes** | CPU PL1/PL2/PL3, temperature targets, GPU cTGP and Dynamic Boost — including the values the kernel refuses to write |
+| **NVIDIA Curve Optimizer** | Drag-and-edit V/F curve, core/memory offsets, named profiles, apply at boot |
+| **Ryzen Curve Optimizer** *(AMD)* | Per-core and all-core Curve Optimizer, CPPC-ranked cores, profiles |
+| **Intel Undervolt** *(Intel)* | Voltage offsets, IccMax, TCC offset, PL1/PL2, AC/battery profiles, ThrottleStop.ini import, live throttle monitor |
+| **Optimizations** | ~60 documented kernel/scheduler/memory/storage knobs, built-in presets, game launch hooks for Lutris and Steam, boot-parameter advisor, one-click *Restore originals* |
+| **Lighting** *(Gen10 Spectrum keyboards)* | Per-key RGB editor on a drawing of your own keyboard, firmware effects, 6 hardware profiles, brightness, lid logo, accent lights |
 
-<img width="1970" height="1467" alt="Screenshot_20260721_125100" src="https://github.com/user-attachments/assets/8e3e741d-17a7-4ce1-818b-3bedc1da8c81" />
-<img width="1970" height="1467" alt="Screenshot_20260721_125043" src="https://github.com/user-attachments/assets/e21120ab-af87-454a-a086-5f3ea99cec29" />
-<img width="1970" height="1467" alt="Screenshot_20260721_125017" src="https://github.com/user-attachments/assets/a29ad67f-4a9b-47f4-a44a-1ac8916d458d" />
-<img width="1970" height="1467" alt="Screenshot_20260721_124954" src="https://github.com/user-attachments/assets/8a5467e1-75b9-4f8e-ac8a-9cd526e87b30" />
-<img width="1970" height="1467" alt="Screenshot_20260721_124937" src="https://github.com/user-attachments/assets/0db5a47d-2f13-4af8-913a-7bdec1d239b1" />
-<img width="1970" height="1467" alt="Screenshot_20260721_124900" src="https://github.com/user-attachments/assets/51dc442c-b37c-4476-95d9-506fd12ffb56" />
+Everything important is also in the **tray menu**. Every setting has a tooltip
+that explains what it does and what value to use.
 
+Built to be safe to experiment with: root helpers validate every value,
+a **boot guard** pauses boot-time presets after a crash, the login scene has
+the same protection, and firmware-persistent changes (BIOS memory timings,
+BIOS CPU OC, GPU MUX) always ask for the administrator password.
 
-# DRSTool
+## Supported hardware
 
-**DRSTool** is a PySide6 desktop GUI for building `DXVK_NVAPI_DRS_SETTINGS` strings on Linux — the DXVK-NVAPI equivalent of NVIDIA Profile Inspector on Windows. It exists because tuning NVIDIA driver behavior for a game running through Proton/DXVK on Linux normally means hand-writing long, error-prone environment-variable strings from memory or scattered wiki pages. DRSTool turns that into a searchable, documented, point-and-click editor and lets you save the result as a reusable profile per game.
+**Lenovo Legion, LOQ and IdeaPad Gaming laptops only.** The program checks the
+machine at start (DMI vendor and model name) and refuses to run anywhere else —
+the GUI shows why and exits, and every root helper refuses before touching
+hardware, because the firmware and EC settings it writes are Lenovo-specific.
 
-## What it does
+- **Developed and tested on:** Lenovo Legion Pro 7 16AFR10H (Ryzen 9 9955HX3D, RTX 5080).
+- **Should work on:** other Legion / LOQ models whose kernel exposes
+  `lenovo-wmi-gamezone`, `lenovo-wmi-other` and `ideapad_laptop` — tabs and
+  rows only appear when the hardware and driver behind them exist.
+- **Model-specific (16AFR10H BIOS):** custom fan curve, BIOS memory timings,
+  GPU power limits via WMI, GPU MUX switch.
+- **Lighting tab:** Legion Gen10 keyboards with the Spectrum controller
+  (USB `048d:c1xx`). Other Legion keyboards are planned.
+- Intel Legion support has been checked against a Core Ultra 7 255HX.
 
-DRSTool lets you:
+Reports from other models are very welcome — open an issue with your model
+number (e.g. `83F5`) and what worked.
 
-- Browse and set **NVIDIA Driver Settings (DRS)** — the same low-level settings NVIDIA Profile Inspector exposes on Windows, reimplemented here for `dxvk-nvapi`'s `DXVK_NVAPI_DRS_SETTINGS` environment variable.
-- Pick a **GPU architecture** so DRSTool generates the correct `DXVK_NVAPI_GPU_ARCH` value for your card.
-- Configure **DXVK**, **VKD3D-Proton**, and NVIDIA `__GL_*` environment variables through the same searchable, documented interface, instead of memorizing variable names and valid values.
-- Configure the **vk_flip_meter (FLM)** frame-pacing layer's runtime variables and build/install the layer itself from source.
-- Save and reload **profiles** (a full snapshot of DRS settings + GPU arch + env vars) per game, and copy the final combined `KEY=VALUE ...` string ready to paste into a launch script, Steam launch options, or a Lutris config.
+## Install
 
-In short: point, click, describe, copy — instead of writing hex-coded driver settings by hand.
+### From source
 
-## Why it exists
+```sh
+git clone <this repository> legion-power-manager
+cd legion-power-manager
+sudo ./install.sh
+```
 
-On Windows, NVIDIA Profile Inspector is the standard tool for tweaking per-game driver behavior beyond what the NVIDIA Control Panel exposes. On Linux there was no equivalent GUI for the `dxvk-nvapi` settings that let you replicate that same fine-grained control for Proton/Wine games — you had to know the hex setting IDs and valid values ahead of time. DRSTool fills that gap with human-readable names, descriptions, and per-setting editors, built specifically for the Linux gaming stack (DXVK, VKD3D-Proton, dxvk-nvapi, vk_flip_meter).
+`install.sh` builds everything tuned for this machine (native CPU, LTO, PGO,
+hardening) and installs to `/usr`. Options: `--no-native` for portable
+binaries, `--no-lto`, `--no-pgo`, `--no-harden`, `--remove-legacy` to remove
+the old Python version. Remove with `sudo ./uninstall.sh`.
+
+To build with clang/LLVM instead of GCC: `sudo ./install-clang.sh` (same options;
+uses lld when installed and `llvm-profdata` for PGO).
+
+### Gentoo
+
+```sh
+./make-dist.sh    # → dist/legion-power-manager-2.0.0.tar.xz (crates vendored, builds offline)
+```
+
+Copy the tarball into your `DISTDIR` and emerge the ebuild from
+`packaging/gentoo/sys-power/legion-power-manager/` in a local overlay.
+
+### After installing
+
+1. Log out and back in once (the keyboard lighting udev rule and polkit rules take effect).
+2. Start **Legion Power Manager** from the menu — it lives in the tray
+   (`legion-power-manager --window` opens the window directly). It also starts
+   automatically at login.
+3. Optional boot-time services — enable only the ones you use:
+
+   | Service | Applies at boot |
+   |---|---|
+   | `lpm-boot-guard` | crash protection for everything below (recommended) |
+   | `nvcurve-autoload` | the ★ default GPU curve |
+   | `lpm-tune` | the ⏻ Optimizations boot preset (OpenRC runlevel `boot`) |
+   | `lpm-intel-uv` / `lpm-intel-uv-daemon` | Intel undervolt (Intel only) |
+
+   ```sh
+   rc-update add nvcurve-autoload default     # OpenRC
+   systemctl enable nvcurve-autoload          # systemd
+   ```
+
+   Services do nothing until you set a default / boot preset in the GUI.
+
+## Quick start
+
+- **Change the power profile:** Home → pick a card, or tray → *Power Profile*.
+- **Undervolt the GPU:** NVIDIA tab → *Read Current Curve* → set an offset or drag
+  points → *Apply Offsets* → *Save As…* → ★ *Default* to apply it at boot.
+- **Undervolt the CPU:** Ryzen tab → all-core or per-core offset → *Apply* → save a profile.
+- **Tune for games:** Optimizations → choose a preset → *Load* → *Apply checked*;
+  ★ *Use for games* and paste the shown hook into Lutris / Steam.
+- **One-click setups:** Scenes → *New…* → pick a profile for each component →
+  *Save*. Turn on *Switch scenes with the power source* for AC / battery.
+- **Keyboard colours:** Lighting → select keys (click, drag, Ctrl-click) →
+  *Paint selection* → *Apply to profile*.
+
+Nothing is applied permanently by accident: tuning can always be undone with
+*Restore originals*, curves with *Reset*, lighting with *Factory reset profile*.
 
 ## Requirements
 
-- Python ≥ 3.7
-- PySide6 ≥ 6.10
-- For the vk_flip_meter build/install feature: `cmake`, a C++ compiler, and `pkexec` (PolicyKit) available on the system
+**Build:** Rust ≥ 1.75 (cargo), a C++20 compiler, CMake ≥ 3.19, Qt ≥ 6.4
+(Widgets, Network).
 
-## Running
+**Runtime:**
 
-```bash
-python3 DRSTool.py
-```
+| Needed for | Dependency |
+|---|---|
+| everything | polkit (`pkexec`), Linux with `platform_profile` |
+| firmware limits, fans, battery, device toggles | kernel drivers `lenovo-wmi-gamezone`, `lenovo-wmi-other`, `ideapad_laptop` |
+| GPU power limits, fan curve, GPU mode, instant boot | `acpi_call` kernel module |
+| NVIDIA tab | proprietary NVIDIA driver (NvAPI / NVML are loaded at runtime) |
+| Ryzen tab | root-owned `ryzenadj` in `/usr/bin`, `/usr/sbin`, `/usr/local/{bin,sbin}` or `/opt/ryzenadj` |
+| live memory timings, extra CPU sensors *(optional)* | `ryzen_smu`, `zenpower` / `zenergy` |
+| BIOS memory timings | efivarfs (`/sys/firmware/efi/efivars`) |
+| Lighting tab without a password | udev + systemd-logind or elogind (`uaccess`) |
 
-## Interface overview
+Missing pieces only disable the tab or row that needs them.
 
-The app is a single window split into a left sidebar (list/navigation) and a right editor panel, with a persistent output bar across the top showing the currently generated environment string. Five tabs switch what the sidebar/editor show:
+## How it works
 
-### 1. DRS Settings
-A searchable, categorized list of **118 driver settings** across categories such as OpenGL, Anti-Aliasing, Texture Filtering, VSync/Flip, Frame Rate, Power, SLI, Stereo, VRR/G-Sync, DLSS/NGX, Ansel, FXAA, AO, Optimus, and Misc. Each setting has a short description and a longer detailed description, plus the correct control type — enum dropdown, numeric spinner, or bitfield checkboxes — matching how the underlying value is actually encoded. Selecting a setting opens its editor on the right; setting a value updates the output bar and highlights the setting green in the sidebar list.
+The GUI runs as your user and never touches hardware directly. Each kind of
+change goes through a small Rust helper in `/usr/libexec/legion-power-manager/`
+that reads one JSON request, validates it against fixed paths and live
+kernel ranges, and exits. polkit lets a `wheel` user at the machine run them
+without a password; firmware-persistent changes always ask. The keyboard
+lighting helper normally runs as you, through a udev `uaccess` rule.
 
-### 2. GPU Arch
-A list of NVIDIA GPU architecture families (Maxwell through Blackwell, i.e. GeForce 900-series through RTX 50-series) with example cards for each. Selecting one sets `DXVK_NVAPI_GPU_ARCH` in the output string, since some DRS settings only apply correctly when the driver knows which architecture it's dealing with.
+More: [docs/TECHNICAL.md](docs/TECHNICAL.md) — every tab in detail, the
+tuning guide, file locations, services and design notes.
 
-### 3. DXVK / VKD3D / NV / FLM
-A single combined, categorized, searchable list covering:
-- **DXVK** environment variables (HUD flags, logging, device/frame-related options, etc.) — 15 variables
-- **VKD3D-Proton** environment variables, including the `VKD3D_CONFIG` flag grid — 16 variables
-- **NVIDIA `__GL_*`** variables — 31 variables
-- **vk_flip_meter (FLM)** runtime variables (`FLM_MODE`, `FLM_TARGET_FPS`, `FLM_MFG_MULTIPLIER`, etc.) — 16 variables
+## Credits and inspiration
 
-Each variable is typed (string, enum, bool, integer, or flag-set) and gets the matching editor control — text field, dropdown, checkbox, or a checkbox grid for multi-flag variables like `DXVK_HUD` and `VKD3D_CONFIG`. Values you set here are merged into the same combined output string as the DRS settings.
+- **[Lenovo Legion Toolkit](https://github.com/LenovoLegionToolkit-Team/LenovoLegionToolkit)**
+  (GPL-3.0) — the reference for Legion hardware on Windows. The Spectrum
+  keyboard protocol, the keyboard ID table and the lighting effect rules were
+  learned from its source; the code here is an independent Rust / C++
+  implementation. Thank you to Bartosz Cichecki, the LenovoLegionToolkit-Team
+  and every LLT contributor.
+- **[legion-spectrum-control](https://github.com/alstergee/legion-spectrum-control)**
+  (MIT) — key legends for the Lighting tab; confirmed the Gen10 keyboard layout.
+- **Lenovo Legion Space / Vantage** — the feature set this app brings to Linux.
+- **The Linux kernel `lenovo-wmi-*` and `ideapad_laptop` drivers**, **RyzenAdj**,
+  **ThrottleStop**, **intel-undervolt** and **throttled** — for the interfaces
+  and ideas the CPU tabs build on.
+- **[LenovoLegionLinux](https://github.com/johnfanv2/LenovoLegionLinux)** — for
+  paving the way for Legion support on Linux.
 
-### 4. Profiles
-Save the entire current state — DRS settings, GPU architecture, and all env vars — under a name, then reload or delete it later. Profiles are stored as JSON under `$XDG_CONFIG_HOME/drstool/profiles.json` (falling back to `~/.config/drstool/profiles.json`), written atomically to avoid corruption on crash/power-loss. Existing installs using the old `~/.drs_configurator_profiles.json` location are migrated automatically on first run.
+Third-party license texts: [NOTICE](NOTICE).
 
-### 5. vk_flip_meter
-A build/install panel for the vk_flip_meter Vulkan layer, bundled as a subproject in this repository. It locates or lets you browse to the layer's source, then runs an unprivileged `cmake` configure + build, and only escalates to `pkexec` for the two steps that actually need root: `cmake --install` and a manifest library-path fixup. This keeps almost the entire build pipeline running as your normal user, only prompting for a password (via a graphical polkit dialog) at the last possible moment.
+## License
 
-Runtime tuning of the layer (`FLM_MODE`, `FLM_TARGET_FPS`, etc.) is not done on this tab — it's one click away on the "Environment" tab, using the same editor as everything else, and is folded into the combined output string automatically.
-
-## Output bar
-
-Across the top of the window, DRSTool continuously shows the combined environment string generated from your current DRS settings, GPU arch, and env vars, along with a "Copy all" action (plain shell form, or Steam launch options ending in `%command%`) — ready to drop directly into a Lutris/Steam launch-options field or a shell script. Each value box is click-to-copy and elides long strings instead of widening the window.
-
-## Design notes
-
-- **Signal-driven state**: a central `SettingsManager` (a `QObject`) is the single source of truth for DRS settings, GPU arch, and profiles, emitting distinct Qt signals (`settings_changed`, `arch_changed`, `profiles_changed`, `profile_loaded`) so UI widgets only rebuild what actually changed — e.g. the profile list only refreshes on `profiles_changed`, not on every single setting edit.
-- **Atomic profile writes**: profiles are written to a temp file and `os.replace()`'d into place, with an `fsync()` beforehand, so a crash mid-save can't corrupt the profiles file.
-- **Shell-safe output**: the combined env string is built with `shlex.quote()`, so values containing spaces or special characters are quoted correctly instead of silently breaking when pasted into a shell.
-- **Keyboard shortcuts:** Ctrl+F filter, Esc clear filter, Ctrl+1…5 switch tabs, Ctrl+S save to the loaded profile, Ctrl+Shift+C copy the launch string. Window size, splitter position and the last tab are remembered.
-- **Unsaved-changes indicator:** once a profile is loaded, any edit marks it (window title "•", highlighted Save button, profile name in the tab bar).
-- **Dark, NVIDIA-green-accented UI** styled consistently across all tabs (list headers, selection highlighting, scrollbars) via shared Qt stylesheets.
+Copyright © 2026 arabcian.
+Free software under the **GNU General Public License v3.0 or later** — see
+[LICENSE](LICENSE). No warranty; see [DISCLAIMER.md](DISCLAIMER.md).
