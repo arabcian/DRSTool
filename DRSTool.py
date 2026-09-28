@@ -4520,276 +4520,87 @@ FLM_ENV_VARS: List[EnvVarDef] = [
               "Syntax: DISABLE_LAYER_cpu_flip_meter=1 %command%",
               options=["1"]),
 
-    EnvVarDef("FLM_PROFILE", "vk_flip_meter", "enum", "",
-              "v2.8/FIX-76: single-knob preset. Selects a named, tested point in the "
-              "tuning space instead of hand-picking a dozen interacting values. "
-              "off: layer inactive (A/B baseline). vrr: VRR panel without frame "
-              "generation. mfg: VRR + frame generation — the case floor-pacing exists "
-              "for (raises FLM_FLOOR_AUTOTUNE_MAX to 400). latency: input lag first — "
-              "looser floor (780), shorter present lead (0.5ms), fast hitch recovery. "
-              "cap: fixed-refresh panel with an FPS ceiling — switches to LIMITER and "
-              "disables the floor family, which is a guaranteed no-op on that path "
-              "(FIX-42); still requires FLM_TARGET_FPS. "
-              "The profile is applied FIRST, so any FLM_* variable you set explicitly "
-              "still overrides it — the profile sets the baseline, not the ceiling. "
-              "Only covers hot-reloadable keys; load-time-only ones "
-              "(FLM_MFG_MULTIPLIER, FLM_RT_PRIORITY, FLM_MEASURE_CPU, FLM_STATS, "
-              "FLM_CSV, FLM_LOG_FILE) are deliberately excluded. Hot-reloadable. "
-              "Syntax: FLM_PROFILE=mfg %command%",
-              options=["off", "vrr", "mfg", "latency", "cap"]),
-
     EnvVarDef("FLM_MODE", "vk_flip_meter", "enum", "auto",
-              "Operating mode. auto: uses PACER if presentWait is available, otherwise "
-              "LIMITER (if FLM_TARGET_FPS is set). present: forces the PACER, for frametime "
-              "correction on a VRR panel (requires WaitForPresentKHR). limiter: a pure FPS "
-              "limiter that doesn't need presentWait — the most reliable/predictable effect, "
-              "works on any driver. off: layer loaded but inactive (useful as an A/B test "
-              "baseline). "
-              "Syntax: FLM_MODE=limiter FLM_TARGET_FPS=120 %command%",
-              options=["auto", "present", "limiter", "off"]),
-
-    EnvVarDef("FLM_PACE_FIFO", "vk_flip_meter", "enum", "0",
-              "Forces frame pacer to run even when FIFO swapchain modes are enabled. "
-              "This creates possibility for pacer to fight with FIFO mechanism "
-              "For testing. "
-              "Syntax: FLM_PACE_FIFO=1",
-              options=["0", "1"]),
+              "v3.0: the layer configures itself — frame-generation multiplier, floor "
+              "ratio, spin margin, hitch handling and FIFO fixed-refresh/VRR detection are "
+              "all automatic. auto: FPS cap if FLM_TARGET_FPS>0, otherwise the floor pacer "
+              "wherever it can help (presentWait + MAILBOX/IMMEDIATE, or FIFO whose "
+              "measured cadence is VRR). latency: like auto with a looser floor and faster "
+              "hitch recovery. present: like auto, but also paces FIFO swapchains judged "
+              "fixed-refresh. cap: limiter only (needs FLM_TARGET_FPS). off: layer loaded "
+              "but inactive (A/B baseline). The legacy FLM_PROFILE=vrr|mfg|latency|cap|off "
+              "and FLM_MODE=limiter are still accepted as aliases. Hot-reloadable. "
+              "Syntax: FLM_MODE=latency %command%",
+              options=["auto", "latency", "present", "cap", "off"]),
 
     EnvVarDef("FLM_TARGET_FPS", "vk_flip_meter", "int", "0",
-              "Target FPS for the limiter/pacer. 0 = the engine's natural cadence (only "
-              "paces/measures, doesn't cap frames). Must be >0 for LIMITER mode to have "
-              "any effect. "
-              "Syntax: FLM_MODE=limiter FLM_TARGET_FPS=60 %command%",
-              placeholder="e.g. 60"),
+              ">0 = FPS cap (absolute-timeline limiter, no presentWait needed, works on "
+              "every driver). 0 = natural cadence: the floor pacer smooths delivery "
+              "without capping. Hot-reloadable. "
+              "Syntax: FLM_TARGET_FPS=120 %command%",
+              placeholder="e.g. 120"),
 
-    EnvVarDef("FLM_STATS_INTERVAL", "vk_flip_meter", "int", "5",
-              "How often (seconds) the FLM_STATS summary is logged. Clamped to 1-3600. "
-              "Only relevant when FLM_STATS=1. "
-              "Syntax: FLM_STATS=1 FLM_STATS_INTERVAL=10 %command%",
-              placeholder="e.g. 5 (1-3600)"),
-
-    EnvVarDef("FLM_PACE_POINT", "vk_flip_meter", "enum", "present",
-              "Which Vulkan call acts as the pacing gate point in PACER mode. present: waits "
-              "before vkQueuePresentKHR (default, lowest risk). acquire: waits before "
-              "vkAcquireNextImage(2)KHR. both: paces at both points (flatter frametime on "
-              "some engines, double latency on others). "
-              "Syntax: FLM_MODE=present FLM_PACE_POINT=acquire %command%",
-              options=["present", "acquire", "both"]),
-
-    EnvVarDef("FLM_PRESENT_LEAD_NS", "vk_flip_meter", "int", "1000000",
-              "How long before the flip target (in nanoseconds) the PACER issues the present "
-              "call. Default 1ms (1000000 ns). Increase if driver/compositor submit latency "
-              "is high; can be lowered on low-latency systems like the RTX 4080M. "
-              "Syntax: FLM_MODE=present FLM_PRESENT_LEAD_NS=1500000 %command%",
-              placeholder="e.g. 1000000"),
-
-    EnvVarDef("FLM_SPIN_NS", "vk_flip_meter", "int", "150000",
-              "Window (ns) of active waiting via _mm_pause/sched_yield instead of "
-              "clock_nanosleep as the target time approaches. 0 = fully sleep-based waiting "
-              "(minimal CPU use, slightly less precise); higher values are more precise but "
-              "burn more CPU. On fast systems like the RTX 4080M/7845HX, 20000-25000 is "
-              "usually enough. "
-              "Syntax: FLM_SPIN_NS=20000 %command%",
-              placeholder="e.g. 20000"),
-
-    EnvVarDef("FLM_DRIFT_TOLERANCE_NS", "vk_flip_meter", "int", "0",
-              "How much deviation (ns) from the slot average is allowed before it's "
-              "corrected gradually (soft-slew). 0 = automatic (~1/4 of the interval). "
-              "Syntax: FLM_DRIFT_TOLERANCE_NS=2000000 %command%",
-              placeholder="e.g. 2000000 (0=automatic)"),
+    EnvVarDef("FLM_FLOOR_RATIO", "vk_flip_meter", "int", "",
+              "Optional override of the floor pacer's base ratio (500-1000; 1000 = one "
+              "full slot). Unset = mode default (auto 850, latency 780). The closed loop "
+              "still adjusts around it per frame-generation multiplier, and the ratchet "
+              "guard still keeps the floor below the slot. Higher = flatter, lower = less "
+              "held. Leave unset unless A/B data says otherwise. Hot-reloadable. "
+              "Syntax: FLM_FLOOR_RATIO=900 %command%",
+              placeholder="unset = auto"),
 
     EnvVarDef("FLM_MFG_MULTIPLIER", "vk_flip_meter", "enum", "0",
-              "Sets the Motion Frame Generation multiplier. 0 = autodetect (based on a "
-              "threshold against the slot average: interval < 0.7·mean — fixed in v2.1 "
-              "[FIX-17]). 1-4 = force the multiplier manually (useful on engines where "
-              "autodetect misfires). "
-              "Syntax: FLM_MFG_MULTIPLIER=3 FLM_TARGET_FPS=60 %command%",
+              "Frame-generation multiplier. 0 = auto-detect (default; re-checked "
+              "periodically, follows in-game changes). 1-4 = force. Load-time only. "
+              "Syntax: FLM_MFG_MULTIPLIER=4 %command%",
               options=["0", "1", "2", "3", "4"]),
 
-    EnvVarDef("FLM_FLOOR_PACING", "vk_flip_meter", "enum", "1",
-              "FIX-36 floor-pacing, for a VRR panel + Frame Generation (DLSS-FG/FSR-FG) "
-              "on GPUs without hardware flip metering (e.g. RTX 40-series), where "
-              "generated frames land unevenly (short/short/short/long — ε,ε,ε,T pattern) "
-              "and are felt as micro-judder on the panel. Only takes effect on the PACER "
-              "path (FLM_TARGET_FPS=0); has no effect once FLM_TARGET_FPS>0 switches to "
-              "LIMITER. Real frames are passed through untouched; only the ε-spaced "
-              "generated frame is held back. Already on by default; set to 0 to fall back "
-              "to the old absolute-grid pacer. "
-              "Syntax: FLM_MODE=present FLM_FLOOR_PACING=1 FLM_FLOOR_RATIO=850 %command%",
-              options=["0", "1"]),
-
-    EnvVarDef("FLM_FLOOR_RATIO", "vk_flip_meter", "int", "850",
-              "The floor-pacing knob to actually feel your way through. A frame is allowed "
-              "to land at earliest floor_ratio/1000 of the slot width after the previous "
-              "one — 850 = at least 85% of the slot. Higher (900-950) = stricter floor, "
-              "flatter frame spacing, fixes remaining micro-judder/MFG rhythm feel. Lower "
-              "(700-750) = looser floor, some natural jitter returns but input feels less "
-              "sticky/heavy. Sensible range 700-950. Doesn't help with real one-off stutter "
-              "(shader-comp hitches) — those are already passed through by the "
-              "hitch_active guard regardless of this value. "
-              "Syntax: FLM_MODE=present FLM_FLOOR_PACING=1 FLM_FLOOR_RATIO=900 %command%",
-              placeholder="e.g. 850 (700-950 sensible range)"),
-
-    EnvVarDef("FLM_FLOOR_MFG_ADAPT", "vk_flip_meter", "enum", "0",
-              "FIX-41: lets the floor ratio adapt automatically to the detected MFG "
-              "multiplier instead of staying fixed at FLM_FLOOR_RATIO. Useful when the "
-              "game switches between 2x/3x/4x Frame Generation at runtime and a single "
-              "static ratio doesn't fit every multiplier equally well. "
-              "Syntax: FLM_MODE=present FLM_FLOOR_PACING=1 FLM_FLOOR_MFG_ADAPT=1 %command%",
-              options=["0", "1"]),
-
-    EnvVarDef("FLM_FLOOR_MFG_STEP", "vk_flip_meter", "int", "0",
-              "FIX-41: step size (0-200, floor_ratio/1000 units) applied per MFG multiplier "
-              "increment when FLM_FLOOR_MFG_ADAPT=1. 0 = adaptation disabled even if "
-              "FLM_FLOOR_MFG_ADAPT is set. Higher values tighten the floor more aggressively "
-              "as the multiplier increases. "
-              "Syntax: FLM_FLOOR_MFG_ADAPT=1 FLM_FLOOR_MFG_STEP=25 %command%",
-              placeholder="e.g. 25 (0-200)"),
-
-    EnvVarDef("FLM_FLOOR_AUTOTUNE", "vk_flip_meter", "enum", "1",
-              "FIX-44: closed-loop floor-ratio adjustment. Tightens the ratio slowly when "
-              "headroom is ample (flattens intervals), loosens it quickly on consecutive "
-              "holds / thin headroom (prevents braking). The autotune delta "
-              "[-150,+FLM_FLOOR_AUTOTUNE_MAX] stacks on top of the base FLM_FLOOR_RATIO "
-              "and the MFG-adapt offset. On by default; set to 0 for the old fixed-ratio "
-              "behaviour (the ratio then stays exactly at FLM_FLOOR_RATIO / its "
-              "MFG-adapted value). Hot-reloadable via FLM_CONFIG + SIGUSR1. "
-              "Syntax: FLM_FLOOR_PACING=1 FLM_FLOOR_AUTOTUNE=0 FLM_FLOOR_RATIO=850 %command%",
-              options=["0", "1"]),
-
-    EnvVarDef("FLM_FLOOR_AUTOTUNE_MAX", "vk_flip_meter", "int", "300",
-              "v2.7/FIX-63: positive ceiling of the closed-loop autotune delta (0-500). "
-              "At m=4 the FIX-56 static relaxation already spends 240 ratio units, so the "
-              "old fixed +150 ceiling capped the effective floor at 0.19T — below the ideal "
-              "0.25T of a perfectly uniform 4x slot. Raising this lets the closed loop "
-              "actually reach the optimum; the m-scaled loosen brake still fires first if a "
-              "real frame gets held, so headroom is not wasted. "
-              "Main smoothness knob: try 400 at m=4 if hitch% stays near zero, "
-              "fall back to 150 for exact v2.6 behaviour. "
-              "Since v2.8 (FIX-74) a high value here is no longer dangerous: the "
-              "ratchet guard bounds the floor at slot_iv minus the measured wakeup "
-              "margin, so the effective ratio can never reach the full slot width and "
-              "close the floor -> interval -> slot_iv -> floor feedback loop that "
-              "used to decay the frame rate monotonically. Hot-reloadable. "
-              "Syntax: FLM_FLOOR_AUTOTUNE=1 FLM_FLOOR_AUTOTUNE_MAX=400 %command%",
-              placeholder="e.g. 300 (0-500)"),
-
     EnvVarDef("FLM_MEASURE_CPU", "vk_flip_meter", "string", "",
-              "CPU cores the measurement thread (std::jthread) is pinned to — useful for "
-              "CCD isolation (e.g. keeping rendering on one CCD and measurement on the "
-              "other). Accepts a single core, a range, or a comma list of both "
-              "(v2.6/FIX-59): 5, 0-3, 4,5,6, 0-3,8,10-11. Defaults to cores-2 if left "
-              "empty. "
+              "CPU affinity of the measurement thread — comma list of cores/ranges, "
+              "e.g. '0-3,8'. Useful with CCD isolation. Load-time only. "
               "Syntax: FLM_MEASURE_CPU=0-3 %command%",
-              placeholder="e.g. 0-3 or 4,5,6"),
+              placeholder="e.g. 0-3"),
 
     EnvVarDef("FLM_RT_PRIORITY", "vk_flip_meter", "int", "0",
-              "SCHED_FIFO real-time priority (0-99) for the measurement thread. Requires "
-              "CAP_SYS_NICE; silently falls back to normal priority with a WARN log if not "
-              "permitted. "
+              "SCHED_FIFO priority of the measurement thread (1-99, needs CAP_SYS_NICE). "
+              "0 = normal scheduling. Load-time only. "
               "Syntax: FLM_RT_PRIORITY=40 %command%",
-              placeholder="e.g. 40 (0=off)"),
-
-    EnvVarDef("FLM_SPIN_ADAPT", "vk_flip_meter", "enum", "0",
-              "FIX-39: lets FLM_SPIN_NS adapt at runtime instead of staying fixed, based on "
-              "observed wake-up jitter. Useful on systems where scheduler latency varies "
-              "(e.g. under thermal throttling or background load) so the spin window doesn't "
-              "need to be hand-tuned for a single steady state. "
-              "Syntax: FLM_SPIN_ADAPT=1 FLM_SPIN_NS=20000 %command%",
-              options=["0", "1"]),
-
-    EnvVarDef("FLM_WARMUP_FRAMES", "vk_flip_meter", "int", "30",
-              "v2.7/FIX-71: number of frames before the pacing gate opens. During warmup "
-              "the layer measures but does not pace. 30 is enough for most games; increase "
-              "for titles with long engine-init sequences after the loading screen where "
-              "the first frames are wildly uneven. Decrease with caution — too few frames "
-              "gives the T estimator no baseline, which can produce a spurious hitch on "
-              "the very first gated frame. Hot-reloadable. "
-              "Syntax: FLM_WARMUP_FRAMES=60 %command%",
-              placeholder="e.g. 30"),
-
-    EnvVarDef("FLM_HITCH_RECOVERY", "vk_flip_meter", "int", "8",
-              "v2.7/FIX-71: frames of suspended pacing after a hitch is detected. During "
-              "recovery the gate resets its anchor and passes frames through untouched so "
-              "the pipeline can drain cleanly. Lower (e.g. 4) = fewer pacing dropouts if "
-              "hitches are frequent; higher (e.g. 16) = more time for the GPU queue to "
-              "drain after a shader/traversal stall. Hot-reloadable. "
-              "Syntax: FLM_HITCH_RECOVERY=4 %command%",
-              placeholder="e.g. 8"),
-
-    EnvVarDef("FLM_HITCH_THRESHOLD_MS", "vk_flip_meter", "int", "0",
-              "v2.7/FIX-71: hitch detection threshold in milliseconds. 0 = adaptive "
-              "(max(1.5×T, T+2ms), capped at T+30ms — matches frame delivery to engine "
-              "cadence automatically). >0 pins an absolute threshold: useful when a game's "
-              "natural frametime tail is wide (physics ticks, streaming hitches) and the "
-              "adaptive formula keeps firing, causing pacing dropouts that cost more "
-              "smoothness than the hitches they react to. Hot-reloadable. "
-              "Syntax: FLM_HITCH_THRESHOLD_MS=25 %command%",
-              placeholder="e.g. 25 (0=adaptive)"),
-
-    EnvVarDef("FLM_PROBE_PERIOD_S", "vk_flip_meter", "int", "10",
-              "v2.7/FIX-65: how often (seconds) the MFG multiplier re-detection probe runs "
-              "(FIX-47). 0 = disable probing entirely — only safe when FLM_MFG_MULTIPLIER "
-              "is forced, otherwise the FIX-47 detection deadlock comes straight back. "
-              "During a v2.7 probe the floor pacer no longer stands fully down; it applies "
-              "a half floor so the periodic unpaced burst from v2.6 is eliminated. "
-              "Hot-reloadable. "
-              "Syntax: FLM_PROBE_PERIOD_S=30 %command%",
-              placeholder="e.g. 10"),
-
-    EnvVarDef("FLM_PROBE_FLIPS", "vk_flip_meter", "int", "24",
-              "v2.7/FIX-65: length of each MFG re-detection probe in flips. The probe "
-              "collects raw (unforced) intervals to count the fraction of short "
-              "(generated) frames. During the probe the floor gate applies a half floor "
-              "instead of standing down completely, keeping every generated-frame interval "
-              "inside the detector's 0.7×slot_mean class while halving the probe's "
-              "amplitude compared to v2.6. 0 = disable probing (same as "
-              "FLM_PROBE_PERIOD_S=0). Hot-reloadable. "
-              "Syntax: FLM_PROBE_FLIPS=32 %command%",
-              placeholder="e.g. 24"),
+              placeholder="e.g. 40"),
 
     EnvVarDef("FLM_LOG_LEVEL", "vk_flip_meter", "enum", "WARN",
-              "Log verbosity. DEBUG is the most verbose (close to per-frame), ERROR the "
-              "quietest. "
-              "Syntax: FLM_LOG_LEVEL=DEBUG %command%",
+              "Log verbosity (default WARN). INFO shows the resolved config, MFG "
+              "multiplier changes and the FIFO/VRR verdict; DEBUG is near per-frame. "
+              "Removed v2.x variables are reported once at WARN. Hot-reloadable. "
+              "Syntax: FLM_LOG_LEVEL=INFO %command%",
               options=["DEBUG", "INFO", "WARN", "ERROR"]),
 
     EnvVarDef("FLM_LOG_FILE", "vk_flip_meter", "string", "",
-              "File path the log output is written to. Written to stderr if left empty "
-              "(visible for games launched from a terminal; can get lost for games launched "
-              "via Steam/Lutris, so redirecting to a file is preferred). "
+              "Log file path (default stderr, which Steam/Lutris often swallow). "
+              "Load-time only. "
               "Syntax: FLM_LOG_LEVEL=INFO FLM_LOG_FILE=/tmp/flm.log %command%",
               placeholder="e.g. /tmp/flm.log"),
 
     EnvVarDef("FLM_STATS", "vk_flip_meter", "enum", "0",
-              "If set to 1, a summary line is logged at INFO level every FLM_STATS_INTERVAL "
-              "seconds (default 5): frame count, mean, p99, max interval, and separate "
-              "fake / hitch counts (v2.6/FIX-58) — a live readout of the hitch rate and "
-              "p99 that previously required an offline FLM_CSV analysis pass. "
+              "1 = summary line every 5 s at INFO: avg, p99, max interval, fake/hitch "
+              "counts, detected multiplier, effective floor ratio (0 = pacer not running "
+              "on this swapchain) and the FIFO verdict. Load-time only. "
               "Syntax: FLM_LOG_LEVEL=INFO FLM_STATS=1 %command%",
               options=["0", "1"]),
 
     EnvVarDef("FLM_CSV", "vk_flip_meter", "string", "",
-              "CSV file path where raw per-frame measurements (present interval/latency etc.) "
-              "are dumped. Used to produce objective evidence in A/B tests (e.g. comparing "
-              "FLM_MODE=off against FLM_MODE=present). Since v2.6 (FIX-57) the file "
-              "survives swapchain recreation (resolution change, alt-tab) — data is "
-              "appended instead of the file being truncated mid-run. "
-              "Syntax: FLM_MODE=present FLM_CSV=/tmp/on.csv %command%",
+              "Per-flip measurement dump for A/B analysis (columns flip_ns, interval_ns, "
+              "is_fake, is_hitch, slot, mfg, slot_mean_ns, pacing). Survives swapchain "
+              "recreation (appends), flushed every 5 s. Load-time only. "
+              "Syntax: FLM_MODE=off FLM_CSV=/tmp/off.csv %command%",
               placeholder="e.g. /tmp/flm.csv"),
 
     EnvVarDef("FLM_CONFIG", "vk_flip_meter", "string", "",
-              "Path to a KEY=VALUE config file that enables live tuning without closing the "
-              "game. The file is re-read via an async-signal-safe flag when a SIGUSR1 signal "
-              "is sent. Supported keys: FLM_TARGET_FPS, FLM_STATS_INTERVAL, FLM_SPIN_NS, "
-              "FLM_PRESENT_LEAD_NS, FLM_DRIFT_TOLERANCE_NS, FLM_MODE, FLM_PACE_POINT, "
-              "FLM_PACE_FIFO, FLM_LOG_LEVEL, FLM_FLOOR_PACING, FLM_FLOOR_RATIO, "
-              "FLM_FLOOR_MFG_ADAPT, FLM_FLOOR_MFG_STEP, FLM_FLOOR_AUTOTUNE, "
-              "FLM_FLOOR_AUTOTUNE_MAX, FLM_SPIN_ADAPT, FLM_WARMUP_FRAMES, "
-              "FLM_HITCH_RECOVERY, FLM_HITCH_THRESHOLD_MS, FLM_PROBE_PERIOD_S, "
-              "FLM_PROBE_FLIPS (v2.7+). "
+              "KEY=VALUE file re-read on SIGUSR1 for live tuning. Hot-reloadable keys: "
+              "FLM_MODE, FLM_TARGET_FPS, FLM_FLOOR_RATIO, FLM_LOG_LEVEL (FLM_PROFILE "
+              "alias too). Each reload starts from defaults → env → file, so deleting a "
+              "line reverts it. "
               "Syntax: FLM_CONFIG=/tmp/flm.conf %command%  →  then: "
-              "echo 'FLM_TARGET_FPS=90' > /tmp/flm.conf && kill -SIGUSR1 $(pgrep -f game)",
+              "echo 'FLM_MODE=latency' > /tmp/flm.conf && kill -USR1 $(pgrep -f game)",
               placeholder="e.g. /tmp/flm.conf"),
 ]
 
@@ -6600,7 +6411,7 @@ QPushButton:checked{
         edit.setPlaceholderText(ev.placeholder or ev.default or "")
         edit.setFixedHeight(32)
         if ev.vtype == "int":
-            # Vars declared as "int" (FLM_TARGET_FPS, FLM_SPIN_NS, ...) only
+            # Vars declared as "int" (FLM_TARGET_FPS, FLM_RT_PRIORITY, ...) only
             # ever hold a non-negative integer — flip_meter.cpp atoi/atoll's
             # them and clamps. Reject non-numeric keystrokes here so a typo
             # like "6o" can't be committed and silently parsed as 6 (or 0)
@@ -7110,7 +6921,12 @@ class LutrisSyncWidget(QWidget):
         Ownership is exactly DRSTool's own catalogue. Anything not in it was
         put there by hand, by Lutris, or by another tool, and is left alone.
         """
-        return {v.name for v in ALL_ENV_VARS} | set(cls._DERIVED_ENV_KEYS)
+        # FLM v3.0 removed these knobs (now auto-tuned inside the layer).
+        # They were DRSTool's own catalogue entries, so they are still ours
+        # to remove: listing them here makes "Apply" clean old Lutris YAMLs
+        # instead of reporting them as unrecognised forever.
+        return ({v.name for v in ALL_ENV_VARS} | set(cls._DERIVED_ENV_KEYS)
+                | set(FLM_LEGACY_ENV_KEYS))
 
     def __init__(self, settings_manager: SettingsManager, parent=None):
         super().__init__(parent)
@@ -7951,22 +7767,22 @@ class LutrisSyncWidget(QWidget):
         self._update_preview()
 
 
+# FLM v2.x variables removed in v3.0 (mirrors k_legacy_keys in
+# flip_meter.cpp). Owned by DRSTool → deleted from game YAMLs on Apply.
+FLM_LEGACY_ENV_KEYS = (
+    "FLM_PACE_POINT", "FLM_PACE_FIFO", "FLM_PRESENT_LEAD_NS", "FLM_SPIN_NS",
+    "FLM_SPIN_ADAPT", "FLM_DRIFT_TOLERANCE_NS", "FLM_FLOOR_PACING",
+    "FLM_FLOOR_MFG_ADAPT", "FLM_FLOOR_MFG_STEP", "FLM_FLOOR_AUTOTUNE",
+    "FLM_FLOOR_AUTOTUNE_MAX", "FLM_WARMUP_FRAMES", "FLM_HITCH_RECOVERY",
+    "FLM_HITCH_THRESHOLD_MS", "FLM_PROBE_PERIOD_S", "FLM_PROBE_FLIPS",
+    "FLM_STATS_INTERVAL", "FLM_CSV_SYNC_S", "FLM_VERBOSE",
+)
+
 # Keys the layer accepts through the FLM_CONFIG file + SIGUSR1 hot-reload.
-# Mirrors snapshot_dynamic_env() / apply_dynamic_kv() in flip_meter.cpp —
+# Mirrors apply_dynamic_kv() in flip_meter.cpp (v3.0) —
 # keep in sync when the layer gains/loses reloadable knobs.
 FLM_RELOADABLE_KEYS = (
-    "FLM_TARGET_FPS", "FLM_STATS_INTERVAL", "FLM_SPIN_NS",
-    "FLM_PRESENT_LEAD_NS", "FLM_DRIFT_TOLERANCE_NS",
-    "FLM_MODE", "FLM_PACE_POINT", "FLM_LOG_LEVEL",
-    "FLM_PACE_FIFO",                          # [FIX-53]
-    "FLM_FLOOR_PACING", "FLM_FLOOR_RATIO",    # [FIX-36]
-    "FLM_FLOOR_MFG_ADAPT", "FLM_FLOOR_MFG_STEP",   # [FIX-41]
-    "FLM_FLOOR_AUTOTUNE",                     # [FIX-44]
-    "FLM_FLOOR_AUTOTUNE_MAX",                 # [FIX-63] v2.7
-    "FLM_SPIN_ADAPT",                         # [FIX-39]
-    "FLM_WARMUP_FRAMES", "FLM_HITCH_RECOVERY",      # [FIX-71] v2.7
-    "FLM_HITCH_THRESHOLD_MS",                       # [FIX-71] v2.7
-    "FLM_PROBE_PERIOD_S", "FLM_PROBE_FLIPS",        # [FIX-65] v2.7
+    "FLM_MODE", "FLM_PROFILE", "FLM_TARGET_FPS", "FLM_FLOOR_RATIO", "FLM_LOG_LEVEL",
 )
 
 # ============================================================================
