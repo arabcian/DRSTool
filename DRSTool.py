@@ -31,6 +31,11 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate, QStyle, QToolButton, QMenu,
 )
 import shutil
+import glob
+import signal
+import tempfile
+import time
+import platform
 
 try:
     import yaml
@@ -141,11 +146,67 @@ APP_TITLE = "DXVK NVAPI DRS Settings Configurator"
 
 # Uygulama ikonu: script'in yanındaki assets/drstool.png dosyasından yüklenir.
 # Wayland altında sistem barı/taskbar ikonu genellikle .desktop dosyasındaki
-# Icon= alanına göre eşleşir; bu yüzden hem QApplication ikonu hem de
-# ensure_desktop_entry() ile bir .desktop girdisi kaydedilir.
+# Icon= alanına göre eşleşir; paket kurulumunda .desktop girdisini ebuild
+# sağlar (bkz. main()).
 APP_ID = "drstool"
 _SCRIPT_DIR = Path(__file__).resolve().parent
 ICON_PATH = _SCRIPT_DIR / "assets" / "drstool.png"
+
+
+def _as_dict(v) -> Dict:
+    """Hand-edited profiles.json may hold null / a list where a mapping is expected."""
+    return dict(v) if isinstance(v, dict) else {}
+
+
+def find_bundled_dir(name: str, marker: str) -> Path:
+    """Locate a bundled helper source tree (vk-flip-meter-main, lutris-game-tune-main).
+
+    Checked in order: $DRSTOOL_DATA_DIR, next to this script (git checkout),
+    /usr/share/drstool and /usr/local/share/drstool (ebuild / package install,
+    where the script itself lives under /usr/lib/python-exec/ and has no
+    sibling directories)."""
+    roots: List[Path] = []
+    env = os.environ.get("DRSTOOL_DATA_DIR")
+    if env:
+        roots.append(Path(env))
+    roots += [_SCRIPT_DIR, Path("/usr/share/drstool"), Path("/usr/local/share/drstool")]
+    for root in roots:
+        if (root / name / marker).is_file():
+            return root / name
+    return _SCRIPT_DIR / name
+
+
+def user_cache_dir() -> Path:
+    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "drstool"
+
+
+def default_flm_conf_path() -> Path:
+    """Per-user, non-world-writable default for the FLM live-tuning file."""
+    rt = os.environ.get("XDG_RUNTIME_DIR")
+    if rt and os.path.isdir(rt) and os.access(rt, os.W_OK):
+        return Path(rt) / "flm.conf"
+    return Path(tempfile.gettempdir()) / f"flm-{os.getuid()}.conf"
+
+
+def detect_libdir() -> str:
+    """Distro-appropriate library directory (relative to the install prefix)."""
+    lib64 = Path("/usr/lib64")
+    if lib64.is_dir() and not lib64.is_symlink():
+        return "lib64"                                   # Gentoo, Fedora, openSUSE
+    multiarch = f"lib/{platform.machine()}-linux-gnu"
+    if Path("/usr", multiarch).is_dir():
+        return multiarch                                 # Debian / Ubuntu
+    return "lib"                                         # Arch (lib64 -> lib symlink), others
+
+
+def pkexec_auth_failed(exit_code: int, output: str) -> bool:
+    """126/127 are ambiguous: pkexec uses them for a dismissed/denied auth
+    dialog, but a missing program inside `bash -c` also exits 127. Only
+    treat them as "authorization failed" when pkexec said so."""
+    if exit_code not in (126, 127):
+        return False
+    low = output.lower()
+    return any(m in low for m in ("dismissed", "not authorized", "authentication"))
 
 try:
     import setproctitle
@@ -175,47 +236,6 @@ def apply_wayland_app_id(app_id: str) -> None:
     except Exception:
         pass
 
-
-def ensure_desktop_entry(icon_path: Path) -> None:
-    """~/.local/share/applications altına bir .desktop dosyası ve
-    ~/.local/share/icons altına ikonu kurar, böylece Wayland masaüstü
-    ortamı (GNOME/KDE/wlroots) pencereyi jenerik ikon yerine bu ikonla
-    eşleştirebilir. Sessizce başarısız olur; kritik değildir."""
-    try:
-        icons_dir = Path.home() / ".local" / "share" / "icons" / "hicolor" / "1024x1024" / "apps"
-        icons_dir.mkdir(parents=True, exist_ok=True)
-        installed_icon = icons_dir / f"{APP_ID}.png"
-        if icon_path.is_file():
-            if (not installed_icon.exists()
-                    or installed_icon.stat().st_mtime < icon_path.stat().st_mtime):
-                shutil.copyfile(icon_path, installed_icon)
-
-        apps_dir = Path.home() / ".local" / "share" / "applications"
-        apps_dir.mkdir(parents=True, exist_ok=True)
-        desktop_file = apps_dir / f"{APP_ID}.desktop"
-        exec_path = shlex.quote(str(Path(sys.argv[0]).resolve()))
-        desktop_contents = (
-            "[Desktop Entry]\n"
-            "Type=Application\n"
-            f"Name={APP_TITLE}\n"
-            f"Exec=python3 {exec_path}\n"
-            f"Icon={APP_ID}\n"
-            f"StartupWMClass={APP_ID}\n"
-            "Categories=Utility;\n"
-            "Terminal=false\n"
-        )
-        if not desktop_file.exists() or desktop_file.read_text() != desktop_contents:
-            desktop_file.write_text(desktop_contents)
-
-        # Icon cache güncellemesi (varsa); yoksa sessizce geç.
-        gtk_update = shutil.which("gtk-update-icon-cache")
-        if gtk_update:
-            import subprocess
-            base_icons_dir = Path.home() / ".local" / "share" / "icons" / "hicolor"
-            subprocess.run([gtk_update, "-f", "-t", str(base_icons_dir)],
-                           check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
 
 # Shared style for the scrollable control area added to SettingEditorWidget
 # and EnvVarEditorWidget (see _build_scrollable_control_area below). Matches
@@ -2367,7 +2387,12 @@ class SettingsManager(QObject):
         self._profiles: Dict[str, Dict] = {}
         self._current_profile: Optional[str] = None
         self._loaded_env_vars: Dict[str, str] = {}
+        self._loaded_gamescope_enabled = False
+        self._loaded_gamescope_flags: Dict[str, str] = {}
         self._all_settings = ALL_SETTINGS
+        # profile_save_error fires from the constructor before MainWindow has
+        # connected it, so the message would be lost; MainWindow re-emits this.
+        self.startup_notice: str = ""
         self._load_profiles()
 
     def get_setting(self, setting_id: str) -> Optional[str]:
@@ -2456,16 +2481,16 @@ class SettingsManager(QObject):
                 f'Profile "{name}" is malformed in profiles.json and cannot be loaded.'
             )
             return
-        self._settings = profile.get("settings", {}).copy()
+        self._settings = _as_dict(profile.get("settings"))
         arch_code = profile.get("arch")
         if arch_code:
             self._arch = next((a for a in GPU_ARCHS if a.code == arch_code), None)
         else:
             self._arch = None
         self._current_profile = name
-        self._loaded_env_vars = profile.get("env_vars", {}).copy()
-        self._loaded_gamescope_enabled = profile.get("gamescope_enabled", False)
-        self._loaded_gamescope_flags = profile.get("gamescope_flags", {}).copy()
+        self._loaded_env_vars = _as_dict(profile.get("env_vars"))
+        self._loaded_gamescope_enabled = bool(profile.get("gamescope_enabled", False))
+        self._loaded_gamescope_flags = _as_dict(profile.get("gamescope_flags"))
         self.profile_loaded.emit(name)
         self.settings_changed.emit()
         self.arch_changed.emit()
@@ -2476,11 +2501,11 @@ class SettingsManager(QObject):
 
     def get_loaded_gamescope_enabled(self) -> bool:
         """Returns gamescope enabled state from the last loaded profile."""
-        return getattr(self, '_loaded_gamescope_enabled', False)
+        return self._loaded_gamescope_enabled
 
     def get_loaded_gamescope_flags(self) -> Dict[str, str]:
         """Returns gamescope flag values from the last loaded profile."""
-        return getattr(self, '_loaded_gamescope_flags', {})
+        return self._loaded_gamescope_flags
 
     def delete_profile(self, name: str):
         if name in self._profiles:
@@ -2524,14 +2549,24 @@ class SettingsManager(QObject):
                     raise ValueError("profiles file is not a JSON object")
                 self._profiles = loaded
         except Exception:
-            # Corrupt or unreadable file: don't silently discard the user's
-            # profiles by overwriting it — just start this session with an
-            # empty in-memory set and leave the file on disk untouched so
-            # it can be inspected/recovered manually.
+            # Corrupt or unreadable file. Starting with an empty in-memory set
+            # is fine, but the very next save_profile() would rewrite the file
+            # and destroy whatever was recoverable in it — so move it aside
+            # first instead of merely leaving it "untouched".
+            moved = ""
+            try:
+                if data_file.exists():
+                    bad = data_file.with_name(
+                        f"profiles.json.corrupt-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+                    os.replace(data_file, bad)
+                    moved = f" The unreadable file was kept as {bad.name}."
+            except OSError:
+                pass
             self._profiles = {}
-            self.profile_save_error.emit(
-                f"Could not read profiles from {data_file} — starting with no profiles this session."
-            )
+            msg = (f"Could not read profiles from {data_file} — starting with no "
+                   f"profiles this session.{moved}")
+            self.startup_notice = msg
+            self.profile_save_error.emit(msg)
 
     def _save_profiles(self) -> bool:
         """Write profiles to disk atomically. Returns True on success."""
@@ -7653,6 +7688,8 @@ class LutrisSyncWidget(QWidget):
         box in the GUI had no effect on an existing file.
         """
         data = yaml.safe_load(original_text) or {}
+        if not isinstance(data, dict):
+            raise ValueError("the game YAML's top level is not a mapping")
         if "system" not in data or not isinstance(data.get("system"), dict):
             data["system"] = {}
         sysdict = data["system"]
@@ -7676,9 +7713,15 @@ class LutrisSyncWidget(QWidget):
             del sysdict[k]
             sys_removed.add(k)
 
+        # Only keys whose value really differs count as "changed"; identical
+        # ones are left untouched so the file keeps its own types, and a fully
+        # matching file reports "Nothing to write" instead of a phantom N changes.
+        sys_changed = set()
         for k, v in system_keys.items():
+            if k in sysdict and sysdict[k] == v and type(sysdict[k]) is type(v):
+                continue
             sysdict[k] = v
-        sys_changed = set(system_keys)
+            sys_changed.add(k)
 
         if "env" not in sysdict or not isinstance(sysdict.get("env"), dict):
             sysdict["env"] = {}
@@ -7690,18 +7733,34 @@ class LutrisSyncWidget(QWidget):
                 del envdict[k]
                 env_removed.add(k)
 
+        env_changed = set()
         for k, v in env_vars.items():
+            if k in envdict and str(envdict[k]) == str(v):
+                continue
             envdict[k] = str(v)
-        env_changed = set(env_vars)
+            env_changed.add(k)
 
         # Don't leave an empty mapping behind if the block ends up cleared.
         if not envdict:
             del sysdict["env"]
 
         new_text = yaml.dump(
-            data, default_flow_style=False, sort_keys=False, allow_unicode=True
+            data, default_flow_style=False, sort_keys=False, allow_unicode=True,
+            width=1_000_000,   # no folding of long gamescope_flags / prefix_command
         )
         return new_text, sys_changed, env_changed, sys_removed, env_removed
+
+    _BACKUP_KEEP = 5
+
+    @classmethod
+    def _prune_backups(cls, target: Path):
+        """Keep only the newest few timestamped .bak files of this game."""
+        try:
+            olds = sorted(target.parent.glob(glob.escape(target.name) + ".*.bak"))
+            for p in olds[:-cls._BACKUP_KEEP]:
+                p.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def _apply_to_game(self):
         index = self._game_combo.currentIndex()
@@ -7746,16 +7805,46 @@ class LutrisSyncWidget(QWidget):
         if reply != QMessageBox.Yes:
             return
 
+        # Lutris (or the user) may have touched the file while the dialog was
+        # open; merging into stale text would silently overwrite that change.
         try:
+            with open(entry.path, "r", encoding="utf-8") as f:
+                fresh = f.read()
+        except Exception as e:
+            QMessageBox.critical(self, "Write failed", f"Could not re-read {entry.path}: {e}")
+            return
+        if fresh != original_text:
+            self._current_yaml_text = fresh
+            self._update_preview()
+            QMessageBox.warning(
+                self, "File changed on disk",
+                f"{entry.path.name} was modified while the confirmation dialog was open.\n"
+                "Nothing was written. The preview has been refreshed — review it and apply again.")
+            return
+
+        try:
+            # Resolve symlinks first: os.replace() on the link itself would
+            # swap the symlink for a regular file.
+            target = Path(os.path.realpath(entry.path))
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            backup_path = entry.path.with_suffix(entry.path.suffix + f".{stamp}.bak")
-            shutil.copy2(entry.path, backup_path)
-            tmp_path = entry.path.with_suffix(entry.path.suffix + ".tmp")
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                f.write(new_text)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, entry.path)
+            backup_path = target.with_name(f"{target.name}.{stamp}.bak")
+            shutil.copy2(target, backup_path)
+            fd, tmp_name = tempfile.mkstemp(dir=str(target.parent),
+                                            prefix=f".{target.name}.", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(new_text)
+                    f.flush()
+                    os.fsync(f.fileno())
+                shutil.copymode(target, tmp_name)   # mkstemp is 0600; keep the original mode
+                os.replace(tmp_name, target)
+            except BaseException:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+                raise
+            self._prune_backups(target)
         except Exception as e:
             QMessageBox.critical(self, "Write failed", f"Could not write {entry.path}: {e}")
             return
@@ -7924,7 +8013,8 @@ class FlmInstallWidget(QWidget):
     _STEPS = ("configure", "build", "install", "verify")
 
     # Bundled source path (repo layout: DRSTool/vk-flip-meter-main/)
-    _BUNDLED_SRC = _SCRIPT_DIR / "vk-flip-meter-main"
+    _BUNDLED_SRC = find_bundled_dir("vk-flip-meter-main", "CMakeLists.txt")
+    _out_buf: str = ""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -7932,6 +8022,7 @@ class FlmInstallWidget(QWidget):
         self._phase: str = ""
         self._build_dir: str = ""
         self._prefix_used: str = ""
+        self._libdir_used: str = "lib64"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -8039,7 +8130,7 @@ QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
 
         conf_lbl = QLabel("Config file:")
         conf_lbl.setStyleSheet("color:#8ea0ba; font-size:13px; font-weight:600;")
-        self._conf_edit = QLineEdit("/tmp/flm.conf")
+        self._conf_edit = QLineEdit(str(default_flm_conf_path()))
         self._conf_edit.setStyleSheet(FLM_FIELD_SS)
         self._write_conf_btn = _tool_btn("Write .conf")
         self._write_conf_btn.clicked.connect(self._on_write_conf)
@@ -8051,7 +8142,7 @@ QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
         proc_lbl.setStyleSheet("color:#8ea0ba; font-size:13px; font-weight:600;")
         self._proc_edit = QLineEdit()
         self._proc_edit.setStyleSheet(FLM_FIELD_SS)
-        self._proc_edit.setPlaceholderText("pkill -f pattern, e.g. GameName.exe")
+        self._proc_edit.setPlaceholderText("optional regex on the command line, e.g. GameName.exe")
         self._sigusr1_btn = _tool_btn("Send SIGUSR1")
         self._sigusr1_btn.clicked.connect(self._on_send_sigusr1)
         live_layout.addWidget(proc_lbl, 1, 0)
@@ -8144,13 +8235,24 @@ QPlainTextEdit{
             lines += [f"# {k}={v}" for k, v in init_only.items()]
 
         try:
-            path = Path(path_str)
-            tmp = path.with_suffix(path.suffix + ".tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                f.write("\n".join(lines) + "\n")
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, path)  # atomic: SIGUSR1 mid-write can't see a torn file
+            path = Path(os.path.expanduser(path_str))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Unpredictable temp name in the same directory, then an atomic
+            # rename: SIGUSR1 mid-write can't see a torn file.
+            fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines) + "\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.chmod(tmp, 0o644)
+                os.replace(tmp, path)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             self._log(f"ERROR: could not write {path_str}: {e}")
             return
@@ -8167,17 +8269,59 @@ QPlainTextEdit{
             self._log(f"WARNING: Env Vars tab has FLM_CONFIG={cfg}, but this file was "
                       f"written to {path_str} — the running game will reload the former.")
 
+    @staticmethod
+    def _find_layer_pids(pattern: str):
+        """(pid, cmdline) of this user's processes that have libvk_flip_meter
+        mapped, optionally filtered by a regex on the command line. `pkill -f`
+        matched ANY command line containing the pattern (Lutris, wrappers,
+        DRSTool itself) and SIGUSR1's default action kills a process."""
+        rx = None
+        if pattern:
+            try:
+                rx = re.compile(pattern)
+            except re.error:
+                rx = re.compile(re.escape(pattern))
+        me, uid = os.getpid(), os.getuid()
+        found = []
+        for d in os.listdir("/proc"):
+            if not d.isdigit() or int(d) == me:
+                continue
+            pid = int(d)
+            try:
+                if os.stat(f"/proc/{pid}").st_uid != uid:
+                    continue
+                with open(f"/proc/{pid}/maps", "rb") as f:
+                    if b"libvk_flip_meter" not in f.read():
+                        continue
+                with open(f"/proc/{pid}/cmdline", "rb") as f:
+                    cmd = f.read().replace(b"\0", b" ").decode(errors="replace").strip()
+            except OSError:
+                continue
+            if rx and not rx.search(cmd):
+                continue
+            found.append((pid, cmd))
+        return found
+
     def _on_send_sigusr1(self):
         pattern = self._proc_edit.text().strip()
-        if not pattern:
-            self._log("ERROR: enter a process match pattern first (pkill -f syntax).")
+        pids = self._find_layer_pids(pattern)
+        if not pids:
+            self._log("No process with the vk_flip_meter layer loaded"
+                      + (f" matches '{pattern}'" if pattern else "")
+                      + " — is the game running with ENABLE_LAYER_cpu_flip_meter=1?")
+            self._status_lbl.setText("No process matched.")
             return
-        self._log(f"==> pkill -USR1 -f -- {pattern}")
-        self._set_busy(True, "Signalling...")
-        self._phase = "sigusr1"
-        # Unprivileged: the game runs as the same user. `--` guards against a
-        # pattern starting with a dash being parsed as a pkill option.
-        self._run_process("pkill", ["-USR1", "-f", "--", pattern], use_pkexec=False)
+        sent = 0
+        for pid, cmd in pids:
+            try:
+                os.kill(pid, signal.SIGUSR1)
+                sent += 1
+                self._log(f"SIGUSR1 -> {pid}  {cmd[:100]}")
+            except OSError as e:
+                self._log(f"Could not signal {pid}: {e}")
+        if sent:
+            self._log("SIGUSR1 sent — the layer will re-read FLM_CONFIG on its next frame.")
+            self._status_lbl.setText(f"SIGUSR1 sent to {sent} process(es).")
 
     # ── build / install pipeline ─────────────────────────────────────────────
 
@@ -8195,7 +8339,9 @@ QPlainTextEdit{
             return
 
         self._prefix_used = prefix
-        self._build_dir = str(self._BUNDLED_SRC / "build")
+        # Out-of-tree build in the user's cache: the bundled source may be
+        # read-only (/usr/share/drstool) and must stay clean when it is not.
+        self._build_dir = str(self._prepare_build_dir(Path(src)))
         native = "ON" if self._native_chk.isChecked() else "OFF"
         generator = "Ninja" if shutil.which("ninja") else "Unix Makefiles"
 
@@ -8207,7 +8353,8 @@ QPlainTextEdit{
 
         # FLM_LIB_PATH is injected so the manifest template gets the correct
         # lib64 path; CMake's configure_file handles the manifest (FIX-52/61).
-        libdir = "lib64"
+        libdir = detect_libdir()
+        self._libdir_used = libdir
         flm_lib_path = f"{prefix}/{libdir}/libvk_flip_meter.so"
         args = [
             "-S", src, "-B", self._build_dir,
@@ -8220,6 +8367,22 @@ QPlainTextEdit{
         ]
         self._run_process("cmake", args, use_pkexec=False)
 
+    @staticmethod
+    def _prepare_build_dir(src: Path) -> Path:
+        build = user_cache_dir() / "flm-build"
+        cache = build / "CMakeCache.txt"
+        try:
+            if cache.is_file():
+                m = re.search(r"^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$",
+                              cache.read_text(errors="replace"), re.M)
+                # A cache from a different source path makes cmake refuse to configure.
+                if m and Path(m.group(1)) != src:
+                    shutil.rmtree(build, ignore_errors=True)
+        except OSError:
+            pass
+        build.mkdir(parents=True, exist_ok=True)
+        return build
+
     def _on_verify_clicked(self):
         self._console.clear()
         self._log("==> vulkaninfo --summary | grep -i flip_meter")
@@ -8229,6 +8392,10 @@ QPlainTextEdit{
         self._run_process("bash", ["-c", cmd], use_pkexec=False)
 
     def _run_process(self, program: str, args: List[str], use_pkexec: bool):
+        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
+            self._log("A step is already running — please wait.")
+            return
+        self._out_buf = ""
         proc = QProcess(self)
         proc.setProcessChannelMode(QProcess.MergedChannels)
         proc.readyReadStandardOutput.connect(lambda p=proc: self._on_output(p))
@@ -8247,6 +8414,7 @@ QPlainTextEdit{
     def _on_output(self, proc: QProcess):
         data = bytes(proc.readAllStandardOutput()).decode(errors="replace")
         if data:
+            self._out_buf = (self._out_buf + data)[-4000:]
             self._log(data.rstrip("\n"))
 
     def _on_proc_error(self, error, proc: QProcess):
@@ -8260,23 +8428,10 @@ QPlainTextEdit{
             self._log(f"ERROR: step '{self._phase}' crashed (killed by a signal).")
             self._set_busy(False, f"Error: step '{self._phase}' crashed.")
             return
-        if self._phase == "sigusr1":
-            # pkill: 0 = at least one process signalled, 1 = no match.
-            if exit_code == 0:
-                self._log("SIGUSR1 sent — the layer will re-read FLM_CONFIG on its next frame.")
-                self._set_busy(False, "SIGUSR1 sent.")
-            elif exit_code == 1:
-                self._log("No matching process found — is the game running, and does the pattern match?")
-                self._set_busy(False, "No process matched.")
-            else:
-                self._log(f"pkill failed (exit code {exit_code}).")
-                self._set_busy(False, "pkill failed.")
-            return
-
         if exit_code != 0:
-            # pkexec's own exit codes: 126 = user dismissed the auth dialog,
-            # 127 = not authorized / auth failure. Both are "you cancelled".
-            if self._phase == "install" and exit_code in (126, 127):
+            # 126/127 only mean "auth cancelled" when pkexec says so (a missing
+            # program exits 127 as well).
+            if self._phase == "install" and pkexec_auth_failed(exit_code, self._out_buf):
                 self._log("Authorization cancelled/denied — installation aborted (build output kept).")
                 self._set_busy(False, "Install cancelled (pkexec authorization).")
                 return
@@ -8301,7 +8456,7 @@ QPlainTextEdit{
 
         elif self._phase == "install":
             self._log("==> Installation complete.")
-            self._log(f"    Layer installed to: {self._prefix_used}/lib64/libvk_flip_meter.so")
+            self._log(f"    Layer installed to: {self._prefix_used}/{self._libdir_used}/libvk_flip_meter.so")
             self._log("    Manifest: share/vulkan/implicit_layer.d/VkLayer_cpu_flip_meter.json")
             self._log("    Verify: vulkaninfo --summary | grep -i flip_meter")
             self._set_busy(False, "Installation complete.")
@@ -8586,7 +8741,8 @@ class LgtuneWidget(QWidget):
     """
 
     # Bundled source path (repo layout: DRSTool/lutris-game-tune-main/)
-    _BUNDLED_SRC = _SCRIPT_DIR / "lutris-game-tune-main"
+    _BUNDLED_SRC = find_bundled_dir("lutris-game-tune-main", "install.sh")
+    _out_buf: str = ""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -9098,17 +9254,23 @@ QPlainTextEdit{
 
     def _on_save(self):
         conf_text = self._build_conf_text()
-        # Write via: pkexec bash -c "cat > /etc/lutris-game-tune.conf"
-        # We pipe the content through stdin using QProcess.write().
+        # Content goes through stdin. It is written to a temp file next to the
+        # target and renamed over it, so an interrupted write can never leave
+        # an empty/truncated /etc/lutris-game-tune.conf behind.
         self._log("==> Writing /etc/lutris-game-tune.conf via pkexec …")
-        # Use tee so we can pipe via stdin without a temp file.
+        script = (
+            "set -e; "
+            "tmp=$(mktemp /etc/.lutris-game-tune.conf.XXXXXX); "
+            "trap 'rm -f \"$tmp\"' EXIT; "
+            "cat > \"$tmp\"; "
+            "chmod 644 \"$tmp\"; chown root:root \"$tmp\"; "
+            "mv -f \"$tmp\" /etc/lutris-game-tune.conf; "
+            "trap - EXIT; "
+            "echo 'Saved: /etc/lutris-game-tune.conf'"
+        )
         self._run_proc(
             "pkexec",
-            ["bash", "-c",
-             "cat > /etc/lutris-game-tune.conf && "
-             "chmod 644 /etc/lutris-game-tune.conf && "
-             "chown root:root /etc/lutris-game-tune.conf && "
-             "echo 'Saved: /etc/lutris-game-tune.conf'"],
+            ["bash", "-c", script],
             tag="save",
             stdin_data=conf_text.encode()
         )
@@ -9125,16 +9287,17 @@ QPlainTextEdit{
             self._log(f"Log file not found: {LGTUNE_LOG}")
             return
         self._log(f"==> tail -80 {LGTUNE_LOG}")
-        self._run_proc("bash", ["-c", f"tail -80 {LGTUNE_LOG}"], tag="log",
-                       use_pkexec=False)
+        self._run_proc("tail", ["-n", "80", str(LGTUNE_LOG)], tag="log")
 
     # ── QProcess plumbing ─────────────────────────────────────────────────────
 
     def _run_proc(self, program: str, args: List[str], tag: str,
-                  stdin_data: Optional[bytes] = None, use_pkexec: bool = True):
+                  stdin_data: Optional[bytes] = None):
+        # Callers that need root pass "pkexec" as the program themselves.
         if self._proc and self._proc.state() != QProcess.NotRunning:
             self._log("A process is already running — please wait.")
             return
+        self._out_buf = ""
         proc = QProcess(self)
         proc.setProcessChannelMode(QProcess.MergedChannels)
         proc.readyReadStandardOutput.connect(lambda p=proc: self._on_output(p))
@@ -9143,16 +9306,14 @@ QPlainTextEdit{
             lambda err, p=proc: self._on_proc_error(err, p)
         )
         self._proc = proc
-        if use_pkexec:
-            proc.start(program, args)
-        else:
-            proc.start(program, args)
+        proc.start(program, args)
         if stdin_data is not None:
             proc.write(stdin_data)
             proc.closeWriteChannel()
 
     def _on_output(self, proc: QProcess):
         data = bytes(proc.readAllStandardOutput()).decode(errors="replace")
+        self._out_buf = (self._out_buf + data)[-4000:]
         if data.strip():
             self._log(data.rstrip("\n"))
 
@@ -9166,7 +9327,7 @@ QPlainTextEdit{
         if exit_status == QProcess.CrashExit:
             self._log(f"ERROR: '{tag}' process crashed.")
             return
-        if exit_code in (126, 127) and tag not in ("log", "status"):
+        if tag != "log" and pkexec_auth_failed(exit_code, self._out_buf):
             self._log("Authorization cancelled or denied (pkexec).")
             return
         if exit_code != 0 and tag not in ("log", "status"):
@@ -9761,6 +9922,9 @@ class MainWindow(QMainWindow):
         self.settings_manager.arch_changed.connect(self._update_arch_ui)
         self.settings_manager.profile_loaded.connect(lambda _n: self._update_window_title())
         self.settings_manager.profile_save_error.connect(self._on_profile_save_error)
+        if self.settings_manager.startup_notice:
+            QTimer.singleShot(0, lambda m=self.settings_manager.startup_notice:
+                              self._on_profile_save_error(m))
         self.settings_manager.profile_saved.connect(lambda _n: self._set_dirty(False))
         self.settings_manager.profiles_changed.connect(self._refresh_badges)
         self.settings_manager.profiles_changed.connect(self._update_window_title)
@@ -9839,6 +10003,21 @@ class MainWindow(QMainWindow):
             self.resize(1440, 900)
 
     def closeEvent(self, event):          # noqa: N802
+        if self._dirty:
+            name = self.settings_manager.get_current_profile() or ""
+            box = QMessageBox.question(
+                self, "Unsaved changes",
+                f'Profile "{name}" has unsaved changes.\n\nSave them before closing?',
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save)
+            if box == QMessageBox.Cancel:
+                event.ignore()
+                return
+            if box == QMessageBox.Save:
+                self._output_bar._save_to_profile()
+                if self._dirty:          # save failed (profile_saved never fired)
+                    event.ignore()
+                    return
         try:
             self._qsettings.setValue("window/geometry", self.saveGeometry())
             self._qsettings.setValue("window/splitter", self._splitter.saveState())
@@ -10113,9 +10292,19 @@ def main():
     # then carries on, which can leave the UI half-rebuilt and silently broken
     # (e.g. a populate() that raised after self.clear() leaves an empty list
     # with signals still blocked). Surface it instead of losing it.
+    _err = {"showing": False, "last": 0.0}
+
     def _excepthook(exc_type, exc_value, exc_tb):
         import traceback
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
         traceback.print_exception(exc_type, exc_value, exc_tb)
+        # A recurring error (e.g. inside paintEvent) must not stack modal
+        # dialogs: one at a time, and at most one per 2 seconds.
+        if _err["showing"] or time.monotonic() - _err["last"] < 2.0:
+            return
+        _err["showing"] = True
         try:
             QMessageBox.critical(
                 None, "Internal error",
@@ -10123,6 +10312,9 @@ def main():
             )
         except Exception:
             pass
+        finally:
+            _err["showing"] = False
+            _err["last"] = time.monotonic()
 
     sys.excepthook = _excepthook
 
@@ -10137,15 +10329,15 @@ def main():
 
     if ICON_PATH.is_file():
         app.setWindowIcon(QIcon(str(ICON_PATH)))
-    # NOT: ensure_desktop_entry() burada KASITLI olarak çağrılmıyor.
-    # Paket ebuild üzerinden kurulduğunda /usr/share/applications/drstool.desktop
-    # zaten doğru (Exec=drstool, doğrudan shebang'li çalıştırılabilir) girdiyi
-    # sağlıyor. Bu fonksiyon ~/.local/share/applications altına ayrıca
-    # Exec=python3 <path> şeklinde İKİNCİ bir .desktop yazıyordu; XDG öncelik
-    # sırasında kullanıcı dizini sistem dizininden önce geldiği için KDE bu
-    # ikinci (python3 sarmalı) girdiyi kullanıyor, Qt Wayland app_id'yi
-    # "python3" üzerinden türetiyor ve StartupWMClass eşleşmesi bozuluyor —
-    # sonuç: başlangıçta doğru ikon, pencere map olunca jenerik "W" ikonu.
+    else:
+        # Paket kurulumunda script /usr/lib/python-exec/ altında durur ve yanında
+        # assets/ yoktur; ebuild ikonu hicolor temasına kurar.
+        themed = QIcon.fromTheme(APP_ID)
+        if not themed.isNull():
+            app.setWindowIcon(themed)
+    # .desktop girdisini (Exec=drstool) ebuild /usr/share/applications altına
+    # kurar; kullanıcı dizinine ikinci bir python3 sarmalı girdi yazmak KDE'de
+    # StartupWMClass eşleşmesini bozduğu için uygulama bunu kendisi yapmaz.
 
     apply_theme(app)
 
