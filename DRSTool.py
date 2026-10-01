@@ -8708,6 +8708,108 @@ LGTUNE_KEYS: List[tuple] = [
      "bus arbitration latency.  Harmless on PCIe-only systems (PCIe doesn't "
      "use the latency timer), but the script still writes it for completeness."),
 
+    # ── Intel CPUs (GenuineIntel only; AMD-only knobs above are skipped there) ──
+    ("SET_INTEL_TURBO", "check", "1",
+     "Force Intel turbo on during gameplay",
+     "Writes 0 to intel_pstate/no_turbo on PRE and restores it on POST.  Intel CPUs only; skipped when intel_pstate is absent."),
+
+    ("SET_INTEL_HWP_BOOST", "check", "1",
+     "Enable intel_pstate HWP dynamic boost",
+     "Writes 1 to intel_pstate/hwp_dynamic_boost (active mode with HWP only)."),
+
+    ("INTEL_MAX_PERF_PCT", "spin", "100",
+     "intel_pstate max_perf_pct",
+     "Upper performance limit in percent while gaming.  0 = leave unchanged.",
+     (0, 100)),
+
+    ("INTEL_MIN_PERF_PCT", "spin", "0",
+     "intel_pstate min_perf_pct",
+     "Lower performance limit in percent while gaming.  0 = leave unchanged.",
+     (0, 100)),
+
+    ("SET_INTEL_EPB", "check", "1",
+     "Set energy_perf_bias to 0 (max performance)",
+     "Writes 0 to every cpuN/power/energy_perf_bias on PRE; restored on POST."),
+
+    ("SET_INTEL_ITMT", "check", "1",
+     "Enable ITMT favored-core scheduling",
+     "Writes 1 to /proc/sys/kernel/sched_itmt_enabled (Turbo Boost Max 3.0 / hybrid CPUs)."),
+
+    ("HYBRID_CORE_ISOLATION", "check", "0",
+     "Hybrid P/E-core isolation (opt-in)",
+     "Intel hybrid CPUs (Alder Lake and newer): game on the P-cores, rest of the system on the E-cores, via the same cpuset machinery as CCD isolation.  Skipped when the P-cores expose fewer than HYBRID_MIN_P_THREADS logical CPUs."),
+
+    ("HYBRID_MIN_P_THREADS", "spin", "8",
+     "Minimum P-core threads for hybrid isolation",
+     "Hybrid isolation is skipped when the P-cores expose fewer logical CPUs than this.",
+     (1, 512)),
+
+    # ── Proton / Wine friendliness ───────────────────────────────────────────
+    ("VM_MAX_MAP_COUNT", "spin", "2147483642",
+     "vm.max_map_count (raise-only)",
+     "Raised to this value while gaming, never lowered.  Some Proton titles crash on the stock 65530.  0 = leave alone.",
+     (0, 2147483647)),
+
+    ("SET_VM_DIRTY", "check", "1",
+     "Limit dirty-page window during gameplay",
+     "Writes smaller dirty_bytes / dirty_background_bytes limits (smooths shader-cache and save-file write bursts).  All four ratio/bytes originals are saved and restored."),
+
+    ("VM_DIRTY_BACKGROUND_BYTES", "spin", "67108864",
+     "vm.dirty_background_bytes",
+     "Background writeback threshold in bytes (must be smaller than dirty_bytes).",
+     (1048576, 2147483647)),
+
+    ("VM_DIRTY_BYTES", "spin", "268435456",
+     "vm.dirty_bytes",
+     "Hard dirty-page limit in bytes.  Skipped when dirty_bytes is already at or below this.",
+     (1048576, 2147483647)),
+
+    ("SET_NUMA_BALANCING", "check", "1",
+     "Disable NUMA auto-balancing during gameplay",
+     "Writes 0 to kernel.numa_balancing (background page scanning/migration adds page-fault noise)."),
+
+    # ── IRQ affinity ─────────────────────────────────────────────────────────
+    ("SET_IRQ_AFFINITY", "check", "0",
+     "Move device IRQs to the system CPUs (opt-in)",
+     "Moves the IRQs of the chosen PCI classes onto the system CPUs (IRQ_AFFINITY_CPUS, or the second CCD group).  Managed IRQs such as NVMe queues cannot be moved and are skipped.  Stop irqbalance, or it undoes this."),
+
+    ("IRQ_AFFINITY_CLASSES", "line_space", "gpu nvme net usb",
+     "IRQ classes to move",
+     "Space-separated, any of: gpu nvme net usb audio.",
+     None),
+
+    ("IRQ_AFFINITY_CPUS", "line", "",
+     "IRQ target CPUs (cpulist)",
+     "Explicit target cpulist such as 8-15,24-31.  Empty = use the second CCD/CCX group (needs a multi-CCD CPU).",
+     None),
+
+    # ── GPU / network / storage ──────────────────────────────────────────────
+    ("SET_NVIDIA_PERSISTENCE", "check", "0",
+     "Enable NVIDIA persistence mode (opt-in)",
+     "Turns persistence mode on for GPUs where it is currently off, and back off on POST.  Small effect while a game already holds the GPU."),
+
+    ("SET_AMDGPU_PERF_LEVEL", "check", "0",
+     "Force amdgpu performance level (opt-in)",
+     "Writes AMDGPU_PERF_LEVEL to power_dpm_force_performance_level on every amdgpu card.  Raises power draw."),
+
+    ("AMDGPU_PERF_LEVEL", "combo", "high",
+     "amdgpu performance level",
+     "Value for power_dpm_force_performance_level.",
+     ["high", "auto", "low", "manual", "profile_standard", "profile_min_sclk", "profile_min_mclk", "profile_peak"]),
+
+    ("SET_WIFI_POWERSAVE", "check", "1",
+     "Turn Wi-Fi power save off during gameplay",
+     "Runs 'iw dev <if> set power_save off' on interfaces where it is on; restored on POST.  Needs the iw tool."),
+
+    ("SET_NVME_SCHED", "check", "1",
+     "Set NVMe I/O scheduler during gameplay",
+     "Writes NVME_IO_SCHEDULER to every NVMe queue/scheduler that offers it."),
+
+    ("NVME_IO_SCHEDULER", "combo", "none",
+     "NVMe I/O scheduler",
+     "none is the usual best choice for NVMe; the others are for experiments.",
+     ["none", "mq-deadline", "kyber", "bfq"]),
+
     # ── Logging ───────────────────────────────────────────────────────────────
     ("LOG_LEVEL", "combo", "INFO",
      "Log level",
@@ -9213,6 +9315,36 @@ QPlainTextEdit{
             "",
             "# --- PCI latency -------------------------------------------------",
             f"SET_PCI_LATENCY={_val('SET_PCI_LATENCY')}",
+            "",
+            "# --- Intel CPUs (GenuineIntel only) --------------------------------",
+            f"SET_INTEL_TURBO={_val('SET_INTEL_TURBO')}",
+            f"SET_INTEL_HWP_BOOST={_val('SET_INTEL_HWP_BOOST')}",
+            f"INTEL_MAX_PERF_PCT={_val('INTEL_MAX_PERF_PCT')}",
+            f"INTEL_MIN_PERF_PCT={_val('INTEL_MIN_PERF_PCT')}",
+            f"SET_INTEL_EPB={_val('SET_INTEL_EPB')}",
+            f"SET_INTEL_ITMT={_val('SET_INTEL_ITMT')}",
+            f"HYBRID_CORE_ISOLATION={_val('HYBRID_CORE_ISOLATION')}",
+            f"HYBRID_MIN_P_THREADS={_val('HYBRID_MIN_P_THREADS')}",
+            "",
+            "# --- Proton / Wine friendliness ------------------------------------",
+            f"VM_MAX_MAP_COUNT={_val('VM_MAX_MAP_COUNT')}",
+            f"SET_VM_DIRTY={_val('SET_VM_DIRTY')}",
+            f"VM_DIRTY_BACKGROUND_BYTES={_val('VM_DIRTY_BACKGROUND_BYTES')}",
+            f"VM_DIRTY_BYTES={_val('VM_DIRTY_BYTES')}",
+            f"SET_NUMA_BALANCING={_val('SET_NUMA_BALANCING')}",
+            "",
+            "# --- IRQ affinity (opt-in) -----------------------------------------",
+            f"SET_IRQ_AFFINITY={_val('SET_IRQ_AFFINITY')}",
+            f'IRQ_AFFINITY_CLASSES="{_val("IRQ_AFFINITY_CLASSES")}"',
+            f"IRQ_AFFINITY_CPUS={_val('IRQ_AFFINITY_CPUS')}",
+            "",
+            "# --- GPU / network / storage ---------------------------------------",
+            f"SET_NVIDIA_PERSISTENCE={_val('SET_NVIDIA_PERSISTENCE')}",
+            f"SET_AMDGPU_PERF_LEVEL={_val('SET_AMDGPU_PERF_LEVEL')}",
+            f"AMDGPU_PERF_LEVEL={_val('AMDGPU_PERF_LEVEL')}",
+            f"SET_WIFI_POWERSAVE={_val('SET_WIFI_POWERSAVE')}",
+            f"SET_NVME_SCHED={_val('SET_NVME_SCHED')}",
+            f"NVME_IO_SCHEDULER={_val('NVME_IO_SCHEDULER')}",
             "",
             "# --- Logging -----------------------------------------------------",
             f"LOG_LEVEL={_val('LOG_LEVEL')}",
