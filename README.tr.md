@@ -1,182 +1,89 @@
-# DRSTool
+# ⚠️ SORUMLULUK REDDİ
 
-**Linux'ta Proton/DXVK ile oynadığın oyunlar için NVIDIA sürücü ayarlarını ve oyun ortam değişkenlerini tıklayarak ayarlamanı sağlayan masaüstü aracı.**
-
-Windows'taki **NVIDIA Profile Inspector**'ı düşün: DRSTool onun Linux karşılığıdır. Ek olarak DXVK, VKD3D-Proton, Proton, Wine, gamescope ve daha birçok bileşenin ayarlarını da tek pencerede toplar.
-
-> ⚠️ **Kendi riskinde kullan.** Sürücü ayarlarıyla oynamak çökme, donma veya görüntü sorunlarına yol açabilir. Bir şey ters giderse eklediğin değişkenleri kaldırıp oyunu yeniden başlatman yeterlidir. Ayrıntılar: [DISCLAIMER.md](DISCLAIMER.md)
-
-<img width="1970" height="1467" alt="DRSTool ekran görüntüsü" src="https://github.com/user-attachments/assets/8e3e741d-17a7-4ce1-818b-3bedc1da8c81" />
+Bu katman yapay zekâ desteğiyle geliştirilmiş bir projenin parçasıdır. Kullanım riski size aittir. FLM'yi kullanarak oluşabilecek sistem kararsızlığı, GPU kilitlenmesi veya görüntü bozulmalarının sorumluluğunu kabul etmiş olursunuz. Ayrıntılar için üst dizindeki DISCLAIMER.md dosyasına bakın.
 
 ---
 
-## Neden var?
+# FLM — Vulkan Flip Meter / Frame Pacing Katmanı (v3.1 — "auto")
 
-Linux'ta bir oyunun NVIDIA davranışını değiştirmek normalde şöyle bir satırı elle yazmak demektir:
+VRR panellerde, özellikle frame generation (DLSS-FG / FSR-FG / MFG) açıkken
+kare teslimini düzenleyen, aynı zamanda hassas bir FPS sınırlayıcı olan
+Vulkan katmanı.
 
-```
-DXVK_NVAPI_DRS_SETTINGS=0x10E41DF3=0xffffff,0x10E41DF7=0xffffff DXVK_NVAPI_GPU_ARCH=GB200 VKD3D_CONFIG=dxr ... %command%
-```
-
-Hex kodlarını ezberlemek, hangi değişkenin ne işe yaradığını wiki'lerde aramak, bir harf hatası yüzünden ayarın hiç çalışmaması... DRSTool bunun yerine sana:
-
-- **Okunabilir isimler** ("DLSS-SR Preset" gibi) ve her ayar için **açıklama** gösterir,
-- Değeri **butonla / listeden seçtirir**, yanlış değer girmeni zorlaştırır,
-- Sonucu **tek tıkla kopyalanabilir** hazır bir satıra çevirir,
-- Her oyun için **profil** olarak kaydeder, istersen doğrudan **Lutris** ayarına yazar.
-
----
-
-## Neler yapabilirsin?
-
-| | |
-|---|---|
-| 🎛️ **NVIDIA sürücü ayarları (DRS)** | DLSS preset/mod, Frame Generation, Ray Reconstruction, V-Sync, G-Sync, anti-aliasing, doku filtreleme ve daha fazlası — 118 ayar, açıklamalarıyla. |
-| 🖥️ **GPU mimarisi** | Kartının mimarisini (Maxwell → Blackwell) seç; bazı ayarlar ancak bununla doğru çalışır. |
-| 🌿 **Ortam değişkenleri** | 250'den fazla değişken: DXVK, VKD3D-Proton, DXVK-NVAPI, NVIDIA `__GL_*`, NVIDIA PRIME, Proton, Wine, gamescope, vk_flip_meter ve bazı fork'lar (GE, CachyOS, EM vb. — hangi fork'a ait olduğu yazılı). |
-| 🎮 **gamescope komut oluşturucu** | Çözünürlük, HDR, VRR, FSR/NIS/SGSR, FPS limiti, MangoApp gibi gamescope bayraklarını seçerek hazır komut üretir. |
-| 💾 **Profiller** | Oyun başına tüm ayarları kaydet, sonra tek tıkla geri yükle. |
-| 🔄 **Lutris senkronizasyonu** | Ayarları seçtiğin oyunun Lutris yapılandırmasına yaz ya da oradan içeri aktar. |
-| ⏱️ **vk_flip_meter** | Frame-pacing (kare zamanlaması) katmanını kaynaktan derleyip kur, çalışırken ayarla. |
-| ⚙️ **lutris-game-tune** | Oyun açılırken sistemi oyun moduna alan, kapanınca eski haline döndüren yardımcıyı yönet. |
-
----
-
-## Kurulum
-
-### Gereksinimler
-
-- Python 3.12 veya üstü
-- PySide6 (Qt 6)
-- PyYAML (Lutris özelliği için)
-- *(İsteğe bağlı)* `setproctitle` — görev çubuğunda doğru simge/isim için
-- *(İsteğe bağlı)* vk_flip_meter derlemek için: `cmake`, C++ derleyici, Vulkan başlık dosyaları ve `pkexec`
-
-### Hızlı başlangıç
+v3.0 kendini yapılandırır; olağan kullanımda ayarlanacak bir şey yoktur:
 
 ```bash
-git clone https://github.com/arabcian/DRSTool.git
-cd DRSTool
-pip install --user PySide6 pyyaml
-python3 DRSTool.py
+ENABLE_LAYER_cpu_flip_meter=1 %command%
 ```
 
-### Gentoo
+## Ne yapar
 
-Depodaki `drstool-9999.ebuild` ile kurabilirsin. USE bayrakları:
-
-| USE | Ne yapar |
+| Durum | FLM'nin yaptığı |
 |---|---|
-| `flip-meter` *(varsayılan açık)* | vk_flip_meter Vulkan katmanını derler ve kurar |
-| `lutris-tune` *(varsayılan açık)* | lutris-game-tune yardımcısını kurar |
-| `lto` | Katmanı LTO ile derler |
-| `pgo` | Katmanı iki aşamalı PGO ile derler (talimatlar kurulum sonunda gösterilir) |
+| `FLM_TARGET_FPS` > 0 | **Limiter**: mutlak zaman çizelgeli FPS sınırı. presentWait gerekmez. |
+| VRR, MAILBOX/IMMEDIATE | **Floor pacer**: üretilmiş/erken kareleri bir öncekinden asgari aralık geçene kadar tutar; gerçek kareler ve VRR hız değişimleri dokunulmadan geçer. |
+| FIFO (vsync açık) | Kadans ölçülür. Sürekli aralıklar = VRR → pacing yapılır. Tazeleme katlarına kilitli aralıklar = sabit tazeleme → dokunulmaz. |
+| Küçük swapchain'ler (<640×480) | Yok sayılır (launcher, overlay). |
 
----
+Otomatik belirlenenler: frame generation çarpanı (1–4x), floor oranı (çarpan
+başına kapalı döngü), uyku/spin marjı, hitch eşiği ve toparlanma süresi,
+FIFO'da sabit tazeleme / VRR ayrımı.
 
-## Nasıl kullanılır? (5 adımda)
+## Değişkenler
 
-1. **DRS Settings** sekmesinde değiştirmek istediğin ayarı bul (üstteki arama kutusu işini kolaylaştırır), sağda değerini seç. Ayarlanan satırlar solda **yeşil** görünür.
-2. **GPU Arch** sekmesinden ekran kartının mimarisini seç.
-3. **Environment** sekmesinden istediğin ortam değişkenlerini ayarla. gamescope kullanacaksan listedeki **"Gamescope launch flags"** satırına tıkla.
-4. Pencerenin üstündeki **çıktı çubuğunda** oluşan satırı **Copy all** ile kopyala:
-   - Terminal / betik için düz biçim,
-   - veya Steam için sonu `%command%` ile biten **Steam launch options** biçimi.
-5. Beğendiğin ayarları **Profiles** sekmesinde bir isimle kaydet.
-
-Steam'de: Oyuna sağ tık → **Özellikler** → **Başlatma Seçenekleri** kutusuna yapıştır.
-
----
-
-## Sekmeler
-
-### 1. DRS Settings
-NVIDIA sürücü ayarları kategorilere ayrılmış halde listelenir (DLSS/NGX, V-Sync, G-Sync/VRR, Anti-Aliasing, doku filtreleme, güç, OpenGL...). Her ayarın kısa ve uzun açıklaması vardır. Değer tipine göre uygun kontrol gelir: seçenek butonları, sayı alanı veya bit kutucukları.
-
-### 2. GPU Arch
-Kartının mimarisini seçersin; çıktıya `DXVK_NVAPI_GPU_ARCH` eklenir. Her mimari için örnek kart modelleri gösterilir.
-
-### 3. Environment
-Tüm ortam değişkenleri tek listede, kategorilere ayrılmış olarak durur. Öne çıkan kolaylıklar:
-
-- **DXVK_HUD** ve **VKD3D_CONFIG**: bayrakları tek tek butonla aç/kapat, her birinin açıklaması yanında.
-- **DXVK_CONFIG**: dxvk.conf ayarlarını tablodan seç. Örneğin:
-  - `dxvk.latencySleep` — DXVK'nın düşük gecikme / Reflex modu
-  - `dxvk.maxFrameRate` — FPS sınırı
-  - `dxgi.syncInterval` — V-Sync'i zorla aç/kapat
-  - `dxgi.hideNvidiaGpu` — DLSS/Reflex için NVIDIA'yı gizleme
-  - Tabloda olmayan anahtarları "Other entries" alanına yazabilirsin, silinmez.
-- **gamescope launch flags**: gamescope komutunu bayrakları işaretleyerek oluşturur.
-
-> 💡 Tanımadığın bir değer bir profilde kaldıysa (ör. vkd3d-proton'dan kaldırılmış eski bir bayrak), DRSTool onu **silmez**, sarı bir notla gösterir.
-
-### 4. Extra Tools
-- **vk_flip_meter**: Katmanı kaynaktan derleyip kurar. Derleme normal kullanıcınla yapılır; şifre sadece sisteme kopyalama adımında (`pkexec`) istenir. Oyun çalışırken ayarları **Live Tuning** bölümünden anında değiştirebilirsin.
-- **lutris-game-tune**: Oyun başlarken CPU/sistem ayarlarını oyun moduna alan, oyun kapanınca geri yükleyen aracı kurar, durumunu ve günlüğünü gösterir.
-
-### 5. Profiles + Lutris Game Sync
-- **Solda** profillerin: kaydet, yükle, sil.
-- **Sağda** Lutris senkronizasyonu:
-  1. Listeden oyununu seç.
-  2. **Load from selected game** ile o oyunun mevcut ayarlarını DRSTool'a aktar.
-  3. İstediğin değişiklikleri yap.
-  4. **Write to Lutris config** ile yaz. Yazmadan önce neyin ekleneceğini ve **neyin silineceğini** gösteren bir onay penceresi çıkar. Her yazmada otomatik yedek alınır.
-
-> ⚠️ **Önemli:** DRSTool, katalogundaki değişkenlerin "sahibi" gibi davranır — ekranda boş olan bir değişkeni Lutris dosyasından siler. Bu yüzden bir oyuna yazmadan önce **mutlaka önce "Load from selected game"** yap. Katalogda olmayan, kendi elinle yazdığın değişkenlere dokunulmaz.
-
----
-
-## Kısayollar
-
-| Tuş | İşlev |
+| Değişken | Anlamı |
 |---|---|
-| `Ctrl+F` | Aramaya odaklan |
-| `Esc` | Aramayı temizle |
-| `Ctrl+1` … `Ctrl+5` | Sekmeler arasında geç |
-| `Ctrl+S` | Yüklü profili kaydet |
-| `Ctrl+Shift+C` | Oluşan satırın tamamını kopyala |
+| `FLM_MODE` | `auto` (varsayılan) · `latency` (daha gevşek floor, daha hızlı hitch toparlanması) · `present` (sabit tazeleme sayılan FIFO'da da pacing) · `cap` (yalnız limiter) · `off` (A/B tabanı). Canlı değiştirilebilir. |
+| `FLM_TARGET_FPS` | `>0` = FPS sınırı. `0` = doğal kadans. Canlı değiştirilebilir. |
+| `FLM_FLOOR_RATIO` | İsteğe bağlı, 500–1000. Temel floor oranını ezer (auto 850, latency 780); kapalı döngü yine bunun etrafında ayarlar. Canlı değiştirilebilir. |
+| `FLM_MFG_MULTIPLIER` | `0` otomatik (varsayılan), `1`–`4` zorla. Yükleme anında. |
+| `FLM_RT_PRIORITY` / `FLM_MEASURE_CPU` | Ölçüm thread'i SCHED_FIFO önceliği / CPU listesi (`0-3,8`). Yükleme anında. |
+| `FLM_LOG_LEVEL` / `FLM_LOG_FILE` | `DEBUG`/`INFO`/`WARN` (varsayılan)/`ERROR`; log dosyası (varsayılan stderr). |
+| `FLM_STATS=1` | 5 sn'de bir INFO: ortalama, p99, max, fake/hitch sayıları, çarpan, efektif oran, FIFO kararı. |
+| `FLM_CSV=/yol` | Flip başına döküm: `flip_ns,interval_ns,is_fake,is_hitch,slot,mfg,slot_mean_ns,pacing`. |
+| `FLM_CONFIG=/yol` | `SIGUSR1` ile yeniden okunan `ANAHTAR=DEĞER` dosyası (yalnız canlı anahtarlar). |
 
-Profil yüklüyken değişiklik yaparsan pencere başlığında **•** işareti belirir; kaydetmeyi unutmazsın.
+`FLM_PROFILE=vrr|mfg|latency|cap|off` ve `FLM_MODE=limiter` takma ad olarak
+çalışmaya devam eder. Diğer tüm v2.x `FLM_*` değişkenleri kaldırıldı; hâlâ
+tanımlıysa logda bir kez raporlanır (`removed in v3 … ignored`) — silin.
 
----
+## Çalıştığını doğrulama
 
-## Ayarlar nerede saklanıyor?
+```bash
+FLM_LOG_LEVEL=INFO FLM_STATS=1 FLM_LOG_FILE=/tmp/flm.log %command%
+tail -f /tmp/flm.log
+```
 
-- Profiller: `~/.config/drstool/profiles.json` (veya `$XDG_CONFIG_HOME/drstool/profiles.json`)
-- Dosya güvenli şekilde yazılır; kayıt sırasında elektrik gitse bile bozulmaz.
-- Eski `~/.drs_configurator_profiles.json` dosyası ilk açılışta otomatik taşınır.
+* `STATS … mfg=4 ratio=9xx` — pacer aktif, çarpan tespit edilmiş, floor tam slota yakın.
+* `ratio=0` — bu swapchain'de pacer çalışmıyor (FIFO sabit tazeleme sayıldı, presentWait yok ya da sınır ayarlı).
+* VRR panelde `fifo=fixed` — oyun panelin azami tazelemesinde ya da kusursuz sabit bir hızda; düzeltilecek bir şey yok. `FLM_MODE=present` yine de zorlar.
+* `presentId/Wait not supported` — bu sürücüde yalnız limiter kullanılabilir.
 
----
+Aynı sahnede A/B (ilk dakikadaki shader derlemesini dışarıda bırakın):
 
-## Sık sorulan sorular
+```bash
+FLM_MODE=off FLM_CSV=/tmp/off.csv %command%
+FLM_CSV=/tmp/on.csv %command%
+```
 
-**Ayarım etki etmiyor gibi, ne yapmalıyım?**
-DRS ayarlarının çoğu yalnızca **dxvk-nvapi etkinken** çalışır. Proton'da `PROTON_ENABLE_NVAPI=1` gerekebilir. DLSS ile ilgili ayarlar için oyunun DLSS'i gerçekten kullanıyor olması gerekir.
+`interval_ns` sütununun stddev / p99 değerlerini karşılaştırın.
 
-**DLSS preset olarak ne seçmeliyim?**
-Emin değilsen **"Latest"** seç; sürücü her mod için önerilen preset'i kullanır.
+## Canlı ayar
 
-**Bir şey bozuldu, nasıl geri alırım?**
-Çıktı çubuğundaki **Reset** ile hepsini sıfırla, ya da Steam/Lutris'teki başlatma seçeneklerini sil. Lutris için DRSTool'un aldığı yedek dosyası oyunun `.yml` dosyasının yanında durur.
+```bash
+ENABLE_LAYER_cpu_flip_meter=1 FLM_CONFIG=/tmp/flm.conf %command%
+echo 'FLM_MODE=latency' > /tmp/flm.conf
+kill -USR1 $(pidof <oyun_binary>)
+```
 
-**Hangi değişkenin hangi Proton sürümünde çalıştığını nasıl bilirim?**
-Fork'a özgü değişkenlerin açıklamasında hangi fork'a (GE-Proton, Proton-CachyOS, Proton-EM...) ait oldukları yazar. Upstream'den kaldırılmış olanlar da açıklamada belirtilir.
+Her reload yerleşik varsayılanlardan başlar, sonra ortam değişkenleri, sonra
+dosya uygulanır — bir satırı silmek o anahtarı geri alır.
 
----
+## v2.x'ten geçiş
 
-## Kapsanan projeler
-
-DRSTool'daki ayar ve açıklamalar şu projelerin güncel kaynak kodlarından derlenmiştir (son eşitleme: Eylül 2026):
-
-- [DXVK](https://github.com/doitsujin/dxvk)
-- [VKD3D-Proton](https://github.com/HansKristian-Work/vkd3d-proton)
-- [DXVK-NVAPI](https://github.com/jp7677/dxvk-nvapi)
-- [NVIDIA NVAPI başlıkları](https://github.com/NVIDIA/nvapi)
-- [gamescope](https://github.com/ValveSoftware/gamescope)
-- [Proton](https://github.com/ValveSoftware/Proton)
-
----
-
-## Lisans
-
-MIT — ayrıntılar için [LICENSE](LICENSE). Bu proje yapay zeka yardımıyla geliştirilmiştir; bkz. [DISCLAIMER.md](DISCLAIMER.md).
+| v2.x | v3.0 |
+|---|---|
+| `FLM_PROFILE=mfg` / `vrr` | hiçbir şey (varsayılan) |
+| `FLM_MODE=limiter FLM_TARGET_FPS=N` | `FLM_TARGET_FPS=N` |
+| `FLM_PACE_FIFO=1` | otomatik (VRR kadans tespiti); zorlamak için `FLM_MODE=present` |
+| `FLM_FLOOR_*`, `FLM_SPIN_*`, `FLM_HITCH_*`, `FLM_PROBE_*`, `FLM_WARMUP_FRAMES`, `FLM_PRESENT_LEAD_NS`, `FLM_DRIFT_TOLERANCE_NS`, `FLM_PACE_POINT`, `FLM_STATS_INTERVAL`, `FLM_CSV_SYNC_S` | silin — artık dahili |

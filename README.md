@@ -1,94 +1,88 @@
 # ⚠️ DISCLAIMER
 
-**USE AT YOUR OWN RISK.** This software is provided as-is without warranty of any kind. By using DRSTool, you acknowledge that:
-
-1. **You accept all responsibility** for any damage, data loss, system instability, or hardware damage that may result from using this tool.
-2. **Modifying driver settings can cause serious issues** including driver crashes, GPU hangs, system freezes, or GPU damage if incorrectly configured.
-3. **This project was developed with AI assistance.** While the code has been reviewed and tested, AI-assisted development may contain subtle bugs or edge cases not caught during testing.
-4. **No liability.** The developers and contributors assume no liability for direct or indirect damages caused by this software.
-
-**Before using:** Test settings on non-critical systems first, back up your working configuration, and keep a recovery method available. If you experience driver issues, completely unset the environment variables and restart your display server/system.
+This layer is part of a project developed with AI assistance. Use at your own risk. By using FLM, you accept responsibility for any system instability, GPU hangs, or display corruption that may result. See DISCLAIMER.md in the parent project directory for full details.
 
 ---
 
-                                                              SCREENSHOTS
+# FLM — Vulkan Flip Meter / Frame Pacing Layer (v3.1 — "auto")
 
-<img width="1970" height="1467" alt="Screenshot_20260721_125100" src="https://github.com/user-attachments/assets/8e3e741d-17a7-4ce1-818b-3bedc1da8c81" />
-<img width="1970" height="1467" alt="Screenshot_20260721_125043" src="https://github.com/user-attachments/assets/e21120ab-af87-454a-a086-5f3ea99cec29" />
-<img width="1970" height="1467" alt="Screenshot_20260721_125017" src="https://github.com/user-attachments/assets/a29ad67f-4a9b-47f4-a44a-1ac8916d458d" />
-<img width="1970" height="1467" alt="Screenshot_20260721_124954" src="https://github.com/user-attachments/assets/8a5467e1-75b9-4f8e-ac8a-9cd526e87b30" />
-<img width="1970" height="1467" alt="Screenshot_20260721_124937" src="https://github.com/user-attachments/assets/0db5a47d-2f13-4af8-913a-7bdec1d239b1" />
-<img width="1970" height="1467" alt="Screenshot_20260721_124900" src="https://github.com/user-attachments/assets/51dc442c-b37c-4476-95d9-506fd12ffb56" />
+A Vulkan layer that evens out frame delivery on VRR panels, especially with
+frame generation (DLSS-FG / FSR-FG / MFG), and doubles as a precise FPS cap.
 
+v3.0 configures itself. There is nothing to tune for the common case:
 
-# DRSTool
-
-**DRSTool** is a PySide6 desktop GUI for building `DXVK_NVAPI_DRS_SETTINGS` strings on Linux — the DXVK-NVAPI equivalent of NVIDIA Profile Inspector on Windows. It exists because tuning NVIDIA driver behavior for a game running through Proton/DXVK on Linux normally means hand-writing long, error-prone environment-variable strings from memory or scattered wiki pages. DRSTool turns that into a searchable, documented, point-and-click editor and lets you save the result as a reusable profile per game.
+```bash
+ENABLE_LAYER_cpu_flip_meter=1 %command%
+```
 
 ## What it does
 
-DRSTool lets you:
+| Situation | What FLM does |
+|---|---|
+| `FLM_TARGET_FPS` > 0 | **Limiter**: absolute-timeline FPS cap. Needs no presentWait. |
+| VRR, MAILBOX/IMMEDIATE | **Floor pacer**: generated/runt frames are held until a minimum spacing after the previous one; real frames and VRR rate changes pass untouched. |
+| FIFO (vsync on) | Cadence is measured. Continuous intervals = VRR → paced. Intervals locked to refresh multiples = fixed refresh → left alone. |
+| Tiny swapchains (<640×480) | Ignored (launchers, overlays). |
 
-- Browse and set **NVIDIA Driver Settings (DRS)** — the same low-level settings NVIDIA Profile Inspector exposes on Windows, reimplemented here for `dxvk-nvapi`'s `DXVK_NVAPI_DRS_SETTINGS` environment variable.
-- Pick a **GPU architecture** so DRSTool generates the correct `DXVK_NVAPI_GPU_ARCH` value for your card.
-- Configure **DXVK**, **VKD3D-Proton**, and NVIDIA `__GL_*` environment variables through the same searchable, documented interface, instead of memorizing variable names and valid values.
-- Configure the **vk_flip_meter (FLM)** frame-pacing layer's runtime variables and build/install the layer itself from source.
-- Save and reload **profiles** (a full snapshot of DRS settings + GPU arch + env vars) per game, and copy the final combined `KEY=VALUE ...` string ready to paste into a launch script, Steam launch options, or a Lutris config.
+Detected automatically: the frame-generation multiplier (1–4x), the floor
+ratio (closed loop, per multiplier), the sleep/spin margin, hitch threshold
+and recovery, fixed-refresh vs VRR on FIFO.
 
-In short: point, click, describe, copy — instead of writing hex-coded driver settings by hand.
+## Variables
 
-## Why it exists
+| Variable | Meaning |
+|---|---|
+| `FLM_MODE` | `auto` (default) · `latency` (looser floor, faster hitch recovery) · `present` (also pace FIFO classified as fixed-refresh) · `cap` (limiter only) · `off` (A/B baseline). Hot-reloadable. |
+| `FLM_TARGET_FPS` | `>0` = FPS cap. `0` = natural cadence. Hot-reloadable. |
+| `FLM_FLOOR_RATIO` | Optional 500–1000. Overrides the base floor ratio (auto 850, latency 780); the closed loop still adjusts around it. Hot-reloadable. |
+| `FLM_MFG_MULTIPLIER` | `0` auto (default), `1`–`4` force. Load-time. |
+| `FLM_RT_PRIORITY` / `FLM_MEASURE_CPU` | Measurement thread SCHED_FIFO priority / CPU list (`0-3,8`). Load-time. |
+| `FLM_LOG_LEVEL` / `FLM_LOG_FILE` | `DEBUG`/`INFO`/`WARN` (default)/`ERROR`; log file (default stderr). |
+| `FLM_STATS=1` | Every 5 s at INFO: avg, p99, max, fake/hitch counts, multiplier, effective ratio, FIFO verdict. |
+| `FLM_CSV=/path` | Per-flip dump: `flip_ns,interval_ns,is_fake,is_hitch,slot,mfg,slot_mean_ns,pacing`. |
+| `FLM_CONFIG=/path` | `KEY=VALUE` file re-read on `SIGUSR1` (hot-reloadable keys only). |
 
-On Windows, NVIDIA Profile Inspector is the standard tool for tweaking per-game driver behavior beyond what the NVIDIA Control Panel exposes. On Linux there was no equivalent GUI for the `dxvk-nvapi` settings that let you replicate that same fine-grained control for Proton/Wine games — you had to know the hex setting IDs and valid values ahead of time. DRSTool fills that gap with human-readable names, descriptions, and per-setting editors, built specifically for the Linux gaming stack (DXVK, VKD3D-Proton, dxvk-nvapi, vk_flip_meter).
+`FLM_PROFILE=vrr|mfg|latency|cap|off` and `FLM_MODE=limiter` still work as
+aliases. Every other v2.x `FLM_*` variable was removed; if one is still set
+it is reported once in the log (`removed in v3 … ignored`) — delete it.
 
-## Requirements
-
-- Python ≥ 3.7
-- PySide6 ≥ 6.10
-- For the vk_flip_meter build/install feature: `cmake`, a C++ compiler, and `pkexec` (PolicyKit) available on the system
-
-## Running
+## Checking it works
 
 ```bash
-python3 DRSTool.py
+FLM_LOG_LEVEL=INFO FLM_STATS=1 FLM_LOG_FILE=/tmp/flm.log %command%
+tail -f /tmp/flm.log
 ```
 
-## Interface overview
+* `STATS … mfg=4 ratio=9xx` — pacer active, multiplier detected, floor near a full slot.
+* `ratio=0` — the pacer is not running on this swapchain (FIFO judged fixed-refresh, no presentWait, or a cap is set).
+* `fifo=fixed` on a VRR panel — the game is sitting at the panel's maximum refresh or at a perfectly steady rate; nothing to smooth. `FLM_MODE=present` forces pacing anyway.
+* `presentId/Wait not supported` — only the limiter is available on this driver.
 
-The app is a single window split into a left sidebar (list/navigation) and a right editor panel, with a persistent output bar across the top showing the currently generated environment string. Five tabs switch what the sidebar/editor show:
+A/B on the same scene (skip the first minute of shader compilation):
 
-### 1. DRS Settings
-A searchable, categorized list of **118 driver settings** across categories such as OpenGL, Anti-Aliasing, Texture Filtering, VSync/Flip, Frame Rate, Power, SLI, Stereo, VRR/G-Sync, DLSS/NGX, Ansel, FXAA, AO, Optimus, and Misc. Each setting has a short description and a longer detailed description, plus the correct control type — enum dropdown, numeric spinner, or bitfield checkboxes — matching how the underlying value is actually encoded. Selecting a setting opens its editor on the right; setting a value updates the output bar and highlights the setting green in the sidebar list.
+```bash
+FLM_MODE=off FLM_CSV=/tmp/off.csv %command%
+FLM_CSV=/tmp/on.csv %command%
+```
 
-### 2. GPU Arch
-A list of NVIDIA GPU architecture families (Maxwell through Blackwell, i.e. GeForce 900-series through RTX 50-series) with example cards for each. Selecting one sets `DXVK_NVAPI_GPU_ARCH` in the output string, since some DRS settings only apply correctly when the driver knows which architecture it's dealing with.
+Compare the stddev / p99 of `interval_ns`.
 
-### 3. DXVK / VKD3D / NV / FLM
-A single combined, categorized, searchable list covering:
-- **DXVK** environment variables (HUD flags, logging, device/frame-related options, etc.) — 15 variables
-- **VKD3D-Proton** environment variables, including the `VKD3D_CONFIG` flag grid — 16 variables
-- **NVIDIA `__GL_*`** variables — 31 variables
-- **vk_flip_meter (FLM)** runtime variables (`FLM_MODE`, `FLM_TARGET_FPS`, `FLM_MFG_MULTIPLIER`, etc.) — 16 variables
+## Live tuning
 
-Each variable is typed (string, enum, bool, integer, or flag-set) and gets the matching editor control — text field, dropdown, checkbox, or a checkbox grid for multi-flag variables like `DXVK_HUD` and `VKD3D_CONFIG`. Values you set here are merged into the same combined output string as the DRS settings.
+```bash
+ENABLE_LAYER_cpu_flip_meter=1 FLM_CONFIG=/tmp/flm.conf %command%
+echo 'FLM_MODE=latency' > /tmp/flm.conf
+kill -USR1 $(pidof <game_binary>)
+```
 
-### 4. Profiles
-Save the entire current state — DRS settings, GPU architecture, and all env vars — under a name, then reload or delete it later. Profiles are stored as JSON under `$XDG_CONFIG_HOME/drstool/profiles.json` (falling back to `~/.config/drstool/profiles.json`), written atomically to avoid corruption on crash/power-loss. Existing installs using the old `~/.drs_configurator_profiles.json` location are migrated automatically on first run.
+Each reload starts from the built-in defaults, then the environment, then the
+file — removing a line reverts that key.
 
-### 5. vk_flip_meter
-A build/install panel for the vk_flip_meter Vulkan layer, bundled as a subproject in this repository. It locates or lets you browse to the layer's source, then runs an unprivileged `cmake` configure + build, and only escalates to `pkexec` for the two steps that actually need root: `cmake --install` and a manifest library-path fixup. This keeps almost the entire build pipeline running as your normal user, only prompting for a password (via a graphical polkit dialog) at the last possible moment.
+## Migrating from v2.x
 
-Runtime tuning of the layer (`FLM_MODE`, `FLM_TARGET_FPS`, etc.) is not done on this tab — it's one click away on the "Environment" tab, using the same editor as everything else, and is folded into the combined output string automatically.
-
-## Output bar
-
-Across the top of the window, DRSTool continuously shows the combined environment string generated from your current DRS settings, GPU arch, and env vars, along with a "Copy all" action (plain shell form, or Steam launch options ending in `%command%`) — ready to drop directly into a Lutris/Steam launch-options field or a shell script. Each value box is click-to-copy and elides long strings instead of widening the window.
-
-## Design notes
-
-- **Signal-driven state**: a central `SettingsManager` (a `QObject`) is the single source of truth for DRS settings, GPU arch, and profiles, emitting distinct Qt signals (`settings_changed`, `arch_changed`, `profiles_changed`, `profile_loaded`) so UI widgets only rebuild what actually changed — e.g. the profile list only refreshes on `profiles_changed`, not on every single setting edit.
-- **Atomic profile writes**: profiles are written to a temp file and `os.replace()`'d into place, with an `fsync()` beforehand, so a crash mid-save can't corrupt the profiles file.
-- **Shell-safe output**: the combined env string is built with `shlex.quote()`, so values containing spaces or special characters are quoted correctly instead of silently breaking when pasted into a shell.
-- **Keyboard shortcuts:** Ctrl+F filter, Esc clear filter, Ctrl+1…5 switch tabs, Ctrl+S save to the loaded profile, Ctrl+Shift+C copy the launch string. Window size, splitter position and the last tab are remembered.
-- **Unsaved-changes indicator:** once a profile is loaded, any edit marks it (window title "•", highlighted Save button, profile name in the tab bar).
-- **Dark, NVIDIA-green-accented UI** styled consistently across all tabs (list headers, selection highlighting, scrollbars) via shared Qt stylesheets.
+| v2.x | v3.0 |
+|---|---|
+| `FLM_PROFILE=mfg` / `vrr` | nothing (default) |
+| `FLM_MODE=limiter FLM_TARGET_FPS=N` | `FLM_TARGET_FPS=N` |
+| `FLM_PACE_FIFO=1` | automatic (VRR cadence detection); `FLM_MODE=present` to force |
+| `FLM_FLOOR_*`, `FLM_SPIN_*`, `FLM_HITCH_*`, `FLM_PROBE_*`, `FLM_WARMUP_FRAMES`, `FLM_PRESENT_LEAD_NS`, `FLM_DRIFT_TOLERANCE_NS`, `FLM_PACE_POINT`, `FLM_STATS_INTERVAL`, `FLM_CSV_SYNC_S` | delete — internal now |
