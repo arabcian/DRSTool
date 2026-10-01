@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# lutris-game-tune.sh — Lutris Pre/Post Game System Tuner (v4.3)
+# lutris-game-tune.sh — Lutris Pre/Post Game System Tuner (v4.6)
 #
 # Not meant to be called directly. Invoked by lutris-game-tune-wrapper (a
 # setuid root binary). See lutris-game-tune-wrapper.c for wrapper setup.
@@ -9,6 +9,9 @@
 #   Pre-game script:  /usr/local/bin/lutris-game-tune-wrapper PRE
 #   Post-game script: /usr/local/bin/lutris-game-tune-wrapper POST
 #   Status check:     /usr/local/bin/lutris-game-tune-wrapper STATUS
+#   Per-game profile: /usr/local/bin/lutris-game-tune-wrapper PRE <profile>
+#   Preview (no writes): lutris-game-tune-wrapper DRYRUN [profile]
+#   Stuck state:      lutris-game-tune-wrapper RESTORE   (forces a full restore)
 #   Command prefix:   /usr/local/bin/lutris-game-tune-wrapper RUN <nice> -- <command...>
 #                      (goes in Lutris's "Command prefix" field; starts the
 #                      game with the given nice value. This mode NEVER enters
@@ -163,16 +166,71 @@
 #     SET_X3D_VCACHE_MODE (default 1) and X3D_VCACHE_MODE (default
 #     "frequency"). Silently skipped, like epp_boost, when the driver isn't
 #     bound.
+#
+# v4.5 changes — Intel CPU support:
+#   - CPU vendor is detected once per run (/proc/cpuinfo vendor_id). AMD-only
+#     tunables (amd-pstate epp_boost, amd_x3d_vcache) are skipped on Intel, so
+#     Intel systems no longer get an "amd_x3d_vcache: driver not bound" warning
+#     on every PRE.
+#   - New Intel tunables, each saved on PRE and restored on POST like every
+#     other parameter and each skipped when its kernel interface is missing:
+#       * intel_pstate/no_turbo            (SET_INTEL_TURBO)      -> 0
+#       * intel_pstate/hwp_dynamic_boost   (SET_INTEL_HWP_BOOST)  -> 1
+#       * intel_pstate/max_perf_pct, min_perf_pct (INTEL_MAX/MIN_PERF_PCT)
+#       * cpuN/power/energy_perf_bias      (SET_INTEL_EPB)        -> 0
+#       * kernel.sched_itmt_enabled        (SET_INTEL_ITMT)       -> 1
+#     The existing governor/EPP handling already works with intel_pstate
+#     (active+HWP exposes energy_performance_preference per policy).
+#   - Hybrid P/E-core isolation (Alder Lake and newer): the AMD CCD logic
+#     looks for two L3 domains, which never exist on Intel (one shared L3), so
+#     it silently did nothing there. With HYBRID_CORE_ISOLATION=1 the same
+#     theGood/theUgly machinery now uses P-cores as the performance group and
+#     E-cores (+ LP-E cores) as the system group. Opt-in, and automatically
+#     skipped when the P-cores expose fewer than HYBRID_MIN_P_THREADS threads.
+#
+# v4.6 changes:
+#   - RELIABILITY: the plain PRE/POST counter is replaced by per-game entries
+#     (STATE_DIR/.games/). Each entry remembers its launcher process (anchor +
+#     start time), so entries left behind by a crashed/killed launcher are
+#     dropped on the next PRE instead of keeping game mode "active" forever.
+#     New RESTORE command forces a full restore regardless of the count.
+#   - PRE <profile> / DRYRUN [profile]: per-game config overrides loaded from
+#     /etc/lutris-game-tune.d/<profile>.conf (same safe whitelist parser;
+#     root-owned, not group/other writable). DRYRUN prints what PRE would do
+#     without writing, saving or moving anything.
+#   - VERIFY: every tune_param/tune_choice_param write is read back; a PRE
+#     summary (applied / read back differently / failed / skipped) is logged
+#     and shown by STATUS.
+#   - New tunables: vm.max_map_count (raise-only), dirty-page limits, NUMA
+#     balancing, IRQ affinity (opt-in), NVIDIA persistence mode, amdgpu
+#     power_dpm_force_performance_level (opt-in), Wi-Fi power save, NVMe I/O
+#     scheduler.
+#   - tests/run-tests.sh sources this file (GT_TEST_DIR, non-root only).
 # =============================================================================
 
 set -euo pipefail
 
 # --- Constants -----------------------------------------------------------------
-readonly STATE_DIR="/run/lutris-game-tune"
-readonly LOCK_FILE="/run/lutris-game-tune.lock"
-readonly LOG_FILE="/var/log/lutris-game-tune.log"
 readonly LOG_MAX_BYTES=$((1024 * 1024))
-readonly CONFIG_FILE="/etc/lutris-game-tune.conf"
+# Test hook (tests/run-tests.sh): honored ONLY for non-root callers, so it can
+# never influence the setuid-root chain (the wrapper also clears the env).
+if (( EUID != 0 )) && [[ -n "${GT_TEST_DIR:-}" ]]; then
+    GT_TEST_MODE=1
+    STATE_DIR="${GT_TEST_DIR}/run"
+    LOCK_FILE="${GT_TEST_DIR}/lock"
+    LOG_FILE="${GT_TEST_DIR}/log"
+    CONFIG_FILE="${GT_TEST_DIR}/lutris-game-tune.conf"
+    PROFILE_DIR="${GT_TEST_DIR}/profiles"
+    OWNER_UID="${EUID}"
+else
+    GT_TEST_MODE=0
+    readonly STATE_DIR="/run/lutris-game-tune"
+    readonly LOCK_FILE="/run/lutris-game-tune.lock"
+    readonly LOG_FILE="/var/log/lutris-game-tune.log"
+    readonly CONFIG_FILE="/etc/lutris-game-tune.conf"
+    readonly PROFILE_DIR="/etc/lutris-game-tune.d"
+    readonly OWNER_UID=0
+fi
 
 # --- Configuration (defaults; overridable via /etc/lutris-game-tune.conf) ----
 # CPU frequency governor (amd-pstate active mode also sets EPP to performance)
@@ -189,6 +247,28 @@ SET_EPP_BOOST=1
 # (non-X3D CPU or kernel without the driver), so safe to leave enabled.
 SET_X3D_VCACHE_MODE=1
 X3D_VCACHE_MODE="frequency"
+# --- Intel CPUs ---------------------------------------------------------------
+# Used only when /proc/cpuinfo reports GenuineIntel (the AMD-only tunables above
+# are skipped on Intel). Each knob is skipped when its kernel interface is
+# missing, so leaving them enabled is safe on any Intel system.
+# Force turbo on while gaming (intel_pstate/no_turbo=0).
+SET_INTEL_TURBO=1
+# intel_pstate hwp_dynamic_boost=1 (active mode + HWP only).
+SET_INTEL_HWP_BOOST=1
+# intel_pstate performance limits in percent; 0 = leave unchanged.
+INTEL_MAX_PERF_PCT=100
+INTEL_MIN_PERF_PCT=0
+# Energy/performance bias (cpuN/power/energy_perf_bias): 0 = max performance.
+SET_INTEL_EPB=1
+# ITMT favored-core scheduling (Turbo Boost Max 3.0 / hybrid): sched_itmt_enabled=1.
+SET_INTEL_ITMT=1
+# Hybrid (P+E core) CPUs only: pin the game to the P-cores and the rest of the
+# system to the E-cores, reusing the CCD isolation machinery. Opt-in, because
+# confining a game to P-core threads only pays off when there are enough of them.
+HYBRID_CORE_ISOLATION=0
+# Skip hybrid isolation when the P-cores expose fewer logical CPUs than this.
+HYBRID_MIN_P_THREADS=8
+CPU_VENDOR="unknown"   # set by detect_cpu_vendor(): intel | amd | unknown
 # PCIe ASPM policy during gameplay (cuts link wake-up latency)
 ASPM_POLICY="performance"
 SET_ASPM=1
@@ -221,6 +301,41 @@ LRU_GEN_ENABLED=7
 SCHED_MIN_BASE_SLICE_NS=1000000
 SCHED_MIGRATION_COST_NS=500000
 SCHED_NR_MIGRATE=32
+
+# --- Proton / Wine friendliness -----------------------------------------------
+# vm.max_map_count: some Proton titles crash on the stock 65530. Only ever
+# RAISED, never lowered. 0 = leave alone. (SteamOS uses 2147483642.)
+VM_MAX_MAP_COUNT=2147483642
+# Smaller dirty-page windows smooth out shader-cache / save-file write bursts.
+# While active, the *_bytes knobs replace the *_ratio ones; all four originals
+# are saved and restored. Skipped when dirty_bytes is already <= the target.
+SET_VM_DIRTY=1
+VM_DIRTY_BACKGROUND_BYTES=67108864
+VM_DIRTY_BYTES=268435456
+# NUMA auto-balancing = background page scanning/migration (page-fault noise).
+SET_NUMA_BALANCING=1
+
+# --- IRQ affinity (opt-in) ----------------------------------------------------
+# Moves the IRQs of the selected PCI device classes (gpu nvme net usb audio)
+# onto the "system" CPUs: IRQ_AFFINITY_CPUS if set, else the system CCD group.
+SET_IRQ_AFFINITY=0
+IRQ_AFFINITY_CLASSES="gpu nvme net usb"
+IRQ_AFFINITY_CPUS=""
+
+# --- GPU ----------------------------------------------------------------------
+# NVIDIA persistence mode (only touches GPUs where it is currently disabled).
+SET_NVIDIA_PERSISTENCE=0
+# amdgpu power_dpm_force_performance_level (raises power draw; opt-in).
+SET_AMDGPU_PERF_LEVEL=0
+AMDGPU_PERF_LEVEL="high"
+
+# --- Network / storage --------------------------------------------------------
+SET_WIFI_POWERSAVE=1
+SET_NVME_SCHED=1
+NVME_IO_SCHEDULER="none"
+
+# --- Dry run / profile (runtime state, not config keys) -----------------------
+DRY_RUN=0
 
 THP_ENABLED="madvise"
 THP_SHMEM_ENABLED="madvise"
@@ -322,7 +437,7 @@ ensure_state_dir() {
     local owner mode
     owner=$(stat -c '%u' "${STATE_DIR}")
     mode=$(stat -c '%a' "${STATE_DIR}")
-    if [[ "${owner}" != "0" ]]; then
+    if [[ "${owner}" != "${OWNER_UID}" ]]; then
         err "SECURITY: ${STATE_DIR} is not owned by root (uid=${owner}) — aborting."
         exit 1
     fi
@@ -333,23 +448,24 @@ ensure_state_dir() {
 
 # Read the config file SAFELY: no source (would allow code execution in the
 # setuid chain) — only whitelisted KEY=VALUE lines are accepted.
-load_config() {
-    [[ -f "${CONFIG_FILE}" ]] || return 0
-    if [[ -L "${CONFIG_FILE}" ]]; then
-        warn "Config is a symlink, ignored: ${CONFIG_FILE}"
-        return 0
+load_config_file() {
+    local cf="$1"
+    [[ -f "${cf}" ]] || return 0
+    if [[ -L "${cf}" ]]; then
+        warn "Config is a symlink, ignored: ${cf}"
+        return 3
     fi
     local owner mode
-    owner=$(stat -c '%u' "${CONFIG_FILE}")
-    mode=$(( 8#$(stat -c '%a' "${CONFIG_FILE}") ))
-    if [[ "${owner}" != "0" ]]; then
-        warn "Config is not owned by root, ignored: ${CONFIG_FILE}"
-        return 0
+    owner=$(stat -c '%u' "${cf}")
+    mode=$(( 8#$(stat -c '%a' "${cf}") ))
+    if [[ "${owner}" != "${OWNER_UID}" ]]; then
+        warn "Config is not owned by root, ignored: ${cf}"
+        return 3
     fi
     # reject if group (020) or other (002) write bit is set
     if (( mode & 8#022 )); then
-        warn "Config is group/other writable, ignored: ${CONFIG_FILE}"
-        return 0
+        warn "Config is group/other writable, ignored: ${cf}"
+        return 3
     fi
 
     local line key val
@@ -361,6 +477,10 @@ load_config() {
         if [[ "${line}" =~ ^CCD_EXTRA_GOOD_PROCS=(.*)$ ]]; then
             key="CCD_EXTRA_GOOD_PROCS"
             val="${BASH_REMATCH[1]}"
+        elif [[ "${line}" =~ ^(IRQ_AFFINITY_CPUS|IRQ_AFFINITY_CLASSES)=(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            val="${BASH_REMATCH[2]}"
+            val="${val#\"}"; val="${val%\"}"
         elif [[ "${line}" =~ ^([A-Z0-9_]+)=([[:alnum:]_.-]+)$ ]]; then
             key="${BASH_REMATCH[1]}"
             val="${BASH_REMATCH[2]}"
@@ -386,6 +506,77 @@ load_config() {
                     frequency|cache) X3D_VCACHE_MODE="${val,,}" ;;
                     *) warn "Invalid X3D_VCACHE_MODE '${val}' (frequency|cache), using default ${X3D_VCACHE_MODE}" ;;
                 esac ;;
+            SET_VM_DIRTY)          SET_VM_DIRTY="${val}" ;;
+            SET_NUMA_BALANCING)    SET_NUMA_BALANCING="${val}" ;;
+            SET_IRQ_AFFINITY)      SET_IRQ_AFFINITY="${val}" ;;
+            SET_NVIDIA_PERSISTENCE) SET_NVIDIA_PERSISTENCE="${val}" ;;
+            SET_AMDGPU_PERF_LEVEL) SET_AMDGPU_PERF_LEVEL="${val}" ;;
+            SET_WIFI_POWERSAVE)    SET_WIFI_POWERSAVE="${val}" ;;
+            SET_NVME_SCHED)        SET_NVME_SCHED="${val}" ;;
+            VM_MAX_MAP_COUNT)
+                if [[ "${val}" =~ ^[0-9]+$ ]] && (( 10#${val} <= 2147483647 )); then
+                    VM_MAX_MAP_COUNT="$(( 10#${val} ))"
+                else
+                    warn "Invalid VM_MAX_MAP_COUNT '${val}' (0-2147483647), using default ${VM_MAX_MAP_COUNT}"
+                fi ;;
+            VM_DIRTY_BACKGROUND_BYTES)
+                if [[ "${val}" =~ ^[0-9]+$ ]] && (( 10#${val} >= 1048576 && 10#${val} <= 2147483647 )); then
+                    VM_DIRTY_BACKGROUND_BYTES="$(( 10#${val} ))"
+                else
+                    warn "Invalid VM_DIRTY_BACKGROUND_BYTES '${val}' (1048576-2147483647), using default ${VM_DIRTY_BACKGROUND_BYTES}"
+                fi ;;
+            VM_DIRTY_BYTES)
+                if [[ "${val}" =~ ^[0-9]+$ ]] && (( 10#${val} >= 1048576 && 10#${val} <= 2147483647 )); then
+                    VM_DIRTY_BYTES="$(( 10#${val} ))"
+                else
+                    warn "Invalid VM_DIRTY_BYTES '${val}' (1048576-2147483647), using default ${VM_DIRTY_BYTES}"
+                fi ;;
+            AMDGPU_PERF_LEVEL)
+                case "${val}" in
+                    auto|low|high|manual|profile_standard|profile_min_sclk|profile_min_mclk|profile_peak)
+                        AMDGPU_PERF_LEVEL="${val}" ;;
+                    *) warn "Invalid AMDGPU_PERF_LEVEL '${val}', using default ${AMDGPU_PERF_LEVEL}" ;;
+                esac ;;
+            NVME_IO_SCHEDULER)
+                case "${val}" in
+                    none|mq-deadline|kyber|bfq) NVME_IO_SCHEDULER="${val}" ;;
+                    *) warn "Invalid NVME_IO_SCHEDULER '${val}' (none|mq-deadline|kyber|bfq), using default ${NVME_IO_SCHEDULER}" ;;
+                esac ;;
+            IRQ_AFFINITY_CPUS)
+                if [[ -z "${val}" || "${val}" =~ ^[0-9]+([,-][0-9]+)*$ ]]; then
+                    IRQ_AFFINITY_CPUS="${val}"
+                else
+                    warn "Invalid IRQ_AFFINITY_CPUS '${val}' (cpulist like 8-15,24-31), ignored"
+                fi ;;
+            IRQ_AFFINITY_CLASSES)
+                if [[ "${val}" =~ ^(gpu|nvme|net|usb|audio)( (gpu|nvme|net|usb|audio))*$ ]]; then
+                    IRQ_AFFINITY_CLASSES="${val}"
+                else
+                    warn "Invalid IRQ_AFFINITY_CLASSES '${val}' (any of: gpu nvme net usb audio), using default '${IRQ_AFFINITY_CLASSES}'"
+                fi ;;
+            SET_INTEL_TURBO)       SET_INTEL_TURBO="${val}" ;;
+            SET_INTEL_HWP_BOOST)   SET_INTEL_HWP_BOOST="${val}" ;;
+            SET_INTEL_EPB)         SET_INTEL_EPB="${val}" ;;
+            SET_INTEL_ITMT)        SET_INTEL_ITMT="${val}" ;;
+            HYBRID_CORE_ISOLATION) HYBRID_CORE_ISOLATION="${val}" ;;
+            INTEL_MAX_PERF_PCT)
+                if [[ "${val}" =~ ^[0-9]+$ ]] && (( 10#${val} <= 100 )); then
+                    INTEL_MAX_PERF_PCT="$(( 10#${val} ))"
+                else
+                    warn "Invalid INTEL_MAX_PERF_PCT '${val}' (0-100), using default ${INTEL_MAX_PERF_PCT}"
+                fi ;;
+            INTEL_MIN_PERF_PCT)
+                if [[ "${val}" =~ ^[0-9]+$ ]] && (( 10#${val} <= 100 )); then
+                    INTEL_MIN_PERF_PCT="$(( 10#${val} ))"
+                else
+                    warn "Invalid INTEL_MIN_PERF_PCT '${val}' (0-100), using default ${INTEL_MIN_PERF_PCT}"
+                fi ;;
+            HYBRID_MIN_P_THREADS)
+                if [[ "${val}" =~ ^[0-9]+$ ]] && (( 10#${val} >= 1 && 10#${val} <= 512 )); then
+                    HYBRID_MIN_P_THREADS="$(( 10#${val} ))"
+                else
+                    warn "Invalid HYBRID_MIN_P_THREADS '${val}' (1-512), using default ${HYBRID_MIN_P_THREADS}"
+                fi ;;
             ASPM_POLICY)           ASPM_POLICY="${val}" ;;
             SET_ASPM)              SET_ASPM="${val}" ;;
             DISABLE_DEEP_CSTATES)  DISABLE_DEEP_CSTATES="${val}" ;;
@@ -477,12 +668,51 @@ load_config() {
                 esac ;;
             *) warn "Unknown config key, skipped: ${key}" ;;
         esac
-    done < "${CONFIG_FILE}"
-    log "Config loaded: ${CONFIG_FILE}"
+    done < "${cf}"
+    log "Config loaded: ${cf}"
+}
+
+load_config() { load_config_file "${CONFIG_FILE}" || true; }
+
+# --- Per-game profiles -----------------------------------------------------------
+# PRE <profile> loads PROFILE_DIR/<profile>.conf on top of the global config.
+# Same whitelist parser, same ownership/permission rules. The profile name is
+# validated here AND in the wrapper (no slashes, no leading dot -> no traversal).
+valid_profile_name() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; }
+
+load_profile() {
+    local name="$1" pf downer dmode
+    if ! valid_profile_name "${name}"; then
+        err "Invalid profile name: '${name}'"
+        return 1
+    fi
+    if [[ -L "${PROFILE_DIR}" || ! -d "${PROFILE_DIR}" ]]; then
+        err "Profile directory missing or a symlink: ${PROFILE_DIR}"
+        return 1
+    fi
+    downer="$(stat -c '%u' "${PROFILE_DIR}")"
+    dmode=$(( 8#$(stat -c '%a' "${PROFILE_DIR}") ))
+    if [[ "${downer}" != "${OWNER_UID}" ]] || (( dmode & 8#022 )); then
+        err "Profile directory must be root-owned and not group/other writable: ${PROFILE_DIR}"
+        return 1
+    fi
+    pf="${PROFILE_DIR}/${name}.conf"
+    if [[ ! -f "${pf}" ]]; then
+        err "Profile not found: ${pf}"
+        return 1
+    fi
+    if ! load_config_file "${pf}"; then
+        err "Profile rejected (ownership/permissions): ${pf}"
+        return 1
+    fi
+    log "Profile loaded: ${name}"
 }
 
 # Check debugfs mount, mount it if needed
 ensure_debugfs() {
+    if (( DRY_RUN )) && ! mountpoint -q /sys/kernel/debug 2>/dev/null; then
+        return 1   # dry run never mounts anything
+    fi
     if ! mountpoint -q /sys/kernel/debug 2>/dev/null; then
         warn "debugfs not mounted, mounting..."
         if ! mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null; then
@@ -508,6 +738,65 @@ _state_write() {
     printf '%s' "${content}" > "${file}"
 }
 
+# --- Run statistics / verification / dry run ---------------------------------------
+STAT_APPLIED=0
+STAT_SKIPPED=0
+STAT_FAILED=0
+STAT_MISMATCH=0
+
+# NOTE: plain assignments, never ((n++)) — that returns 1 when n was 0 and
+# would kill the script under set -e.
+_stat_applied() { STAT_APPLIED=$((STAT_APPLIED + 1)); }
+_stat_skipped() { STAT_SKIPPED=$((STAT_SKIPPED + 1)); }
+_stat_failed()  { STAT_FAILED=$((STAT_FAILED + 1)); }
+
+# Dry-run output always goes to the terminal, whatever LOG_LEVEL says.
+dry() { printf '[dry-run] %s\n' "$*"; }
+
+# Numeric value of a decimal or 0x-hex token (prints nothing otherwise)
+_to_num() {
+    local v="$1"
+    if [[ "${v}" =~ ^0[xX][0-9a-fA-F]+$ ]]; then
+        echo "$(( v ))"
+    elif [[ "${v}" =~ ^[0-9]+$ ]]; then
+        echo "$(( 10#${v} ))"
+    fi
+    return 0
+}
+
+# Read the value back after writing it and compare with what we wrote.
+# "a [b] c" choice files compare on the bracketed item; numbers compare
+# numerically (lru_gen reads back 0x0007 after writing 7).
+_verify_applied() {
+    local path="$1" want="$2" desc="$3" raw got wn gn
+    raw="$(cat "${path}" 2>/dev/null || true)"
+    if [[ "${raw}" =~ \[([^]]+)\] ]]; then got="${BASH_REMATCH[1]}"; else got="${raw}"; fi
+    got="${got//[[:space:]]/}"
+    wn="$(_to_num "${want}")"
+    gn="$(_to_num "${got}")"
+    if [[ "${got}" == "${want}" ]] || [[ -n "${wn}" && "${wn}" == "${gn}" ]]; then
+        log "Set         [${desc}]: ${want}"
+        _stat_applied
+    else
+        warn "Set         [${desc}]: wrote '${want}' but it reads back '${got}'"
+        STAT_MISMATCH=$((STAT_MISMATCH + 1))
+    fi
+}
+
+_print_summary() {
+    if (( DRY_RUN )); then
+        dry "Summary: ${STAT_SKIPPED} knob(s) not present on this system; everything else would be applied."
+        return 0
+    fi
+    local msg="${STAT_APPLIED} applied, ${STAT_MISMATCH} read back differently, ${STAT_FAILED} failed, ${STAT_SKIPPED} skipped (interface missing)"
+    if (( STAT_MISMATCH + STAT_FAILED > 0 )); then
+        warn "Summary: ${msg}"
+    else
+        log "Summary: ${msg}"
+    fi
+    _state_write "${STATE_DIR}/.summary" "${msg} [$(date '+%F %T')]" || true
+}
+
 # --- Parameter helpers -----------------------------------------------------
 # Read current value → save it → write new value
 # tune_param <path> <new_value> <description>
@@ -517,6 +806,11 @@ tune_param() {
 
     if [[ ! -e "${path}" ]]; then
         warn "Does not exist, skipped: ${desc}"
+        _stat_skipped
+        return 0
+    fi
+    if (( DRY_RUN )); then
+        dry "would set [${desc}]: $(cat "${path}" 2>/dev/null || echo '?') -> ${new_val}"
         return 0
     fi
 
@@ -538,9 +832,10 @@ tune_param() {
 
     if ! printf '%s' "${new_val}" > "${path}" 2>/dev/null; then
         warn "Write failed: ${desc} = ${new_val}"
+        _stat_failed
         return 0
     fi
-    log "Set         [${desc}]: ${new_val}"
+    _verify_applied "${path}" "${new_val}" "${desc}"
 }
 
 # For "a [b] c"-style choice files (THP, ASPM, io scheduler): extracts the
@@ -552,6 +847,11 @@ tune_choice_param() {
 
     if [[ ! -e "${path}" ]]; then
         warn "Does not exist, skipped: ${desc}"
+        _stat_skipped
+        return 0
+    fi
+    if (( DRY_RUN )); then
+        dry "would set [${desc}]: $(cat "${path}" 2>/dev/null || echo '?') -> ${new_val}"
         return 0
     fi
 
@@ -575,9 +875,10 @@ tune_choice_param() {
 
     if ! printf '%s' "${new_val}" > "${path}" 2>/dev/null; then
         warn "Write failed: ${desc} = ${new_val}"
+        _stat_failed
         return 0
     fi
-    log "Set         [${desc}]: ${new_val}"
+    _verify_applied "${path}" "${new_val}" "${desc}"
 }
 
 # Restore the saved value → remove the save file
@@ -620,6 +921,7 @@ SET_PCI_LATENCY=1
 
 tune_pci_latency() {
     [[ "${SET_PCI_LATENCY}" == "1" ]] || return 0
+    if (( DRY_RUN )); then dry "would set PCI latency timers (bridge=80, host=00, other=20)"; return 0; fi
     PCI_SAVE_FILE="${STATE_DIR}/pci_latency"
     if ! command -v setpci &>/dev/null; then
         warn "setpci not found — PCI latency tuning skipped"
@@ -699,6 +1001,78 @@ restore_cpu_governor() {
     done
 }
 
+# --- CPU vendor -----------------------------------------------------------------
+# Must ALWAYS return 0 (set -e): grep's "no match" status is swallowed.
+detect_cpu_vendor() {
+    local line=""
+    line="$(grep -m1 '^vendor_id' /proc/cpuinfo 2>/dev/null)" || true
+    case "${line}" in
+        *GenuineIntel*) CPU_VENDOR="intel" ;;
+        *AuthenticAMD*) CPU_VENDOR="amd" ;;
+        *)              CPU_VENDOR="unknown" ;;
+    esac
+    log_debug "CPU vendor: ${CPU_VENDOR}"
+    return 0
+}
+
+# --- Intel: intel_pstate / EPB / ITMT --------------------------------------------
+INTEL_PSTATE_DIR="/sys/devices/system/cpu/intel_pstate"
+ITMT_PATH="/proc/sys/kernel/sched_itmt_enabled"
+
+tune_intel() {
+    local d="${INTEL_PSTATE_DIR}"
+    if [[ -d "${d}" ]]; then
+        log_debug "intel_pstate status: $(cat "${d}/status" 2>/dev/null || echo unknown)"
+        if [[ "${SET_INTEL_TURBO}" == "1" ]]; then
+            tune_param "${d}/no_turbo" "0" "intel_pstate.no_turbo"
+        fi
+        if [[ "${SET_INTEL_HWP_BOOST}" == "1" && -e "${d}/hwp_dynamic_boost" ]]; then
+            tune_param "${d}/hwp_dynamic_boost" "1" "intel_pstate.hwp_dynamic_boost"
+        fi
+        # max before min: min_perf_pct must never exceed max_perf_pct
+        if (( INTEL_MAX_PERF_PCT > 0 )); then
+            tune_param "${d}/max_perf_pct" "${INTEL_MAX_PERF_PCT}" "intel_pstate.max_perf_pct"
+        fi
+        if (( INTEL_MIN_PERF_PCT > 0 )); then
+            tune_param "${d}/min_perf_pct" "${INTEL_MIN_PERF_PCT}" "intel_pstate.min_perf_pct"
+        fi
+    else
+        log_debug "intel_pstate not present (acpi-cpufreq or disabled), skipped"
+    fi
+
+    if [[ "${SET_INTEL_EPB}" == "1" ]]; then
+        local epb cpu_name
+        for epb in /sys/devices/system/cpu/cpu*/power/energy_perf_bias; do
+            [[ -f "${epb}" ]] || continue
+            [[ "${epb}" =~ /(cpu[0-9]+)/power/ ]] && cpu_name="${BASH_REMATCH[1]}" || cpu_name="cpu?"
+            tune_param "${epb}" "0" "epb.${cpu_name}"
+        done
+    fi
+
+    if [[ "${SET_INTEL_ITMT}" == "1" && -e "${ITMT_PATH}" ]]; then
+        tune_param "${ITMT_PATH}" "1" "kernel.sched_itmt_enabled"
+    fi
+}
+
+restore_intel() {
+    local d="${INTEL_PSTATE_DIR}"
+    # min before max (reverse of tune order); restore_param is a quiet no-op
+    # for anything that was never saved.
+    restore_param "${d}/min_perf_pct"      "intel_pstate.min_perf_pct"
+    restore_param "${d}/max_perf_pct"      "intel_pstate.max_perf_pct"
+    restore_param "${d}/hwp_dynamic_boost" "intel_pstate.hwp_dynamic_boost"
+    restore_param "${d}/no_turbo"          "intel_pstate.no_turbo"
+
+    local epb cpu_name
+    for epb in /sys/devices/system/cpu/cpu*/power/energy_perf_bias; do
+        [[ -f "${epb}" ]] || continue
+        [[ "${epb}" =~ /(cpu[0-9]+)/power/ ]] && cpu_name="${BASH_REMATCH[1]}" || cpu_name="cpu?"
+        restore_param "${epb}" "epb.${cpu_name}"
+    done
+
+    restore_param "${ITMT_PATH}" "kernel.sched_itmt_enabled"
+}
+
 # --- amd-pstate EPP boost (per-core, not yet upstream) ------------------------
 # /sys/module/amd_pstate/parameters/epp_boost only exists on kernels built
 # with the epp_boost patch series applied. tune_param already no-ops cleanly
@@ -708,6 +1082,7 @@ EPP_BOOST_PATH="/sys/module/amd_pstate/parameters/epp_boost"
 
 tune_epp_boost() {
     [[ "${SET_EPP_BOOST}" == "1" ]] || return 0
+    [[ "${CPU_VENDOR}" != "intel" ]] || return 0   # AMD-only knob
     if [[ ! -e "${EPP_BOOST_PATH}" ]]; then
         log_debug "epp_boost not present on this kernel, skipped"
         return 0
@@ -765,13 +1140,19 @@ find_x3d_vcache_path() {
 
 tune_x3d_vcache() {
     [[ "${SET_X3D_VCACHE_MODE}" == "1" ]] || return 0
+    [[ "${CPU_VENDOR}" != "intel" ]] || return 0   # AMD-only driver
     local path
     path="$(find_x3d_vcache_path)"
     if [[ -z "${path}" ]]; then
-        warn "amd_x3d_vcache: no */amd_x3d_mode found under /sys/bus/platform/drivers/amd_x3d_vcache/ — driver not bound (non-X3D CPU, unsupported kernel, or module not yet probed), skipped"
+        if [[ -d /sys/bus/platform/drivers/amd_x3d_vcache ]]; then
+            warn "amd_x3d_vcache: driver present but no */amd_x3d_mode yet (module not probed?), skipped"
+        else
+            log_debug "amd_x3d_vcache driver not present (non-X3D CPU or unsupported kernel), skipped"
+        fi
         return 0
     fi
     log_debug "amd_x3d_vcache path resolved: ${path}"
+    if (( DRY_RUN )); then dry "would set [amd_x3d_vcache.amd_x3d_mode] -> ${X3D_VCACHE_MODE}"; return 0; fi
 
     # amd_x3d_mode writes trigger a synchronous ACPI _DSM call inside the
     # kernel driver (unlike every other sysfs write in this script, which
@@ -856,6 +1237,319 @@ restore_cstates() {
     done
 }
 
+# =============================================================================
+# Proton / Wine sysctls, IRQ affinity, GPU, network, storage
+# =============================================================================
+
+# Raise-only variant of tune_param (vm.max_map_count must never be LOWERED).
+tune_param_atleast() {
+    local path="$1" min="$2" desc="$3" cur=""
+    if [[ -r "${path}" ]]; then
+        cur="$(cat "${path}" 2>/dev/null || true)"
+        if [[ "${cur}" =~ ^[0-9]+$ ]] && (( 10#${cur} >= min )); then
+            log_debug "${desc} already ${cur} >= ${min}, left as is"
+            return 0
+        fi
+    fi
+    tune_param "${path}" "${min}" "${desc}"
+}
+
+# dirty_ratio/dirty_bytes (and the background pair) are mutually exclusive:
+# writing one zeroes the other. So all four originals are saved, and restore
+# writes back whichever of each pair was actually in use.
+tune_vm_dirty() {
+    [[ "${SET_VM_DIRTY}" == "1" ]] || return 0
+    local v=/proc/sys/vm p sf
+    for p in dirty_ratio dirty_bytes dirty_background_ratio dirty_background_bytes; do
+        if [[ ! -w "${v}/${p}" ]]; then
+            warn "vm.${p} not writable — dirty limits skipped"
+            _stat_skipped
+            return 0
+        fi
+    done
+    if (( VM_DIRTY_BACKGROUND_BYTES >= VM_DIRTY_BYTES )); then
+        warn "VM_DIRTY_BACKGROUND_BYTES must be < VM_DIRTY_BYTES — dirty limits skipped"
+        return 0
+    fi
+    local cur_bytes
+    cur_bytes="$(cat "${v}/dirty_bytes" 2>/dev/null || echo 0)"
+    if [[ "${cur_bytes}" =~ ^[0-9]+$ ]] && (( cur_bytes > 0 && cur_bytes <= VM_DIRTY_BYTES )); then
+        log_debug "vm.dirty_bytes already ${cur_bytes} <= ${VM_DIRTY_BYTES}, left as is"
+        return 0
+    fi
+    if (( DRY_RUN )); then
+        dry "would set [vm.dirty_bytes]: ${VM_DIRTY_BYTES}, [vm.dirty_background_bytes]: ${VM_DIRTY_BACKGROUND_BYTES}"
+        return 0
+    fi
+    for p in dirty_ratio dirty_bytes dirty_background_ratio dirty_background_bytes; do
+        sf="$(_save_name "${v}/${p}")"
+        [[ -f "${sf}" ]] || _state_write "${sf}" "$(cat "${v}/${p}")" || return 0
+    done
+    if printf '%s' "${VM_DIRTY_BYTES}" > "${v}/dirty_bytes" 2>/dev/null &&
+       printf '%s' "${VM_DIRTY_BACKGROUND_BYTES}" > "${v}/dirty_background_bytes" 2>/dev/null; then
+        log "Set         [vm.dirty_bytes / dirty_background_bytes]: ${VM_DIRTY_BYTES} / ${VM_DIRTY_BACKGROUND_BYTES}"
+        _stat_applied
+    else
+        warn "Write failed: vm.dirty_* limits"
+        _stat_failed
+    fi
+}
+
+restore_vm_dirty() {
+    local v=/proc/sys/vm pair ratio bytes sr sb vr vb
+    for pair in "dirty_ratio dirty_bytes" "dirty_background_ratio dirty_background_bytes"; do
+        read -r ratio bytes <<< "${pair}"
+        sr="$(_save_name "${v}/${ratio}")"
+        sb="$(_save_name "${v}/${bytes}")"
+        [[ -f "${sr}" && -f "${sb}" ]] || { rm -f "${sr}" "${sb}"; continue; }
+        vr="$(cat "${sr}")"
+        vb="$(cat "${sb}")"
+        if [[ "${vb}" =~ ^[0-9]+$ ]] && (( vb > 0 )); then
+            printf '%s' "${vb}" > "${v}/${bytes}" 2>/dev/null || warn "Restore failed: vm.${bytes}"
+            log "Restored    [vm.${bytes}]: '${vb}'"
+        else
+            printf '%s' "${vr}" > "${v}/${ratio}" 2>/dev/null || warn "Restore failed: vm.${ratio}"
+            log "Restored    [vm.${ratio}]: '${vr}'"
+        fi
+        rm -f "${sr}" "${sb}"
+    done
+}
+
+# --- IRQ affinity ------------------------------------------------------------------
+_irq_class_wanted() {
+    local c=""
+    case "$1" in
+        0x03*)   c="gpu" ;;
+        0x0108*) c="nvme" ;;
+        0x02*)   c="net" ;;
+        0x0c03*) c="usb" ;;
+        0x04*)   c="audio" ;;
+        *) return 1 ;;
+    esac
+    [[ " ${IRQ_AFFINITY_CLASSES} " == *" ${c} "* ]]
+}
+
+# Save the original affinity, write the new one. Managed IRQs (NVMe queues...)
+# refuse the write: the save file is dropped again and 1 is returned.
+_move_one_irq() {
+    local irq="$1" target="$2"
+    local path="/proc/irq/${irq}/smp_affinity_list" sf cur had=0
+    [[ -w "${path}" ]] || return 1
+    sf="$(_save_name "${path}")"
+    if [[ -f "${sf}" ]]; then
+        had=1
+    else
+        cur="$(cat "${path}" 2>/dev/null)" || return 1
+        [[ -n "${cur}" ]] || return 1
+        _state_write "${sf}" "${cur}" || return 1
+    fi
+    if ! printf '%s' "${target}" > "${path}" 2>/dev/null; then
+        if (( had == 0 )); then rm -f "${sf}"; fi
+        return 1
+    fi
+    return 0
+}
+
+tune_irq_affinity() {
+    [[ "${SET_IRQ_AFFINITY}" == "1" ]] || return 0
+    local target="${IRQ_AFFINITY_CPUS}"
+    if [[ -z "${target}" ]]; then
+        if detect_ccx_groups; then target="${CCX_GROUPS[1]}"; fi
+    fi
+    if [[ -z "${target}" ]]; then
+        warn "IRQ affinity: no target CPUs (no second CCX/CCD group and IRQ_AFFINITY_CPUS unset) — skipped"
+        return 0
+    fi
+    if pgrep -x irqbalance &>/dev/null; then
+        warn "IRQ affinity: irqbalance is running and may undo these changes (stop it, or ban the IRQs)."
+    fi
+    local dev class f irq moved=0 skipped=0
+    local -a irqs
+    for dev in /sys/bus/pci/devices/*; do
+        [[ -d "${dev}" ]] || continue
+        class="$(cat "${dev}/class" 2>/dev/null)" || continue
+        _irq_class_wanted "${class}" || continue
+        irqs=()
+        if [[ -d "${dev}/msi_irqs" ]]; then
+            for f in "${dev}"/msi_irqs/*; do
+                if [[ -e "${f}" ]]; then irqs+=("${f##*/}"); fi
+            done
+        elif [[ -r "${dev}/irq" ]]; then
+            irq=""
+            read -r irq < "${dev}/irq" || true
+            if [[ "${irq}" =~ ^[1-9][0-9]*$ ]]; then irqs+=("${irq}"); fi
+        fi
+        for irq in ${irqs[@]+"${irqs[@]}"}; do
+            if (( DRY_RUN )); then
+                dry "would move IRQ ${irq} (${dev##*/}, ${class}) -> CPUs ${target}"
+                continue
+            fi
+            if _move_one_irq "${irq}" "${target}"; then
+                moved=$((moved + 1))
+            else
+                skipped=$((skipped + 1))
+            fi
+        done
+    done
+    if (( DRY_RUN == 0 )); then
+        log "IRQ affinity: ${moved} IRQ(s) moved to CPUs ${target}, ${skipped} not movable (managed/unsupported)"
+        STAT_APPLIED=$((STAT_APPLIED + moved))
+        STAT_SKIPPED=$((STAT_SKIPPED + skipped))
+    fi
+}
+
+restore_irq_affinity() {
+    local f irq n=0
+    for f in "${STATE_DIR}"/_proc_irq_*_smp_affinity_list; do
+        [[ -f "${f}" ]] || continue
+        irq="${f##*/_proc_irq_}"
+        irq="${irq%_smp_affinity_list}"
+        if [[ ! "${irq}" =~ ^[0-9]+$ ]]; then rm -f "${f}"; continue; fi
+        restore_param "/proc/irq/${irq}/smp_affinity_list" "irq.${irq}"
+        n=$((n + 1))
+    done
+    if (( n > 0 )); then log "IRQ affinity restored for ${n} IRQ(s)"; fi
+}
+
+# --- GPU --------------------------------------------------------------------------
+NVIDIA_PM_FILE_NAME="nvidia_persistence"
+
+tune_nvidia_persistence() {
+    [[ "${SET_NVIDIA_PERSISTENCE}" == "1" ]] || return 0
+    if ! command -v nvidia-smi &>/dev/null; then
+        log_debug "nvidia-smi not found, persistence mode skipped"
+        return 0
+    fi
+    local out idx mode save="${STATE_DIR}/${NVIDIA_PM_FILE_NAME}"
+    out="$(timeout 5 nvidia-smi --query-gpu=index,persistence_mode --format=csv,noheader 2>/dev/null)" || {
+        warn "nvidia-smi query failed/timed out — persistence mode skipped"
+        return 0
+    }
+    while IFS=, read -r idx mode; do
+        idx="${idx//[[:space:]]/}"
+        mode="${mode//[[:space:]]/}"
+        [[ "${idx}" =~ ^[0-9]+$ && "${mode}" == "Disabled" ]] || continue
+        if (( DRY_RUN )); then dry "would enable persistence mode on GPU ${idx}"; continue; fi
+        if [[ -L "${save}" ]]; then err "SECURITY: ${save} is a symlink"; return 0; fi
+        if timeout 5 nvidia-smi -i "${idx}" -pm 1 &>/dev/null; then
+            echo "${idx}" >> "${save}"
+            log "Set         [nvidia.persistence.gpu${idx}]: Enabled"
+            _stat_applied
+        else
+            warn "Could not enable persistence mode on GPU ${idx}"
+            _stat_failed
+        fi
+    done <<< "${out}"
+}
+
+restore_nvidia_persistence() {
+    local save="${STATE_DIR}/${NVIDIA_PM_FILE_NAME}" idx
+    [[ -f "${save}" && ! -L "${save}" ]] || { rm -f "${save}"; return 0; }
+    if command -v nvidia-smi &>/dev/null; then
+        while read -r idx; do
+            [[ "${idx}" =~ ^[0-9]+$ ]] || continue
+            if timeout 5 nvidia-smi -i "${idx}" -pm 0 &>/dev/null; then
+                log "Restored    [nvidia.persistence.gpu${idx}]: Disabled"
+            else
+                warn "Could not restore persistence mode on GPU ${idx}"
+            fi
+        done < "${save}"
+    fi
+    rm -f "${save}"
+}
+
+tune_amdgpu_perf() {
+    [[ "${SET_AMDGPU_PERF_LEVEL}" == "1" ]] || return 0
+    local f card
+    for f in /sys/class/drm/card*/device/power_dpm_force_performance_level; do
+        [[ -f "${f}" ]] || continue
+        card="${f#/sys/class/drm/}"; card="${card%%/*}"
+        tune_param "${f}" "${AMDGPU_PERF_LEVEL}" "amdgpu.perf_level.${card}"
+    done
+}
+
+restore_amdgpu_perf() {
+    local f card
+    for f in /sys/class/drm/card*/device/power_dpm_force_performance_level; do
+        [[ -f "${f}" ]] || continue
+        card="${f#/sys/class/drm/}"; card="${card%%/*}"
+        restore_param "${f}" "amdgpu.perf_level.${card}"
+    done
+}
+
+tune_gpu()    { tune_nvidia_persistence; tune_amdgpu_perf; }
+restore_gpu() { restore_nvidia_persistence; restore_amdgpu_perf; }
+
+# --- Wi-Fi power save / NVMe I/O scheduler --------------------------------------------
+WIFI_PS_FILE_NAME="wifi_powersave"
+
+tune_wifi_powersave() {
+    [[ "${SET_WIFI_POWERSAVE}" == "1" ]] || return 0
+    if ! command -v iw &>/dev/null; then
+        log_debug "iw not found, Wi-Fi power save skipped"
+        return 0
+    fi
+    local w ifc cur save="${STATE_DIR}/${WIFI_PS_FILE_NAME}"
+    for w in /sys/class/net/*/wireless; do
+        [[ -d "${w}" ]] || continue
+        ifc="${w%/wireless}"; ifc="${ifc##*/}"
+        [[ "${ifc}" =~ ^[A-Za-z0-9_.:-]+$ ]] || continue
+        cur="$(iw dev "${ifc}" get power_save 2>/dev/null)" || continue
+        [[ "${cur}" == *"Power save: on"* ]] || continue
+        if (( DRY_RUN )); then dry "would turn Wi-Fi power save off on ${ifc}"; continue; fi
+        if [[ -L "${save}" ]]; then err "SECURITY: ${save} is a symlink"; return 0; fi
+        if iw dev "${ifc}" set power_save off &>/dev/null; then
+            echo "${ifc}" >> "${save}"
+            log "Set         [wifi.power_save.${ifc}]: off"
+            _stat_applied
+        else
+            warn "Could not turn Wi-Fi power save off on ${ifc}"
+            _stat_failed
+        fi
+    done
+}
+
+restore_wifi_powersave() {
+    local save="${STATE_DIR}/${WIFI_PS_FILE_NAME}" ifc
+    [[ -f "${save}" && ! -L "${save}" ]] || { rm -f "${save}"; return 0; }
+    if command -v iw &>/dev/null; then
+        while read -r ifc; do
+            [[ "${ifc}" =~ ^[A-Za-z0-9_.:-]+$ ]] || continue
+            if iw dev "${ifc}" set power_save on &>/dev/null; then
+                log "Restored    [wifi.power_save.${ifc}]: on"
+            else
+                warn "Could not restore Wi-Fi power save on ${ifc}"
+            fi
+        done < "${save}"
+    fi
+    rm -f "${save}"
+}
+
+tune_nvme_sched() {
+    [[ "${SET_NVME_SCHED}" == "1" ]] || return 0
+    local f dev raw
+    for f in /sys/block/nvme*n*/queue/scheduler; do
+        [[ -f "${f}" ]] || continue
+        dev="${f#/sys/block/}"; dev="${dev%%/*}"
+        raw="$(cat "${f}" 2>/dev/null || true)"
+        raw="${raw//[\[\]]/}"
+        if [[ " ${raw} " != *" ${NVME_IO_SCHEDULER} "* ]]; then
+            log_debug "iosched.${dev}: '${NVME_IO_SCHEDULER}' not offered by this kernel/device, skipped"
+            continue
+        fi
+        tune_choice_param "${f}" "${NVME_IO_SCHEDULER}" "iosched.${dev}"
+    done
+}
+
+restore_nvme_sched() {
+    local f dev
+    for f in /sys/block/nvme*n*/queue/scheduler; do
+        [[ -f "${f}" ]] || continue
+        dev="${f#/sys/block/}"; dev="${dev%%/*}"
+        restore_param "${f}" "iosched.${dev}"
+    done
+}
+
 # --- CCD/CCX core isolation ----------------------------------------------------
 readonly CGROUP_V2_ROOT="/sys/fs/cgroup"
 readonly CCD_GOOD_GROUP="theGood"
@@ -864,7 +1558,54 @@ CCD_AVAILABLE=0   # set by detect_ccx_groups()
 
 # N-CCX-aware topology detection. Returns 1 if only a single CCX/CCD is found
 # (not an error) — the caller uses this as a "skip silently" signal.
+CCX_LABEL_GOOD="CCX0 (CCD0 - performance)"
+CCX_LABEL_SYS="CCX1 (CCD1 - system)"
+CCX_GROUPS=()
+
+# Number of CPUs in a cpulist string ("0-7,16-23" -> 16)
+_cpulist_count() {
+    local list="$1" part a b n=0
+    local IFS=','
+    for part in ${list}; do
+        if [[ "${part}" == *-* ]]; then
+            a="${part%-*}"; b="${part#*-}"
+            n=$(( n + 10#${b} - 10#${a} + 1 ))
+        elif [[ -n "${part}" ]]; then
+            n=$(( n + 1 ))
+        fi
+    done
+    echo "${n}"
+}
+
+# Intel hybrid (Alder Lake and newer): P-cores = performance group, E-cores
+# (+ LP-E cores on Meteor Lake and newer) = system group. Returns 1 when the
+# CPU is not hybrid or the P-cores expose too few threads.
+detect_hybrid_groups() {
+    local pf="/sys/devices/cpu_core/cpus" ef="/sys/devices/cpu_atom/cpus" lf="/sys/devices/cpu_lowpower/cpus"
+    local p e l pn
+    [[ -r "${pf}" && -r "${ef}" ]] || return 1
+    p="$(cat "${pf}" 2>/dev/null)" || return 1
+    e="$(cat "${ef}" 2>/dev/null)" || return 1
+    [[ -n "${p}" && -n "${e}" ]] || return 1
+    if [[ -r "${lf}" ]]; then
+        l="$(cat "${lf}" 2>/dev/null || true)"
+        if [[ -n "${l}" ]]; then e="${e},${l}"; fi
+    fi
+    pn="$(_cpulist_count "${p}")"
+    if (( pn < HYBRID_MIN_P_THREADS )); then
+        warn "Intel hybrid: P-cores expose only ${pn} threads (< HYBRID_MIN_P_THREADS=${HYBRID_MIN_P_THREADS}) — P/E isolation skipped."
+        return 1
+    fi
+    CCX_GROUPS=("${p}" "${e}")
+    CCX_LABEL_GOOD="P-cores (performance)"
+    CCX_LABEL_SYS="E-cores (system)"
+    return 0
+}
+
 detect_ccx_groups() {
+    if [[ "${CPU_VENDOR}" == "intel" && "${HYBRID_CORE_ISOLATION}" == "1" ]]; then
+        if detect_hybrid_groups; then return 0; fi
+    fi
     local cache_dir="/sys/devices/system/cpu/cpu0/cache/index3"
     [[ -d "${cache_dir}" ]] || return 1
 
@@ -1390,6 +2131,10 @@ apply_ccd_isolation() {
     [[ "${CCD_ISOLATION_ENABLED}" == "1" ]] || return 0
     detect_ccx_groups || return 0   # single CCX/CCD -> silent exit
     CCD_AVAILABLE=1
+    if (( DRY_RUN )); then
+        dry "would isolate: ${CCX_LABEL_GOOD} = ${CCX_GROUPS[0]}; ${CCX_LABEL_SYS} = ${CCX_GROUPS[1]}"
+        return 0
+    fi
 
     if ! mount | grep -q "on ${CGROUP_V2_ROOT} type cgroup2"; then
         warn "cgroup v2 is not mounted on ${CGROUP_V2_ROOT} — CCD isolation skipped."
@@ -1403,8 +2148,8 @@ apply_ccd_isolation() {
     cleanup_stale_ccd_cgroups
 
     local ccx0="${CCX_GROUPS[0]}" ccx1="${CCX_GROUPS[1]}"
-    log "  CCX0 (CCD0 - performance): ${ccx0}"
-    log "  CCX1 (CCD1 - system):      ${ccx1}"
+    log "  ${CCX_LABEL_GOOD}: ${ccx0}"
+    log "  ${CCX_LABEL_SYS}: ${ccx1}"
 
     if ! grep -qw "cpuset" "${CGROUP_V2_ROOT}/cgroup.controllers"; then
         warn "Kernel does not support the cpuset controller — CCD isolation skipped."
@@ -1668,62 +2413,234 @@ restore_pid_to_origin() {
     echo "${pid}" > "${CGROUP_V2_ROOT}/cgroup.procs" 2>/dev/null
 }
 
-# --- Reference counter -------------------------------------------------------
-# Tracks how many games are currently running. PRE increments by 1 on every
-# call, POST decrements by 1. Once the counter reaches zero (the last game
-# has exited), the restore actually happens.
-# Updates are atomic via flock — no race under concurrent PRE/POST.
+# --- Game entries / reference counter --------------------------------------------
+# One small file per running game under STATE_DIR/.games/. PRE adds an entry,
+# POST removes one; the restore happens when the last entry is gone. Each entry
+# records an "anchor": the long-lived launcher process (the TOPMOST ancestor of
+# the PRE caller whose name is CCD_LAUNCHER or starts with "lutris") plus its
+# start time. If that launcher dies without POST ever running (crash, kill -9),
+# the entry is recognised as stale and dropped on the next PRE — otherwise the
+# counter would never reach zero again and nothing would ever be restored.
+# Entries WITHOUT an anchor (launcher not found in the ancestry) are never
+# auto-removed; use the RESTORE command for those.
+# .refcount mirrors the entry count (the CCD session watcher polls it).
 readonly REFCOUNT_FILE="${STATE_DIR}/.refcount"
+readonly GAMES_DIR="${STATE_DIR}/.games"
+readonly STALE_MIN_AGE=15   # seconds; never drop entries younger than this
 
-# Read the counter (returns 0 if STATE_DIR or the file doesn't exist)
+# Process start time (field 22 of /proc/PID/stat), robust against ')' in comm
+_pid_start() {
+    local line
+    local -a f
+    line="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+    line="${line##*) }"
+    read -ra f <<< "${line}"
+    printf '%s' "${f[19]:-}"
+}
+
+# Prints "<pid> <starttime>" of the launcher ancestor, or "0 0"
+_find_anchor() {
+    local pid="$1" depth=0 comm line best=""
+    local -a f
+    while (( pid > 1 && depth < 32 )); do
+        comm="$(cat "/proc/${pid}/comm" 2>/dev/null)" || break
+        if [[ "${comm}" == "${CCD_LAUNCHER}" || "${comm}" == lutris* ]]; then best="${pid}"; fi
+        line="$(cat "/proc/${pid}/stat" 2>/dev/null)" || break
+        line="${line##*) }"
+        read -ra f <<< "${line}"
+        pid="${f[1]:-0}"
+        depth=$((depth + 1))
+    done
+    if [[ -n "${best}" ]]; then
+        echo "${best} $(_pid_start "${best}" || echo 0)"
+    else
+        echo "0 0"
+    fi
+}
+
+_games_init() {
+    ensure_state_dir
+    if [[ -L "${GAMES_DIR}" ]]; then
+        err "SECURITY: ${GAMES_DIR} is a symlink — removed"
+        rm -f "${GAMES_DIR}"
+    fi
+    if [[ ! -d "${GAMES_DIR}" ]]; then
+        mkdir -m 0700 "${GAMES_DIR}"
+        # one-time migration from the pre-4.6 plain counter
+        if [[ -f "${REFCOUNT_FILE}" && ! -L "${REFCOUNT_FILE}" ]]; then
+            local n i
+            n="$(cat "${REFCOUNT_FILE}" 2>/dev/null || true)"
+            if [[ "${n}" =~ ^[0-9]{1,4}$ ]]; then
+                for ((i = 0; i < 10#${n}; i++)); do
+                    printf '0 0 legacy\n' > "${GAMES_DIR}/0-legacy-${i}"
+                done
+            fi
+        fi
+    fi
+}
+
+_games_count() {
+    local f n=0
+    for f in "${GAMES_DIR}"/*; do
+        if [[ -f "${f}" ]]; then n=$((n + 1)); fi
+    done
+    echo "${n}"
+}
+
+_refcount_sync() {
+    local n
+    n="$(_games_count)"
+    if [[ -L "${REFCOUNT_FILE}" ]]; then rm -f "${REFCOUNT_FILE}"; fi
+    if (( n == 0 )); then rm -f "${REFCOUNT_FILE}"; else printf '%s' "${n}" > "${REFCOUNT_FILE}"; fi
+}
+
+# Number of running games (0 if STATE_DIR or the entries don't exist)
 _refcount_read() {
     local n
-    if [[ ! -f "${REFCOUNT_FILE}" ]]; then echo 0; return; fi
-    if [[ -L "${REFCOUNT_FILE}" ]]; then
-        err "SECURITY: refcount file is a symlink — treating as 0"
-        echo 0; return
+    if [[ -d "${GAMES_DIR}" && ! -L "${GAMES_DIR}" ]]; then
+        _games_count
+        return 0
     fi
-    n="$(cat "${REFCOUNT_FILE}" 2>/dev/null)"
-    if [[ "${n}" =~ ^[0-9]+$ ]]; then echo "${n}"; else echo 0; fi
+    # pre-4.6 state (counter file only)
+    if [[ -f "${REFCOUNT_FILE}" && ! -L "${REFCOUNT_FILE}" ]]; then
+        n="$(cat "${REFCOUNT_FILE}" 2>/dev/null || true)"
+        if [[ "${n}" =~ ^[0-9]+$ ]]; then echo "${n}"; return 0; fi
+    fi
+    echo 0
 }
 
-# Called by PRE: increments the counter, returns the new value
+# Drop entries whose launcher is gone. Runs in the main shell (it logs).
+sweep_stale_games() {
+    [[ -d "${GAMES_DIR}" && ! -L "${GAMES_DIR}" ]] || return 0
+    local f anchor start cur now mtime removed=0
+    now="$(date +%s)"
+    for f in "${GAMES_DIR}"/*; do
+        [[ -f "${f}" ]] || continue
+        anchor=""; start=""
+        read -r anchor start _ < "${f}" || true
+        [[ "${anchor}" =~ ^[0-9]+$ && "${start}" =~ ^[0-9]+$ ]] || continue
+        (( anchor > 0 )) || continue
+        mtime="$(stat -c '%Y' "${f}" 2>/dev/null || echo "${now}")"
+        (( now - mtime >= STALE_MIN_AGE )) || continue
+        cur="$(_pid_start "${anchor}" 2>/dev/null || true)"
+        if [[ "${cur}" != "${start}" ]]; then
+            rm -f "${f}"
+            removed=$((removed + 1))
+        fi
+    done
+    if (( removed > 0 )); then
+        warn "Dropped ${removed} stale game entry(ies): the launcher exited without running POST (crash/kill)."
+        _refcount_sync
+    fi
+}
+
+# Called by PRE (in a command substitution — must stay silent): add an entry,
+# print the new number of running games.
 refcount_inc() {
-    ensure_state_dir
-    local n
-    n=$(( $(_refcount_read) + 1 ))
-    printf '%s' "${n}" > "${REFCOUNT_FILE}"
-    echo "${n}"
+    local profile="${1:-}" anchor start id
+    _games_init
+    read -r anchor start <<< "$(_find_anchor "${PPID}")"
+    id="$(date +%s%N)-$$"
+    printf '%s %s %s\n' "${anchor}" "${start}" "${profile:-none}" > "${GAMES_DIR}/${id}"
+    _refcount_sync
+    _games_count
 }
 
-# Called by POST: decrements the counter (never below 0), returns the new value
+# Called by POST (also silent): remove ONE entry — preferably the one from the
+# same launcher, else one whose launcher is gone, else the oldest — and print
+# the number of games still running.
 refcount_dec() {
-    local n
-    n=$(( $(_refcount_read) - 1 ))
-    (( n < 0 )) && n=0
-    if (( n == 0 )); then rm -f "${REFCOUNT_FILE}"; else printf '%s' "${n}" > "${REFCOUNT_FILE}"; fi
-    echo "${n}"
+    local f anchor start my_anchor my_start target="" first="" cur
+    if [[ -d "${GAMES_DIR}" || -f "${REFCOUNT_FILE}" ]]; then _games_init; fi
+    read -r my_anchor my_start <<< "$(_find_anchor "${PPID}")"
+    for f in "${GAMES_DIR}"/*; do
+        [[ -f "${f}" ]] || continue
+        [[ -n "${first}" ]] || first="${f}"
+        anchor=""; start=""
+        read -r anchor start _ < "${f}" || true
+        if (( my_anchor > 0 )) && [[ "${anchor}" == "${my_anchor}" && "${start}" == "${my_start}" ]]; then
+            target="${f}"
+            break
+        fi
+    done
+    if [[ -z "${target}" ]]; then
+        for f in "${GAMES_DIR}"/*; do
+            [[ -f "${f}" ]] || continue
+            anchor=""; start=""
+            read -r anchor start _ < "${f}" || true
+            [[ "${anchor}" =~ ^[0-9]+$ ]] && (( anchor > 0 )) || continue
+            cur="$(_pid_start "${anchor}" 2>/dev/null || true)"
+            if [[ "${cur}" != "${start}" ]]; then target="${f}"; break; fi
+        done
+    fi
+    [[ -n "${target}" ]] || target="${first}"
+    if [[ -n "${target}" ]]; then rm -f "${target}"; fi
+    if [[ -d "${GAMES_DIR}" ]]; then _refcount_sync; fi
+    _refcount_read
 }
 
 # =============================================================================
 # PRE — apply settings before the game starts
 # =============================================================================
 apply_game_settings() {
+    local profile="${1:-}"
     log "========== ENTERING GAME MODE =========="
     ensure_state_dir
+    if [[ -n "${profile}" ]] && ! valid_profile_name "${profile}"; then
+        warn "Invalid profile name '${profile}' — ignored, using the global config."
+        profile=""
+    fi
+    sweep_stale_games
     local count
-    count="$(refcount_inc)"
+    count="$(refcount_inc "${profile}")"
     if (( count > 1 )); then
+        local active_profile=""
+        if [[ -f "${STATE_DIR}/.profile" ]]; then
+            active_profile="$(cat "${STATE_DIR}/.profile" 2>/dev/null || true)"
+        fi
+        if [[ "${profile}" != "${active_profile}" ]]; then
+            warn "Game mode already active with profile '${active_profile:-<global>}'; requested '${profile:-<global>}' is ignored until all games exit."
+        fi
         log "Reference count: ${count} (parameters already set, not rewriting)"
         log "========== GAME MODE ALREADY ACTIVE (${count} games running) =========="
         return 0
     fi
     log "Reference count: ${count} (first game — applying parameters)"
 
+    if [[ -n "${profile}" ]]; then
+        if load_profile "${profile}"; then
+            _state_write "${STATE_DIR}/.profile" "${profile}" || true
+        else
+            warn "Profile '${profile}' could not be loaded — continuing with the global config."
+        fi
+    fi
+
     # First game — stop any watcher left behind by a crashed session and
     # reset stale CCD tracking files
     stop_session_monitor
-    rm -f "${STATE_DIR}/.tracked_game_pids" "${STATE_DIR}/.ccd_pid_origin" "${STATE_DIR}/.ccd_cpuset_saved"
+    rm -f "${STATE_DIR}/.tracked_game_pids" "${STATE_DIR}/.ccd_pid_origin" "${STATE_DIR}/.ccd_cpuset_saved" "${STATE_DIR}/.summary"
+
+    _apply_all
+}
+
+# DRYRUN [profile]: show what PRE would do. Writes, saves and moves nothing.
+dry_run() {
+    local profile="${1:-}"
+    DRY_RUN=1
+    dry "DRY RUN — nothing will be written, saved or moved."
+    dry "CPU vendor: ${CPU_VENDOR}"
+    if [[ -n "${profile}" ]]; then
+        if load_profile "${profile}"; then
+            dry "profile: ${profile}"
+        else
+            dry "profile '${profile}' could not be loaded — showing the global config"
+        fi
+    fi
+    _apply_all
+}
+
+# The actual parameter application (shared by PRE and DRYRUN)
+_apply_all() {
 
     log "--- VM Parameters ---"
     tune_param "/proc/sys/vm/compaction_proactiveness"        "${VM_COMPACTION_PROACTIVENESS}" "vm.compaction_proactiveness"
@@ -1737,6 +2654,10 @@ apply_game_settings() {
     tune_param "/proc/sys/vm/stat_interval"                   "${VM_STAT_INTERVAL}" "vm.stat_interval"
     # disable swap readahead -> single-page swap-in, lower latency (ideal with zram)
     tune_param "/proc/sys/vm/page-cluster"                    "0"                 "vm.page-cluster"
+    if (( VM_MAX_MAP_COUNT > 0 )); then
+        tune_param_atleast "/proc/sys/vm/max_map_count"       "${VM_MAX_MAP_COUNT}" "vm.max_map_count"
+    fi
+    tune_vm_dirty
 
     log "--- LRU Gen ---"
     tune_param "/sys/kernel/mm/lru_gen/enabled"               "${LRU_GEN_ENABLED}" "lru_gen.enabled"
@@ -1753,6 +2674,9 @@ apply_game_settings() {
     tune_param "/proc/sys/kernel/split_lock_mitigate"         "0"       "kernel.split_lock_mitigate"
     # Disable soft/NMI lockup watchdogs -> fewer periodic per-cpu interrupts
     tune_param "/proc/sys/kernel/watchdog"                    "0"       "kernel.watchdog"
+    if [[ "${SET_NUMA_BALANCING}" == "1" ]]; then
+        tune_param "/proc/sys/kernel/numa_balancing"          "0"       "kernel.numa_balancing"
+    fi
 
     log "--- Scheduler (procfs) ---"
     tune_param "/proc/sys/kernel/sched_autogroup_enabled"     "1"       "sched.autogroup_enabled"
@@ -1771,8 +2695,13 @@ apply_game_settings() {
     tune_cpu_governor
     tune_epp_boost
 
-    log "--- AMD 3D V-Cache ---"
-    tune_x3d_vcache
+    if [[ "${CPU_VENDOR}" == "intel" ]]; then
+        log "--- Intel (intel_pstate / EPB / ITMT) ---"
+        tune_intel
+    else
+        log "--- AMD 3D V-Cache ---"
+        tune_x3d_vcache
+    fi
 
     tune_cstates
 
@@ -1791,9 +2720,24 @@ apply_game_settings() {
     log "--- PCI Latency Timer ---"
     tune_pci_latency
 
+    log "--- GPU ---"
+    tune_gpu
+
+    log "--- Network / Storage ---"
+    tune_wifi_powersave
+    tune_nvme_sched
+
     apply_ccd_isolation
 
-    log "========== GAME MODE ACTIVE =========="
+    log "--- IRQ affinity ---"
+    tune_irq_affinity
+
+    _print_summary
+    if (( DRY_RUN )); then
+        dry "DRY RUN COMPLETE"
+    else
+        log "========== GAME MODE ACTIVE =========="
+    fi
 }
 
 # =============================================================================
@@ -1815,7 +2759,30 @@ restore_game_settings() {
         return 0
     fi
     log "Reference count: 0 (last game exited — starting restore)"
+    _restore_all
+}
+
+# RESTORE: force a full restore regardless of the game count (stuck state).
+force_restore() {
+    log "========== FORCED RESTORE =========="
+    if [[ ! -d "${STATE_DIR}" ]]; then
+        log "Nothing to restore (no state directory)."
+        return 0
+    fi
+    rm -f "${GAMES_DIR}"/* "${REFCOUNT_FILE}" 2>/dev/null || true
+    _restore_all
+}
+
+_restore_all() {
     log "--- RESTORE ---"
+    # Re-load the profile PRE used: restore must see the same config gating.
+    local saved_profile=""
+    if [[ -f "${STATE_DIR}/.profile" && ! -L "${STATE_DIR}/.profile" ]]; then
+        saved_profile="$(cat "${STATE_DIR}/.profile" 2>/dev/null || true)"
+        if [[ -n "${saved_profile}" ]] && ! load_profile "${saved_profile}"; then
+            warn "Could not re-load profile '${saved_profile}' for the restore — using the global config."
+        fi
+    fi
 
     # Unconditional: restore_ccd_isolation() returns early when no cgroups
     # exist, and a watcher must never outlive game mode.
@@ -1834,6 +2801,8 @@ restore_game_settings() {
     restore_param "/proc/sys/vm/page_lock_unfairness"            "vm.page_lock_unfairness"
     restore_param "/proc/sys/vm/stat_interval"                   "vm.stat_interval"
     restore_param "/proc/sys/vm/page-cluster"                    "vm.page-cluster"
+    restore_param "/proc/sys/vm/max_map_count"                   "vm.max_map_count"
+    restore_vm_dirty
 
     log "--- LRU Gen ---"
     restore_param "/sys/kernel/mm/lru_gen/enabled"               "lru_gen.enabled"
@@ -1846,6 +2815,7 @@ restore_game_settings() {
     log "--- Kernel / Latency ---"
     restore_param "/proc/sys/kernel/split_lock_mitigate"         "kernel.split_lock_mitigate"
     restore_param "/proc/sys/kernel/watchdog"                    "kernel.watchdog"
+    restore_param "/proc/sys/kernel/numa_balancing"              "kernel.numa_balancing"
 
     log "--- Scheduler (procfs) ---"
     restore_param "/proc/sys/kernel/sched_autogroup_enabled"     "sched.autogroup_enabled"
@@ -1862,8 +2832,13 @@ restore_game_settings() {
     restore_cpu_governor
     restore_epp_boost
 
-    log "--- AMD 3D V-Cache ---"
-    restore_x3d_vcache
+    if [[ "${CPU_VENDOR}" == "intel" ]]; then
+        log "--- Intel (intel_pstate / EPB / ITMT) ---"
+        restore_intel
+    else
+        log "--- AMD 3D V-Cache ---"
+        restore_x3d_vcache
+    fi
 
     restore_cstates
 
@@ -1877,7 +2852,15 @@ restore_game_settings() {
     log "--- PCI Latency Timer ---"
     restore_pci_latency
 
+    log "--- GPU / Network / Storage / IRQ ---"
+    restore_gpu
+    restore_wifi_powersave
+    restore_nvme_sched
+    restore_irq_affinity
+
     # Clean up the state directory
+    rmdir "${GAMES_DIR}" 2>/dev/null || true
+    rm -f "${STATE_DIR}/.profile" "${STATE_DIR}/.summary"
     if rmdir "${STATE_DIR}" 2>/dev/null; then
         log "State directory cleaned up."
     else
@@ -1897,12 +2880,30 @@ restore_game_settings() {
 # STATUS — is game mode active, and what values are saved?
 # =============================================================================
 show_status() {
-    if [[ -d "${STATE_DIR}" ]] && compgen -G "${STATE_DIR}/*" >/dev/null 2>&1; then
+    if [[ -d "${STATE_DIR}" ]] && [[ -n "$(ls -A "${STATE_DIR}" 2>/dev/null)" ]]; then
         local game_count
         game_count="$(_refcount_read)"
         local param_count
-        param_count="$(find -P "${STATE_DIR}" -maxdepth 1 -type f -not -name '.refcount' -not -name '.ccd_*' -not -name '.tracked_game_pids' -not -name '.monitor_pid' | wc -l)"
+        param_count="$(find -P "${STATE_DIR}" -maxdepth 1 -type f -not -name '.*' | wc -l)"
         echo "Game mode: ACTIVE (${game_count} game(s) running, ${param_count} parameter(s) saved)"
+        if [[ -f "${STATE_DIR}/.profile" ]]; then echo "Profile: $(cat "${STATE_DIR}/.profile" 2>/dev/null)"; fi
+        local gf ga gs gp gstate
+        for gf in "${GAMES_DIR}"/*; do
+            [[ -f "${gf}" ]] || continue
+            ga=""; gs=""; gp=""
+            read -r ga gs gp < "${gf}" || true
+            if [[ "${ga}" =~ ^[0-9]+$ ]] && (( ga > 0 )); then
+                if [[ "$(_pid_start "${ga}" 2>/dev/null || true)" == "${gs}" ]]; then
+                    gstate="launcher pid ${ga} alive"
+                else
+                    gstate="launcher pid ${ga} GONE (stale; dropped on next PRE)"
+                fi
+            else
+                gstate="no launcher anchor"
+            fi
+            echo "  game ${gf##*/}: profile=${gp:-none}, ${gstate}"
+        done
+        if [[ -f "${STATE_DIR}/.summary" ]]; then echo "Last PRE: $(cat "${STATE_DIR}/.summary" 2>/dev/null)"; fi
         echo
         printf '%-55s %s\n' "PARAMETER (save file)" "ORIGINAL VALUE"
         printf '%-55s %s\n' "----------------------" "--------------"
@@ -1911,7 +2912,7 @@ show_status() {
             [[ -f "${f}" ]] || continue
             local fname
             fname="$(basename "${f}")"
-            [[ "${fname}" == ".refcount" || "${fname}" == .ccd_* || "${fname}" == ".tracked_game_pids" || "${fname}" == ".monitor_pid" ]] && continue
+            [[ "${fname}" == .* ]] && continue
             printf '%-55s %s\n' "${fname}" "$(head -c 120 "${f}" | tr '\n' ' ')"
         done
     else
@@ -1935,6 +2936,7 @@ show_status() {
         echo "CCD isolation: OFF (may be single CCX/CCD, disabled, or game mode is not active)"
     fi
     echo
+    echo "CPU vendor: ${CPU_VENDOR}"
     echo "Current values:"
     local p
     for p in /proc/sys/vm/swappiness \
@@ -1943,7 +2945,14 @@ show_status() {
              /sys/kernel/mm/transparent_hugepage/enabled \
              /sys/module/pcie_aspm/parameters/policy \
              /sys/devices/system/cpu/cpufreq/policy0/scaling_governor \
-             /sys/module/amd_pstate/parameters/epp_boost; do
+             /sys/module/amd_pstate/parameters/epp_boost \
+             /sys/devices/system/cpu/intel_pstate/status \
+             /sys/devices/system/cpu/intel_pstate/no_turbo \
+             /sys/devices/system/cpu/intel_pstate/hwp_dynamic_boost \
+             /sys/devices/system/cpu/intel_pstate/min_perf_pct \
+             /sys/devices/system/cpu/intel_pstate/max_perf_pct \
+             /sys/devices/system/cpu/cpu0/power/energy_perf_bias \
+             /proc/sys/kernel/sched_itmt_enabled; do
         [[ -e "${p}" ]] && printf '  %-60s %s\n' "${p}" "$(cat "${p}" 2>/dev/null)"
     done
     local x3d_path
@@ -1961,13 +2970,19 @@ if (( BASH_VERSINFO[0] < 4 )); then
     exit 1
 fi
 
+# Sourced by tests/run-tests.sh (non-root + GT_TEST_DIR only): stop here.
+if [[ "${GT_TEST_MODE}" == "1" && "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    return 0
+fi
+
 require_root
 rotate_log
 load_config
+detect_cpu_vendor
 
 ACTION="${1:-}"
 case "${ACTION}" in
-    PRE|pre|POST|post)
+    PRE|pre|POST|post|RESTORE|restore)
         # Lock against concurrent PRE/POST runs (Lutris fast-restart scenario).
         # PRE can hold this lock for up to CCD_MONITOR_SECONDS while it scans
         # for newly spawned child processes — if a game is closed quickly
@@ -1984,15 +2999,19 @@ case "${ACTION}" in
             exit 1
         fi
         case "${ACTION}" in
-            PRE|pre)   apply_game_settings ;;
-            POST|post) restore_game_settings ;;
+            PRE|pre)         apply_game_settings "${2:-}" ;;
+            POST|post)       restore_game_settings ;;
+            RESTORE|restore) force_restore ;;
         esac
+        ;;
+    DRYRUN|dryrun)
+        dry_run "${2:-}"
         ;;
     STATUS|status)
         show_status
         ;;
     *)
-        err "Invalid argument: '${ACTION}'. Expected: PRE, POST, or STATUS"
+        err "Invalid argument: '${ACTION}'. Expected: PRE [profile], POST, RESTORE, DRYRUN [profile], or STATUS"
         exit 1
         ;;
 esac

@@ -4,7 +4,7 @@ This component is part of a project developed with AI assistance. Use at your ow
 
 ---
 
-# lutris-game-tune (v4)
+# lutris-game-tune (v4.6)
 
 Pre/post-game system tuning for Lutris, plus CCD/CCX core isolation and
 lower-nice game startup. All three features are provided through a single
@@ -93,9 +93,11 @@ counting, the STATUS command, whitelist-based config) are preserved as-is.
 | File | Description |
 |---|---|
 | `lutris-game-tune.sh` | Main bash script (PRE/POST/STATUS + CCD isolation) |
-| `lutris-game-tune-wrapper.c` | Setuid root C wrapper (PRE/POST/STATUS/RUN) |
+| `lutris-game-tune-wrapper.c` | Setuid root C wrapper (PRE/POST/STATUS/RESTORE/DRYRUN/RUN) |
 | `lutris-game-tune.conf` | Sample config file (installed to `/etc/lutris-game-tune.conf`) |
 | `lutris-game-tune.conf.example` | Same as above, annotated for manual installs (see [Manual installation](#manual-installation)) |
+| `profiles/` | Example per-game profiles (installed to `/etc/lutris-game-tune.d/`) |
+| `tests/run-tests.sh` | Dependency-free unit tests (`bash tests/run-tests.sh`) |
 | `install.sh` | Automated build + install script |
 | `uninstall.sh` | Removal script — restores game state first if still active, `--purge` also removes config/logs |
 
@@ -199,6 +201,32 @@ CPU_GOVERNOR=performance
 # skipped silently if the sysfs knob doesn't exist. 1=on, 0=off.
 SET_EPP_BOOST=1
 
+# --- Intel CPUs (GenuineIntel only; see "Intel CPU support") ---
+SET_INTEL_TURBO=1
+SET_INTEL_HWP_BOOST=1
+INTEL_MAX_PERF_PCT=100       # 0 = leave unchanged
+INTEL_MIN_PERF_PCT=0         # 0 = leave unchanged
+SET_INTEL_EPB=1
+SET_INTEL_ITMT=1
+HYBRID_CORE_ISOLATION=0
+HYBRID_MIN_P_THREADS=8
+
+# --- Proton / Wine, IRQ, GPU, network, storage (see "v4.6 features") ---
+VM_MAX_MAP_COUNT=2147483642
+SET_VM_DIRTY=1
+VM_DIRTY_BACKGROUND_BYTES=67108864
+VM_DIRTY_BYTES=268435456
+SET_NUMA_BALANCING=1
+SET_IRQ_AFFINITY=0
+IRQ_AFFINITY_CLASSES="gpu nvme net usb"
+IRQ_AFFINITY_CPUS=
+SET_NVIDIA_PERSISTENCE=0
+SET_AMDGPU_PERF_LEVEL=0
+AMDGPU_PERF_LEVEL=high
+SET_WIFI_POWERSAVE=1
+SET_NVME_SCHED=1
+NVME_IO_SCHEDULER=none
+
 # --- PCIe ASPM ---
 SET_ASPM=1
 ASPM_POLICY=performance
@@ -240,6 +268,108 @@ cat /sys/devices/system/cpu/cpu*/cache/index3/shared_cpu_list | sort -u
 A single line means your system has one CCX and isolation is not applied.
 
 ---
+
+## v4.6 features
+
+### Crash-proof game counting, `RESTORE`
+PRE/POST no longer use a bare counter. Every PRE adds a small entry under
+`/run/lutris-game-tune/.games/` that remembers its **launcher** (the topmost
+ancestor named `CCD_LAUNCHER` or `lutris*`, plus its start time). If Lutris is
+killed and POST never runs, the next PRE notices the launcher is gone, drops the
+stale entry (log: *Dropped N stale game entry(ies)*) and re-applies normally —
+the originally saved values are preserved, so the next POST restores the true
+originals. Entries with no detectable launcher are never auto-dropped. For any
+stuck state:
+
+```bash
+sudo lutris-game-tune-wrapper STATUS     # shows entries, profile, last summary
+sudo lutris-game-tune-wrapper RESTORE    # force a full restore, ignoring the count
+```
+
+### Per-game profiles and `DRYRUN`
+```bash
+# Lutris pre-game script (per game):
+/usr/local/bin/lutris-game-tune-wrapper PRE heavy-game
+# Preview what PRE would do — writes, saves and moves nothing:
+sudo lutris-game-tune-wrapper DRYRUN heavy-game
+```
+`PRE <profile>` loads `/etc/lutris-game-tune.d/<profile>.conf` on top of the
+global config (same whitelist parser; the file and the directory must be
+root-owned and not group/other-writable; names match
+`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`). The profile of the **first** game that
+starts stays in effect until all games exit; POST reloads it so the restore sees
+the same gating. See `profiles/heavy-game.conf.example`.
+
+### Verification and summary
+Every `tune_param` write is read back (hex/decimal and `[bracketed]` choice
+files are normalised). The PRE log ends with
+`Summary: N applied, N read back differently, N failed, N skipped`, also shown
+by `STATUS`.
+
+### New tunables
+| Key(s) | What it does |
+|---|---|
+| `VM_MAX_MAP_COUNT` | Raises `vm.max_map_count` (never lowers). Fixes crashes in some Proton titles. `0` = off |
+| `SET_VM_DIRTY`, `VM_DIRTY_BYTES`, `VM_DIRTY_BACKGROUND_BYTES` | Smaller dirty-page window against shader-cache write stalls. Saves/restores all four ratio+bytes knobs |
+| `SET_NUMA_BALANCING` | `kernel.numa_balancing=0` while gaming |
+| `SET_IRQ_AFFINITY`, `IRQ_AFFINITY_CLASSES`, `IRQ_AFFINITY_CPUS` | **Opt-in.** Moves GPU/NVMe/NIC/USB(/audio) IRQs to the system CPUs (second CCD group, or an explicit cpulist). Managed IRQs are skipped. Stop `irqbalance` or it undoes this |
+| `SET_NVIDIA_PERSISTENCE` | **Opt-in.** Enables persistence mode on GPUs where it is off (small effect while a game holds the GPU) |
+| `SET_AMDGPU_PERF_LEVEL`, `AMDGPU_PERF_LEVEL` | **Opt-in.** `power_dpm_force_performance_level` (raises power draw) |
+| `SET_WIFI_POWERSAVE` | Wi-Fi power save off during the game (needs `iw`) |
+| `SET_NVME_SCHED`, `NVME_IO_SCHEDULER` | NVMe I/O scheduler (`none`/`mq-deadline`/`kyber`/`bfq`) |
+
+> The config parser accepts **only** `KEY=VALUE` alone on a line — a trailing
+> `# comment` makes the whole line invalid. Put comments on their own line.
+
+### `RUN` options: I/O priority and scheduling policy
+```
+lutris-game-tune-wrapper RUN -5 --io be:0 --sched batch -- <command>
+```
+| Option | Values |
+|---|---|
+| `--io` | `idle`, `be:0-7`, `rt:0-7` |
+| `--sched` | `other`, `batch`, `idle`, `rr:1-10`, `fifo:1-10` |
+
+Real-time choices (`--io rt:N`, `--sched rr:N|fifo:N`) are **refused** unless the
+admin opts in with a root-owned marker file (a runaway RT thread can starve the
+whole machine):
+`sudo install -o root -g root -m 644 /dev/null /etc/lutris-game-tune.allow-rt`
+
+### Tests
+`bash tests/run-tests.sh` (no dependencies) sources the script with
+`GT_TEST_DIR` set. That hook is honored only for non-root users, so it can never
+affect the setuid chain; when started as root the test file re-executes itself
+as `nobody`. CI runs shellcheck, a `-Werror` wrapper build and the tests.
+
+---
+
+## Intel CPU support
+
+The vendor is detected from `/proc/cpuinfo`. On Intel, the AMD-only tunables
+(`epp_boost`, `amd_x3d_vcache`) are skipped, and these are applied instead —
+all saved on PRE, restored on POST, and skipped when the kernel interface is
+missing:
+
+| Knob | Path | Game value |
+|------|------|-----------|
+| Turbo | `intel_pstate/no_turbo` | `0` |
+| HWP dynamic boost | `intel_pstate/hwp_dynamic_boost` | `1` |
+| Perf limits | `intel_pstate/max_perf_pct`, `min_perf_pct` | `INTEL_MAX_PERF_PCT` / `INTEL_MIN_PERF_PCT` (0 = untouched) |
+| Energy/perf bias | `cpuN/power/energy_perf_bias` | `0` |
+| ITMT | `/proc/sys/kernel/sched_itmt_enabled` | `1` |
+
+The governor/EPP handling is shared with AMD: `intel_pstate` in active mode
+with HWP exposes `energy_performance_preference` per policy, so the existing
+`SET_CPU_GOVERNOR` logic works unchanged.
+
+**Hybrid P/E-core isolation (Alder Lake and newer).** CCD isolation looks for
+two L3 domains, which Intel CPUs never have (one shared L3), so it does nothing
+there. With `HYBRID_CORE_ISOLATION=1`, the same `theGood`/`theUgly` cpuset
+machinery uses the P-cores (`/sys/devices/cpu_core/cpus`) as the performance
+group and the E-cores (`cpu_atom`, plus `cpu_lowpower` when present) as the
+system group. It is opt-in, and skipped (with a warning) when the P-cores expose
+fewer than `HYBRID_MIN_P_THREADS` logical CPUs — e.g. a 6-core, no-HT part would
+confine games to 6 threads.
 
 ## CCD/CCX isolation architecture
 

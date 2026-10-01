@@ -18,6 +18,8 @@ readonly LIB_DIR="/usr/local/lib/lutris-game-tune"
 readonly SCRIPT_DST="${LIB_DIR}/lutris-game-tune.sh"
 readonly WRAPPER_DST="/usr/local/bin/lutris-game-tune-wrapper"
 readonly CONF_DST="/etc/lutris-game-tune.conf"
+readonly PROFILE_DIR="/etc/lutris-game-tune.d"
+readonly RT_MARKER="/etc/lutris-game-tune.allow-rt"
 readonly LOG_FILE="/var/log/lutris-game-tune.log"
 readonly STATE_DIR="/run/lutris-game-tune"
 readonly LOCK_FILE="/run/lutris-game-tune.lock"
@@ -33,12 +35,14 @@ if [[ "${1:-}" == "--purge" ]]; then
 fi
 
 # --- 1. Restore if game mode is still active -----------------------------------
-if [[ -d "${STATE_DIR}" ]] && compgen -G "${STATE_DIR}/*" >/dev/null 2>&1; then
+if [[ -d "${STATE_DIR}" ]] && [[ -n "$(ls -A "${STATE_DIR}" 2>/dev/null)" ]]; then
     msg "Game mode is still ACTIVE — restoring original values before removal..."
+    # RESTORE (not POST): the game counter may be stale, and we are removing
+    # the tool anyway, so force everything back.
     if [[ -x "${WRAPPER_DST}" ]]; then
-        "${WRAPPER_DST}" POST || echo "WARNING: POST failed, continuing anyway." >&2
+        "${WRAPPER_DST}" RESTORE || "${WRAPPER_DST}" POST || echo "WARNING: RESTORE/POST failed, continuing anyway." >&2
     elif [[ -f "${SCRIPT_DST}" ]]; then
-        bash "${SCRIPT_DST}" POST || echo "WARNING: POST failed, continuing anyway." >&2
+        bash "${SCRIPT_DST}" RESTORE || bash "${SCRIPT_DST}" POST || echo "WARNING: RESTORE/POST failed, continuing anyway." >&2
     else
         echo "WARNING: Neither wrapper nor script found; saved state could not be restored." >&2
         echo "         Saved original values: ${STATE_DIR}/ (a reboot also clears everything)" >&2
@@ -73,8 +77,14 @@ if (( PURGE )); then
     remove "${CONF_DST}"
     remove "${LOG_FILE}"
     remove "${LOG_FILE}.old"
+    remove "${RT_MARKER}"
+    if [[ -d "${PROFILE_DIR}" ]]; then
+        rm -rf "${PROFILE_DIR}"
+        msg "Removed: ${PROFILE_DIR}"
+    fi
 else
     [[ -e "${CONF_DST}" ]] && echo "Note: ${CONF_DST} was kept (use --purge to remove)."
+    [[ -d "${PROFILE_DIR}" ]] && echo "Note: ${PROFILE_DIR} was kept (use --purge to remove)."
     [[ -e "${LOG_FILE}" ]] && echo "Note: ${LOG_FILE} was kept (use --purge to remove)."
 fi
 

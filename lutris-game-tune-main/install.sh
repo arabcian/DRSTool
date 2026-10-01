@@ -16,6 +16,7 @@ readonly LIB_DIR="/usr/local/lib/lutris-game-tune"
 readonly SCRIPT_DEST="${LIB_DIR}/lutris-game-tune.sh"
 readonly WRAPPER_DEST="/usr/local/bin/lutris-game-tune-wrapper"
 readonly CONF_DEST="/etc/lutris-game-tune.conf"
+readonly PROFILE_DIR="/etc/lutris-game-tune.d"
 
 c_green()  { printf '\033[32m%s\033[0m\n' "$*"; }
 c_yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
@@ -90,6 +91,17 @@ else
     c_green "    Configuration file installed: ${CONF_DEST}"
 fi
 
+# Per-game profile directory (PRE <profile>); must be root-owned, not g/o-writable
+install -d -o root -g root -m 755 "${PROFILE_DIR}"
+if [[ -d "${SCRIPT_DIR}/profiles" ]]; then
+    for _p in "${SCRIPT_DIR}"/profiles/*.example; do
+        [[ -f "${_p}" ]] || continue
+        _d="${PROFILE_DIR}/$(basename "${_p}")"
+        [[ -e "${_d}" ]] || install -o root -g root -m 644 "${_p}" "${_d}"
+    done
+fi
+c_green "    Profile directory ready: ${PROFILE_DIR}"
+
 # --- 4. Install the wrapper as setuid root -----------------------------------
 c_yellow "[4/5] Installing the wrapper as setuid root..."
 install -o root -g root -m 4755 "${TMP_BUILD}/lutris-game-tune-wrapper" "${WRAPPER_DEST}"
@@ -135,6 +147,13 @@ echo "  ${WRAPPER_DEST} RUN -5"
 echo
 echo "(Lutris prepends this prefix to the actual launch command automatically.)"
 echo
+echo "Per-game profile (optional): ${WRAPPER_DEST} PRE <profile>"
+echo "  -> loads ${PROFILE_DIR}/<profile>.conf on top of the global config"
+echo "Extra RUN options: --io idle|be:0-7  --sched other|batch|idle"
+echo "  (real-time: rt:N / rr:N / fifo:N need: sudo install -o root -g root -m 644 /dev/null /etc/lutris-game-tune.allow-rt)"
+echo
+echo "Preview PRE without changing anything: sudo ${WRAPPER_DEST} DRYRUN [profile]"
+echo "Force a restore if game mode got stuck: sudo ${WRAPPER_DEST} RESTORE"
 echo "Status check:  sudo ${WRAPPER_DEST} STATUS"
 echo "Configuration: ${CONF_DEST}"
 echo "Log file:      /var/log/lutris-game-tune.log"

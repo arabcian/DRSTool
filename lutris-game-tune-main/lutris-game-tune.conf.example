@@ -31,6 +31,61 @@ SET_EPP_BOOST=1
 SET_X3D_VCACHE_MODE=1
 X3D_VCACHE_MODE=frequency
 
+# --- Intel CPUs -----------------------------------------------------------------
+# Applied only on GenuineIntel CPUs (the two AMD sections above are skipped
+# there). Each knob is skipped when its kernel interface is missing.
+# NOTE: values must be alone on their line — the parser rejects trailing comments.
+#
+# intel_pstate/no_turbo=0 while gaming
+SET_INTEL_TURBO=1
+# intel_pstate/hwp_dynamic_boost=1 (active mode + HWP only)
+SET_INTEL_HWP_BOOST=1
+# intel_pstate max/min_perf_pct in percent; 0 = leave unchanged
+INTEL_MAX_PERF_PCT=100
+INTEL_MIN_PERF_PCT=0
+# cpuN/power/energy_perf_bias=0 (max performance)
+SET_INTEL_EPB=1
+# kernel.sched_itmt_enabled=1 (favored-core scheduling)
+SET_INTEL_ITMT=1
+# Hybrid (P+E core) CPUs: P-cores -> game, E-cores (+LP-E) -> rest of the system,
+# using the same cgroup/cpuset machinery as CCD isolation. Opt-in.
+HYBRID_CORE_ISOLATION=0
+# Skipped when the P-cores expose fewer logical CPUs than this.
+HYBRID_MIN_P_THREADS=8
+
+# --- Proton / Wine friendliness --------------------------------------------------
+# vm.max_map_count is only ever RAISED to this value (0 = leave alone).
+VM_MAX_MAP_COUNT=2147483642
+# Smaller dirty-page windows smooth shader-cache / save-file write bursts.
+SET_VM_DIRTY=1
+VM_DIRTY_BACKGROUND_BYTES=67108864
+VM_DIRTY_BYTES=268435456
+# kernel.numa_balancing=0 while gaming
+SET_NUMA_BALANCING=1
+
+# --- IRQ affinity (opt-in) -------------------------------------------------------
+# Moves the IRQs of the listed PCI classes (gpu nvme net usb audio) onto the
+# system CPUs: IRQ_AFFINITY_CPUS if set (cpulist, e.g. 8-15,24-31), otherwise
+# the second CCD/CCX group. Managed IRQs (NVMe queues) cannot be moved and are
+# skipped. Stop irqbalance, or it will undo this.
+SET_IRQ_AFFINITY=0
+IRQ_AFFINITY_CLASSES="gpu nvme net usb"
+IRQ_AFFINITY_CPUS=
+
+# --- GPU ---------------------------------------------------------------------------
+# NVIDIA persistence mode (only touches GPUs where it is currently disabled).
+SET_NVIDIA_PERSISTENCE=0
+# amdgpu power_dpm_force_performance_level (higher power draw).
+SET_AMDGPU_PERF_LEVEL=0
+AMDGPU_PERF_LEVEL=high
+
+# --- Network / storage -------------------------------------------------------------
+# Wi-Fi power save off while gaming (needs the iw tool).
+SET_WIFI_POWERSAVE=1
+# NVMe I/O scheduler: none | mq-deadline | kyber | bfq
+SET_NVME_SCHED=1
+NVME_IO_SCHEDULER=none
+
 # --- PCIe ASPM -----------------------------------------------------------------
 # PCIe ASPM policy during gameplay: performance | default | powersave
 ASPM_POLICY=performance
