@@ -1,5 +1,5 @@
 #!/bin/bash
-# build.sh — build and install vk_flip_meter layer (v3.0)
+# build.sh — build and install vk_flip_meter layer (v3.1)
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -7,7 +7,7 @@ BUILD_DIR="$SCRIPT_DIR/build"
 INSTALL_PREFIX="${1:-/usr/local}"
 NATIVE_BUILD="${FLM_NATIVE_BUILD:-OFF}"
 
-echo "==> Building vk_flip_meter (v3.0)"
+echo "==> Building vk_flip_meter (v3.1)"
 echo "    Prefix: $INSTALL_PREFIX"
 if [ "$NATIVE_BUILD" = "ON" ]; then
     echo "    Native build: ON (-O3 -march=native -mtune=native -flto, runs on this machine only)"
@@ -71,7 +71,7 @@ echo "  # FPS cap: MangoHud should show a flat 60 FPS line (works on every drive
 echo "  ENABLE_LAYER_cpu_flip_meter=1 FLM_TARGET_FPS=60 mangohud %command%"
 echo ""
 echo "============================================================"
-echo " USAGE (v3.0 — auto-configuring)"
+echo " USAGE (v3.1 — auto-configuring)"
 echo "============================================================"
 echo ""
 echo "  # Default: FPS cap if FLM_TARGET_FPS>0, otherwise the floor pacer wherever"

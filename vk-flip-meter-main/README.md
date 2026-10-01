@@ -4,7 +4,7 @@ This layer is part of a project developed with AI assistance. Use at your own ri
 
 ---
 
-# FLM — Vulkan Flip Meter / Frame Pacing Layer (v3.0 — "auto")
+# FLM — Vulkan Flip Meter / Frame Pacing Layer (v3.1 — "auto")
 
 A Vulkan layer that evens out frame delivery on VRR panels, especially with
 frame generation (DLSS-FG / FSR-FG / MFG), and doubles as a precise FPS cap.

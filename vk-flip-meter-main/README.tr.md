@@ -4,7 +4,7 @@ Bu katman yapay zekâ desteğiyle geliştirilmiş bir projenin parçasıdır. Ku
 
 ---
 
-# FLM — Vulkan Flip Meter / Frame Pacing Katmanı (v3.0 — "auto")
+# FLM — Vulkan Flip Meter / Frame Pacing Katmanı (v3.1 — "auto")
 
 VRR panellerde, özellikle frame generation (DLSS-FG / FSR-FG / MFG) açıkken
 kare teslimini düzenleyen, aynı zamanda hassas bir FPS sınırlayıcı olan

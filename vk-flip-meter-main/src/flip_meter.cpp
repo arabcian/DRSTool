@@ -1,5 +1,5 @@
 // ============================================================================
-// FLM — Vulkan Flip Meter / Frame Pacing Layer  (v3.0 — "auto")
+// FLM — Vulkan Flip Meter / Frame Pacing Layer  (v3.1 — "auto")
 //
 // DESIGN SUMMARY
 // --------------
@@ -93,6 +93,68 @@
 //         recreated swapchains ended up writing to "<path>.2".
 //  [V3-13] STATS line reports the effective floor ratio and the FIFO/VRR
 //         verdict, so the auto-configuration is observable without CSV.
+//
+// v3.1 changes (review pass — no new configuration)
+// ------------------------------------------------------------------------------
+//  [V31-1] FLOOR WATCHED ITS OWN OUTPUT ON A CADENCE RISE. The slot is derived
+//          from measured flips, and a held frame's flip is the floor itself, so
+//          after any slow phase the pacer kept the old cadence: a 10 FPS
+//          loading screen followed by 200 FPS gameplay held every frame ~85 ms
+//          for ~2 s (simulated: 72 vs 194 FPS in the 3 s after the load); a
+//          60→250 FPS rise ran at ~195 FPS with 15 ms spikes for a second.
+//          Three fixes: (a) a single hold is capped at MAX_PACE_WAIT_NS;
+//          (b) a SUSTAINED STALE HOLD (m=1: 3 presents in a row arriving before
+//          half the floor; m>1: more than two cycles of holds the cap had to
+//          clip) means the natural cadence is faster
+//          than anything
+//          the floor can measure → the frame is released, the
+//          next REAL_WINDOW+2m presents pass unpaced (m=1) or at the probe's
+//          half floor (m>1, keeps generated frames spaced) and the measurement
+//          thread restarts its T/slot windows from them (re-anchor);
+//          (c) see V31-2.
+//  [V31-2] INTEGRATOR WIND-UP. ratio_auto kept climbing while the ratio sat on
+//          its ceiling (m=1: +400 above the 850 cap), so the "one held frame
+//          = brake" response (-4) needed ~100 held frames before the effective
+//          ratio moved at all. ratio_auto is now clamped to the range that can
+//          actually change the clamped ratio.
+//  [V31-3] LIMITER: the first frame scheduled the NEXT deadline and the second
+//          call added another interval on top (second frame waited 2×iv);
+//          after a stall > 2 intervals the re-anchor added a full interval of
+//          wait to a frame that was already late. Deadline now means "this
+//          present"; a stall re-anchors to now with no wait.
+//  [V31-4] VK_SUBOPTIMAL_KHR from vkWaitForPresentKHR is a SUCCESS code (the
+//          present completed). It was handled as an error: 50 ms sleep, id not
+//          advanced → on a swapchain that stays suboptimal (common when the
+//          app ignores SUBOPTIMAL) measurement — and with it the pacer — was
+//          dead for the session while the thread woke 20×/s.
+//  [V31-5] SWAPCHAIN DESTROY STALL. The measurement thread waited in the driver
+//          for the NEXT id, which after the app's last present never comes:
+//          vkDestroySwapchainKHR / vkDestroyDevice blocked up to 50 ms on the
+//          join (+50 ms on the OUT_OF_DATE sleep) — on every alt-tab/resize
+//          recreate. The thread now enters the driver only for ids already
+//          handed to QueuePresent and otherwise sleeps on a futex
+//          (submit_seq) that the next present or the stop request wakes.
+//          Side effect: zero wake-ups while the game isn't presenting.
+//  [V31-6] EXIT SAFETY. The measurement thread owned a shared_ptr to its own
+//          state; when static destructors ran at exit (Wine calls exit())
+//          the maps, config strings and the CSV registry were destroyed under
+//          a still-running thread (use-after-free), and if that thread then
+//          dropped the last reference, ~jthread joined itself → terminate.
+//          The thread now gets a raw pointer (state lifetime ⊇ thread
+//          lifetime: ~SwapchainState stops+joins first), and the global
+//          tables are intentionally leaked so exit never frees them.
+//  [V31-7] CONFIG RELOAD RACE. Reload reset the live atomics to defaults and
+//          then re-applied env/file, so the present thread could observe
+//          target_fps=0 for one frame (limiter timeline reset → one uncapped
+//          frame + re-anchor). Values are now built off-line and published
+//          once. Mode/log-level values are case-insensitive; an over-long
+//          config line is skipped instead of being re-parsed as a new line.
+//  [V31-8] LESS SPIN. The present thread's timer slack (default 50 µs) was
+//          most of the measured oversleep, i.e. most of the spin margin burnt
+//          with _mm_pause. precise_wait sets it to 1 µs once per thread, which
+//          cuts the per-hold busy-wait to roughly a third.
+//  [V31-9] STATS ratio=0 whenever the floor is not pacing right now (it kept
+//          the last value after mode=off/cap, hitch, FIFO-fixed).
 // ============================================================================
 
 
@@ -123,6 +185,9 @@
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
+#include <sys/stat.h>
+#include <sys/prctl.h>
+#include <strings.h>
 
 #if defined(__x86_64__) || defined(__i386__)
 #  include <immintrin.h>
@@ -188,6 +253,8 @@ namespace FlmConst {
     constexpr int      FIFO_VRR_MAX_PCT    = 60;    // quantised share below this → VRR
     constexpr int      FIFO_VRR_CONFIRM    = 2;     // consecutive windows to latch
     constexpr int64_t  FIFO_MIN_REFRESH_NS = 1'800'000LL;   // > any real panel's refresh
+    // [V31-8] Present-thread timer slack (ns) used while FLM sleeps on it.
+    constexpr unsigned long TIMER_SLACK_NS = 1'000UL;
 }
 
 // Floor-pacer tuning. Base ratio and the autotune ceiling depend on the mode;
@@ -222,7 +289,9 @@ struct FLMConfig {
     std::atomic<int> floor_ratio {0};   // 0 = mode default
 };
 
-static FLMConfig      g_config;
+// [V31-6] Leaked on purpose: a still-running measurement thread must never see
+// these destroyed by static destructors at exit.
+static FLMConfig&     g_config = *new FLMConfig;
 static std::once_flag g_config_flag;
 
 static const char* mode_name(int m) {
@@ -236,13 +305,14 @@ static const char* mode_name(int m) {
     return "?";
 }
 
-// FLM_MODE and the legacy FLM_PROFILE share one vocabulary.
+// FLM_MODE and the legacy FLM_PROFILE share one vocabulary. [V31-7] any case.
 static PaceMode parse_mode(const char* s) {
-    if (!strcmp(s, "auto") || !strcmp(s, "vrr") || !strcmp(s, "mfg")) return PaceMode::AUTO;
-    if (!strcmp(s, "present"))                        return PaceMode::PRESENT;
-    if (!strcmp(s, "latency"))                        return PaceMode::LATENCY;
-    if (!strcmp(s, "cap") || !strcmp(s, "limiter"))   return PaceMode::CAP;
-    if (!strcmp(s, "off"))                            return PaceMode::OFF;
+    if (!strcasecmp(s, "auto") || !strcasecmp(s, "vrr") || !strcasecmp(s, "mfg"))
+                                                              return PaceMode::AUTO;
+    if (!strcasecmp(s, "present"))                            return PaceMode::PRESENT;
+    if (!strcasecmp(s, "latency"))                            return PaceMode::LATENCY;
+    if (!strcasecmp(s, "cap") || !strcasecmp(s, "limiter"))   return PaceMode::CAP;
+    if (!strcasecmp(s, "off"))                                return PaceMode::OFF;
     FLM_LOG(LogLevel::WARN, "FLM_MODE='%s' unknown — expected auto|present|latency|cap|off; "
             "using auto", s);
     return PaceMode::AUTO;
@@ -269,7 +339,7 @@ static bool in_list(const char* k, const char* const (&list)[N]) {
 
 // Keys already reported, so a SIGUSR1 loop doesn't spam the log.
 static std::mutex               g_warned_lock;
-static std::vector<std::string> g_warned_keys;
+static std::vector<std::string>& g_warned_keys = *new std::vector<std::string>;   // [V31-6]
 static void warn_key_once(const char* key, const char* why) {
     std::lock_guard lk(g_warned_lock);
     for (const auto& k : g_warned_keys) if (k == key) return;
@@ -277,22 +347,31 @@ static void warn_key_once(const char* key, const char* why) {
     FLM_LOG(LogLevel::WARN, "%s: %s", key, why);
 }
 
+// [V31-7] Hot-reloadable values are assembled here and published in one go,
+// so the present thread never sees the transient built-in defaults.
+struct DynCfg {
+    int mode        = (int)PaceMode::AUTO;
+    int target_fps  = 0;
+    int floor_ratio = 0;
+    int log_level   = (int)LogLevel::WARN;
+};
+
 // Returns true if the key is a hot-reloadable one and was applied.
-static bool apply_dynamic_kv(const char* key, const char* val) {
+static bool apply_dynamic_kv(DynCfg& c, const char* key, const char* val) {
     if (!key || !val || !*val) return false;
     if      (!strcmp(key, "FLM_MODE") || !strcmp(key, "FLM_PROFILE"))
-        g_config.mode.store((int)parse_mode(val));
+        c.mode = (int)parse_mode(val);
     else if (!strcmp(key, "FLM_TARGET_FPS"))
-        g_config.target_fps.store(std::clamp(atoi(val), 0, 1000));
+        c.target_fps = std::clamp(atoi(val), 0, 1000);
     else if (!strcmp(key, "FLM_FLOOR_RATIO")) {
         int r = atoi(val);
-        g_config.floor_ratio.store(r <= 0 ? 0 : std::clamp(r, 500, 1000));
+        c.floor_ratio = r <= 0 ? 0 : std::clamp(r, 500, 1000);
     }
     else if (!strcmp(key, "FLM_LOG_LEVEL")) {
-        if      (!strcmp(val, "DEBUG")) g_log_level.store((int)LogLevel::DEBUG);
-        else if (!strcmp(val, "INFO"))  g_log_level.store((int)LogLevel::INFO);
-        else if (!strcmp(val, "WARN"))  g_log_level.store((int)LogLevel::WARN);
-        else if (!strcmp(val, "ERROR")) g_log_level.store((int)LogLevel::ERR);
+        if      (!strcasecmp(val, "DEBUG")) c.log_level = (int)LogLevel::DEBUG;
+        else if (!strcasecmp(val, "INFO"))  c.log_level = (int)LogLevel::INFO;
+        else if (!strcasecmp(val, "WARN"))  c.log_level = (int)LogLevel::WARN;
+        else if (!strcasecmp(val, "ERROR")) c.log_level = (int)LogLevel::ERR;
     }
     else return false;
     return true;
@@ -301,12 +380,12 @@ static bool apply_dynamic_kv(const char* key, const char* val) {
 using KvList = std::vector<std::pair<std::string, std::string>>;
 
 // FLM_PROFILE first, so an explicit FLM_MODE in the same source wins.
-static void apply_kv_list(const KvList& kv, bool from_file) {
+static void apply_kv_list(DynCfg& c, const KvList& kv, bool from_file) {
     for (const auto& [k, v] : kv)
-        if (k == "FLM_PROFILE") apply_dynamic_kv(k.c_str(), v.c_str());
+        if (k == "FLM_PROFILE") apply_dynamic_kv(c, k.c_str(), v.c_str());
     for (const auto& [k, v] : kv) {
         if (k == "FLM_PROFILE") continue;
-        if (apply_dynamic_kv(k.c_str(), v.c_str())) continue;
+        if (apply_dynamic_kv(c, k.c_str(), v.c_str())) continue;
         if (in_list(k.c_str(), k_legacy_keys))
             warn_key_once(k.c_str(), "removed in v3 (auto-tuned now) — ignored");
         else if (from_file && in_list(k.c_str(), k_loadtime_keys))
@@ -321,8 +400,15 @@ static KvList read_config_file(const char* path) {
     KvList out;
     FILE* f = fopen(path, "r");
     if (!f) return out;
-    char line[256];
+    char line[512];
     while (fgets(line, sizeof line, f)) {
+        // [V31-7] Over-long line: drop the rest instead of parsing it as a new line.
+        const size_t len = strlen(line);
+        if (len && line[len - 1] != '\n' && !feof(f)) {
+            int ch;
+            while ((ch = fgetc(f)) != EOF && ch != '\n') {}
+            continue;
+        }
         char* p = line;
         while (*p == ' ' || *p == '\t') p++;
         if (*p == '#' || *p == '\n' || *p == '\0') continue;
@@ -346,7 +432,7 @@ static KvList read_config_file(const char* path) {
 // process's env can't change from outside anyway). Every FLM_* var is kept so
 // unknown/legacy names can be reported.
 extern char** environ;
-static KvList g_env_snapshot;
+static KvList& g_env_snapshot = *new KvList;   // [V31-6] leaked
 
 static void snapshot_env() {
     for (char** e = environ; e && *e; ++e) {
@@ -359,19 +445,44 @@ static void snapshot_env() {
 
 // [V3-8] defaults → env → file. Removing a line from the file reverts it.
 static void reload_dynamic_config() {
-    g_config.mode.store((int)PaceMode::AUTO);
-    g_config.target_fps.store(0);
-    g_config.floor_ratio.store(0);
-    g_log_level.store((int)LogLevel::WARN);
-    apply_kv_list(g_env_snapshot, false);
+    DynCfg c;
+    apply_kv_list(c, g_env_snapshot, false);
     if (!g_config.config_path.empty())
-        apply_kv_list(read_config_file(g_config.config_path.c_str()), true);
+        apply_kv_list(c, read_config_file(g_config.config_path.c_str()), true);
+    g_config.mode.store(c.mode);
+    g_config.target_fps.store(c.target_fps);
+    g_config.floor_ratio.store(c.floor_ratio);
+    g_log_level.store(c.log_level);
 }
 
 static std::atomic<bool> g_reload_flag{false};
 static void sigusr1_handler(int) { g_reload_flag.store(true, std::memory_order_relaxed); }
 
+static inline int64_t now_ns();
+
+// [V3-18] SIGUSR1 is unreliable under Wine/Proton: ntdll installs its own
+// SIGUSR1 handler before the layer loads, so the SIG_DFL check in init_config
+// leaves ours uninstalled and `kill -USR1` never reaches the reload path.
+// Second trigger: poll FLM_CONFIG's mtime at <= 1 Hz, same flag, same reload.
+static std::atomic<int64_t> g_cfg_next_poll_ns{0};
+static std::atomic<int64_t> g_cfg_mtime_ns{-1};   // -1 = baseline not taken yet
+static void poll_config_mtime() {
+    if (g_config.config_path.empty()) return;
+    const int64_t t = now_ns();
+    int64_t next = g_cfg_next_poll_ns.load(std::memory_order_relaxed);
+    if (t < next ||
+        !g_cfg_next_poll_ns.compare_exchange_strong(next, t + 1'000'000'000LL,
+                                                    std::memory_order_relaxed))
+        return;
+    struct stat sb;
+    if (stat(g_config.config_path.c_str(), &sb) != 0) return;
+    const int64_t mt = (int64_t)sb.st_mtim.tv_sec * 1'000'000'000LL + sb.st_mtim.tv_nsec;
+    const int64_t prev = g_cfg_mtime_ns.exchange(mt, std::memory_order_relaxed);
+    if (prev != -1 && prev != mt) g_reload_flag.store(true, std::memory_order_relaxed);
+}
+
 static inline void maybe_reload() {
+    poll_config_mtime();
     if (g_reload_flag.load(std::memory_order_relaxed) &&
         g_reload_flag.exchange(false, std::memory_order_relaxed)) {
         reload_dynamic_config();
@@ -539,6 +650,14 @@ static void spin_margin_update(int64_t os) {
 
 static void precise_wait_absolute(int64_t target) {
     if (target <= 0) return;
+    // [V31-8] Default timer slack (50 µs) was most of the measured oversleep —
+    // and therefore most of the busy-spin margin. Once per thread; RT threads
+    // ignore slack anyway.
+    thread_local bool slack_set = false;
+    if (!slack_set) {
+        slack_set = true;
+        prctl(PR_SET_TIMERSLACK, FlmConst::TIMER_SLACK_NS, 0UL, 0UL, 0UL);
+    }
     const int64_t spin = g_spin_margin.load(std::memory_order_relaxed);   // p75-derived, always adaptive
     for (;;) {
         int64_t left = target - now_ns();
@@ -621,9 +740,13 @@ struct SwapchainState {
                 std::atomic<int>      eff_ratio{0};           // [V3-13] observability
                 int64_t limiter_next_ns = 0;
                 int64_t last_present_ns = 0;
+                std::atomic<uint32_t> submit_seq{0};          // [V31-5] futex: id handed to the driver / stop
+                std::atomic<bool>     reanchor_req{false};    // [V31-1] restart T/slot windows
                 int     ratio_auto      = 0;
                 int     ratio_m         = 1;                  // [V3-5] m the delta was learned at
                 int     held_run        = 0;
+                int     hold_streak     = 0;                  // [V31-1] consecutive DEEP holds
+                int     pass_left       = 0;                  // [V31-1] unpaced presents left (re-anchor)
     //
     // Line M — written by the measurement thread.
     alignas(64) std::atomic<int64_t>  slot_interval_ns{FlmConst::DEFAULT_INTERVAL_NS};
@@ -683,7 +806,18 @@ struct SwapchainState {
     SwapchainState(VkDevice dev, VkSwapchainKHR sc, DeviceDispatch* d)
         : device(dev), swapchain(sc), disp(d) {}
 
-    ~SwapchainState() { csv_close(); }   // normally already closed by the thread
+    // [V31-5/6] Stop the measurement thread: request_stop alone can't reach a
+    // thread asleep on submit_seq, so bump + notify it as well.
+    void stop_measurement() {
+        if (!measure_thread.joinable()) return;
+        measure_thread.request_stop();
+        submit_seq.fetch_add(1, std::memory_order_seq_cst);
+        submit_seq.notify_all();
+        measure_thread.join();
+    }
+
+    // [V31-6] Join BEFORE touching the CSV: the thread owns it while it runs.
+    ~SwapchainState() { stop_measurement(); csv_close(); }
 
     // [V3-7]
     static int64_t hitch_threshold(int64_t T) {
@@ -746,24 +880,30 @@ struct SwapchainState {
 // ============================================================================
 // GLOBAL MAPS
 // ============================================================================
+// [V31-6] All tables are leaked on purpose (never destroyed at exit).
 static std::shared_mutex g_inst_lock;
-static std::unordered_map<VkInstance, InstanceDispatch> g_inst_map;
+static std::unordered_map<VkInstance, InstanceDispatch>& g_inst_map =
+    *new std::unordered_map<VkInstance, InstanceDispatch>;
 // [item 2] dispatch_key(gpu/instance) → locate InstanceDispatch
-static std::unordered_map<void*, VkInstance>            g_instkey_map;
+static std::unordered_map<void*, VkInstance>& g_instkey_map =
+    *new std::unordered_map<void*, VkInstance>;
 
 static std::shared_mutex g_dev_lock;
-static std::unordered_map<VkDevice, DeviceDispatch> g_dev_map;
+static std::unordered_map<VkDevice, DeviceDispatch>& g_dev_map =
+    *new std::unordered_map<VkDevice, DeviceDispatch>;
 
 struct QueueData {
     VkDevice        device = VK_NULL_HANDLE;
     DeviceDispatch* disp   = nullptr;
 };
 static std::shared_mutex g_queue_lock;
-static std::unordered_map<VkQueue, QueueData> g_queue_map;
+static std::unordered_map<VkQueue, QueueData>& g_queue_map =
+    *new std::unordered_map<VkQueue, QueueData>;
 static std::atomic<uint64_t> g_queue_gen{0};   // [V3-11] bumps invalidate find_queue caches
 
 static std::shared_mutex g_sc_lock;
-static std::unordered_map<VkSwapchainKHR, std::shared_ptr<SwapchainState>> g_sc_map;
+static std::unordered_map<VkSwapchainKHR, std::shared_ptr<SwapchainState>>& g_sc_map =
+    *new std::unordered_map<VkSwapchainKHR, std::shared_ptr<SwapchainState>>;
 
 static inline void* dispatch_key(void* handle) { return *(void**)handle; }
 
@@ -809,10 +949,7 @@ static std::shared_ptr<SwapchainState> find_sc_state(VkSwapchainKHR sc) {
 }
 
 static void stop_and_join(std::shared_ptr<SwapchainState>& st) {
-    if (st && st->measure_thread.joinable()) {
-        st->measure_thread.request_stop();
-        st->measure_thread.join();
-    }
+    if (st) st->stop_measurement();
 }
 
 // ============================================================================
@@ -830,9 +967,9 @@ static void stop_and_join(std::shared_ptr<SwapchainState>& st) {
 // (games routinely _exit()).
 // ============================================================================
 struct CsvPathInfo { int active = 0; bool seen = false; };
-static std::mutex& csv_registry_lock() { static std::mutex m; return m; }
+static std::mutex& csv_registry_lock() { static std::mutex& m = *new std::mutex; return m; }
 static std::unordered_map<std::string, CsvPathInfo>& csv_registry() {
-    static std::unordered_map<std::string, CsvPathInfo> r; return r;
+    static auto& r = *new std::unordered_map<std::string, CsvPathInfo>; return r;   // [V31-6]
 }
 
 // Returns the FILE* (nullptr on failure) and stores the registry key the
@@ -1025,6 +1162,18 @@ static void csv_open_lazy(SwapchainState* st) {
 
 // One real flip interval. All of this used to be inline in the thread loop.
 static void process_interval(SwapchainState* st, int64_t tnow, int64_t interval_ns) {
+    // [V31-1] The gate saw a sustained hold and is letting frames through
+    // unpaced: drop everything the floor shaped and rebuild T and the slot
+    // mean from the natural cadence (warm=false → no clamp against old T).
+    if (st->reanchor_req.load(std::memory_order_relaxed) &&
+        st->reanchor_req.exchange(false, std::memory_order_acquire)) {
+        st->real_count = st->real_idx = 0;
+        st->cyc_since_hitch = 0;
+        st->slot_count = st->slot_idx = 0;
+        st->slot_sum = 0;
+        std::fill(st->slot_win, st->slot_win + FlmConst::SLOT_WINDOW, 0);
+        st->mfg_small_cnt = st->mfg_total_cnt = 0;
+    }
     const int     m      = st->eff_mfg.load(std::memory_order_relaxed);
     const int64_t T_prev = st->real_median_cache;
     const bool    warm   = st->real_count >= 4;
@@ -1077,7 +1226,8 @@ static void process_interval(SwapchainState* st, int64_t tnow, int64_t interval_
 
     // Slot mean over ALL intervals (= T/m): the MFG detector's reference.
     {
-        int64_t safe_iv = std::clamp<int64_t>(interval_ns, 100'000LL, st->slot_mean_ns * 4);
+        int64_t safe_iv = std::clamp<int64_t>(interval_ns, 100'000LL,
+                                              std::max<int64_t>(st->slot_mean_ns * 4, 100'000LL));
         st->slot_sum += safe_iv - st->slot_win[st->slot_idx];
         st->slot_win[st->slot_idx] = safe_iv;
         st->slot_idx = (st->slot_idx + 1) % FlmConst::SLOT_WINDOW;
@@ -1178,7 +1328,9 @@ static void process_interval(SwapchainState* st, int64_t tnow, int64_t interval_
     }
 }
 
-static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<SwapchainState> st) {
+// [V31-6] Raw pointer: the state outlives the thread (~SwapchainState joins
+// first), and the thread can never end up holding the last reference.
+static void measurement_thread_fn(std::stop_token stoken, SwapchainState* st) {
     apply_thread_policies();
     if (g_config.stats)
         st->stat_ring = std::make_unique<int64_t[]>(FlmConst::STAT_RING);
@@ -1189,13 +1341,25 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
     int      immediate_run   = 0;
     st->stat_last_ns = now_ns();
 
-    while (!stoken.stop_requested()) {
+    for (;;) {
+        // [V31-5] seq BEFORE the stop check and the id load: a present or a
+        // stop that lands after this point changes seq, so the futex wait
+        // below returns at once instead of missing the wake-up.
+        const uint32_t seq = st->submit_seq.load(std::memory_order_acquire);
+        if (stoken.stop_requested()) break;
         maybe_reload();
 #ifdef FLM_PGO_INSTRUMENTED
         flm_gcov_periodic_dump();
 #endif
+        const uint64_t latest = st->next_present_id.load(std::memory_order_acquire);
+        // [V31-5] Only ids already handed to QueuePresent go to the driver.
+        // Waiting there for an id that was never submitted kept every
+        // swapchain destroy blocked on the 50 ms timeout.
+        if (wait_id >= latest) {
+            st->submit_seq.wait(seq, std::memory_order_acquire);
+            continue;
+        }
         // [V3-4] Safety net only: a backlog is normally caught by [V3-3].
-        const uint64_t latest = st->next_present_id.load(std::memory_order_relaxed);
         if (latest > FlmConst::FF_GAP && wait_id + FlmConst::FF_GAP < latest) {
             wait_id    = latest - 1;
             last_valid = false;
@@ -1205,18 +1369,22 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
         VkResult r = st->disp->WaitForPresentKHR(st->device, st->swapchain,
                                                  wait_id, FlmConst::WAIT_TIMEOUT_NS);
         if (r == VK_TIMEOUT) {
-            // No flips (paused, alt-tab, app presents id=0): back off, don't spin.
+            // Submitted but not shown within 50 ms (minimised, compositor
+            // stall): back off, don't spin.
             last_valid = false;
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
         }
-        if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR ||
-            r == VK_ERROR_SURFACE_LOST_KHR) {
+        if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR) {
+            // [V31-5] Dead swapchain: sleep until the next present (or the
+            // destroy's stop request) instead of a fixed 50 ms the join had
+            // to sit through. One driver call per present at most.
             last_valid = false;
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            st->submit_seq.wait(seq, std::memory_order_acquire);
             continue;
         }
-        if (r != VK_SUCCESS) {
+        // [V31-4] VK_SUBOPTIMAL_KHR is a success code: the present completed.
+        if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
             FLM_LOG(LogLevel::DEBUG, "WaitForPresentKHR fatal: %d", (int)r);
             break;
         }
@@ -1234,9 +1402,9 @@ static void measurement_thread_fn(std::stop_token stoken, std::shared_ptr<Swapch
         immediate_run = 0;
 
         st->last_flip_ns.store(tnow, std::memory_order_relaxed);
-        csv_open_lazy(st.get());   // [V3-12] after the old swapchain is gone
+        csv_open_lazy(st);   // [V3-12] after the old swapchain is gone
 
-        if (last_valid) process_interval(st.get(), tnow, tnow - last_display_ns);
+        if (last_valid) process_interval(st, tnow, tnow - last_display_ns);
 
         last_display_ns = tnow;
         last_valid      = true;
@@ -1368,11 +1536,20 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkCreateDevice(
     }
 
     // [FIX-14] Don't re-inject feature structs already present in pNext.
+    // [V3-19] Also capture the VALUES the app set: a struct present with
+    // VK_FALSE leaves the feature off even though the extension name is enabled.
     bool chain_id_feat = false, chain_wait_feat = false;
+    bool app_id_on = false, app_wait_on = false;
     for (const VkBaseInStructure* p = (const VkBaseInStructure*)pCreateInfo->pNext;
          p; p = p->pNext) {
-        if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR)   chain_id_feat   = true;
-        if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR) chain_wait_feat = true;
+        if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR) {
+            chain_id_feat = true;
+            app_id_on = ((const VkPhysicalDevicePresentIdFeaturesKHR*)p)->presentId == VK_TRUE;
+        }
+        if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR) {
+            chain_wait_feat = true;
+            app_wait_on = ((const VkPhysicalDevicePresentWaitFeaturesKHR*)p)->presentWait == VK_TRUE;
+        }
     }
 
     VkPhysicalDevicePresentIdFeaturesKHR   id_feat{
@@ -1415,7 +1592,15 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkCreateDevice(
     // On the fallback path the extension was NOT enabled; WaitForPresentKHR
     // may be non-null but calling it is UB. created_with_wait guarantees this;
     // also safe if the app itself enabled both.
-    bool safe_wait = created_with_wait || (app_has_id && app_has_wait);
+    // [V3-19] Effective feature state: the app's own value if it supplied the
+    // struct, otherwise ours (TRUE only if our injected create succeeded).
+    const bool id_on   = chain_id_feat   ? app_id_on   : created_with_wait;
+    const bool wait_on = chain_wait_feat ? app_wait_on : created_with_wait;
+    const bool ext_ok  = created_with_wait || (app_has_id && app_has_wait);
+    bool safe_wait = ext_ok && id_on && wait_on;
+    if (ext_ok && !safe_wait)
+        FLM_LOG(LogLevel::INFO, "presentId/presentWait feature is off in the application's "
+                "device features; PACER disabled (LIMITER still available)");
     d.has_present_wait = (d.WaitForPresentKHR != nullptr) && safe_wait;
 
     std::unique_lock lk(g_dev_lock);
@@ -1513,7 +1698,7 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkCreateSwapchainKHR(
 
     // Measurement thread only when presentWait is available and swapchain is paceable.
     if (disp->has_present_wait && st->pace_allowed)
-        st->measure_thread = std::jthread(measurement_thread_fn, st);
+        st->measure_thread = std::jthread(measurement_thread_fn, st.get());   // [V31-6]
 
     std::shared_ptr<SwapchainState> stale;
     {
@@ -1552,14 +1737,19 @@ VK_LAYER_EXPORT void VKAPI_CALL FLM_vkDestroySwapchainKHR(
 // ============================================================================
 
 // LIMITER: absolute timeline, soft slew on small debt, rebase on stalls.
+// limiter_next_ns is the deadline of THIS present (0 = not started).
 static void gate_limiter(SwapchainState* st, int fps, int64_t t) {
     const int64_t iv = 1'000'000'000LL / fps;
-    if (st->limiter_next_ns == 0) { st->limiter_next_ns = t + iv; return; }
+    // [V31-3] First present: it IS the anchor (v3.0 stored t+iv here and the
+    // next call added another iv → the second frame waited two intervals).
+    if (st->limiter_next_ns == 0) { st->limiter_next_ns = t; return; }
     st->limiter_next_ns += iv;
     const int64_t drift = st->limiter_next_ns - t;
     const int64_t tol   = std::clamp<int64_t>(iv / 4, 1'000'000LL, 4'000'000LL);
-    if (drift < -2 * iv || drift > 4 * iv) st->limiter_next_ns = t + iv;   // stall / clock jump
-    else if (drift < -tol)                 st->limiter_next_ns -= drift / 8;
+    // [V31-3] Stall / rate change: re-anchor to NOW. v3.0 re-anchored to
+    // now+iv, adding a full interval of wait to a frame that was already late.
+    if (drift < -2 * iv || drift > 4 * iv) { st->limiter_next_ns = t; return; }
+    if (drift < -tol) st->limiter_next_ns -= drift / 8;
 
     const int64_t left     = st->limiter_next_ns - t;
     const int64_t max_wait = std::max<int64_t>(FlmConst::MAX_PACE_WAIT_NS, iv + iv / 2);
@@ -1569,7 +1759,7 @@ static void gate_limiter(SwapchainState* st, int fps, int64_t t) {
 // FLOOR PACER: a present may not leave sooner than `floor` after the previous
 // one. floor = slot * ratio, slot = T/m from the measurement thread.
 static void gate_floor(SwapchainState* st, bool latency, int64_t t) {
-    auto reset = [st] { st->last_present_ns = 0; st->held_run = 0; };
+    auto reset = [st] { st->last_present_ns = 0; st->held_run = 0; st->hold_streak = 0; };
 
     if (st->hitch_left.load(std::memory_order_relaxed) > 0) { reset(); return; }
     // No fresh measurement (id=0 presents, alt-tab, OUT_OF_DATE loop): the
@@ -1583,7 +1773,16 @@ static void gate_floor(SwapchainState* st, bool latency, int64_t t) {
     const int64_t slot = st->slot_interval_ns.load(std::memory_order_relaxed);
     if (slot <= 0) return;
     const int  m       = st->eff_mfg.load(std::memory_order_relaxed);
-    const bool probing = st->probe_active.load(std::memory_order_relaxed);
+    // [V31-1] Re-anchor window: the measurement thread is rebuilding T from
+    // these presents. m=1: unpaced (any floor would be measured back as T).
+    // m>1: the probe's half floor — generated frames stay spaced, real frames
+    // are no longer braked, and the cycle sum yields the new T regardless.
+    const bool reanchoring = st->pass_left > 0;
+    if (reanchoring) {
+        st->pass_left--;
+        if (m == 1) { reset(); return; }
+    }
+    const bool probing = reanchoring || st->probe_active.load(std::memory_order_relaxed);
 
     // [V3-5] A delta learned for another multiplier is meaningless here.
     if (m != st->ratio_m) { st->ratio_m = m; st->ratio_auto = 0; st->held_run = 0; }
@@ -1595,11 +1794,17 @@ static void gate_floor(SwapchainState* st, bool latency, int64_t t) {
     // Relax faster than linearly with m: interpolated frames at m=3/4 share
     // one optical-flow pass and their cost variance stacks (field data: 4x
     // hitch rate 5.5 % → 0.01 % after this change).
-    int ratio = base;
-    if (m > 1) ratio -= FlmTune::MFG_STEP * (m - 1) * m / 2;
-    if (!probing) ratio += st->ratio_auto;
+    const int fixed = base - ((m > 1) ? FlmTune::MFG_STEP * (m - 1) * m / 2 : 0);
     // [V3-6] No frame generation → only runt frames are the target.
-    const int ceil = (m == 1) ? std::max(FlmTune::RATIO_CAP_M1, user) : 1000;
+    const int ceil  = (m == 1) ? std::max(FlmTune::RATIO_CAP_M1, user) : 1000;
+    // [V31-2] Anti-windup: ratio_auto may only span the range in which it
+    // still moves the clamped ratio; anything beyond is invisible credit the
+    // brake path would first have to burn off.
+    const int a_lo = std::max(FlmTune::AUTO_MIN, 500 - fixed);
+    const int a_hi = std::max(a_lo, std::min(amax, ceil - fixed));
+    st->ratio_auto = std::clamp(st->ratio_auto, a_lo, a_hi);
+
+    int ratio = fixed + (probing ? 0 : st->ratio_auto);
     ratio = std::clamp(ratio, 500, ceil);
     if (probing) {   // keep generated frames classifiable (< 0.7 slot)
         ratio = std::min(ratio / 2, FlmConst::PROBE_RATIO_CAP);
@@ -1623,13 +1828,43 @@ static void gate_floor(SwapchainState* st, bool latency, int64_t t) {
 
     if (st->last_present_ns == 0) { st->last_present_ns = t; return; }
     const int64_t since = t - st->last_present_ns;
+    const bool    hold  = since < floor;
+
+    // [V31-1] SUSTAINED HOLD → RE-ANCHOR. The slot comes from measured flips
+    // and a held frame's flip is the floor itself, so once the game speeds up
+    // the floor keeps reproducing the old cadence (loading screen → gameplay:
+    // every frame held for most of the old frame time).
+    //  m=1: a DEEP hold (arrived before half the floor) has no legitimate
+    //       cause but a lone runt; 3 in a row = real frames queueing behind
+    //       the floor.
+    //  m>1: generated frames are deep holds by design, and the relaxed ratio
+    //       (<1) follows moderate rises by itself within a few cycles (a
+    //       re-anchor there only drains the queue in a burst — simulated).
+    //       Only holds the MAX_PACE_WAIT_NS cap had to clip count: the slot
+    //       is then stale by more than 20 ms. More than two cycles of them.
+    // Release, and let the measurement re-learn T from unshaped presents.
+    const bool stale_hold = (m == 1) ? since < floor / 2
+                                     : floor - since > FlmConst::MAX_PACE_WAIT_NS;
+    if (hold && !probing && stale_hold) {
+        if (++st->hold_streak > 2 * m) {
+            reset();
+            st->pass_left = FlmConst::REAL_WINDOW + 2 * m;
+            st->reanchor_req.store(true, std::memory_order_release);
+            st->eff_ratio.store(0, std::memory_order_relaxed);
+            FLM_LOG(LogLevel::DEBUG, "Floor re-anchor: cadence faster than slot %.2f ms (m=%d)",
+                    (double)slot / 1e6, m);
+            return;
+        }
+    } else {
+        st->hold_streak = 0;
+    }
 
     // CLOSED LOOP. Per cycle m-1 generated frames are legitimately held; the
     // m-th consecutive hold is the real frame being braked → loosen fast.
     // A pass with plenty of headroom means intervals are still uneven →
     // tighten slowly; a pass that barely clears the floor → loosen.
     if (!probing) {
-        if (since < floor) {
+        if (hold) {
             if (++st->held_run >= m) {
                 st->ratio_auto -= 4 * std::max(1, m - 1);
                 st->held_run = 0;
@@ -1642,14 +1877,16 @@ static void gate_floor(SwapchainState* st, bool latency, int64_t t) {
             if      (head > slot / 12) st->ratio_auto += std::max(1, m / 2);
             else if (head < slot / 50) st->ratio_auto -= 2;
         }
-        st->ratio_auto = std::clamp(st->ratio_auto, FlmTune::AUTO_MIN, amax);
+        st->ratio_auto = std::clamp(st->ratio_auto, a_lo, a_hi);   // [V31-2]
     }
 
     // Anchor to the actual post-wait time, not to the target: target
     // anchoring doubles per-interval variance (difference of two noise
     // samples) and a relative pacer has no grid to drift from.
-    if (since < floor) {
-        const int64_t target = st->last_present_ns + floor;
+    if (hold) {
+        // [V31-1] One hold never exceeds MAX_PACE_WAIT_NS, whatever the slot.
+        const int64_t target = std::min(st->last_present_ns + floor,
+                                        t + FlmConst::MAX_PACE_WAIT_NS);
         if (target > t) {
             st->last_gate_wait_ns.store(t, std::memory_order_relaxed);
             precise_wait_absolute(target);
@@ -1661,6 +1898,7 @@ static void gate_floor(SwapchainState* st, bool latency, int64_t t) {
 
 static void apply_gate(SwapchainState* st, bool has_wait) {
     if (!st->pace_allowed) return;
+    st->eff_ratio.store(0, std::memory_order_relaxed);   // [V31-9] gate_floor overwrites
     const PaceMode mode = (PaceMode)g_config.mode.load(std::memory_order_relaxed);
     if (mode == PaceMode::OFF) return;
 
@@ -1772,6 +2010,13 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkQueuePresentKHR(
             present_ids[i] = st->next_present_id.fetch_add(1, std::memory_order_relaxed);
             any_id = true;
         }
+        // [V31-5] Wake the measurement thread if it sleeps waiting for this
+        // id (a plain load when nobody waits). After the gate, so a held
+        // frame's id never reaches the driver wait early.
+        if (has_wait && st->measure_thread.joinable()) {
+            st->submit_seq.fetch_add(1, std::memory_order_release);
+            st->submit_seq.notify_one();
+        }
     }
 
     VkPresentIdKHR   present_id_info{};
@@ -1856,7 +2101,7 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(
 } // extern "C"
 
 // ============================================================================
-// ENVIRONMENT VARIABLES (v3.0)
+// ENVIRONMENT VARIABLES (v3.1 — unchanged since v3.0)
 // ----------------------------------------------------------------------------
 //  ENABLE_LAYER_cpu_flip_meter=1   load the implicit layer
 //  FLM_MODE=auto|latency|present|cap|off   (default auto; hot-reloadable)
