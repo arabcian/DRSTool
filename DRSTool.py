@@ -5009,7 +5009,7 @@ WINE_ENV_VARS: List[EnvVarDef] = [
               "Wine's own debug channel logging control. '-all' silences everything (fastest, "
               "recommended for normal play); '+all' is maximally verbose. Combine toggles with "
               "commas, e.g. '-all,+loaded' to see only module loads.",
-              options=["-all", "+all", "+relay", "+seh", "+heap", "+loaded",
+              options=["-all", "err+all", "+all", "+relay", "+seh", "+heap", "+loaded",
                        "+module", "+process", "+timestamp", "+pid", "+tid"]),
     # ── Sync Primitives (plain Wine/Lutris — Proton uses PROTON_NO_ESYNC/ ───
     # ── PROTON_NO_FSYNC/PROTON_USE_NTSYNC instead, see Proton category) ──────
@@ -5686,6 +5686,44 @@ ALL_ENV_VARS = (DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS + NVIDIA_PRIME_ENV_
                  SYS_ENV_VARS + FLM_ENV_VARS + GAMESCOPE_ENV_VARS +
                  FORK_ENV_VARS)
 
+# ── Master logging toggle ────────────────────────────────────────────────────
+# ON  = every logging switch enabled, every verbosity picker at ERROR level
+#       (never debug/trace/info, except DXVK_NVAPI_LOG_LEVEL which has no
+#       error level: "info" is its lowest "on" value).
+# OFF = every picker at its none/off value; pure debug switches removed.
+# Log *path/file* vars are left alone in both states.
+LOG_ENV_ON: Dict[str, str] = {
+    "DXVK_LOG_LEVEL": "error",
+    "D7VK_LOG_LEVEL": "error",
+    "VKD3D_DEBUG": "err",
+    "VKD3D_SHADER_DEBUG": "err",
+    "DXVK_NVAPI_LOG_LEVEL": "info",
+    "DXVK_NVAPI_VKREFLEX_LAYER_LOG_LEVEL": "error",
+    "NVPRESENT_LOG_LEVEL": "1",
+    "FLM_LOG_LEVEL": "ERROR",
+    "__GL_EVENT_LOGLEVEL": "ERROR",
+    "PROTON_LOG": "1",
+    "WINEDEBUG": "-all,err+all",
+    "VK_LOADER_DEBUG": "error",
+}
+LOG_ENV_OFF: Dict[str, str] = {
+    "DXVK_LOG_LEVEL": "none",
+    "D7VK_LOG_LEVEL": "none",
+    "VKD3D_DEBUG": "none",
+    "VKD3D_SHADER_DEBUG": "none",
+    "DXVK_NVAPI_LOG_LEVEL": "none",
+    "DXVK_NVAPI_VKREFLEX_LAYER_LOG_LEVEL": "none",
+    "NVPRESENT_LOG_LEVEL": "0",
+    "FLM_LOG_LEVEL": "ERROR",      # FLM has no "off"; ERROR is its quietest
+    "__GL_EVENT_LOGLEVEL": "OFF",
+    "PROTON_LOG": "0",
+    "WINEDEBUG": "-all",
+}
+LOG_ENV_UNSET_OFF = ("VK_LOADER_DEBUG", "FLM_STATS", "FLM_CSV",
+                     "VKD3D_LOG_BUFFERED", "DXVK_DEBUG")
+LOG_VKD3D_CONFIG_FLAGS = ("breadcrumbs", "breadcrumbs_sync", "breadcrumbs_trace",
+                          "log_memory_budget")
+
 # Sidebar display order for the Environment tab. Forks sit right under the
 # upstream project they patch.
 ENV_CATEGORY_ORDER = [
@@ -5873,6 +5911,34 @@ class EnvVarsWidget(QListWidget):
     def reset_all_values(self):
         """Clear all env var values and refresh list colors."""
         self._values.clear()
+        self.refresh_colors()
+        self.env_changed.emit()
+
+    def logging_state(self) -> str:
+        """\"on\" / \"off\" if every logging var matches that profile, else \"mixed\"."""
+        v = self._values
+        if all(v.get(k) == x for k, x in LOG_ENV_ON.items()):
+            return "on"
+        if (all(v.get(k) == x for k, x in LOG_ENV_OFF.items())
+                and not any(k in v for k in LOG_ENV_UNSET_OFF)
+                and not (set(v.get("VKD3D_CONFIG", "").split(",")) & set(LOG_VKD3D_CONFIG_FLAGS))):
+            return "off"
+        return "mixed"
+
+    def set_logging(self, on: bool):
+        """Master logging toggle: apply the ON or OFF profile in one step."""
+        if on:
+            self._values.update(LOG_ENV_ON)
+        else:
+            self._values.update(LOG_ENV_OFF)
+            for k in LOG_ENV_UNSET_OFF:
+                self._values.pop(k, None)
+            cfg = [f for f in self._values.get("VKD3D_CONFIG", "").split(",")
+                   if f and f not in LOG_VKD3D_CONFIG_FLAGS]
+            if cfg:
+                self._values["VKD3D_CONFIG"] = ",".join(cfg)
+            else:
+                self._values.pop("VKD3D_CONFIG", None)
         self.refresh_colors()
         self.env_changed.emit()
 
@@ -9889,6 +9955,13 @@ class MainWindow(QMainWindow):
         self._settings_tab.setChecked(True)
         nav_layout.addStretch(1)
 
+        self._log_btn = QPushButton()
+        self._log_btn.setCursor(Qt.PointingHandCursor)
+        self._log_btn.setFixedHeight(24)
+        self._log_btn.clicked.connect(self._toggle_logging)
+        nav_layout.addWidget(self._log_btn)
+        nav_layout.addSpacing(10)
+
         self._profile_chip = QLabel()
         self._profile_chip.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
         nav_layout.addWidget(self._profile_chip)
@@ -9950,6 +10023,7 @@ class MainWindow(QMainWindow):
         self._env_widget = EnvVarsWidget(self.settings_manager)
         self._env_widget.env_var_selected.connect(self._open_env_var)
         self._env_widget.env_changed.connect(self._on_env_changed)
+        self._update_log_btn()
         self._sidebar_stack.addWidget(self._env_widget)
 
         # Page 3: Extra Tools sidebar (orientation text for both sub-tools)
@@ -10336,7 +10410,33 @@ class MainWindow(QMainWindow):
         self._settings_list.refresh_colors(self.settings_manager.get_settings_list())
         self._refresh_badges()
 
+    def _toggle_logging(self):
+        """One click: off -> ON (error level); on or custom -> OFF."""
+        self._env_widget.set_logging(self._env_widget.logging_state() == "off")
+        # Re-open the visible env var so its editor shows the new value.
+        name = getattr(self._env_editor, "_current_name", "")
+        ev = next((e for e in ALL_ENV_VARS if e.name == name), None)
+        if ev:
+            self._env_editor.set_var(ev)
+
+    def _update_log_btn(self):
+        st = self._env_widget.logging_state()
+        txt, col = {"on": ("Logging: ON (error)", "#76b900"),
+                    "off": ("Logging: OFF", T['muted']),
+                    "mixed": ("Logging: custom", "#d9a441")}[st]
+        self._log_btn.setText(txt)
+        self._log_btn.setToolTip(
+            "One-click logging control for all env vars.\n"
+            "Off  -> every log level = none/off\n"
+            "On   -> every log level = error (not debug)\n"
+            "Click: Off -> On, On/custom -> Off.")
+        self._log_btn.setStyleSheet(
+            f"QPushButton {{ color:{col}; background:transparent; border:1px solid {col};"
+            f" border-radius:4px; padding:0 10px; font-size:12px; }}"
+            f"QPushButton:hover {{ background:{T['surface']}; }}")
+
     def _on_env_changed(self):
+        self._update_log_btn()
         env_count = len(self._env_widget.get_env_dict())
         arch = self.settings_manager.get_arch()
         arch_str = f" [Arch: {arch.code}]" if arch else ""
