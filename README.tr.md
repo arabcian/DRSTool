@@ -1,89 +1,114 @@
-# ⚠️ SORUMLULUK REDDİ
+# DRSTool
 
-Bu katman yapay zekâ desteğiyle geliştirilmiş bir projenin parçasıdır. Kullanım riski size aittir. FLM'yi kullanarak oluşabilecek sistem kararsızlığı, GPU kilitlenmesi veya görüntü bozulmalarının sorumluluğunu kabul etmiş olursunuz. Ayrıntılar için üst dizindeki DISCLAIMER.md dosyasına bakın.
+> ⚠️ **Riski size aittir.** DRSTool GPU sürücü ayarlarını ve isteğe bağlı olarak sistem ayarlarını değiştirir. Kullanmadan önce [DISCLAIMER.md](DISCLAIMER.md) dosyasını okuyun.
 
----
+**DRSTool**, [dxvk-nvapi](https://github.com/jp7677/dxvk-nvapi) ve NVIDIA DRS (Driver Registry Settings) profilini yapılandırmak için PySide6 (Qt6) tabanlı bir arayüzdür. Ayrıca Wine, Proton, DXVK, VKD3D-Proton, Gamescope ve NVIDIA'ya özgü ayarlar için ortam değişkeni üreticileri içerir. Sonucu doğrudan bir Lutris oyun yapılandırmasına yazabilir.
 
-# FLM — Vulkan Flip Meter / Frame Pacing Katmanı (v3.1 — "auto")
+English version: [README.md](README.md)
 
-VRR panellerde, özellikle frame generation (DLSS-FG / FSR-FG / MFG) açıkken
-kare teslimini düzenleyen, aynı zamanda hassas bir FPS sınırlayıcı olan
-Vulkan katmanı.
+![DRSTool](assets/drstool.png)
 
-v3.0 kendini yapılandırır; olağan kullanımda ayarlanacak bir şey yoktur:
+## Bileşenler
 
-```bash
-ENABLE_LAYER_cpu_flip_meter=1 %command%
-```
+| Bileşen | Yol | Açıklama |
+|---|---|---|
+| DRSTool arayüzü | `DRSTool.py` | Ana uygulama: DRS ayarları, ortam değişkenleri, Gamescope bayrakları, profiller, Lutris senkronizasyonu |
+| vk_flip_meter (FLM) | `vk-flip-meter-main/` | VRR panellerde kare sıralaması (frame pacing) ve hassas FPS sınırlayıcısı sağlayan Vulkan katmanı. Ayrıntılar için [README](vk-flip-meter-main/README.tr.md) |
+| lutris-game-tune | `lutris-game-tune-main/` | Lutris için oyun öncesi/sonrası sistem ayarları, CCD/CCX çekirdek izolasyonu ve daha düşük nice değeriyle oyun başlatma (setuid C sarmalayıcı + Bash) |
+| Ebuild | `drstool-9999.ebuild` | Yukarıdakilerin tümünü derleyip kuran Gentoo live ebuild (`games-util/drstool`) |
 
-## Ne yapar
+## Özellikler
 
-| Durum | FLM'nin yaptığı |
-|---|---|
-| `FLM_TARGET_FPS` > 0 | **Limiter**: mutlak zaman çizelgeli FPS sınırı. presentWait gerekmez. |
-| VRR, MAILBOX/IMMEDIATE | **Floor pacer**: üretilmiş/erken kareleri bir öncekinden asgari aralık geçene kadar tutar; gerçek kareler ve VRR hız değişimleri dokunulmadan geçer. |
-| FIFO (vsync açık) | Kadans ölçülür. Sürekli aralıklar = VRR → pacing yapılır. Tazeleme katlarına kilitli aralıklar = sabit tazeleme → dokunulmaz. |
-| Küçük swapchain'ler (<640×480) | Yok sayılır (launcher, overlay). |
+### DRS Ayarları
+- Açıklamalı, kategorilere ayrılmış NVIDIA DRS ayarları
+- GPU mimarisi seçici (`DXVK_NVAPI_GPU_ARCH` değerini ayarlar)
+- Uygulamadan önce ortaya çıkacak komut/ortamın önizlemesi
 
-Otomatik belirlenenler: frame generation çarpanı (1–4x), floor oranı (çarpan
-başına kapalı döngü), uyku/spin marjı, hitch eşiği ve toparlanma süresi,
-FIFO'da sabit tazeleme / VRR ayrımı.
+### Ortam Değişkenleri
+Ortam sekmesi aşağıdaki gruplarda 238 değişkeni kapsar:
 
-## Değişkenler
+- **DXVK** (`DXVK_HUD` bayrak tablosu ve `DXVK_CONFIG` anahtar seçici dahil)
+- **DXVK çatalları**: d7vk, dxvk-low-latency, DXVK-Sarek (hangi Proton çatalına ait olduğu etiketli)
+- **VKD3D-Proton** (`VKD3D_CONFIG` onay kutusu tablosu ve hata ayıklama/profil değişkenleri)
+- **DXVK-NVAPI** (DRS ayarları, Vulkan Reflex katmanı, günlükleme, NGX hata ayıklama seçenekleri)
+- **Proton** ve **Wine**; Proton-GE, Proton-EM, Proton-CachyOS ve Proton-DW'ye özgü bayraklar dahil
+- **NVIDIA** `__GL_*` ve `__NV_*` değişkenleri, PRIME / hibrit GPU ayarları
+- **NVIDIA Smooth Motion** (NVPresent katmanı)
+- **Wayland girdi** bayrakları ve AMD dışı oyun optimizasyon bayrakları
 
-| Değişken | Anlamı |
-|---|---|
-| `FLM_MODE` | `auto` (varsayılan) · `latency` (daha gevşek floor, daha hızlı hitch toparlanması) · `present` (sabit tazeleme sayılan FIFO'da da pacing) · `cap` (yalnız limiter) · `off` (A/B tabanı). Canlı değiştirilebilir. |
-| `FLM_TARGET_FPS` | `>0` = FPS sınırı. `0` = doğal kadans. Canlı değiştirilebilir. |
-| `FLM_FLOOR_RATIO` | İsteğe bağlı, 500–1000. Temel floor oranını ezer (auto 850, latency 780); kapalı döngü yine bunun etrafında ayarlar. Canlı değiştirilebilir. |
-| `FLM_MFG_MULTIPLIER` | `0` otomatik (varsayılan), `1`–`4` zorla. Yükleme anında. |
-| `FLM_RT_PRIORITY` / `FLM_MEASURE_CPU` | Ölçüm thread'i SCHED_FIFO önceliği / CPU listesi (`0-3,8`). Yükleme anında. |
-| `FLM_LOG_LEVEL` / `FLM_LOG_FILE` | `DEBUG`/`INFO`/`WARN` (varsayılan)/`ERROR`; log dosyası (varsayılan stderr). |
-| `FLM_STATS=1` | 5 sn'de bir INFO: ortalama, p99, max, fake/hitch sayıları, çarpan, efektif oran, FIFO kararı. |
-| `FLM_CSV=/yol` | Flip başına döküm: `flip_ns,interval_ns,is_fake,is_hitch,slot,mfg,slot_mean_ns,pacing`. |
-| `FLM_CONFIG=/yol` | `SIGUSR1` ile yeniden okunan `ANAHTAR=DEĞER` dosyası (yalnız canlı anahtarlar). |
+Sabit değer kümesi olan değişkenler onay kutusu veya açılır liste olarak, serbest biçimli değerler ise metin alanı olarak gösterilir.
 
-`FLM_PROFILE=vrr|mfg|latency|cap|off` ve `FLM_MODE=limiter` takma ad olarak
-çalışmaya devam eder. Diğer tüm v2.x `FLM_*` değişkenleri kaldırıldı; hâlâ
-tanımlıysa logda bir kez raporlanır (`removed in v3 … ignored`) — silin.
+### Gamescope
+Bayrak kataloğundan (ölçekleme, kare sıralaması, girdi, oturum seçenekleri) `gamescope` komut satırları üretir.
 
-## Çalıştığını doğrulama
+### Profiller
+- Tam profilleri (DRS ayarları + ortam değişkenleri) kaydetme ve yükleme
+- XDG uyumlu depolama: `$XDG_CONFIG_HOME/drstool/` (varsayılan `~/.config/drstool/`), atomik yazma
 
-```bash
-FLM_LOG_LEVEL=INFO FLM_STATS=1 FLM_LOG_FILE=/tmp/flm.log %command%
-tail -f /tmp/flm.log
-```
+### Ek Araçlar
+- **vk_flip_meter**: FLM ayarlarını düzenleme, canlı ayarlama (`FLM_CONFIG` yazar ve `SIGUSR1` gönderir)
+- **lutris-game-tune**: ayarlayıcı yapılandırmasını ve oyun bazlı Lutris ayarlarını düzenleme
 
-* `STATS … mfg=4 ratio=9xx` — pacer aktif, çarpan tespit edilmiş, floor tam slota yakın.
-* `ratio=0` — bu swapchain'de pacer çalışmıyor (FIFO sabit tazeleme sayıldı, presentWait yok ya da sınır ayarlı).
-* VRR panelde `fifo=fixed` — oyun panelin azami tazelemesinde ya da kusursuz sabit bir hızda; düzeltilecek bir şey yok. `FLM_MODE=present` yine de zorlar.
-* `presentId/Wait not supported` — bu sürücüde yalnız limiter kullanılabilir.
+### Lutris Oyun Senkronizasyonu
+- Bir Lutris oyununun YAML yapılandırmasını okur ve yazar (`system.*` anahtarları, ortam değişkenleri, Gamescope seçenekleri, Lutris Game Tune oyun öncesi/sonrası komutları)
+- Mevcut bir oyun yapılandırmasından ayarları geri alır ("Seçili oyundan yükle")
+- Yalnızca DRSTool'un yönettiği anahtarları değiştirir. Elle yazılmış anahtarlar korunur ve onay penceresi silinecek her şeyi listeler
 
-Aynı sahnede A/B (ilk dakikadaki shader derlemesini dışarıda bırakın):
+## Gereksinimler
 
-```bash
-FLM_MODE=off FLM_CSV=/tmp/off.csv %command%
-FLM_CSV=/tmp/on.csv %command%
-```
+- NVIDIA GPU ve tescilli sürücü (DRS ayarları için)
+- Python 3.12+
+- PySide6
+- İsteğe bağlı, belirli özellikler için: Lutris, Gamescope, Proton/Wine, FLM'yi derlemek için Vulkan SDK + CMake
 
-`interval_ns` sütununun stddev / p99 değerlerini karşılaştırın.
-
-## Canlı ayar
+## Kaynak koddan çalıştırma
 
 ```bash
-ENABLE_LAYER_cpu_flip_meter=1 FLM_CONFIG=/tmp/flm.conf %command%
-echo 'FLM_MODE=latency' > /tmp/flm.conf
-kill -USR1 $(pidof <oyun_binary>)
+pip install PySide6
+python3 DRSTool.py
 ```
 
-Her reload yerleşik varsayılanlardan başlar, sonra ortam değişkenleri, sonra
-dosya uygulanır — bir satırı silmek o anahtarı geri alır.
+## Gentoo'ya kurulum
 
-## v2.x'ten geçiş
+Dahil olan ebuild (`drstool-9999.ebuild`) git'ten çeken bir live ebuild'dir.
 
-| v2.x | v3.0 |
-|---|---|
-| `FLM_PROFILE=mfg` / `vrr` | hiçbir şey (varsayılan) |
-| `FLM_MODE=limiter FLM_TARGET_FPS=N` | `FLM_TARGET_FPS=N` |
-| `FLM_PACE_FIFO=1` | otomatik (VRR kadans tespiti); zorlamak için `FLM_MODE=present` |
-| `FLM_FLOOR_*`, `FLM_SPIN_*`, `FLM_HITCH_*`, `FLM_PROBE_*`, `FLM_WARMUP_FRAMES`, `FLM_PRESENT_LEAD_NS`, `FLM_DRIFT_TOLERANCE_NS`, `FLM_PACE_POINT`, `FLM_STATS_INTERVAL`, `FLM_CSV_SYNC_S` | silin — artık dahili |
+USE bayrakları:
+
+| Bayrak | Varsayılan | Etkisi |
+|---|---|---|
+| `flip-meter` | açık | vk_flip_meter Vulkan katmanını (C++) derler ve kurar |
+| `lto` | kapalı | Katmanı `-flto` ile derler (`flip-meter` gerektirir) |
+| `pgo` | kapalı | Katman için iki geçişli profil tabanlı optimizasyon (`flip-meter` gerektirir) |
+| `lutris-tune` | açık | lutris-game-tune setuid sarmalayıcısını, betiğini ve varsayılan yapılandırmayı kurar |
+
+```bash
+emerge --oneshot games-util/drstool
+```
+
+Not: lutris-game-tune, setuid-root sarmalayıcı gerektirir. Ebuild bunu ayarlar; `lutris-game-tune-wrapper STATUS` ile kontrol edebilirsiniz.
+
+## Kullanım notları
+
+- Değişiklikler seçili oyunun yapılandırmasına uygulanır. Yazmadan önce önizlemeyi kontrol edin.
+- Ayarlar diske yazılır ve bir sonraki oyun başlatmada etkili olur. lutris-game-tune değişiklikleri bir sonraki PRE çalıştırmasında uygulanır.
+- Lutris YAML dosyasını yedekleyin. Bir Lutris yapılandırmasına yazmadan önce DRSTool, yanına zaman damgalı bir `.bak` kopyası oluşturur ve en son 5 tanesini tutar.
+
+## Proje yapısı
+
+```
+DRSTool.py                 ana arayüz
+assets/drstool.png         uygulama simgesi
+drstool-9999.ebuild        Gentoo ebuild
+vk-flip-meter-main/        FLM Vulkan katmanı (C++, CMake)
+lutris-game-tune-main/     Lutris ayarlayıcı (Bash + setuid C sarmalayıcı)
+DISCLAIMER.md              risk bildirimi
+LICENSE                    MIT
+```
+
+## Lisans
+
+MIT. Ayrıntılar için [LICENSE](LICENSE).
+
+## Sorumluluk reddi
+
+Bu proje yapay zekâ desteğiyle geliştirilmiştir ve garanti verilmeden sunulmaktadır. Tam metin için [DISCLAIMER.md](DISCLAIMER.md) dosyasına bakın.
