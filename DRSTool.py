@@ -5083,8 +5083,9 @@ DXVK_NVAPI_ENV_VARS: List[EnvVarDef] = [
               "heavy on performance and log size.",
               options=["none", "info", "trace"]),
     EnvVarDef("DXVK_NVAPI_LOG_PATH", "DXVK-NVAPI", "string", "",
-              "Also write DXVK-NVAPI's log to dxvk-nvapi.log in this directory, in addition "
-              "to console output. Entries are appended to an existing file.",
+              "Also write DXVK-NVAPI's log to nvapi.log / nvapi64.log / nvofapi64.log (per DLL) "
+              "in this directory, in addition to console output. Needs LOG_LEVEL info or "
+              "trace. Entries are appended to an existing file.",
               placeholder="/path/to/log/dir"),
     EnvVarDef("DXVK_NVAPI_DRIVER_VERSION", "DXVK-NVAPI", "int", "",
               "Override the driver version DXVK-NVAPI reports to the game. Value is the "
@@ -5116,6 +5117,22 @@ DXVK_NVAPI_ENV_VARS: List[EnvVarDef] = [
     EnvVarDef("DXVK_NVAPI_VKREFLEX_INJECT_PRESENT_FRAME_IDS", "DXVK-NVAPI", "enum", "",
               "VK Reflex layer: inject frame IDs into vkQueuePresentKHR. Same caveats as "
               "..._INJECT_SUBMIT_FRAME_IDS. Requires DXVK_NVAPI_VKREFLEX=1.",
+              options=["0", "1"]),
+    EnvVarDef("DXVK_NVAPI_VKREFLEX_ALLOW_FALLBACK_TO_OOB_FRAME_ID", "DXVK-NVAPI", "enum", "",
+              "VK Reflex layer: when the game's latency markers carry no usable frame ID, "
+              "the layer falls back to an out-of-band frame ID in submit and present calls "
+              "(default on). 0 = disable that fallback. Only meaningful together with the "
+              "INJECT_*_FRAME_IDS options. Requires DXVK_NVAPI_VKREFLEX=1.",
+              options=["0", "1"]),
+    EnvVarDef("DXVK_NVAPI_VKREFLEX_ALLOW_FALLBACK_TO_PRESENT_FRAME_ID", "DXVK-NVAPI", "enum", "",
+              "VK Reflex layer: allow falling back to the present frame ID in vkQueueSubmit* "
+              "calls (default on). 0 = disable that fallback. Only meaningful together with "
+              "the INJECT_*_FRAME_IDS options. Requires DXVK_NVAPI_VKREFLEX=1.",
+              options=["0", "1"]),
+    EnvVarDef("DXVK_NVAPI_VKREFLEX_ALLOW_FALLBACK_TO_SIMULATION_FRAME_ID", "DXVK-NVAPI", "enum", "",
+              "VK Reflex layer: allow falling back to the simulation frame ID in "
+              "vkQueueSubmit* calls (default on). 0 = disable that fallback. Only meaningful "
+              "together with the INJECT_*_FRAME_IDS options. Requires DXVK_NVAPI_VKREFLEX=1.",
               options=["0", "1"]),
 ]
 
