@@ -48,6 +48,7 @@ Builds `gamescope` command lines from a flag catalog (upscaling, frame pacing, i
 ### Extra Tools
 - **vk_flip_meter**: edit FLM settings, live tuning (writes `FLM_CONFIG` and sends `SIGUSR1`)
 - **lutris-game-tune**: edit the tuner config and the per-game Lutris settings
+- **DLSS Updater**: list every DLSS SR / RR / FG and Streamline build on NVIDIA's NGX servers (incl. staged builds) and download the selected ones as `nvngx_dlss*.dll` / `sl.*.dll` into a version-named folder, SHA-256 checked
 
 ### Lutris Game Sync
 - Reads and writes a Lutris game's YAML config (`system.*` keys, env vars, Gamescope options, Lutris Game Tune prelaunch/postexit commands)

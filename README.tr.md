@@ -48,6 +48,7 @@ Bayrak kataloğundan (ölçekleme, kare sıralaması, girdi, oturum seçenekleri
 ### Ek Araçlar
 - **vk_flip_meter**: FLM ayarlarını düzenleme, canlı ayarlama (`FLM_CONFIG` yazar ve `SIGUSR1` gönderir)
 - **lutris-game-tune**: ayarlayıcı yapılandırmasını ve oyun bazlı Lutris ayarlarını düzenleme
+- **DLSS Updater**: NVIDIA NGX sunucularındaki tüm DLSS SR / RR / FG ve Streamline sürümlerini (henüz yayınlanmamış staged sürümler dahil) listeler; seçilenleri `nvngx_dlss*.dll` / `sl.*.dll` adlarıyla, sürüm adlı klasöre SHA-256 doğrulamalı indirir
 
 ### Lutris Oyun Senkronizasyonu
 - Bir Lutris oyununun YAML yapılandırmasını okur ve yazar (`system.*` anahtarları, ortam değişkenleri, Gamescope seçenekleri, Lutris Game Tune oyun öncesi/sonrası komutları)
