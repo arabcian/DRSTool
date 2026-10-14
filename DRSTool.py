@@ -9913,7 +9913,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from PySide6.QtCore import QThread, QUrl, QStandardPaths
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QProgressBar, QTreeWidget, QTreeWidgetItem, QHeaderView
+from PySide6.QtWidgets import QProgressBar
 
 NGX_HOST = "https://ngx.download.nvidia.com"
 _NGX_MODELS = "org/nvidia/team/ngx/models"
@@ -10283,6 +10283,7 @@ class _NgxWorker(QThread):
     discovered = Signal(object)              # List[NgxBuild]
     downloaded = Signal(int, int, str)       # ok, failed, dest dir
     failed = Signal(str)
+    state = Signal(str, str)                 # feature, run | ok | err
 
     def __init__(self, builds: Optional[List[NgxBuild]] = None,
                  dest: Optional[Path] = None, parent=None):
@@ -10304,11 +10305,13 @@ class _NgxWorker(QThread):
             for b in self._builds:
                 label = f"{ngx_title(b.feature)} {b.version}"
                 self.log.emit("info", f"↓ {label} ({ngx_human(b.size)})")
+                self.state.emit(b.feature, "run")
                 cb = lambda d, _t, base=base, label=label: \
                     self.progress.emit(min(1.0, (base + d) / total), label)
                 try:
                     names, digest, verified = client.download(b, self._dest, cb)
                     ok += 1
+                    self.state.emit(b.feature, "ok")
                     self.log.emit("ok", f"✓ {label} → {', '.join(names)}  "
                                         f"[sha256 {digest[:16]}… "
                                         f"{'verified' if verified else 'no sidecar, size-checked'}]")
@@ -10316,6 +10319,7 @@ class _NgxWorker(QThread):
                     raise
                 except Exception as e:  # noqa: BLE001
                     bad += 1
+                    self.state.emit(b.feature, "err")
                     self.log.emit("err", f"✗ {label}: {e}")
                 base += b.size
             self.progress.emit(1.0, "done")
@@ -10326,182 +10330,427 @@ class _NgxWorker(QThread):
             self.failed.emit(str(e))
 
 
+_NGX_ACCENTS = {
+    "dlss": "#76b900",       # SR — NVIDIA green
+    "dlssd": "#3fa7d6",      # RR — cyan
+    "dlssg": "#b07cf0",      # FG — violet
+    "sl_sdk_0": "#d2a03c",   # Streamline — amber
+}
+_NGX_SHORT = {"dlss": "SR", "dlssd": "RR", "dlssg": "FG", "sl_sdk_0": "SL"}
+
+
+def _ngx_accent(feat: str) -> str:
+    return _NGX_ACCENTS.get(feat, T["text2"])
+
+
+def _ngx_rgba(hex_color: str, alpha: float) -> str:
+    c = QColor(hex_color)
+    return f"rgba({c.red()},{c.green()},{c.blue()},{alpha})"
+
+
+_NGX_COMBO_SS = f"""
+QComboBox {{ background:{T['bg']}; border:1px solid {T['border_hi']}; border-radius:6px;
+            color:{T['text']}; font-family:monospace; font-size:12px; padding:5px 10px; }}
+QComboBox:hover {{ border-color:{T['accent_dim']}; }}
+QComboBox:disabled {{ color:#3a4250; border-color:#232a36; }}
+QComboBox::drop-down {{ border:none; width:22px; }}
+QComboBox QAbstractItemView {{ background:{T['surface']}; color:{T['text']};
+    border:1px solid {T['border_hi']}; selection-background-color:rgba(118,185,0,0.18);
+    font-family:monospace; font-size:12px; outline:0; }}
+"""
+
+
+class _NgxFeatureCard(QFrame):
+    """One card per NGX feature: include toggle, version picker, build facts."""
+    changed = Signal()
+
+    def __init__(self, feature: str, builds: List[NgxBuild], parent=None):
+        super().__init__(parent)
+        self.feature = feature
+        self._builds = builds                      # newest first
+        self._accent = _ngx_accent(feature)
+        self.setObjectName("ngxCard")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(8)
+
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        self._badge = QLabel(_NGX_SHORT.get(feature, feature[:2].upper()))
+        self._badge.setAlignment(Qt.AlignCenter)
+        self._badge.setFixedSize(30, 22)
+        top.addWidget(self._badge)
+        self._on = QCheckBox(ngx_title(feature))
+        self._on.setChecked(True)
+        self._on.setCursor(Qt.PointingHandCursor)
+        self._on.toggled.connect(self._sync)
+        top.addWidget(self._on, 1)
+        lay.addLayout(top)
+
+        mid = QHBoxLayout()
+        mid.setSpacing(10)
+        self._ver = QLabel()
+        mid.addWidget(self._ver, 0, Qt.AlignBottom)
+        self._age = QLabel()
+        mid.addWidget(self._age, 0, Qt.AlignVCenter)
+        mid.addStretch(1)
+        self._file = QLabel(ngx_target_name(feature) or "sl.*.dll")
+        self._file.setToolTip(ngx_target_name(feature) or
+                              "sl.common.dll, sl.dlss.dll, sl.dlss_g.dll, … (unpacked from the SDK zip)")
+        mid.addWidget(self._file, 0, Qt.AlignBottom)
+        lay.addLayout(mid)
+
+        self._combo = QComboBox()
+        self._combo.setStyleSheet(_NGX_COMBO_SS)
+        for b in builds:
+            tag = f"  [{b.tag()}]" if b.tag() else ""
+            self._combo.addItem(f"v{b.version}{tag}  ·  {ngx_human(b.size)}")
+        self._combo.setMaxVisibleItems(16)
+        self._combo.currentIndexChanged.connect(self._sync)
+        lay.addWidget(self._combo)
+
+        self._meta = QLabel()
+        self._meta.setTextFormat(Qt.RichText)
+        lay.addWidget(self._meta)
+
+        self._sync()
+
+    # ── state ───────────────────────────────────────────────────────────────
+    def selected(self) -> Optional[NgxBuild]:
+        if not self._on.isChecked() or self._combo.currentIndex() < 0:
+            return None
+        return self._builds[self._combo.currentIndex()]
+
+    def set_pick(self, include: bool, newest: bool = False):
+        for w in (self._on, self._combo):
+            w.blockSignals(True)
+        self._on.setChecked(include)
+        if newest:
+            self._combo.setCurrentIndex(0)
+        for w in (self._on, self._combo):
+            w.blockSignals(False)
+        self._sync()
+
+    def set_state(self, text: str = "", color: str = ""):
+        self._state_txt, self._state_col = text, color
+        self._render_meta()
+
+    def _render_meta(self):
+        idx = max(0, self._combo.currentIndex())
+        b = self._builds[idx]
+        dim = not self._on.isChecked()
+        sep = f'<span style="color:{T["border_hi"]}">&nbsp;│&nbsp;</span>'
+        sha = (f'<span style="color:{T["accent_hi"] if not dim else T["muted"]}">SHA-256 sidecar ✓</span>'
+               if b.verified else f'<span style="color:{T["warn"] if not dim else T["muted"]}">'
+                                  f'no sidecar · size-checked</span>')
+        mirrors = f"{len(b.mirrors)} mirror" + ("s" if len(b.mirrors) != 1 else "")
+        parts = [mirrors, sha]
+        st = getattr(self, "_state_txt", "")
+        if st:
+            parts.append(f'<b style="color:{self._state_col or T["text"]}">{st}</b>')
+        self._meta.setText(sep.join(parts))
+        self._meta.setStyleSheet(f"color:{T['muted']}; font-size:11px;")
+
+    def _sync(self, *_):
+        on = self._on.isChecked()
+        idx = max(0, self._combo.currentIndex())
+        b = self._builds[idx]
+        acc = self._accent
+        self._combo.setEnabled(on)
+        self._ver.setText(b.version)
+        self._ver.setStyleSheet(
+            f"color:{acc if on else T['muted']}; font-family:monospace; font-size:24px; "
+            f"font-weight:700; letter-spacing:-0.5px;")
+        if idx == 0:
+            age, fg, bg = "NEWEST", acc, _ngx_rgba(acc, 0.14)
+        else:
+            age, fg, bg = f"{idx} BEHIND", T["warn"], _ngx_rgba(T["warn"], 0.12)
+        if not on:
+            fg, bg = T["muted"], "transparent"
+        self._age.setText(age)
+        self._age.setStyleSheet(f"color:{fg}; background:{bg}; border:1px solid {fg}; "
+                                f"border-radius:8px; padding:1px 7px; font-size:10px; "
+                                f"font-weight:700; letter-spacing:0.6px;")
+        self._file.setStyleSheet(f"color:{T['text2'] if on else T['muted']}; "
+                                 f"font-family:monospace; font-size:12px;")
+        self._badge.setStyleSheet(
+            f"color:{T['bg'] if on else T['muted']}; background:{acc if on else T['raised']}; "
+            f"border-radius:5px; font-size:11px; font-weight:800;")
+        self._on.setStyleSheet(f"""
+QCheckBox {{ color:{T['text'] if on else T['muted']}; font-size:13px; font-weight:700; spacing:8px; }}
+QCheckBox::indicator {{ width:30px; height:14px; border-radius:7px;
+    border:1px solid {T['border_hi']}; background:{T['bg']}; }}
+QCheckBox::indicator:checked {{ background:{acc}; border-color:{acc}; }}
+""")
+        self.setStyleSheet(f"""
+QFrame#ngxCard {{ background:{T['surface'] if on else T['bg']};
+    border:1px solid {_ngx_rgba(acc, 0.55) if on else T['border']};
+    border-top:3px solid {acc if on else T['border_hi']}; border-radius:9px; }}
+""")
+        self.setToolTip("\n".join(u for u, _s in b.sources()))
+        self._render_meta()
+        self.changed.emit()
+
+
 class NgxUpdaterWidget(QWidget):
-    """Extra Tools sub-tab: list NGX DLSS / Streamline builds and download them."""
+    """Extra Tools sub-tab: NGX DLSS / Streamline builds as feature cards + a download dock."""
 
     _LOG_COLORS = {"info": T["text2"], "ok": T["accent_hi"], "warn": T["warn"], "err": T["danger"]}
-    _ROLE = Qt.UserRole + 1
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._worker: Optional[_NgxWorker] = None
         self._qs = QSettings(APP_ID, APP_ID)
         self._last_dest: Optional[Path] = None
+        self._cards: List[_NgxFeatureCard] = []
+        self._cols = 0
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(10)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(12)
 
-        header = QLabel("DLSS / Streamline Updater")
-        header.setStyleSheet("color:#f2f2f2; font-size:18px; font-weight:700;")
-        lay.addWidget(header)
-        desc = QLabel(
-            "Lists every DLSS Super Resolution, Ray Reconstruction, Frame Generation and "
-            "Streamline SDK build on NVIDIA's NGX update servers (including staged builds "
-            "the NVIDIA App does not offer yet) and downloads the selected ones with the "
-            "file names games expect — <code>nvngx_dlss.dll</code>, <code>nvngx_dlssd.dll</code>, "
-            "<code>nvngx_dlssg.dll</code>, <code>sl.*.dll</code>. Downloads are checked against "
-            "NVIDIA's own SHA-256 sidecars when the server publishes them.")
-        desc.setWordWrap(True)
-        desc.setTextFormat(Qt.RichText)
-        desc.setStyleSheet("color:#a7afbc; font-size:12px;")
-        lay.addWidget(desc)
-
-        row = QHBoxLayout()
-        self._check_btn = _tool_btn("Check NGX servers", bg="#1d2a10", border="#4a7300",
+        # ── hero strip: what this is + server state + check ─────────────────
+        hero = QFrame()
+        hero.setObjectName("ngxHero")
+        hero.setAttribute(Qt.WA_StyledBackground, True)
+        hero.setStyleSheet(f"""
+QFrame#ngxHero {{ border:1px solid {T['border']}; border-radius:10px;
+    background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #17200f, stop:0.45 {T['surface']},
+                               stop:1 {T['surface']}); }}
+""")
+        h = QHBoxLayout(hero)
+        h.setContentsMargins(18, 14, 16, 14)
+        h.setSpacing(14)
+        col = QVBoxLayout()
+        col.setSpacing(3)
+        title = QLabel("DLSS Updater")
+        title.setStyleSheet(f"color:{T['text']}; font-size:17px; font-weight:800;")
+        col.addWidget(title)
+        chips = " ".join(
+            f'<span style="color:{_ngx_accent(f)}">■</span>&nbsp;{_NGX_SHORT[f]}' for f in _NGX_ORDER)
+        sub = QLabel(f"{chips}&nbsp;&nbsp;<span style='color:{T['muted']}'>straight from NVIDIA's NGX "
+                     f"OTA bucket — staged drops included</span>")
+        sub.setTextFormat(Qt.RichText)
+        sub.setStyleSheet(f"color:{T['text2']}; font-size:12px;")
+        col.addWidget(sub)
+        hero.setToolTip(
+            "Lists every DLSS Super Resolution, Ray Reconstruction, Frame Generation and Streamline SDK "
+            "build on ngx.download.nvidia.com (including staged builds the NVIDIA App does not offer "
+            "yet) and saves them with the file names games expect: nvngx_dlss.dll, nvngx_dlssd.dll, "
+            "nvngx_dlssg.dll, sl.*.dll. Downloads are checked against NVIDIA's SHA-256 sidecars "
+            "when the server publishes them.")
+        h.addLayout(col, 1)
+        self._pill = QLabel()
+        h.addWidget(self._pill, 0, Qt.AlignVCenter)
+        self._check_btn = _tool_btn("⟳  Check NGX servers", bg="#1d2a10", border="#4a7300",
                                     fg="#cfe8a8", bold=True)
         self._check_btn.clicked.connect(self._start_check)
-        self._latest_btn = _tool_btn("Select latest")
-        self._latest_btn.clicked.connect(lambda: self._select(latest=True))
-        self._clear_btn = _tool_btn("Clear")
-        self._clear_btn.clicked.connect(lambda: self._select(latest=False))
-        for w in (self._check_btn, self._latest_btn, self._clear_btn):
-            row.addWidget(w)
-        row.addStretch(1)
+        h.addWidget(self._check_btn, 0, Qt.AlignVCenter)
+        lay.addWidget(hero)
+
+        # ── quick selection row ─────────────────────────────────────────────
+        self._quick = QWidget()
+        q = QHBoxLayout(self._quick)
+        q.setContentsMargins(2, 0, 2, 0)
+        q.setSpacing(4)
+        cap = QLabel("PICK")
+        cap.setStyleSheet(f"color:{T['muted']}; font-size:10px; font-weight:800; letter-spacing:1.2px;")
+        q.addWidget(cap)
+        link_ss = (f"QPushButton{{background:transparent; border:none; color:{T['text2']}; "
+                   f"font-size:12px; padding:2px 6px; text-decoration:underline;}}"
+                   f"QPushButton:hover{{color:{T['accent_hi']};}}"
+                   f"QPushButton:disabled{{color:#3a4250;}}")
+        self._latest_btn = QPushButton("newest of each")
+        self._clear_btn = QPushButton("none")
+        for b, fn in ((self._latest_btn, lambda: self._select(latest=True)),
+                      (self._clear_btn, lambda: self._select(latest=False))):
+            b.setStyleSheet(link_ss)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(fn)
+            q.addWidget(b)
+        q.addStretch(1)
         self._status = QLabel("")
         self._status.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
-        row.addWidget(self._status)
-        lay.addLayout(row)
+        q.addWidget(self._status)
+        lay.addWidget(self._quick)
 
-        self._tree = QTreeWidget()
-        self._tree.setColumnCount(5)
-        self._tree.setHeaderLabels(["Version", "Variant", "Size", "Mirrors", "SHA-256"])
-        self._tree.setRootIsDecorated(True)
-        self._tree.setUniformRowHeights(True)
-        self._tree.setMinimumHeight(260)
-        hdr = self._tree.header()
-        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
-        for c in range(1, 5):
-            hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
-        self._tree.setStyleSheet(f"""
-QTreeWidget {{ background:{T['surface']}; border:1px solid {T['border']}; border-radius:6px;
-              color:{T['text']}; font-size:12px; }}
-QTreeWidget::item {{ padding:3px 2px; }}
-QTreeWidget::item:selected {{ background:rgba(118,185,0,0.14); color:{T['text']}; }}
-QHeaderView::section {{ background:{T['raised']}; color:{T['muted']}; border:none;
-                       border-bottom:1px solid {T['border']}; padding:4px 6px; font-weight:600; }}
-QTreeWidget::indicator {{ width:14px; height:14px; border:1px solid {T['border_hi']};
-                         border-radius:3px; background:{T['bg']}; }}
-QTreeWidget::indicator:checked {{ background:{T['accent']}; border-color:{T['accent']}; }}
-""")
-        self._tree.itemChanged.connect(self._on_item_changed)
-        lay.addWidget(self._tree, 1)
+        # ── cards (or an empty-state panel before the first check) ──────────
+        self._stack = QStackedWidget()
+        empty = QLabel("No builds loaded yet.\n\nPress “Check NGX servers” to list every DLSS and "
+                       "Streamline drop\nNVIDIA currently hosts — one card per feature.")
+        empty.setAlignment(Qt.AlignCenter)
+        empty.setMinimumHeight(200)
+        empty.setStyleSheet(f"color:{T['muted']}; font-size:13px; border:1px dashed {T['border_hi']}; "
+                            f"border-radius:10px; background:{T['bg']};")
+        self._stack.addWidget(empty)
+        host = QWidget()
+        self._grid = QGridLayout(host)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(10)
+        self._stack.addWidget(host)
+        lay.addWidget(self._stack)
 
-        out = QGroupBox("Output")
-        out.setStyleSheet(_TOOL_GROUP_SS)
-        form = QGridLayout(out)
-        form.setHorizontalSpacing(8)
-        lbl = lambda t: QLabel(t, styleSheet=f"color:{T['text2']}; font-size:12px;")
+        # ── download dock ───────────────────────────────────────────────────
+        dock = QFrame()
+        dock.setObjectName("ngxDock")
+        dock.setAttribute(Qt.WA_StyledBackground, True)
+        dock.setStyleSheet(f"QFrame#ngxDock {{ background:{T['raised']}; border:1px solid "
+                           f"{T['border_hi']}; border-radius:10px; }}")
+        d = QVBoxLayout(dock)
+        d.setContentsMargins(14, 12, 14, 12)
+        d.setSpacing(8)
+
+        r1 = QHBoxLayout()
+        r1.setSpacing(6)
+        save = QLabel("Save to")
+        save.setStyleSheet(f"color:{T['text2']}; font-size:12px; font-weight:700;")
+        r1.addWidget(save)
         default_base = QStandardPaths.writableLocation(QStandardPaths.DownloadLocation) \
             or str(Path.home() / "Downloads")
         self._base = QLineEdit(str(self._qs.value("ngx/base_dir", default_base)))
         self._base.setStyleSheet(FLM_FIELD_SS)
         self._base.textChanged.connect(self._refresh_dest)
-        browse = _tool_btn("Browse…")
+        r1.addWidget(self._base, 3)
+        browse = _tool_btn("…")
+        browse.setToolTip("Choose base folder")
         browse.clicked.connect(self._browse)
+        r1.addWidget(browse)
+        slash = QLabel("/")
+        slash.setStyleSheet(f"color:{T['muted']}; font-family:monospace; font-size:14px;")
+        r1.addWidget(slash)
         self._sub = QLineEdit()
         self._sub.setStyleSheet(FLM_FIELD_SS)
         self._sub.setPlaceholderText("subfolder")
+        self._sub.setMaximumWidth(160)
         self._sub.textChanged.connect(self._refresh_dest)
-        self._auto = QCheckBox("name after selected version")
+        r1.addWidget(self._sub, 1)
+        self._auto = QCheckBox("auto")
+        self._auto.setToolTip("Name the subfolder after the newest selected version")
         self._auto.setChecked(True)
         self._auto.setStyleSheet(f"color:{T['text2']}; font-size:12px;")
         self._auto.toggled.connect(self._refresh_dest)
-        self._dest_lbl = QLabel()
-        self._dest_lbl.setStyleSheet(f"color:{T['muted']}; font-family:monospace; font-size:11px;")
-        self._dest_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        form.addWidget(lbl("Base folder"), 0, 0)
-        form.addWidget(self._base, 0, 1)
-        form.addWidget(browse, 0, 2)
-        form.addWidget(lbl("Subfolder"), 1, 0)
-        form.addWidget(self._sub, 1, 1)
-        form.addWidget(self._auto, 1, 2)
-        form.addWidget(self._dest_lbl, 2, 1, 1, 2)
-        form.setColumnStretch(1, 1)
-        lay.addWidget(out)
+        r1.addWidget(self._auto)
+        d.addLayout(r1)
 
-        row2 = QHBoxLayout()
-        self._dl_btn = _tool_btn("Download selected", bg="#1d2a10", border="#4a7300",
-                                 fg="#cfe8a8", bold=True)
-        self._dl_btn.clicked.connect(self._start_download)
-        self._cancel_btn = _tool_btn("Cancel")
-        self._cancel_btn.clicked.connect(self._cancel)
-        self._open_btn = _tool_btn("Open output folder")
-        self._open_btn.clicked.connect(self._open_dest)
-        for w in (self._dl_btn, self._cancel_btn, self._open_btn):
-            row2.addWidget(w)
-        row2.addStretch(1)
-        self._sel_lbl = QLabel()
-        self._sel_lbl.setStyleSheet(f"color:{T['text2']}; font-size:12px;")
-        row2.addWidget(self._sel_lbl)
-        lay.addLayout(row2)
+        self._dest_lbl = ElidedLabel()
+        self._dest_lbl.setStyleSheet(f"color:{T['muted']}; font-family:monospace; font-size:11px;")
+        d.addWidget(self._dest_lbl)
 
         self._bar = QProgressBar()
         self._bar.setRange(0, 1000)
-        self._bar.setTextVisible(True)
-        self._bar.setFormat("")
-        self._bar.setFixedHeight(18)
+        self._bar.setTextVisible(False)
+        self._bar.setFixedHeight(5)
         self._bar.setStyleSheet(f"""
-QProgressBar {{ background:{T['surface']}; border:1px solid {T['border']}; border-radius:4px;
-               color:{T['text']}; font-size:11px; text-align:center; }}
-QProgressBar::chunk {{ background:{T['accent_dim']}; border-radius:3px; }}
+QProgressBar {{ background:{T['bg']}; border:none; border-radius:2px; }}
+QProgressBar::chunk {{ background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
+    stop:0 {T['accent_dim']}, stop:1 {T['accent_hi']}); border-radius:2px; }}
 """)
-        lay.addWidget(self._bar)
+        d.addWidget(self._bar)
+
+        r2 = QHBoxLayout()
+        r2.setSpacing(8)
+        self._bar_lbl = QLabel("")
+        self._bar_lbl.setStyleSheet(f"color:{T['text2']}; font-size:11px;")
+        r2.addWidget(self._bar_lbl, 1)
+        self._open_btn = _tool_btn("Open folder")
+        self._open_btn.clicked.connect(self._open_dest)
+        self._cancel_btn = _tool_btn("Cancel")
+        self._cancel_btn.clicked.connect(self._cancel)
+        self._dl_btn = QPushButton("Download")
+        self._dl_btn.setCursor(Qt.PointingHandCursor)
+        self._dl_btn.setMinimumHeight(34)
+        self._dl_btn.setStyleSheet(f"""
+QPushButton {{ background:{T['accent']}; color:#0b1200; border:none; border-radius:7px;
+              padding:6px 20px; font-size:13px; font-weight:800; }}
+QPushButton:hover {{ background:{T['accent_hi']}; }}
+QPushButton:disabled {{ background:#1c2230; color:#4a5263; }}
+""")
+        self._dl_btn.clicked.connect(self._start_download)
+        for w in (self._open_btn, self._cancel_btn, self._dl_btn):
+            r2.addWidget(w)
+        d.addLayout(r2)
+        lay.addWidget(dock)
+
+        # ── activity (collapsible log) ──────────────────────────────────────
+        act = QHBoxLayout()
+        act.setSpacing(8)
+        self._log_toggle = QToolButton()
+        self._log_toggle.setCheckable(True)
+        self._log_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._log_toggle.setStyleSheet(
+            f"QToolButton{{background:transparent; border:none; color:{T['text2']}; "
+            f"font-size:12px; font-weight:700;}} QToolButton:hover{{color:{T['text']};}}")
+        self._log_toggle.toggled.connect(self._toggle_log)
+        act.addWidget(self._log_toggle)
+        self._last_line = ElidedLabel()
+        self._last_line.set_copyable(False)
+        self._last_line.setStyleSheet(f"color:{T['muted']}; font-family:monospace; font-size:11px;")
+        act.addWidget(self._last_line, 1)
+        lay.addLayout(act)
 
         self._log = QPlainTextEdit()
         self._log.setReadOnly(True)
         self._log.setMaximumBlockCount(2000)
-        self._log.setMinimumHeight(140)
+        self._log.setMinimumHeight(150)
         self._log.setStyleSheet(f"""
-QPlainTextEdit {{ background:{T['bg']}; border:1px solid {T['border']}; border-radius:6px;
-                 color:{T['text2']}; font-family:monospace; font-size:11px; padding:4px; }}
+QPlainTextEdit {{ background:{T['bg']}; border:1px solid {T['border']}; border-left:2px solid
+                 {T['accent_dim']}; border-radius:4px; color:{T['text2']}; font-family:monospace;
+                 font-size:11px; padding:6px; }}
 """)
         lay.addWidget(self._log)
+        lay.addStretch(1)
+        self._log_toggle.setChecked(self._qs.value("ngx/log_open", False, type=bool))
+        self._toggle_log(self._log_toggle.isChecked())
 
         app = QApplication.instance()
         if app is not None:
             app.aboutToQuit.connect(self._shutdown)
+        self._set_pill("not checked", T["muted"])
         self._set_busy(False)
         self._refresh_dest()
 
     # ── helpers ─────────────────────────────────────────────────────────────
+    def _set_pill(self, text: str, color: str):
+        self._pill.setText(f"●  {text}")
+        self._pill.setStyleSheet(f"color:{color}; background:{_ngx_rgba(color, 0.10)}; "
+                                 f"border:1px solid {_ngx_rgba(color, 0.45)}; border-radius:11px; "
+                                 f"padding:3px 10px; font-size:11px; font-weight:700;")
+
+    def _toggle_log(self, on: bool):
+        self._log.setVisible(on)
+        self._log_toggle.setText(("▾" if on else "▸") + "  Activity")
+        self._qs.setValue("ngx/log_open", on)
+
     def _append(self, level: str, msg: str):
         color = self._LOG_COLORS.get(level, T["text2"])
         stamp = datetime.now().strftime("%H:%M:%S")
         safe = msg.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         self._log.appendHtml(f'<span style="color:{T["muted"]}">{stamp}</span> '
                              f'<span style="color:{color}">{safe}</span>')
+        self._last_line.setText(msg)
+        self._last_line.setStyleSheet(f"color:{color if level != 'info' else T['muted']}; "
+                                      f"font-family:monospace; font-size:11px;")
+        if level == "err" and not self._log_toggle.isChecked():
+            self._log_toggle.setChecked(True)
 
     def _set_busy(self, busy: bool):
-        has_rows = self._tree.topLevelItemCount() > 0
+        has_rows = bool(self._cards)
         self._check_btn.setEnabled(not busy)
         self._latest_btn.setEnabled(not busy and has_rows)
         self._clear_btn.setEnabled(not busy and has_rows)
-        self._tree.setEnabled(not busy)
-        self._cancel_btn.setEnabled(busy)
+        self._quick.setVisible(has_rows)
+        for c in self._cards:
+            c.setEnabled(not busy)
+        self._cancel_btn.setVisible(busy)
         self._dl_btn.setEnabled(not busy and bool(self._checked()))
         self._open_btn.setEnabled(not busy and self._last_dest is not None
                                   and self._last_dest.is_dir())
 
-    def _rows(self):
-        for i in range(self._tree.topLevelItemCount()):
-            top = self._tree.topLevelItem(i)
-            for j in range(top.childCount()):
-                yield top, top.child(j)
-
     def _checked(self) -> List[NgxBuild]:
-        return [c.data(0, self._ROLE) for _t, c in self._rows()
-                if c.checkState(0) == Qt.Checked]
+        return [b for b in (c.selected() for c in self._cards) if b is not None]
 
     def _auto_subfolder(self) -> str:
         sel = self._checked()
@@ -10527,13 +10776,9 @@ QPlainTextEdit {{ background:{T['bg']}; border:1px solid {T['border']}; border-r
         d = self._dest()
         self._dest_lbl.setText(f"→ {d}" if d else "→ (invalid output path)")
         sel = self._checked()
-        self._sel_lbl.setText(f"{len(sel)} selected · {ngx_human(sum(b.size for b in sel))}"
-                              if sel else "")
+        self._dl_btn.setText(f"Download {len(sel)}  ·  {ngx_human(sum(b.size for b in sel))}"
+                             if sel else "Download")
         self._set_busy(self._worker is not None and self._worker.isRunning())
-
-    def _on_item_changed(self, item, col):
-        if col == 0 and item.parent() is not None:
-            self._refresh_dest()
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(self, "Base folder", self._base.text())
@@ -10541,55 +10786,76 @@ QPlainTextEdit {{ background:{T['bg']}; border:1px solid {T['border']}; border-r
             self._base.setText(d)
 
     def _select(self, latest: bool):
-        self._tree.blockSignals(True)
-        for top, child in self._rows():
-            first = top.indexOfChild(child) == 0
-            child.setCheckState(0, Qt.Checked if (latest and first) else Qt.Unchecked)
-        self._tree.blockSignals(False)
+        for c in self._cards:
+            c.set_pick(latest, newest=latest)
         self._refresh_dest()
 
+    def _reflow(self):
+        w = self._stack.width()
+        cols = 1 if w < 620 else (2 if w < 1180 else 3)
+        if cols == self._cols and all(self._grid.indexOf(c) >= 0 for c in self._cards):
+            return
+        self._cols = cols
+        for c in self._cards:
+            self._grid.removeWidget(c)
+        for i, c in enumerate(self._cards):
+            self._grid.addWidget(c, i // cols, i % cols)
+        for i in range(3):
+            self._grid.setColumnStretch(i, 1 if i < cols else 0)
+
+    def resizeEvent(self, e):             # noqa: N802
+        super().resizeEvent(e)
+        if self._cards:
+            self._reflow()
+
     def _populate(self, builds: List[NgxBuild]):
-        self._tree.blockSignals(True)
-        self._tree.clear()
-        groups: Dict[str, QTreeWidgetItem] = {}
-        bold = QFont()
-        bold.setBold(True)
+        for c in self._cards:
+            self._grid.removeWidget(c)
+            c.deleteLater()
+        groups: Dict[str, List[NgxBuild]] = {}
         for b in builds:        # already sorted: feature order, newest first
-            top = groups.get(b.feature)
-            if top is None:
-                hint = ngx_target_name(b.feature) or "sl.common.dll, sl.dlss.dll, sl.dlss_g.dll, …"
-                top = QTreeWidgetItem([f"{ngx_title(b.feature)}   → {hint}"])
-                top.setFont(0, bold)
-                top.setFlags(Qt.ItemIsEnabled)
-                top.setFirstColumnSpanned(True)
-                self._tree.addTopLevelItem(top)
-                groups[b.feature] = top
-            child = QTreeWidgetItem([f"v{b.version}", b.tag() or "—", ngx_human(b.size),
-                                     str(len(b.mirrors)), "✓" if b.verified else "—"])
-            child.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable | Qt.ItemIsSelectable)
-            child.setCheckState(0, Qt.Checked if top.childCount() == 0 else Qt.Unchecked)
-            child.setData(0, self._ROLE, b)
-            for c in (2, 3, 4):
-                child.setTextAlignment(c, Qt.AlignRight | Qt.AlignVCenter)
-            child.setToolTip(0, "\n".join(u for u, _s in b.sources()))
-            top.addChild(child)
-        self._tree.expandAll()
-        self._tree.blockSignals(False)
-        for i in range(self._tree.topLevelItemCount()):
-            self._tree.topLevelItem(i).setFirstColumnSpanned(True)
+            groups.setdefault(b.feature, []).append(b)
+        self._cards = []
+        for feat, lst in groups.items():
+            card = _NgxFeatureCard(feat, lst)
+            card.changed.connect(self._refresh_dest)
+            self._cards.append(card)
+        self._cols = 0
+        self._stack.setCurrentIndex(1 if self._cards else 0)
+        self._reflow()
+
+    def _card(self, feature: str) -> Optional[_NgxFeatureCard]:
+        return next((c for c in self._cards if c.feature == feature), None)
 
     # ── actions ─────────────────────────────────────────────────────────────
     def _spawn(self, worker: _NgxWorker):
         self._worker = worker
         worker.log.connect(self._append)
-        worker.progress.connect(lambda f, lbl: (self._bar.setValue(int(f * 1000)),
-                                                self._bar.setFormat(f"{lbl}  %p%")))
-        worker.failed.connect(lambda m: (self._append("warn" if m == "cancelled" else "err",
-                                                      f"stopped: {m}"),
-                                         self._status.setText(m)))
+        worker.progress.connect(self._on_progress)
+        worker.failed.connect(self._on_failed)
         worker.finished.connect(self._on_finished)
         self._set_busy(True)
         worker.start()
+
+    def _on_progress(self, frac: float, label: str):
+        self._bar.setValue(int(frac * 1000))
+        self._bar_lbl.setText(f"{label}  ·  {int(frac * 100)}%")
+
+    def _on_failed(self, msg: str):
+        cancelled = msg == "cancelled"
+        self._append("warn" if cancelled else "err", f"stopped: {msg}")
+        self._status.setText(msg)
+        self._bar_lbl.setText(msg)
+        if not self._cards:
+            self._set_pill("cancelled" if cancelled else "check failed",
+                           T["warn"] if cancelled else T["danger"])
+
+    def _on_card_state(self, feature: str, state: str):
+        card = self._card(feature)
+        if card is not None:
+            card.set_state(*{"run": ("downloading…", T["text"]),
+                             "ok": ("✓ saved", T["accent_hi"]),
+                             "err": ("✗ failed", T["danger"])}.get(state, ("", "")))
 
     def _on_finished(self):
         w, self._worker = self._worker, None
@@ -10600,17 +10866,22 @@ QPlainTextEdit {{ background:{T['bg']}; border:1px solid {T['border']}; border-r
     def _start_check(self):
         if self._worker is not None:
             return
-        self._status.setText("checking…")
+        self._set_pill("checking…", T["warn"])
+        self._status.setText("")
+        self._bar_lbl.setText("listing ngx.download.nvidia.com …")
         self._bar.setRange(0, 0)              # busy indicator while listing
         w = _NgxWorker(parent=self)
         w.discovered.connect(self._on_discovered)
-        w.finished.connect(lambda: self._bar.setRange(0, 1000))
+        w.finished.connect(lambda: (self._bar.setRange(0, 1000), self._bar.setValue(0)))
         self._spawn(w)
 
     def _on_discovered(self, builds: List[NgxBuild]):
         self._populate(builds)
         feats = len({b.feature for b in builds})
-        self._status.setText(f"{len(builds)} builds · {feats} features")
+        self._set_pill(f"{len(builds)} builds · {feats} features · "
+                       f"{datetime.now().strftime('%H:%M')}", T["accent"])
+        self._status.setText(f"{feats} cards · newest of each pre-selected")
+        self._bar_lbl.setText("")
         self._append("ok", f"found {len(builds)} builds across {feats} features")
         self._refresh_dest()
 
@@ -10634,14 +10905,20 @@ QPlainTextEdit {{ background:{T['bg']}; border:1px solid {T['border']}; border-r
         self._qs.setValue("ngx/base_dir", self._base.text().strip())
         self._last_dest = dest
         self._bar.setValue(0)
-        self._status.setText("downloading…")
+        for c in self._cards:
+            c.set_state("queued" if c.selected() else "", T["muted"])
+        self._set_pill("downloading…", T["warn"])
         self._append("info", f"saving to {dest}")
         w = _NgxWorker(sel, dest, parent=self)
         w.downloaded.connect(self._on_downloaded)
+        w.state.connect(self._on_card_state)
         self._spawn(w)
 
     def _on_downloaded(self, ok: int, bad: int, dest: str):
-        self._status.setText(f"{ok} downloaded" + (f", {bad} failed" if bad else ""))
+        text = f"{ok} downloaded" + (f", {bad} failed" if bad else "")
+        self._status.setText(text)
+        self._bar_lbl.setText(f"{text} → {dest}")
+        self._set_pill(text, T["danger"] if bad and not ok else (T["warn"] if bad else T["accent"]))
         self._append("ok" if not bad else "warn", f"finished: {ok} ok, {bad} failed → {dest}")
 
     def _cancel(self):
