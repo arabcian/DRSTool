@@ -9911,7 +9911,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-from PySide6.QtCore import QThread, QUrl, QStandardPaths
+from PySide6.QtCore import QThread, QUrl, QStandardPaths, QPointF
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QProgressBar
 
@@ -10353,11 +10353,54 @@ QComboBox {{ background:{T['bg']}; border:1px solid {T['border_hi']}; border-rad
             color:{T['text']}; font-family:monospace; font-size:12px; padding:5px 10px; }}
 QComboBox:hover {{ border-color:{T['accent_dim']}; }}
 QComboBox:disabled {{ color:#3a4250; border-color:#232a36; }}
-QComboBox::drop-down {{ border:none; width:22px; }}
+QComboBox::drop-down {{ border:none; width:24px; }}
+QComboBox::down-arrow {{ image:none; width:0; height:0; }}
 QComboBox QAbstractItemView {{ background:{T['surface']}; color:{T['text']};
     border:1px solid {T['border_hi']}; selection-background-color:rgba(118,185,0,0.18);
     font-family:monospace; font-size:12px; outline:0; }}
 """
+
+
+class _NgxVersionCombo(QComboBox):
+    """Version picker with an "N versions" hint pinned left of the arrow."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._hint = QLabel(self)
+        self._hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    def refresh_hint(self):
+        n = self.count()
+        self._hint.setText(f"{n} version{'s' if n != 1 else ''}")
+        col = T["accent_hi"] if n > 1 and self.isEnabled() else T["muted"]
+        self._hint.setStyleSheet(f"color:{col}; background:transparent; font-size:11px; font-weight:700;")
+        self._hint.adjustSize()
+        self._place_hint()
+
+    def _place_hint(self):
+        self._hint.move(self.width() - 28 - self._hint.width(),
+                        (self.height() - self._hint.height()) // 2)
+
+    def resizeEvent(self, e):             # noqa: N802
+        super().resizeEvent(e)
+        self._place_hint()
+
+    def paintEvent(self, e):              # noqa: N802
+        super().paintEvent(e)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor(T["text2"] if self.isEnabled() else "#3a4250"), 1.6)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        cx, cy = self.width() - 14, self.height() / 2
+        p.drawPolyline([QPointF(cx - 4, cy - 2), QPointF(cx, cy + 2), QPointF(cx + 4, cy - 2)])
+        p.end()
+
+    def changeEvent(self, e):             # noqa: N802
+        super().changeEvent(e)
+        if e.type() == QEvent.EnabledChange:
+            self.refresh_hint()
 
 
 class _NgxFeatureCard(QFrame):
@@ -10403,12 +10446,13 @@ class _NgxFeatureCard(QFrame):
         mid.addWidget(self._file, 0, Qt.AlignBottom)
         lay.addLayout(mid)
 
-        self._combo = QComboBox()
-        self._combo.setStyleSheet(_NGX_COMBO_SS)
+        self._combo = _NgxVersionCombo()
+        self._combo.setStyleSheet(_NGX_COMBO_SS + "QComboBox { padding-right:96px; }")
         for b in builds:
             tag = f"  [{b.tag()}]" if b.tag() else ""
             self._combo.addItem(f"v{b.version}{tag}  ·  {ngx_human(b.size)}")
         self._combo.setMaxVisibleItems(16)
+        self._combo.refresh_hint()
         self._combo.currentIndexChanged.connect(self._sync)
         lay.addWidget(self._combo)
 
