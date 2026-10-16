@@ -3767,6 +3767,12 @@ DXVK_ENV_VARS: List[EnvVarDef] = [
               "Enable HDR10 color space exposure (DXGI_COLOR_SPACE_RGB_FULL_G2084). "
               "Needed by some HDR-capable games.",
               options=["0", "1"]),
+    EnvVarDef("DXVK_NO_HDR", "DXVK", "enum", "",
+              "[Proton-GE / Proton-CachyOS / Proton-EM] Opposite of DXVK_HDR=1: forcefully "
+              "disables HDR when it would otherwise be switched on automatically (current "
+              "Protons detect HDR by themselves). Useful on GNOME, which does not yet expose "
+              "enough colour-management features for DXVK's HDR path.",
+              options=["0", "1"]),
     # ── Debug ────────────────────────────────────────────────────────────────
     EnvVarDef("DXVK_DEBUG", "DXVK", "enum", "",
               "Enables one DXVK debugging mode.\n"
@@ -3935,6 +3941,129 @@ DXVK_CONFIG_KEYS = [
      "Add to the app's mip LOD bias (-2.0 .. 1.0). Negative = sharper + shimmer."),
     ("d3d11.clampNegativeLodBias", "enum", _BOOL,
      "Clamp negative LOD bias to 0 (after samplerLodBias)."),
+    # ── Added from upstream dxvk.conf (DXVK 3.1.x, 2026-10). Kinds other than ──
+    # ── "enum" render as a free text box (placeholder = third field).        ──
+    # ── Frame limiter / latency (per API) ───────────────────────────────────
+    ("dxgi.maxFrameRate", "num", "0",
+     "Legacy per-API D3D10/11 frame limiter (0 = off). Prefer dxvk.maxFrameRate, or "
+     "MangoHud / Gamescope limiters, which pace better."),
+    ("d3d9.maxFrameRate", "num", "0",
+     "Legacy per-API D3D9 frame limiter (0 = off). Prefer dxvk.maxFrameRate or an "
+     "external limiter."),
+    ("d3d9.maxFrameLatency", "num", "0",
+     "Enforce stricter max frame latency for D3D9 (0 = app value)."),
+    # ── GPU identification / spoofing ───────────────────────────────────────
+    ("dxgi.hideAmdGpu", "enum", _TRI,
+     "Report AMD GPUs as NVIDIA GPUs (workaround for AMDAGS / AMD-specific code "
+     "paths). Auto = only for known-affected games."),
+    ("dxgi.hideIntelGpu", "enum", _TRI,
+     "Report Intel GPUs as AMD GPUs (workaround for Intel-specific libraries such as "
+     "XeSS). Auto = known-affected games; defaults to True for D3D8/9."),
+    ("dxgi.hideNvkGpu", "enum", _TRI,
+     "Report NVIDIA GPUs running on NVK (Mesa) as AMD GPUs. Irrelevant with the "
+     "proprietary NVIDIA driver."),
+    ("dxgi.customVendorId", "str", "e.g. 10de",
+     "Report this PCI vendor ID (hex) instead of the real one. 10de = NVIDIA, "
+     "1002 = AMD, 8086 = Intel."),
+    ("dxgi.customDeviceId", "str", "e.g. 2704",
+     "Report this PCI device ID (hex) instead of the real one."),
+    ("dxgi.customDeviceDesc", "str", "e.g. NVIDIA GeForce RTX 4080",
+     "Report this adapter description string instead of the real GPU name."),
+    ("dxgi.maxSharedMemory", "num", "0",
+     "Override reported shared system memory in MB (0 = off). Companion of "
+     "dxgi.maxDeviceMemory; not a hard cap."),
+    ("dxvk.deviceFilter", "str", "e.g. RTX 5080",
+     "Only expose Vulkan devices whose name contains this string. Config-file "
+     "equivalent of DXVK_FILTER_DEVICE_NAME."),
+    ("dxgi.enableUe4Workarounds", "enum", _BOOL,
+     "Unreal Engine 4 HDR workarounds for games not named *-Win64-Shipping.exe "
+     "(avoids AMDAGS crashes in D3D11 on HDR systems)."),
+    # ── D3D11 performance / compatibility ───────────────────────────────────
+    ("d3d11.maxFeatureLevel", "enum",
+     ["9_1", "9_2", "9_3", "10_0", "10_1", "11_0", "11_1", "12_0", "12_1"],
+     "Cap the D3D11 feature level a device can be created with (default 12_1). "
+     "Raising it can unblock apps that fail device creation."),
+    ("d3d11.maxTessFactor", "num", "0",
+     "Cap the tessellation factor (8-64, 0 = off). Big win in tessellation-heavy games."),
+    ("d3d11.relaxedBarriers", "enum", _BOOL,
+     "Relax UAV pipeline barriers (ignore WAW in compute, all UAV hazards in graphics). "
+     "Can raise performance; may cause rendering glitches."),
+    ("d3d11.relaxedGraphicsBarriers", "enum", _BOOL,
+     "Like relaxedBarriers but only for graphics-shader UAVs (compute untouched)."),
+    ("d3d11.forceComputeLdsBarriers", "enum", _BOOL,
+     "Insert barriers after group-shared-memory writes in compute shaders. Workaround "
+     "for games with missing GroupMemoryBarrier; costs performance."),
+    ("d3d11.forceComputeUavBarriers", "enum", _BOOL,
+     "Insert barriers after UAV writes in compute shaders. Workaround for missing "
+     "UAV sync; costs performance."),
+    ("d3d11.forceSampleRateShading", "enum", _BOOL,
+     "Per-sample instead of per-pixel shading when MSAA is on. Cleaner image, big "
+     "performance cost."),
+    ("d3d9.forceSampleRateShading", "enum", _BOOL,
+     "Per-sample shading when MSAA is on (D3D9). Cleaner image, big performance cost."),
+    ("d3d11.disableMsaa", "enum", _BOOL,
+     "Force every texture to 1 sample and fix up resolves/shaders. Big FPS gain at the "
+     "cost of no MSAA."),
+    ("d3d11.disableDirectImageMapping", "enum", _BOOL,
+     "Don't map dynamic images directly. Fixes corruption in games that ignore the "
+     "driver's row pitch."),
+    ("d3d11.cachedDynamicResources", "str", "e.g. vicr",
+     "Put dynamic resources with these bind flags in cached system memory for fast CPU "
+     "readback (v=vertex, i=index, c=constant, r=shader resource ...). Buggy-app workaround."),
+    ("d3d11.exposeDriverCommandLists", "enum", _BOOL,
+     "Advertise native driver command-list support (default True). Turn off if a game "
+     "misbehaves with deferred contexts."),
+    ("d3d11.enableContextLock", "enum", _BOOL,
+     "Force-enable the D3D11 context lock (ID3D10Multithread). Race-condition debugging."),
+    # ── D3D9 ────────────────────────────────────────────────────────────────
+    ("d3d9.samplerLodBias", "num", "0.0",
+     "Add to the app's mip LOD bias for D3D9 samplers."),
+    ("d3d9.clampNegativeLodBias", "enum", _BOOL,
+     "Clamp negative D3D9 LOD bias to 0 (after samplerLodBias)."),
+    ("d3d9.floatEmulation", "enum", ["Auto", "True", "False", "Strict"],
+     "x*0 floating-point quirk emulation. True = fast/less exact, Strict = slow/exact, "
+     "False = off. Auto = per-game."),
+    ("d3d9.deviceLocalConstantBuffers", "enum", _TRI,
+     "Stream shader constants into VRAM; may help GPU-bound scenes. Auto = discrete GPUs only."),
+    ("d3d9.lenientClear", "enum", _BOOL,
+     "Fast-path clears that nearly cover the whole render target."),
+    ("d3d9.maxAvailableMemory", "num", "4096",
+     "Initial value (MB) for GetAvailableTextureMem tracking. Raise for old games that "
+     "refuse to start with 'too little' video memory."),
+    ("d3d9.forceRefreshRate", "num", "0",
+     "Only expose D3D9 display modes with this refresh rate (0 = off)."),
+    ("d3d9.seamlessCubes", "enum", _BOOL,
+     "Always use seamless cube maps (prettier edges, deviates from real D3D9)."),
+    ("d3d9.useFP16", "enum", _TRI,
+     "FP16 for partial-precision instructions. May help weak GPUs, can regress desktop GPUs."),
+    ("d3d9.cachedWriteOnlyBuffers", "enum", _BOOL,
+     "Allocate write-only D3DPOOL_DEFAULT buffers in cached system memory (buggy-app readback fix)."),
+    ("d3d9.forceAspectRatio", "str", "e.g. 16:9",
+     "Force the aspect ratio of exposed D3D9 display modes."),
+    # ── Memory / Vulkan backend (mostly debug or driver-specific) ───────────
+    ("dxvk.maxMemoryBudget", "num", "0",
+     "Cap the VRAM DXVK will use, in MB (0 = off). Debug only: severe slowdown when hit."),
+    ("dxvk.zeroMappedMemory", "enum", _BOOL,
+     "Zero mapped memory when suballocations are freed. Huge CPU cost; last resort for "
+     "games that don't initialise their buffers."),
+    ("dxvk.useRawSsbo", "enum", _TRI,
+     "Raw/structured buffer views via SSBOs. Auto = on where offset alignment is 4 B "
+     "(AMD). Unsafe on hardware with stricter alignment."),
+    ("dxvk.enableNvRawAccessChains", "enum", _BOOL,
+     "Use VK_NV_raw_access_chains on NVIDIA (default True). Disabling reduces performance; debug only."),
+    ("dxvk.enableImplicitResolves", "enum", _BOOL,
+     "Resolve multisampled images when a game samples them as plain textures (fixes "
+     "striped artifacts on NVIDIA). Default True."),
+    ("dxvk.enableUnifiedImageLayouts", "enum", _BOOL,
+     "Use VK_KHR_unified_image_layouts where available. Default True; debug only."),
+    ("dxvk.trackPipelineLifetime", "enum", _TRI,
+     "Free pipeline libraries aggressively to save memory/address space. Auto = 32-bit games only."),
+    ("dxvk.lowerSinCos", "enum", _TRI,
+     "Custom sin/cos approximation. Auto = only on drivers with poor native precision."),
+    ("dxvk.tilerMode", "enum", _TRI,
+     "Tiler (mobile GPU) submission heuristics. For perf testing only."),
+    ("dxvk.enableDebugUtils", "enum", _BOOL,
+     "Enable VK_EXT_debug_utils object names/labels (RenderDoc / Nsight)."),
 ]
 DXVK_CONFIG_KEY_NAMES = [k[0] for k in DXVK_CONFIG_KEYS]
 
@@ -4003,6 +4132,21 @@ VKD3D_CONFIG_DESCS: Dict[str, str] = {
     "breadcrumbs_trace":                   "Breadcrumbs + full trace logging of every command. Very slow; debug only.",
     "log_memory_budget":                   "Log VRAM / ReBAR budget decisions and allocations to the vkd3d log. Handy for diagnosing VRAM-limited stutter.",
     "debug_utils":                         "Enable VK_EXT_debug_utils labels (object names/markers) for RenderDoc/Nsight captures.",
+    # ── Added from upstream config_flag_decl.h (2026-10, vkd3d-proton 3.0.1+) ─
+    "fault":                               "Report GPU faults (device lost) with detailed fault info and keep the app blocked on its fences while the report is dumped. Lighter than breadcrumbs; debug GPU hangs only.",
+    "app_debug_marker_only":               "With debug_utils: only forward the application's own debug markers/labels, not vkd3d-proton's internal ones. Cleaner RenderDoc/Nsight captures.",
+    "queue_profile_extra":                 "Extra detail in VKD3D_QUEUE_PROFILE queue-timeline traces (more events per submission). Profiling only; adds overhead.",
+    "descriptor_qa_checks":                "Instrument shaders to validate descriptor access (needs a build with -Denable_descriptor_qa=true). Very slow; QA/debug only.",
+    "instruction_qa_checks":               "Instrument shaders for per-instruction buffer sync validation (needs a descriptor-QA build, see docs/syncval.md). Very slow; QA/debug only.",
+    "pipeline_library_ignore_spirv":       "Ignore the SPIR-V stored in the pipeline library cache and recompile from DXIL. Forced on automatically by VKD3D_SHADER_OVERRIDE / VKD3D_SHADER_DUMP_PATH / VKD3D_QA_HASHES.",
+    "pipeline_library_no_serialize_spirv": "Don't store SPIR-V in the pipeline library cache (smaller cache file, but a driver/vkd3d-proton update then forces a cold DXIL recompile).",
+    "pipeline_library_sanitize_spirv":     "Re-validate SPIR-V loaded from the pipeline library before use. Catches corrupted caches at a startup cost; debug only.",
+    "pipeline_library_log":                "Log pipeline library hits/misses and load/save decisions to the vkd3d log. Useful for diagnosing cold-compile stutter.",
+    "mutable_single_set":                  "Force the single-descriptor-set path for mutable descriptors (auto-enabled on Intel). Workaround/test for descriptor-set limits; may cost performance.",
+    "damage_not_zeroed_allocations":       "Fill D3D12_HEAP_FLAG_CREATE_NOT_ZEROED buffers with 0xFF on creation to expose games that wrongly assume zeroed memory. Debug only.",
+    "debug_wave64_simulation":             "Report a wave size of 64 to the game (WaveLaneCountMin forced up) to test wave64-dependent shader paths on wave32 GPUs. Debug only.",
+    "fail_unsupported_state_template":     "Fail loudly instead of silently ignoring when a command-list state template is unsupported. Debug only.",
+    "adreno_7xx_extra_compat":             "Qualcomm Adreno 7xx only: use slower, more spec-compliant paths to isolate whether a game hits them. Irrelevant on NVIDIA/AMD.",
 }
 
 VKD3D_ENV_VARS: List[EnvVarDef] = [
@@ -4038,11 +4182,16 @@ VKD3D_ENV_VARS: List[EnvVarDef] = [
                   # PSO / Pipeline Cache
                   "pipeline_library_ignore_mismatch_driver",
                   "pipeline_library_app_cache",
+                  "pipeline_library_no_serialize_spirv",
+                  "pipeline_library_ignore_spirv",
+                  "pipeline_library_sanitize_spirv",
+                  "pipeline_library_log",
                   "global_pipeline_cache",
                   "shader_cache_sync",
                   "retain_psos",
                   # Descriptor Heap
                   "descriptor_heap",
+                  "mutable_single_set",
                   # CBV / SRV Binding
                   "force_raw_va_cbv",
                   "preallocate_srv_mip_clamps",
@@ -4067,9 +4216,18 @@ VKD3D_ENV_VARS: List[EnvVarDef] = [
                   "breadcrumbs",
                   "breadcrumbs_sync",
                   "breadcrumbs_trace",
+                  "fault",
                   "log_memory_budget",
                   "vk_debug",
                   "debug_utils",
+                  "app_debug_marker_only",
+                  "queue_profile_extra",
+                  "descriptor_qa_checks",
+                  "instruction_qa_checks",
+                  "damage_not_zeroed_allocations",
+                  "debug_wave64_simulation",
+                  "fail_unsupported_state_template",
+                  "adreno_7xx_extra_compat",
                   "skip_application_workarounds",
                   "force_host_cached",
               ],
@@ -4380,6 +4538,33 @@ NV_ENV_VARS: List[EnvVarDef] = [
 
     EnvVarDef("__GL_SHARPEN_INDICATOR_ENABLE", "NVIDIA __GL", "enum", "",
               "Shows an on-screen indicator when NVIDIA Image Sharpening is active.",
+              options=["0", "1"]),
+
+    # ── Added from the NVIDIA 595.58 OpenGL environment-variable README ───────
+    EnvVarDef("__GL_LOG_MAX_ANISO", "NVIDIA __GL", "enum", "",
+              "Enables automatic anisotropic texture filtering for OpenGL: 0 = none, "
+              "1 = 2x, 2 = 4x, 3 = 8x, 4 = 16x.",
+              options=["0", "1", "2", "3", "4"]),
+
+    EnvVarDef("__GL_ALLOW_FXAA_USAGE", "NVIDIA __GL", "enum", "",
+              "Set to 0 to let an individual application opt out of FXAA when FXAA is "
+              "enabled globally in nvidia-settings.",
+              options=["0", "1"]),
+
+    EnvVarDef("__GL_HEAP_ALLOC_LIMIT", "NVIDIA __GL", "string", "",
+              "Per-process limit on the driver's heap allocations, written as BYTES with an "
+              "optional case-insensitive suffix (k, kB, M, MB, G, GB); no suffix = bytes. "
+              "Values below 12 MB are clamped up to 12 MB.",
+              placeholder="e.g. 4G"),
+
+    EnvVarDef("__GL_ConformantBlitFramebufferScissor", "NVIDIA __GL", "enum", "",
+              "glBlitFramebuffer() scissor test: enabled by default (spec-conformant). Set "
+              "0 to disable it for old applications that relied on the previous behaviour.",
+              options=["0", "1"]),
+
+    EnvVarDef("__GL_SORT_FBCONFIGS", "NVIDIA __GL", "enum", "",
+              "Set to 0 to return GLX FBConfigs in the order the X server reports them "
+              "instead of the driver's sorted order.",
               options=["0", "1"]),
 
     # ── Display / HUD ─────────────────────────────────────────────────────────
@@ -4921,6 +5106,161 @@ PROTON_ENV_VARS: List[EnvVarDef] = [
               "Write Wine crash reports (minidumps) to this directory "
               "(sets WINE_CRASH_REPORT_DIR).",
               placeholder="e.g. /tmp/proton-crashes"),
+
+    # ── Added 2026-10 from Valve Proton / Proton-GE / Proton-CachyOS / Proton-EM ──
+    # ── Upscaler DLL upgrades & OptiScaler ───────────────────────────────────
+    EnvVarDef("PROTON_FSR4_UPGRADE", "Proton", "string", "",
+              "[Proton-GE / Proton-CachyOS] Download amdxcffx64.dll and upgrade games that "
+              "ship FSR 3.1 to FSR 4. 1 = default version from the upscaler manifest, or "
+              "pin a version (e.g. 4.1.1). Opt-in. Needs a GPU/driver with FSR4 support — "
+              "AMD RDNA3/4 only; it has no effect on an NVIDIA GPU (use "
+              "PROTON_DLSS_UPGRADE there). Replaces the obsolete PROTON_FSR4_RDNA3_UPGRADE.",
+              placeholder="1 or e.g. 4.1.1"),
+    EnvVarDef("PROTON_FSR4_INDICATOR", "Proton", "enum", "",
+              "[Proton-GE / Proton-CachyOS] Show the FSR upscaling and frame-generation "
+              "watermarks (shorthand for FSR_WATERMARK=1 and FSR_FG_WATERMARK=1).",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_FSR3_UPGRADE", "Proton", "string", "",
+              "[Proton-GE] Download and use a newer FSR 3.x FidelityFX DLL than the game "
+              "ships with. 1 = latest from the manifest, or pin a version string.",
+              placeholder="1 or a version"),
+    EnvVarDef("PROTON_FFX3_UPGRADE", "Proton", "string", "",
+              "[Proton-CachyOS] FidelityFX 3 counterpart of PROTON_FSR3_UPGRADE (used by "
+              "the OptiScaler/upgrade path; not described in the fork's README table).",
+              placeholder="1 or a version"),
+    EnvVarDef("PROTON_FFX4_UPGRADE", "Proton", "string", "",
+              "[Proton-CachyOS] FidelityFX 4 counterpart of PROTON_FSR4_UPGRADE (used by "
+              "the OptiScaler/upgrade path; not described in the fork's README table).",
+              placeholder="1 or a version"),
+    EnvVarDef("PROTON_XESS_UPGRADE", "Proton", "string", "",
+              "[Proton-GE / Proton-CachyOS] Download and use a newer Intel XeSS DLL than "
+              "the game ships with. 1 = latest from the manifest, or pin a version string. "
+              "XeSS runs on NVIDIA GPUs through its DP4a path.",
+              placeholder="1 or a version"),
+    EnvVarDef("PROTON_MLFG_UPGRADE", "Proton", "enum", "",
+              "[Proton-GE / Proton-CachyOS] Enable MLFG (ML frame generation) together with "
+              "FSR 4 >= 4.0.3. AMD-only; set together with PROTON_FSR4_UPGRADE.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_USE_OPTISCALER", "Proton", "enum", "",
+              "[Proton-GE / Proton-CachyOS] Inject OptiScaler automatically so games can "
+              "swap their upscaler (DLSS / FSR / XeSS) and add frame generation where "
+              "the game has no option. The PROTON_<UPSCALER>_UPGRADE variables then choose "
+              "the DLL versions. Config files live in "
+              "<prefix>/drive_c/windows/system32/umu/.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_OPTISCALER_NAME", "Proton", "enum", "",
+              "[Proton-CachyOS] File name OptiScaler is injected as. Defaults to dxgi.dll; "
+              "switch if the game already uses that DLL name.",
+              options=["dxgi.dll", "d3d12.dll", "dbghelp.dll"]),
+    EnvVarDef("PROTON_OPTISCALER_CONFIG", "Proton", "string", "",
+              "[Proton-CachyOS] Semicolon-separated {section}.{option}={value} entries "
+              "written into OptiScaler.ini (only options that already exist in the file). "
+              "Changes persist until OptiScaler is upgraded and strip the file's comments. "
+              "Example: Upscalers.Dx11Upscaler=fsr31;Upscalers.Dx12Upscaler=dlss",
+              placeholder="Upscalers.Dx12Upscaler=dlss"),
+    # ── Low-latency forks & legacy API ───────────────────────────────────────
+    EnvVarDef("PROTON_VKD3D_LOWLATENCY", "Proton", "enum", "",
+              "[Proton-CachyOS] Switch to the vkd3d-low-latency fork of vkd3d-proton "
+              "(low-latency frame pacing for Direct3D 12 with a native Reflex "
+              "implementation). Companion of PROTON_DXVK_LOWLATENCY for D3D12 titles.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_D7VK_DDRAW", "Proton", "enum", "",
+              "[Proton-CachyOS] Use ddraw.dll from the D7VK project for DirectX 7-and-older "
+              "games instead of Wine's built-in ddraw.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_USE_D7VK", "Proton", "enum", "",
+              "[Proton-GE] Use D7VK's ddraw implementation for DirectX 7-and-older games "
+              "(GE spelling of PROTON_D7VK_DDRAW).",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NO_D3D9", "Proton", "enum", "",
+              "[Proton-GE] Disable the D3D9 DLLs, for games that run better on another API.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NO_D3D12", "Proton", "enum", "",
+              "[Proton-GE] Disable the D3D12 DLLs, so a game with a DX11 fallback uses it "
+              "instead of vkd3d-proton.",
+              options=["0", "1"]),
+    EnvVarDef("LOW_LATENCY_LAYER", "Proton", "enum", "",
+              "[Proton-GE] Enable the low_latency_layer Vulkan layer (Korthos-Software), "
+              "which provides Reflex-style latency reduction (VK_NV_low_latency2) on "
+              "GPUs that lack it natively. Not needed on the proprietary NVIDIA driver.",
+              options=["0", "1"]),
+    EnvVarDef("ENABLE_VKBASALT", "Proton", "enum", "",
+              "[Proton-GE] Load the vkBasalt post-processing Vulkan layer (sharpening, "
+              "CAS, SMAA, LUTs). Configure it with VKBASALT_CONFIG_FILE.",
+              options=["0", "1"]),
+    EnvVarDef("PYROVEIL", "Proton", "enum", "",
+              "[Proton-GE] Enable the Pyroveil Vulkan layer, which patches broken "
+              "shader/pipeline behaviour per game; the config name goes in PYROVEIL_CONFIG.",
+              options=["0", "1"]),
+    # ── Compatibility / memory behaviour ─────────────────────────────────────
+    EnvVarDef("PROTON_NATIVE_AGS", "Proton", "enum", "",
+              "[Proton-GE / Proton-EM] Use AMD's proprietary AMD GPU Services binary "
+              "instead of Proton's built-in one, and allow statically linked AGS. Mainly "
+              "useful to enable HDR in some UE4 D3D11 games on AMD GPUs.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_USE_WRITECOPY", "Proton", "enum", "",
+              "[Proton-GE] Simulate Windows copy-on-write (writecopy) semantics for loaded "
+              "images (sets WINE_SIMULATE_WRITECOPY=1). Needed by some DRM/anti-cheat.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NO_WRITE_WATCH", "Proton", "enum", "",
+              "[Proton-GE] Disable memory write-watch support in ntdll. Can improve "
+              "performance in a few specific games; only use after verifying the game "
+              "runs without it.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_OLD_GL_STRING", "Proton", "enum", "",
+              "Limit the length of the GL extension string through driver overrides "
+              "(sets MESA_EXTENSION_MAX_YEAR=2003 and __GL_ExtensionStringVersion=17700), "
+              "for old OpenGL games that crash on very long strings.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_HIDE_INTEL_GPU", "Proton", "enum", "",
+              "Hide Intel GPUs from the game (sets WINE_HIDE_INTEL_GPU=1), for titles that "
+              "break on Intel-specific code paths. Relevant on hybrid laptops with an "
+              "Intel iGPU.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_HIDE_VANGOGH_GPU", "Proton", "enum", "",
+              "Hide the Steam Deck (Van Gogh) GPU from the game (sets "
+              "WINE_HIDE_VANGOGH_GPU=1).",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_NO_XIM", "Proton", "enum", "",
+              "Disable the X Input Method (XIM) in Wine's X11 driver. Works around "
+              "text-input/focus problems in a few games.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_SET_STEAM_DRIVE", "Proton", "enum", "",
+              "Create a T: drive in the Wine prefix pointing at the Steam installation "
+              "directory (counterpart of PROTON_SET_GAME_DRIVE's S: drive).",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_DLL_COPY", "Proton", "string", "",
+              "Comma-separated list of built-in DLL globs Proton copies into the prefix "
+              "(default: the DirectX / VC++ redistributable set, e.g. d3dcompiler_*.dll, "
+              "xaudio*.dll, msvcp1*.dll). Setting it REPLACES that default list.",
+              placeholder="e.g. d3dcompiler_*.dll,xaudio*.dll"),
+    # ── Wayland / input / audio / media ──────────────────────────────────────
+    EnvVarDef("PROTON_USE_X11_EXCLUSIVE", "Proton", "string", "",
+              "[Proton-GE] Under Wine-Wayland, run only this executable on winex11.drv "
+              "while everything else stays on Wayland. Takes an exact basename "
+              "(Launcher.exe) or a case-insensitive path fragment.",
+              placeholder="e.g. Launcher.exe"),
+    EnvVarDef("PROTON_WAYLAND_MONITOR", "Proton", "string", "",
+              "[Proton-GE] Primary monitor for Wine-Wayland (sets WAYLANDDRV_PRIMARY_MONITOR). "
+              "Auto-detected when unset.",
+              placeholder="e.g. DP-1"),
+    EnvVarDef("PROTON_NO_STEAMINPUT", "Proton", "enum", "",
+              "[Proton-GE / Proton-CachyOS / Proton-EM] Disable Steam Input support for the "
+              "game. Proton-GE also sets it by itself in some controller-fallback cases; "
+              "disable Steam Input for the game in Steam too.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_EMULATE_STEAMINPUT", "Proton", "enum", "",
+              "[Proton-GE / Proton-EM] Force Steam Input emulation on. Explicitly setting "
+              "it also disables Proton-GE's automatic Sony-controller compatibility fallback.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_USE_PIPEWIRE", "Proton", "enum", "",
+              "[Proton-CachyOS] Use the native winepipewire.drv audio driver (enabled by "
+              "default). Set 0 to fall back to winepulse.drv.",
+              options=["0", "1"]),
+    EnvVarDef("PROTON_MEDIA_FORCE_GST", "Proton", "enum", "",
+              "[Proton-CachyOS] Force the GStreamer media path. Fixes cutscene video/audio "
+              "in some games.",
+              options=["0", "1"]),
 ]
 
 # ============================================================================
@@ -4999,6 +5339,22 @@ WINE_ENV_VARS: List[EnvVarDef] = [
               "(max 16 hosts, 256 chars each). Useful for blocking telemetry/DRM phone-home "
               "hosts that cause launch hangs.",
               placeholder="host1.org,host2.net"),
+    EnvVarDef("WINE_FULLSCREEN_FSR", "Wine", "enum", "",
+              "[Proton-GE] Enable AMD FSR upscaling inside Wine's fullscreen hack, so a "
+              "game running at a lower fake resolution is upscaled to the monitor. Works "
+              "in Vulkan games only (DXVK and VKD3D-Proton included) and needs the "
+              "fullscreen hack, i.e. not under Wine-Wayland. Vendor-neutral, so it also "
+              "runs on NVIDIA GPUs.",
+              options=["0", "1"]),
+    EnvVarDef("WINE_FULLSCREEN_FSR_STRENGTH", "Wine", "enum", "",
+              "[Proton-GE] FSR sharpening for WINE_FULLSCREEN_FSR, 0-5. 0 is the sharpest, "
+              "higher values sharpen less; 2 is AMD's recommended default and GE's default.",
+              options=["0", "1", "2", "3", "4", "5"]),
+    EnvVarDef("WINE_FULLSCREEN_FSR_CUSTOM_MODE", "Wine", "string", "",
+              "[Proton-GE] Fake screen resolution (WIDTHxHEIGHT) shown to the game while "
+              "FSR upscales to the real mode. Useful for games that always render at "
+              "native resolution.",
+              placeholder="e.g. 1280x720"),
     EnvVarDef("WINE_ENABLE_TIMEOUT_FIX", "Wine", "enum", "",
               "[Proton-DW (dwproton) only] Works around connection-timeout failures some "
               "setups hit launching live-service titles (originally documented for Genshin "
@@ -5284,6 +5640,17 @@ GAMESCOPE_ENV_VARS: List[EnvVarDef] = [
               "Example: STEAM_GAMESCOPE_XWAYLAND_DISPLAY=:1",
               placeholder="e.g. :1"),
 
+    EnvVarDef("DISABLE_GAMESCOPE_WSI", "Gamescope", "enum", "",
+              "Disable switch of gamescope's Vulkan WSI layer (VkLayer_FROG_gamescope_wsi): "
+              "the layer manifest's disable_environment, so DISABLE_GAMESCOPE_WSI=1 stops "
+              "the layer from loading at all. Use it when a game misbehaves with the layer "
+              "(black video, bad swapchain) and ENABLE_GAMESCOPE_WSI=0 is not enough.",
+              options=["0", "1"]),
+    EnvVarDef("GAMESCOPE_MANGOAPP_SOCKET_DISABLE", "Gamescope", "enum", "",
+              "Read by gamescope itself (set it on the gamescope process): stops gamescope "
+              "from sending its per-frame data to mangoapp over the mangoapp socket. "
+              "Debug/compat switch, e.g. when mangoapp is not draining the socket.",
+              options=["0", "1"]),
     EnvVarDef("ENABLE_GAMESCOPE_WSI", "Gamescope", "enum", "",
               "Toggles gamescope's Vulkan WSI (VK_layer) integration for the wrapped game. "
               "Proton sets this to 1 automatically when it detects it's running under "
@@ -5594,9 +5961,10 @@ GAMESCOPE_FLAGS: List[GamescopeFlagDef] = [
 #
 #   vkd3d-low-latency   github.com/netborg-afps/vkd3d-low-latency
 #                       vkd3d-proton plus the same frame pacer, wired to the
-#                       Reflex API and waitable DXGI swapchains. NO Proton
-#                       switch — d3d12.dll / d3d12core.dll have to be replaced
-#                       inside a custom Proton build by hand.
+#                       Reflex API and waitable DXGI swapchains. Shipped in
+#                       proton-cachyos: PROTON_VKD3D_LOWLATENCY=1
+#                       (otherwise: replace d3d12.dll / d3d12core.dll inside a
+#                       custom Proton build by hand).
 #
 #   d7vk                github.com/WinterSnowfall/d7vk
 #                       D3D7/6/5/3 on top of DXVK's D3D9 backend. Standalone
@@ -5691,8 +6059,8 @@ FORK_ENV_VARS: List[EnvVarDef] = [
               "Only active when the game actually drives the pacer: it needs either the "
               "Nvidia Reflex API or a waitable DXGI swapchain. Confirm with PROTON_LOG=1 "
               "and look for the swapchain lines in the vkd3d log.\n"
-              "Proton: no switch — vkd3d-low-latency has to be installed by replacing "
-              "d3d12.dll and d3d12core.dll inside a custom Proton build. "
+              "Proton-CachyOS: enable the fork with PROTON_VKD3D_LOWLATENCY=1; other "
+              "Protons need d3d12.dll and d3d12core.dll replaced by hand. "
               "Syntax: VKD3D_LOW_LATENCY_OFFSET=100 %command%",
               placeholder="e.g. 100 (microseconds, 0-500)"),
 ]
@@ -5739,7 +6107,7 @@ LOG_ENV_OFF: Dict[str, str] = {
 LOG_ENV_UNSET_OFF = ("VK_LOADER_DEBUG", "FLM_STATS", "FLM_CSV",
                      "VKD3D_LOG_BUFFERED", "DXVK_DEBUG")
 LOG_VKD3D_CONFIG_FLAGS = ("breadcrumbs", "breadcrumbs_sync", "breadcrumbs_trace",
-                          "log_memory_budget")
+                          "log_memory_budget", "fault", "pipeline_library_log")
 
 # Sidebar display order for the Environment tab. Forks sit right under the
 # upstream project they patch.
