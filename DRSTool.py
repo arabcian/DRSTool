@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QComboBox, QGroupBox, QTabWidget,
     QButtonGroup, QFormLayout,
     QStyledItemDelegate, QStyle, QToolButton, QMenu,
+    QDialog, QDoubleSpinBox, QTableWidget, QTableWidgetItem, QHeaderView,
 )
 import shutil
 import glob
@@ -359,6 +360,8 @@ ROLE_KIND  = Qt.UserRole + 10   # "header" | "item" | "special"
 ROLE_VALUE = Qt.UserRole + 11   # short value preview shown on the right
 ROLE_SET   = Qt.UserRole + 12   # bool: item is part of the output
 ROLE_COUNT = Qt.UserRole + 13   # header: how many of its items are set
+ROLE_FAV = Qt.UserRole + 14     # bool: item is a favorite
+ROLE_UNAVAIL = Qt.UserRole + 15  # str: why the system can't run it ("" = fine)
 
 
 class SidebarDelegate(QStyledItemDelegate):
@@ -438,20 +441,33 @@ class SidebarDelegate(QStyledItemDelegate):
             p.drawText(QRect(r.right() - 10 - val_w, r.top(), val_w, r.height()),
                        Qt.AlignRight | Qt.AlignVCenter, shown)
 
+        fav = bool(index.data(ROLE_FAV))
+        unavail = bool(index.data(ROLE_UNAVAIL))
         nf = QFont(base_font)
         if is_set:
             nf.setWeight(QFont.DemiBold)
+        if unavail:
+            nf.setItalic(True)
         p.setFont(nf)
         nfm = QFontMetrics(nf)
         name_w = avail - (val_w + 12 if val_w else 0)
         if kind == "special":
             color = QColor(T["warn"])
+        elif unavail and not is_set:
+            color = QColor(T["muted"])
+            color.setAlpha(150)
         elif is_set or selected:
             color = QColor(T["text"])
         else:
             color = QColor(T["text2"])
+        text_x = pad_l
+        if fav:
+            p.setPen(QColor("#e0b341"))
+            p.drawText(QRect(pad_l, r.top(), 14, r.height()), Qt.AlignLeft | Qt.AlignVCenter, "\u2605")
+            text_x += 15
+            name_w -= 15
         p.setPen(color)
-        p.drawText(QRect(pad_l, r.top(), max(0, name_w), r.height()),
+        p.drawText(QRect(text_x, r.top(), max(0, name_w), r.height()),
                    Qt.AlignLeft | Qt.AlignVCenter,
                    nfm.elidedText(name, Qt.ElideRight, max(0, name_w)))
         p.restore()
@@ -483,12 +499,16 @@ def make_header_item(text: str, count: int = 0) -> QListWidgetItem:
 
 
 def make_list_item(text: str, key, is_set: bool = False, value: str = "",
-                   kind: str = "item") -> QListWidgetItem:
+                   kind: str = "item", fav: bool = False, unavail: str = "") -> QListWidgetItem:
     item = QListWidgetItem(text)
     item.setData(Qt.UserRole, key)
     item.setData(ROLE_KIND, kind)
     item.setData(ROLE_SET, is_set)
     item.setData(ROLE_VALUE, value)
+    item.setData(ROLE_FAV, fav)
+    item.setData(ROLE_UNAVAIL, unavail)
+    if unavail:
+        item.setToolTip("Not supported here: " + unavail)
     return item
 
 
@@ -2708,6 +2728,12 @@ class OutputBarWidget(QWidget):
         copy_btn.clicked.connect(lambda: self._copy_all(steam=False))
         col.addWidget(copy_btn)
 
+        steam_btn = QPushButton("Steam line")
+        steam_btn.setStyleSheet(self._btn_ss_quiet)
+        steam_btn.setToolTip("Copy  env … gamescope … -- %command%  for Steam's launch options")
+        steam_btn.clicked.connect(self._copy_steam_env)
+        col.addWidget(steam_btn)
+
         self._save_profile_btn = QPushButton("Save")
         self._save_profile_btn.setStyleSheet(self._btn_ss_quiet)
         self._save_profile_btn.setEnabled(False)
@@ -2808,6 +2834,17 @@ class OutputBarWidget(QWidget):
             self._show_feedback("Copied Steam launch options" if steam else "Copied launch string")
         else:
             self._show_feedback("Nothing to copy yet")
+
+    def _copy_steam_env(self):
+        win = self.window()
+        if not hasattr(win, "collect_launch_payload"):
+            return self._copy_all(steam=True)
+        p = win.collect_launch_payload()
+        if not p["env"] and not p["gs_cmd"]:
+            self._show_feedback("Nothing to copy yet")
+            return
+        QApplication.clipboard().setText(build_launch_line(p, "%command%", True))
+        self._show_feedback("Copied: env … gamescope … -- %command%")
 
     def _save_to_profile(self):
         current = self.settings_manager.get_current_profile()
@@ -3062,6 +3099,10 @@ QPushButton:pressed{
 
         self._clear_layout(self._control_layout)
         self._remove_btn.hide()
+        _why = drs_unavailable(s)
+        if _why:
+            self._control_layout.addWidget(unavail_banner(
+                _why, lambda: _set_layout_enabled(self._control_layout, True, 1)))
 
         if s.type == "enum":
             self._build_enum_control(s, cur)
@@ -3082,6 +3123,8 @@ QPushButton:pressed{
         # when a QVBoxLayout with no stretch item lives inside a
         # setWidgetResizable(True) QScrollArea).
         self._control_layout.addStretch()
+        if _why and cur is None:
+            _set_layout_enabled(self._control_layout, False, 1)
 
         if cur is not None:
             self._remove_btn.show()
@@ -3597,7 +3640,8 @@ class ArchListWidget(QListWidget):
         self.currentItemChanged.connect(self._on_current_item_changed)
         setup_sidebar_list(self)
 
-    def populate(self, archs: List[GPUArch], selected_arch: Optional[GPUArch]):
+    def populate(self, archs: List[GPUArch], selected_arch: Optional[GPUArch],
+                 only_set: bool = False, only_fav: bool = False):
         """Fill the list with architecture items, highlighting the selected one."""
         # Block currentItemChanged for the rebuild - clear()+re-add can fire
         # spurious selection-changed signals we don't want driving navigation.
@@ -3606,8 +3650,13 @@ class ArchListWidget(QListWidget):
         self.addItem(make_header_item("GPU architectures", 1 if selected_arch else 0))
         for arch in archs:
             is_sel = bool(selected_arch and arch.code == selected_arch.code)
+            if only_set and not is_sel:
+                continue
+            if only_fav and not FAVS.is_fav("arch", arch.code):
+                continue
             self.addItem(make_list_item(f"{arch.name}  ·  {arch.arch}", arch,
-                                        is_set=is_sel, value=arch.code))
+                                        is_set=is_sel, value=arch.code,
+                                        fav=FAVS.is_fav("arch", arch.code)))
         self.blockSignals(False)
 
     def _on_item_clicked(self, item):
@@ -6066,10 +6115,34 @@ FORK_ENV_VARS: List[EnvVarDef] = [
 ]
 
 
+OVERLAY_ENV_VARS: List[EnvVarDef] = [
+    EnvVarDef("MANGOHUD", "MangoHud / vkBasalt", "enum", "",
+              "Load the MangoHud Vulkan layer for this process (alternative to the `mangohud` "
+              "command prefix). Options come from MANGOHUD_CONFIG / MANGOHUD_CONFIGFILE or "
+              "~/.config/MangoHud/MangoHud.conf.", options=["0", "1"]),
+    EnvVarDef("MANGOHUD_CONFIG", "MangoHud / vkBasalt", "string", "",
+              "Inline MangoHud options, comma separated (fps,cpu_temp,position=top-left). "
+              "Overrides the config file for the keys it sets. Use the MangoHud builder "
+              "(Extra Tools) to generate it.", placeholder="fps,frametime,position=top-left"),
+    EnvVarDef("MANGOHUD_CONFIGFILE", "MangoHud / vkBasalt", "string", "",
+              "Path of an explicit MangoHud config file instead of the per-user default.",
+              placeholder="/home/you/.config/MangoHud/game.conf"),
+    EnvVarDef("MANGOHUD_DLSYM", "MangoHud / vkBasalt", "enum", "",
+              "Hook dlsym so MangoHud also works with OpenGL / when injected via LD_PRELOAD. "
+              "The `mangohud --dlsym` prefix sets this for you.", options=["0", "1"]),
+    EnvVarDef("VKBASALT_CONFIG_FILE", "MangoHud / vkBasalt", "string", "",
+              "Path of the vkBasalt config file (default: ~/.config/vkBasalt/vkBasalt.conf). "
+              "Pair with ENABLE_VKBASALT=1.", placeholder="/home/you/.config/vkBasalt/game.conf"),
+    EnvVarDef("VKBASALT_LOG_LEVEL", "MangoHud / vkBasalt", "enum", "",
+              "vkBasalt log verbosity.", options=["trace", "debug", "info", "warn", "error", "none"]),
+    EnvVarDef("VKBASALT_LOG_FILE", "MangoHud / vkBasalt", "string", "",
+              "Write the vkBasalt log to this file instead of stderr.", placeholder="/tmp/vkbasalt.log"),
+]
+
 ALL_ENV_VARS = (DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS + NVIDIA_PRIME_ENV_VARS +
                  PROTON_ENV_VARS + WINE_ENV_VARS + DXVK_NVAPI_ENV_VARS + NVPRESENT_ENV_VARS +
                  SYS_ENV_VARS + FLM_ENV_VARS + GAMESCOPE_ENV_VARS +
-                 FORK_ENV_VARS)
+                 FORK_ENV_VARS + OVERLAY_ENV_VARS)
 
 # ── Master logging toggle ────────────────────────────────────────────────────
 # ON  = every logging switch enabled, every verbosity picker at ERROR level
@@ -6114,7 +6187,7 @@ LOG_VKD3D_CONFIG_FLAGS = ("breadcrumbs", "breadcrumbs_sync", "breadcrumbs_trace"
 ENV_CATEGORY_ORDER = [
     "DXVK", "DXVK Forks", "VKD3D-Proton", "VKD3D Forks", "DXVK-NVAPI",
     "NVIDIA __GL", "NVIDIA PRIME", "NVIDIA Smooth Motion",
-    "Proton", "Wine", "System / Loader", "vk_flip_meter", "Gamescope",
+    "Proton", "Wine", "System / Loader", "MangoHud / vkBasalt", "vk_flip_meter", "Gamescope",
 ]
 
 
@@ -6143,6 +6216,8 @@ class EnvVarsWidget(QListWidget):
         # { var_name: current_value_str }  — single source of truth
         self._values: Dict[str, str] = {}
         self._gamescope_on = False
+        self.only_set = False
+        self.only_fav = False
 
         self.setSelectionMode(QListWidget.SingleSelection)
         self.itemClicked.connect(self._on_item_clicked)
@@ -6195,6 +6270,11 @@ class EnvVarsWidget(QListWidget):
             else:
                 matching = env_list
                 show_gs = cat_label == "Gamescope"
+            if self.only_set or self.only_fav:
+                matching = [ev for ev in matching
+                            if (not self.only_set or ev.name in self._values)
+                            and (not self.only_fav or FAVS.is_fav("env", ev.name))]
+                show_gs = show_gs and not self.only_fav and (not self.only_set or self._gamescope_on)
             if not matching and not show_gs:
                 continue
 
@@ -6213,7 +6293,9 @@ class EnvVarsWidget(QListWidget):
             for ev in matching:
                 val = self._values.get(ev.name)
                 self.addItem(make_list_item(ev.name, ev.name,
-                                            is_set=val is not None, value=val or ""))
+                                            is_set=val is not None, value=val or "",
+                                            fav=FAVS.is_fav("env", ev.name),
+                                            unavail=env_unavailable(ev)))
 
         if current_name:
             for i in range(self.count()):
@@ -6523,6 +6605,10 @@ QPushButton:pressed{ background:#a73434; }
         self._desc_label.updateGeometry()
         self.layout().activate()
         self._clear_layout(self._control_layout)
+        _why = env_unavailable(ev)
+        if _why:
+            self._control_layout.addWidget(unavail_banner(
+                _why, lambda: _set_layout_enabled(self._control_layout, True, 1)))
 
         if ev.vtype == "enum" and ev.options:
             self._build_enum(ev, cur)
@@ -6539,6 +6625,8 @@ QPushButton:pressed{ background:#a73434; }
         # short controls (e.g. a single line edit) get vertically centered
         # inside the scroll area instead of sitting at the top.
         self._control_layout.addStretch()
+        if _why and not cur:
+            _set_layout_enabled(self._control_layout, False, 1)
 
     def _clear_layout(self, layout):
         while layout.count():
@@ -6657,6 +6745,10 @@ QPushButton:checked{
             btn = QPushButton(flag)
             btn.setCheckable(True)
             btn.setChecked(flag in active)
+            _fw = vkd3d_flag_unavailable(flag)
+            if _fw and flag not in active:
+                btn.setEnabled(False)
+                btn.setToolTip("Not supported here: " + _fw)
             btn.setFixedHeight(30)
             self._apply_flag_btn_style(btn)
             btn.toggled.connect(lambda checked, f=flag: self._on_vkd3d_flag_toggled())
@@ -6749,6 +6841,10 @@ QPushButton:checked{
                 w.setMinimumWidth(90)
                 w.textChanged.connect(lambda _t: self._on_dxvkcfg_text())
             self._dxvkcfg_widgets[key] = w
+            _kw = dxvk_cfg_unavailable(key)
+            if _kw and not val:
+                w.setEnabled(False)
+                w.setToolTip("Not supported here: " + _kw)
             d = QLabel(desc)
             d.setWordWrap(True)
             d.setStyleSheet("color:#a7afbc; font-size:11px;")
@@ -6976,6 +7072,8 @@ class SettingsListWidget(QListWidget):
         self.currentItemChanged.connect(self._on_current_item_changed)
         setup_sidebar_list(self)
         self._by_id: Dict[str, Setting] = {}
+        self.only_set = False
+        self.only_fav = False
 
     def populate(self, settings: List[Setting], current_state: Dict[str, str], filter_text: str = ""):
         # Block selection signals for the rebuild (see EnvVarsWidget.populate).
@@ -6993,6 +7091,10 @@ class SettingsListWidget(QListWidget):
                 filter_lower in s.desc.lower()
             ):
                 continue
+            if self.only_set and s.id not in current_state:
+                continue
+            if self.only_fav and not FAVS.is_fav("drs", s.id):
+                continue
             categories.setdefault(s.cat, []).append(s)
 
         for cat, items in categories.items():
@@ -7002,7 +7104,8 @@ class SettingsListWidget(QListWidget):
                 cur = current_state.get(s.id)
                 self.addItem(make_list_item(
                     s.name, s.id, is_set=cur is not None,
-                    value=_fmt_drs_value(s, cur) if cur is not None else ""))
+                    value=_fmt_drs_value(s, cur) if cur is not None else "",
+                    fav=FAVS.is_fav("drs", s.id), unavail=drs_unavailable(s)))
         self.blockSignals(False)
 
     def refresh_colors(self, current_state: Dict[str, str]):
@@ -11394,7 +11497,2947 @@ QTabBar::tab:hover { color: #c8cdd8; }
         ngx_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
         tabs.addTab(ngx_scroll, "DLSS Updater")
 
+        # ── feature pack: linter / system / prefix doctor / overlays ──────────
+        self._tabs = tabs
+        self.linter = LinterWidget()
+        tabs.addTab(self.linter, "Linter")
+        self.sysinfo = SystemInfoWidget()
+        tabs.addTab(self.sysinfo, "System")
+        self.prefix_doctor = PrefixDoctorWidget()
+        tabs.addTab(self.prefix_doctor, "Prefix Doctor")
+        self.mangohud = MangoHudBuilder()
+        tabs.addTab(self.mangohud, "MangoHud")
+        self.vkbasalt = VkBasaltBuilder()
+        tabs.addTab(self.vkbasalt, "vkBasalt")
+
         layout.addWidget(tabs)
+
+    def show_tab(self, title: str) -> bool:
+        for i in range(self._tabs.count()):
+            if self._tabs.tabText(i) == title:
+                self._tabs.setCurrentIndex(i)
+                return True
+        return False
+
+
+# ============================================================================
+# Feature pack: favorites, system probe, availability greying, consistency
+# linter.  (Everything below is self-contained and only touches the rest of
+# the program through the small hooks in the list widgets / MainWindow.)
+# ============================================================================
+
+import subprocess
+
+ROLE_FAV = Qt.UserRole + 14       # bool: item is a favorite
+ROLE_UNAVAIL = Qt.UserRole + 15   # str: why the item is unsupported ("" = fine)
+
+
+# ----------------------------------------------------------------------------
+# Favorites (persisted in QSettings, shared by DRS / Env / Arch lists)
+# ----------------------------------------------------------------------------
+
+class FavoritesStore(QObject):
+    changed = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self._data: Optional[Dict[str, List[str]]] = None
+
+    def _load(self) -> Dict[str, List[str]]:
+        if self._data is None:
+            self._data = {}
+            try:
+                qs = QSettings(APP_ID, APP_ID)
+                for kind in ("drs", "env", "arch"):
+                    v = qs.value(f"favorites/{kind}", [])
+                    if isinstance(v, str):
+                        v = [v] if v else []
+                    self._data[kind] = [str(x) for x in (v or [])]
+            except Exception:
+                self._data = {}
+        return self._data
+
+    def _save(self):
+        try:
+            qs = QSettings(APP_ID, APP_ID)
+            for kind, lst in self._load().items():
+                qs.setValue(f"favorites/{kind}", list(lst))
+        except Exception:
+            pass
+
+    def is_fav(self, kind: str, key: str) -> bool:
+        return key in self._load().get(kind, [])
+
+    def all(self, kind: str) -> List[str]:
+        return list(self._load().get(kind, []))
+
+    def toggle(self, kind: str, key: str) -> bool:
+        lst = self._load().setdefault(kind, [])
+        if key in lst:
+            lst.remove(key)
+            now = False
+        else:
+            lst.append(key)
+            now = True
+        self._save()
+        self.changed.emit()
+        return now
+
+
+FAVS = FavoritesStore()
+
+
+def install_fav_menu(lw: QListWidget, kind: str, key_of=None) -> None:
+    """Right-click -> add/remove favorite on any sidebar list item."""
+    lw.setContextMenuPolicy(Qt.CustomContextMenu)
+
+    def _menu(pos):
+        item = lw.itemAt(pos)
+        if item is None or item.data(ROLE_KIND) == "header":
+            return
+        key = item.data(Qt.UserRole)
+        if key_of is not None:
+            key = key_of(key)
+        if not key or (isinstance(key, str) and key.startswith("__")):
+            return
+        m = QMenu(lw)
+        a = m.addAction("Remove from favorites" if FAVS.is_fav(kind, key)
+                        else "★  Add to favorites   (Ctrl+D)")
+        if m.exec(lw.viewport().mapToGlobal(pos)) is a:
+            FAVS.toggle(kind, key)
+
+    lw.customContextMenuRequested.connect(_menu)
+
+
+# ----------------------------------------------------------------------------
+# System probe: NVIDIA driver version + Vulkan device extensions
+# ----------------------------------------------------------------------------
+
+@dataclass
+class VkGpu:
+    name: str = ""
+    vendor_id: int = 0
+    driver: str = ""
+    exts: set = field(default_factory=set)
+
+    @property
+    def is_nvidia(self) -> bool:
+        return self.vendor_id == 0x10DE or "nvidia" in self.name.lower()
+
+
+@dataclass
+class SysInfo:
+    probed: bool = False
+    nv_driver: str = ""               # "595.58.03" or ""
+    nv_kernel_flavor: str = ""        # "Open Kernel Module" / "proprietary" / ""
+    nv_gpus: List[str] = field(default_factory=list)
+    vk_ok: bool = False               # vulkaninfo ran and produced devices
+    vk_gpus: List[VkGpu] = field(default_factory=list)
+    vk_instance_exts: set = field(default_factory=set)
+    vulkaninfo_error: str = ""
+    session: str = ""
+    ntsync_dev: bool = False
+    tools: Dict[str, str] = field(default_factory=dict)
+    raw_version: str = ""
+
+    @property
+    def nv_major(self) -> int:
+        m = re.match(r"(\d+)", self.nv_driver or "")
+        return int(m.group(1)) if m else 0
+
+    @property
+    def has_nvidia(self) -> bool:
+        return bool(self.nv_driver) or any(g.is_nvidia for g in self.vk_gpus)
+
+    @property
+    def nvidia_known_absent(self) -> bool:
+        """Probe finished and positively found no NVIDIA anything."""
+        return self.probed and self.vk_ok and not self.has_nvidia
+
+    def device_exts(self, nvidia_first: bool = True) -> set:
+        """Extensions of the NVIDIA device if there is one, else the union."""
+        if nvidia_first:
+            nv = [g for g in self.vk_gpus if g.is_nvidia]
+            if nv:
+                out = set()
+                for g in nv:
+                    out |= g.exts
+                return out
+        out = set()
+        for g in self.vk_gpus:
+            out |= g.exts
+        return out
+
+    def has_ext(self, ext: str) -> Optional[bool]:
+        """True/False if known, None if the probe could not tell."""
+        if not self.vk_ok:
+            return None
+        return ext in self.device_exts() or ext in self.vk_instance_exts
+
+
+def _run(cmd: List[str], timeout: float = 15.0) -> str:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           env={**os.environ, "LC_ALL": "C"})
+        return r.stdout or ""
+    except Exception:
+        return ""
+
+
+def parse_vulkaninfo(text: str):
+    """-> (instance_exts:set, [VkGpu]).  Tolerant line parser for `vulkaninfo`."""
+    ext_re = re.compile(r"^\s*(VK_[A-Za-z0-9_]+)\s*:\s*extension revision", re.M)
+    # split into the instance section and per-GPU sections
+    parts = re.split(r"^GPU(\d+):\s*$", text, flags=re.M)
+    head = parts[0]
+    inst = set(ext_re.findall(head))
+    gpus: List[VkGpu] = []
+    for i in range(1, len(parts) - 1, 2):
+        body = parts[i + 1]
+        g = VkGpu()
+        m = re.search(r"deviceName\s*=\s*(.+)", body)
+        if m:
+            g.name = m.group(1).strip()
+        m = re.search(r"vendorID\s*=\s*(0x[0-9a-fA-F]+|\d+)", body)
+        if m:
+            try:
+                g.vendor_id = int(m.group(1), 0)
+            except ValueError:
+                pass
+        m = re.search(r"driverInfo\s*=\s*(.+)", body)
+        if m:
+            g.driver = m.group(1).strip()
+        g.exts = set(ext_re.findall(body))
+        gpus.append(g)
+    return inst, gpus
+
+
+def probe_system() -> SysInfo:
+    si = SysInfo()
+    # --- NVIDIA kernel/driver version -------------------------------------
+    try:
+        raw = Path("/proc/driver/nvidia/version").read_text(errors="replace")
+        si.raw_version = raw.strip()
+        m = re.search(r"NVRM version:\s*(.*?)\s+(\d+\.\d+(?:\.\d+)?)\s", raw)
+        if m:
+            si.nv_driver = m.group(2)
+            si.nv_kernel_flavor = "Open Kernel Module" if "Open" in m.group(1) else "proprietary"
+    except OSError:
+        pass
+    smi = shutil.which("nvidia-smi")
+    if smi:
+        out = _run([smi, "--query-gpu=driver_version,name", "--format=csv,noheader"], 8)
+        for ln in out.splitlines():
+            if "," in ln:
+                ver, name = [x.strip() for x in ln.split(",", 1)]
+                si.nv_gpus.append(name)
+                if not si.nv_driver and re.match(r"\d+\.\d+", ver):
+                    si.nv_driver = ver
+    # --- Vulkan -------------------------------------------------------------
+    vi = shutil.which("vulkaninfo")
+    if vi:
+        out = _run([vi], 25)
+        inst, gpus = parse_vulkaninfo(out)
+        if gpus:
+            si.vk_gpus, si.vk_instance_exts, si.vk_ok = gpus, inst, True
+        else:
+            si.vulkaninfo_error = "vulkaninfo produced no device list"
+    else:
+        si.vulkaninfo_error = "vulkaninfo not installed (dev-util/vulkan-tools)"
+    # --- misc ---------------------------------------------------------------
+    si.session = os.environ.get("XDG_SESSION_TYPE", "") or (
+        "wayland" if os.environ.get("WAYLAND_DISPLAY") else "x11" if os.environ.get("DISPLAY") else "")
+    si.ntsync_dev = Path("/dev/ntsync").exists()
+    for t in ("gamescope", "mangohud", "vulkaninfo", "nvidia-smi", "wine", "zstd"):
+        p = shutil.which(t)
+        if p:
+            si.tools[t] = p
+    si.probed = True
+    return si
+
+
+class _ProbeThread(QThread):
+    done = Signal(object)
+
+    def run(self):
+        try:
+            self.done.emit(probe_system())
+        except Exception as e:                       # never kill the GUI for a probe
+            si = SysInfo(probed=True)
+            si.vulkaninfo_error = f"probe failed: {e}"
+            self.done.emit(si)
+
+
+class SysHub(QObject):
+    """Holds the latest SysInfo and re-probes in the background."""
+    info_changed = Signal(object)
+
+    def __init__(self):
+        super().__init__()
+        self.info = SysInfo()
+        self.enabled = True       # "grey out unsupported options"
+        self._thread: Optional[_ProbeThread] = None
+        try:
+            self.enabled = QSettings(APP_ID, APP_ID).value("sys/grey_unsupported", True, type=bool)
+        except Exception:
+            pass
+
+    def set_enabled(self, on: bool):
+        self.enabled = on
+        try:
+            QSettings(APP_ID, APP_ID).setValue("sys/grey_unsupported", on)
+        except Exception:
+            pass
+        self.info_changed.emit(self.info)
+
+    def refresh(self):
+        if self._thread is not None and self._thread.isRunning():
+            return
+        self._thread = _ProbeThread()
+        self._thread.done.connect(self._on_done)
+        self._thread.start()
+
+    def _on_done(self, info):
+        self.info = info
+        self.info_changed.emit(info)
+
+    def shutdown(self):
+        if self._thread is not None and self._thread.isRunning():
+            self._thread.wait(30000)
+
+
+SYSHUB = SysHub()
+
+
+# ----------------------------------------------------------------------------
+# Availability rules ("why is this greyed out?").  Deliberately conservative:
+# an option is only flagged when the probe POSITIVELY says it cannot work.
+# Unknown probe data never greys anything out.
+# ----------------------------------------------------------------------------
+
+_NV_ONLY_PREFIXES = ("__GL_", "__NV_", "DXVK_NVAPI_", "NVPRESENT_", "PROTON_NVIDIA_",
+                     "DISABLE_DXVK_NVAPI_", "__GLX_VENDOR")
+_NV_ONLY_NAMES = {"PROTON_ENABLE_NVAPI", "PROTON_DISABLE_NVAPI", "PROTON_FORCE_NVAPI",
+                  "PROTON_HIDE_NVIDIA_GPU", "PROTON_NVAPI_BYPASS", "PROTON_ENABLE_NGX_UPDATER",
+                  "PROTON_DLSS_UPGRADE", "PROTON_DLSS_INDICATOR", "DXVK_ENABLE_NVAPI"}
+
+# env var / dxvk.conf key / vkd3d flag  ->  required Vulkan extension
+_EXT_REQ_ENV = {"DXVK_NVAPI_VKREFLEX": "VK_NV_low_latency2"}
+_EXT_REQ_DXVK_CFG = {
+    "dxvk.enableDescriptorHeap": "VK_EXT_descriptor_heap",
+    "dxvk.enableDescriptorBuffer": "VK_EXT_descriptor_buffer",
+}
+_EXT_REQ_VKD3D_FLAG = {"descriptor_heap": "VK_EXT_descriptor_heap"}
+
+
+def _sys_active() -> Optional[SysInfo]:
+    return SYSHUB.info if (SYSHUB.enabled and SYSHUB.info.probed) else None
+
+
+def _need_ext(si: SysInfo, ext: str) -> str:
+    if si.has_ext(ext) is False:
+        return f"{ext} is not exposed by this system's Vulkan driver"
+    return ""
+
+
+def env_unavailable(ev: "EnvVarDef") -> str:
+    si = _sys_active()
+    if si is None:
+        return ""
+    n = ev.name
+    if (n in _NV_ONLY_NAMES or n.startswith(_NV_ONLY_PREFIXES)) and si.nvidia_known_absent:
+        return "No NVIDIA driver / GPU detected on this system"
+    ext = _EXT_REQ_ENV.get(n)
+    return _need_ext(si, ext) if ext else ""
+
+
+def drs_unavailable(s: "Setting") -> str:
+    si = _sys_active()
+    if si is None:
+        return ""
+    if si.nvidia_known_absent:
+        return "DRS settings are read by dxvk-nvapi from the NVIDIA driver — none detected here"
+    return ""
+
+
+def vkd3d_flag_unavailable(flag: str) -> str:
+    si = _sys_active()
+    ext = _EXT_REQ_VKD3D_FLAG.get(flag)
+    return _need_ext(si, ext) if (si and ext) else ""
+
+
+def dxvk_cfg_unavailable(key: str) -> str:
+    si = _sys_active()
+    ext = _EXT_REQ_DXVK_CFG.get(key)
+    return _need_ext(si, ext) if (si and ext) else ""
+
+
+def unavail_banner(why: str, on_override=None) -> QWidget:
+    """Amber note shown on top of an editor whose option the system can't run."""
+    box = QFrame()
+    box.setStyleSheet("QFrame{background:rgba(210,160,60,0.10);border:1px solid %s;"
+                      "border-radius:5px;}" % T['warn'])
+    lay = QHBoxLayout(box)
+    lay.setContentsMargins(10, 6, 10, 6)
+    lbl = QLabel(f"⚠  Not supported here: {why}")
+    lbl.setWordWrap(True)
+    lbl.setStyleSheet(f"color:{T['warn']}; font-size:12px; border:none; background:transparent;")
+    lay.addWidget(lbl, 1)
+    if on_override is not None:
+        b = QPushButton("Edit anyway")
+        b.setCursor(Qt.PointingHandCursor)
+        b.setStyleSheet(f"QPushButton{{color:{T['text']};background:{T['raised']};"
+                        f"border:1px solid {T['border_hi']};border-radius:4px;padding:2px 10px;}}"
+                        f"QPushButton:hover{{border-color:{T['warn']};}}")
+        b.clicked.connect(lambda: (on_override(), box.hide()))
+        lay.addWidget(b)
+    return box
+
+
+# ----------------------------------------------------------------------------
+# Consistency linter
+# ----------------------------------------------------------------------------
+
+@dataclass
+class LintIssue:
+    sev: str                       # "error" | "warn" | "info"
+    code: str
+    msg: str
+    involved: List[str] = field(default_factory=list)
+    # list of ("env_unset", NAME) | ("env_set", NAME, VALUE) | ("drs_unset", ID)
+    # | ("gamescope_off",)
+    fixes: List[tuple] = field(default_factory=list)
+    fix_label: str = "Fix"
+
+
+_FALSY = {"", "0", "false", "no", "off", "none"}
+
+
+def _on(env: Dict[str, str], name: str) -> bool:
+    return name in env and str(env[name]).strip().lower() not in _FALSY
+
+
+def _driver_tuple(v: str):
+    try:
+        return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
+    except Exception:
+        return ()
+
+
+def lint_config(env: Dict[str, str], drs: Dict[str, str], arch_code: str,
+                gs_on: bool, gs_flags: Dict[str, str], mangohud: bool,
+                si: Optional[SysInfo] = None) -> List[LintIssue]:
+    """Pure function: configuration in, list of issues out (unit-testable)."""
+    si = si or SysInfo()
+    out: List[LintIssue] = []
+
+    def add(sev, code, msg, involved=(), fixes=(), label="Fix"):
+        out.append(LintIssue(sev, code, msg, list(involved), list(fixes), label))
+
+    def unset(*names):
+        return [("env_unset", n) for n in names]
+
+    nvapi_cfg = bool(arch_code or drs or any(k.startswith("DXVK_NVAPI_") for k in env))
+
+    # Does the user steer rendering to a non-NVIDIA device?
+    flt = (env.get("DXVK_FILTER_DEVICE_NAME", "") + " " + env.get("VKD3D_FILTER_DEVICE_NAME", "")
+           + " " + env.get("VKD3D_VULKAN_DEVICE", "")).lower()
+    amd_target = bool(re.search(r"amd|radeon|rdna|intel|arc\b", flt)) or "DRI_PRIME" in env and not _on(env, "__NV_PRIME_RENDER_OFFLOAD")
+    nv_render = (si.has_nvidia or nvapi_cfg) and not amd_target
+
+    # 1. PROTON_NVIDIA_LIBS + WoW64
+    if _on(env, "PROTON_NVIDIA_LIBS") and _on(env, "PROTON_USE_WOW64"):
+        sev = "info" if _on(env, "PROTON_NVIDIA_LIBS_NO_32BIT") else "error"
+        add(sev, "nvlibs-wow64",
+            "PROTON_NVIDIA_LIBS is incompatible with PROTON_USE_WOW64 (the 32-bit nvidia-libs "
+            "shims have no place to load in a WoW64 process)."
+            + (" PROTON_NVIDIA_LIBS_NO_32BIT is set, so only the 64-bit shims load — likely OK."
+               if sev == "info" else ""),
+            ["PROTON_NVIDIA_LIBS", "PROTON_USE_WOW64"],
+            unset("PROTON_USE_WOW64") if sev == "error" else [], "Unset WOW64")
+        if sev == "error":
+            out[-1].fixes = unset("PROTON_USE_WOW64")
+            add("info", "nvlibs-wow64-alt", "Alternative: keep WoW64 and drop the NVIDIA shims instead.",
+                ["PROTON_NVIDIA_LIBS"], unset("PROTON_NVIDIA_LIBS", "PROTON_NVIDIA_LIBS_NO_32BIT"),
+                "Drop shims")
+    # 2. Sub-switches that do nothing without the master
+    if _on(env, "PROTON_NVIDIA_LIBS_NO_32BIT") and not _on(env, "PROTON_NVIDIA_LIBS"):
+        add("warn", "nvlibs-no32-orphan",
+            "PROTON_NVIDIA_LIBS_NO_32BIT only restricts PROTON_NVIDIA_LIBS — which is not enabled.",
+            ["PROTON_NVIDIA_LIBS_NO_32BIT"], unset("PROTON_NVIDIA_LIBS_NO_32BIT"))
+    # 3. FSR4 on NVIDIA
+    fsr4 = [n for n in ("PROTON_FSR4_UPGRADE", "PROTON_FSR4_INDICATOR", "PROTON_FFX4_UPGRADE")
+            if _on(env, n)]
+    if fsr4 and nv_render:
+        add("warn", "fsr4-nvidia",
+            "FSR 4 needs an AMD RDNA3/4 GPU; on the NVIDIA GPU these variables do nothing. "
+            "Use PROTON_DLSS_UPGRADE instead (or point the game at the AMD iGPU with "
+            "DXVK_FILTER_DEVICE_NAME).", fsr4, unset(*fsr4), "Unset FSR4")
+    # 4. HDR WSI layer + new drivers
+    drv = _driver_tuple(si.nv_driver)
+    if _on(env, "ENABLE_HDR_WSI") and drv and drv[0] >= 595 and not amd_target:
+        add("warn", "hdr-wsi-595",
+            f"ENABLE_HDR_WSI is only needed on NVIDIA drivers older than 595; this system runs "
+            f"{si.nv_driver}, which has native HDR WSI — the extra layer is redundant and can "
+            f"misbehave.", ["ENABLE_HDR_WSI"], unset("ENABLE_HDR_WSI"), "Unset")
+    if _on(env, "ENABLE_HDR_WSI") and drv and drv[0] < 595 and not (
+            _on(env, "DXVK_HDR") or _on(env, "PROTON_ENABLE_HDR")):
+        add("info", "hdr-wsi-orphan",
+            "ENABLE_HDR_WSI has no visible effect without DXVK_HDR=1 / PROTON_ENABLE_HDR=1.",
+            ["ENABLE_HDR_WSI"])
+    # 5. HDR without a compositor path
+    hdr_on = _on(env, "DXVK_HDR") or _on(env, "PROTON_ENABLE_HDR")
+    if hdr_on:
+        if _on(env, "DXVK_NO_HDR"):
+            add("error", "hdr-contradiction", "DXVK_HDR and DXVK_NO_HDR are both set.",
+                ["DXVK_HDR", "DXVK_NO_HDR"], unset("DXVK_NO_HDR"), "Unset NO_HDR")
+        if not gs_on and not _on(env, "PROTON_ENABLE_WAYLAND") and si.session != "x11":
+            add("warn", "hdr-no-path",
+                "HDR output needs the Wayland driver (PROTON_ENABLE_WAYLAND=1) or gamescope with "
+                "--hdr-enabled; neither is configured.", ["PROTON_ENABLE_HDR", "DXVK_HDR"],
+                [("env_set", "PROTON_ENABLE_WAYLAND", "1")], "Enable Wayland")
+        if gs_on and "--hdr-enabled" not in gs_flags:
+            add("warn", "hdr-gs-flag", "HDR is requested but gamescope runs without --hdr-enabled.",
+                ["--hdr-enabled"])
+    # 6. Wayland vs forced X11
+    if _on(env, "PROTON_ENABLE_WAYLAND") and env.get("SDL_VIDEODRIVER", "").lower() == "x11":
+        add("warn", "wayland-vs-x11", "PROTON_ENABLE_WAYLAND=1 contradicts SDL_VIDEODRIVER=x11.",
+            ["PROTON_ENABLE_WAYLAND", "SDL_VIDEODRIVER"], unset("SDL_VIDEODRIVER"), "Unset SDL_VIDEODRIVER")
+    # 7. WineD3D replaces DXVK/VKD3D
+    if _on(env, "PROTON_USE_WINED3D"):
+        dead = [k for k in env if k.startswith(("DXVK_", "VKD3D_")) and k != "DXVK_NVAPI_DRS_SETTINGS"
+                and not k.startswith("DXVK_NVAPI_")]
+        if dead or nvapi_cfg:
+            add("warn", "wined3d-dxvk",
+                "PROTON_USE_WINED3D=1 replaces DXVK/VKD3D-Proton, so DXVK_*/VKD3D_*/NVAPI settings "
+                "have no effect.", ["PROTON_USE_WINED3D"] + dead[:6], unset("PROTON_USE_WINED3D"),
+                "Unset WINED3D")
+    if _on(env, "PROTON_NO_D3D12") and any(k.startswith("VKD3D_") for k in env):
+        add("info", "no-d3d12-vkd3d", "PROTON_NO_D3D12 disables VKD3D-Proton; VKD3D_* variables are unused.",
+            ["PROTON_NO_D3D12"])
+    if _on(env, "PROTON_NO_D3D11") and any(k.startswith("DXVK_") and not k.startswith("DXVK_NVAPI")
+                                           for k in env):
+        add("info", "no-d3d11-dxvk", "PROTON_NO_D3D11 is set; DXVK_* variables only apply to the "
+            "remaining D3D8/9/10 paths.", ["PROTON_NO_D3D11"])
+    # 8. NVAPI switches
+    if _on(env, "PROTON_ENABLE_NVAPI") and _on(env, "PROTON_DISABLE_NVAPI"):
+        add("error", "nvapi-both", "PROTON_ENABLE_NVAPI and PROTON_DISABLE_NVAPI are both set.",
+            ["PROTON_ENABLE_NVAPI", "PROTON_DISABLE_NVAPI"], unset("PROTON_DISABLE_NVAPI"), "Unset DISABLE")
+    if _on(env, "PROTON_ENABLE_NVAPI") and _on(env, "PROTON_HIDE_NVIDIA_GPU"):
+        add("warn", "nvapi-hidden",
+            "NVAPI is enabled but PROTON_HIDE_NVIDIA_GPU=1 reports the NVIDIA GPU as AMD — "
+            "NVAPI/DLSS will not find it. Set PROTON_HIDE_NVIDIA_GPU=0.",
+            ["PROTON_ENABLE_NVAPI", "PROTON_HIDE_NVIDIA_GPU"],
+            [("env_set", "PROTON_HIDE_NVIDIA_GPU", "0")], "Set HIDE=0")
+    if _on(env, "DXVK_ENABLE_NVAPI") is False and "DXVK_ENABLE_NVAPI" in env and nvapi_cfg:
+        add("warn", "nvapi-hack-off",
+            "DXVK_ENABLE_NVAPI=0 turns DXVK's NVAPI GPU spoof off, but DRS/arch settings expect "
+            "dxvk-nvapi to be active.", ["DXVK_ENABLE_NVAPI"])
+    # 9. Reflex / latency stacks
+    if _on(env, "DXVK_NVAPI_VKREFLEX") and _on(env, "DISABLE_DXVK_NVAPI_VKREFLEX"):
+        add("error", "vkreflex-both", "DXVK_NVAPI_VKREFLEX and DISABLE_DXVK_NVAPI_VKREFLEX are both set.",
+            ["DXVK_NVAPI_VKREFLEX", "DISABLE_DXVK_NVAPI_VKREFLEX"],
+            unset("DISABLE_DXVK_NVAPI_VKREFLEX"), "Unset DISABLE")
+    lat = [n for n in ("DXVK_NVAPI_VKREFLEX", "LOW_LATENCY_LAYER", "PROTON_DXVK_LOWLATENCY",
+                       "PROTON_VKD3D_LOWLATENCY") if _on(env, n)]
+    if len(lat) >= 2:
+        add("warn", "latency-stack",
+            "Several latency-reduction paths are active at once (" + ", ".join(lat) +
+            "); they all drive VK_NV_low_latency2 and can fight each other. Keep one.", lat)
+    # 10. Sync primitives
+    if _on(env, "PROTON_USE_NTSYNC") and _on(env, "PROTON_NO_NTSYNC"):
+        add("error", "ntsync-both", "PROTON_USE_NTSYNC and PROTON_NO_NTSYNC are both set.",
+            ["PROTON_USE_NTSYNC", "PROTON_NO_NTSYNC"], unset("PROTON_NO_NTSYNC"), "Unset NO_NTSYNC")
+    if _on(env, "PROTON_USE_NTSYNC") and si.probed and not si.ntsync_dev:
+        add("warn", "ntsync-missing",
+            "PROTON_USE_NTSYNC=1 but /dev/ntsync does not exist (modprobe ntsync, kernel ≥ 6.14).",
+            ["PROTON_USE_NTSYNC"])
+    # 11. PRIME / device selection
+    if _on(env, "__NV_PRIME_RENDER_OFFLOAD") and "DRI_PRIME" in env:
+        add("warn", "prime-mixed", "__NV_PRIME_RENDER_OFFLOAD (NVIDIA) and DRI_PRIME (Mesa) are both set; "
+            "use only the one that matches the GPU you want.", ["__NV_PRIME_RENDER_OFFLOAD", "DRI_PRIME"])
+    if re.search(r"amd|radeon", flt) and nvapi_cfg:
+        add("warn", "filter-amd-nvapi",
+            "A DXVK/VKD3D device filter selects an AMD GPU, but DRS/arch/NVAPI settings only mean "
+            "something on the NVIDIA GPU.", ["DXVK_FILTER_DEVICE_NAME"])
+    # 12. Frame limiters
+    limiters = {n: env[n] for n in ("DXVK_FRAME_RATE", "VKD3D_FRAME_RATE") if _on(env, n)}
+    if "--framerate-limit" in gs_flags:
+        limiters["gamescope --framerate-limit"] = gs_flags["--framerate-limit"]
+    if len(limiters) >= 2:
+        add("info", "multi-limiter", "More than one frame limiter is active ("
+            + ", ".join(f"{k}={v}" for k, v in limiters.items()) +
+            "); the lowest wins and pacing can get uneven.", list(limiters))
+    # 13. Async shader patch
+    if _on(env, "DXVK_ASYNC") or _on(env, "PROTON_DXVK_LLASYNC"):
+        add("info", "async-gpl",
+            "DXVK_ASYNC / PROTON_DXVK_LLASYNC only exist in dxvk-async/GE-style builds; upstream "
+            "DXVK 2.x uses Graphics Pipeline Libraries instead and ignores them.",
+            [n for n in ("DXVK_ASYNC", "PROTON_DXVK_LLASYNC") if n in env])
+    # 14. OptiScaler vs individual upgrades
+    ups = [n for n in ("PROTON_DLSS_UPGRADE", "PROTON_FSR3_UPGRADE", "PROTON_FSR4_UPGRADE",
+                       "PROTON_XESS_UPGRADE", "PROTON_FFX3_UPGRADE", "PROTON_FFX4_UPGRADE") if _on(env, n)]
+    if _on(env, "PROTON_USE_OPTISCALER") and ups:
+        add("info", "optiscaler-upgrades",
+            "With OptiScaler the PROTON_*_UPGRADE variables choose the DLL versions it injects; "
+            "make sure they are the upscalers you actually want OptiScaler to swap.", ups)
+    # 15. Gamescope WSI switches
+    if _on(env, "ENABLE_GAMESCOPE_WSI") and _on(env, "DISABLE_GAMESCOPE_WSI"):
+        add("error", "gswsi-both", "ENABLE_GAMESCOPE_WSI and DISABLE_GAMESCOPE_WSI are both set.",
+            ["ENABLE_GAMESCOPE_WSI", "DISABLE_GAMESCOPE_WSI"], unset("DISABLE_GAMESCOPE_WSI"), "Unset DISABLE")
+    gs_env = [k for k in env if k.startswith(("STEAM_GAMESCOPE_", "GAMESCOPE_"))]
+    if gs_env and not gs_on:
+        add("info", "gs-env-no-gs", "Gamescope-specific variables are set but gamescope itself is "
+            "disabled in the Gamescope builder.", gs_env[:5])
+    # 16. Overlays
+    if mangohud and not gs_on:
+        pass  # (the checkbox is greyed without gamescope, nothing to flag)
+    if mangohud and _on(env, "MANGOHUD"):
+        add("info", "mangohud-twice", "MangoHud is added both as a command prefix and via MANGOHUD=1 "
+            "— two HUDs may draw on top of each other.", ["MANGOHUD"], unset("MANGOHUD"), "Unset MANGOHUD")
+    if _on(env, "DXVK_HUD") and (mangohud or _on(env, "MANGOHUD")):
+        add("info", "hud-twice", "DXVK_HUD and MangoHud are both active — you will see two overlays.",
+            ["DXVK_HUD"])
+    # 17. Vulkan feature requirements (needs probe)
+    if si.vk_ok:
+        if _on(env, "DXVK_NVAPI_VKREFLEX") and si.has_ext("VK_NV_low_latency2") is False:
+            add("warn", "no-ll2", "DXVK_NVAPI_VKREFLEX needs VK_NV_low_latency2, which this driver "
+                "does not expose.", ["DXVK_NVAPI_VKREFLEX"], unset("DXVK_NVAPI_VKREFLEX"), "Unset")
+        flags = [f.strip() for f in env.get("VKD3D_CONFIG", "").split(",") if f.strip()]
+        if "descriptor_heap" in flags and si.has_ext("VK_EXT_descriptor_heap") is False:
+            add("warn", "no-descheap", "VKD3D_CONFIG=descriptor_heap needs VK_EXT_descriptor_heap, "
+                "which this driver does not expose.", ["VKD3D_CONFIG"],
+                [("env_set", "VKD3D_CONFIG", ",".join(f for f in flags if f != "descriptor_heap"))],
+                "Remove flag")
+    # 18. nvidia-only vars with no nvidia
+    if si.nvidia_known_absent and (nvapi_cfg or any(k.startswith(("__GL_", "PROTON_NVIDIA_")) for k in env)):
+        add("info", "no-nvidia", "No NVIDIA driver was detected on this machine; NVIDIA-specific "
+            "settings only matter if this configuration is for another PC.", [])
+    order = {"error": 0, "warn": 1, "info": 2}
+    out.sort(key=lambda i: order.get(i.sev, 3))
+    return out
+
+
+def _set_layout_enabled(layout, enabled: bool, skip: int = 0) -> None:
+    """Enable/disable every widget in a layout tree, leaving the first `skip` items alone."""
+    for i in range(layout.count()):
+        if i < skip:
+            continue
+        it = layout.itemAt(i)
+        if it is None:
+            continue
+        w = it.widget()
+        if w is not None:
+            w.setEnabled(enabled)
+        elif it.layout() is not None:
+            _set_layout_enabled(it.layout(), enabled)
+
+
+# ============================================================================
+# Runnable launch line + Steam / Heroic / Bottles sync
+# ============================================================================
+
+def build_launch_line(payload: dict, command: str = "%command%", use_env: bool = True) -> str:
+    """`env K=V … gamescope … -- [mangohud --dlsym] <command>` from a launch payload."""
+    parts: List[str] = []
+    env = payload.get("env") or {}
+    if env:
+        kv = [f"{k}={shlex.quote(str(v))}" for k, v in env.items()]
+        parts.append(("env " if use_env else "") + " ".join(kv))
+    gs = payload.get("gs_cmd") or ""
+    if gs:
+        parts.append(gs)
+    parts.append(command)
+    return " ".join(parts)
+
+
+def gamescope_arg_string(flags: Dict[str, str]) -> str:
+    """Flag part of the gamescope command (no program name, no '--', no mangohud)."""
+    toks = []
+    for flag, val in flags.items():
+        if flag == GamescopeFlagsWidget.MANGOHUD_KEY:
+            continue
+        toks.append(flag if val == "" else f"{flag} {shlex.quote(val)}")
+    return " ".join(toks)
+
+
+def _backup_file(path: Path) -> Path:
+    bak = path.with_name(f"{path.name}.drstool-{datetime.now():%Y%m%d-%H%M%S}.bak")
+    shutil.copy2(path, bak)
+    # keep the 5 newest backups of this file
+    olds = sorted(path.parent.glob(f"{path.name}.drstool-*.bak"))
+    for o in olds[:-5]:
+        try:
+            o.unlink()
+        except OSError:
+            pass
+    return bak
+
+
+def _atomic_write(path: Path, text: str):
+    tmp = path.with_name(path.name + ".drstool-tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _proc_running(*names: str) -> bool:
+    for n in names:
+        if _run(["pgrep", "-x", n], 3).strip():
+            return True
+    return False
+
+
+# ── minimal VDF (Valve KeyValues text) editor ───────────────────────────────
+
+_VDF_TOK = re.compile(r'"((?:[^"\\]|\\.)*)"|([{}])', re.S)
+
+
+def _vdf_unesc(s: str) -> str:
+    return re.sub(r"\\(.)", lambda m: {"n": "\n", "t": "\t"}.get(m.group(1), m.group(1)), s)
+
+
+def _vdf_esc(s: str) -> str:
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _vdf_parse(text: str):
+    toks = []
+    for m in _VDF_TOK.finditer(text):
+        if m.group(2) == "{":
+            toks.append(("open", "", m.start(), m.end()))
+        elif m.group(2) == "}":
+            toks.append(("close", "", m.start(), m.end()))
+        else:
+            toks.append(("str", _vdf_unesc(m.group(1)), m.start(), m.end()))
+
+    def block(i):
+        items = []
+        while i < len(toks):
+            k = toks[i]
+            if k[0] == "close":
+                return items, i
+            if k[0] == "str" and i + 1 < len(toks):
+                n = toks[i + 1]
+                if n[0] == "str":
+                    items.append((k, "val", n))
+                    i += 2
+                    continue
+                if n[0] == "open":
+                    sub, j = block(i + 2)
+                    items.append((k, "block", (n, sub, toks[j] if j < len(toks) else n)))
+                    i = j + 1
+                    continue
+            i += 1
+        return items, i
+
+    items, _ = block(0)
+    return items
+
+
+def _vdf_find(items, key: str, kind: str):
+    kl = key.lower()
+    for k, kd, payload in items:
+        if kd == kind and k[1].lower() == kl:
+            return payload
+    return None
+
+
+def _vdf_apps_block(text: str):
+    items = _vdf_parse(text)
+    node = items
+    for part in ("UserLocalConfigStore", "Software", "Valve", "Steam", "apps"):
+        b = _vdf_find(node, part, "block")
+        if b is None:
+            raise ValueError(f'"{part}" section not found in localconfig.vdf '
+                             "(start Steam once with this account first)")
+        node = b[1]
+        last = b
+    return last            # (open_tok, items, close_tok) of "apps"
+
+
+def vdf_get_launch_options(text: str, appid: str) -> str:
+    try:
+        apps = _vdf_apps_block(text)
+    except ValueError:
+        return ""
+    app = _vdf_find(apps[1], str(appid), "block")
+    if app is None:
+        return ""
+    v = _vdf_find(app[1], "LaunchOptions", "val")
+    return v[1] if v else ""
+
+
+def vdf_set_launch_options(text: str, appid: str, value: str) -> str:
+    apps = _vdf_apps_block(text)
+    appid = str(appid)
+    app = _vdf_find(apps[1], appid, "block")
+    esc = _vdf_esc(value)
+
+    def child_insert(close_tok, body: str) -> str:
+        pos = close_tok[2]
+        ls = text.rfind("\n", 0, pos) + 1
+        indent = text[ls:pos]
+        if indent.strip() == "":                       # brace alone on its line
+            return text[:ls] + body.replace("\n", "\n", 1) + text[ls:]
+        return text[:pos] + "\n" + body + text[pos:]
+
+    def indent_of(close_tok) -> str:
+        pos = close_tok[2]
+        ls = text.rfind("\n", 0, pos) + 1
+        ind = text[ls:pos]
+        return ind if ind.strip() == "" else ""
+
+    if app is not None:
+        v = _vdf_find(app[1], "LaunchOptions", "val")
+        if v is not None:
+            tok = v
+            return text[:tok[2]] + f'"{esc}"' + text[tok[3]:]
+        ind = indent_of(app[2]) + "\t"
+        return child_insert(app[2], f'{ind}"LaunchOptions"\t\t"{esc}"\n')
+    ind = indent_of(apps[2]) + "\t"
+    body = (f'{ind}"{appid}"\n{ind}{{\n{ind}\t"LaunchOptions"\t\t"{esc}"\n{ind}}}\n')
+    return child_insert(apps[2], body)
+
+
+# ── backends ────────────────────────────────────────────────────────────────
+
+@dataclass
+class LEntry:
+    key: str
+    title: str
+    path: Optional[Path] = None
+    extra: dict = field(default_factory=dict)
+
+
+class LauncherBackend:
+    name = ""
+    blurb = ""
+
+    def unavailable(self) -> str:
+        return ""
+
+    def accounts(self) -> List[tuple]:
+        return []                      # [(label, id)]
+
+    def scan(self, account=None) -> List[LEntry]:
+        return []
+
+    def current(self, e: LEntry) -> str:
+        return ""
+
+    def proposed(self, e: LEntry, payload: dict, opts: dict) -> str:
+        return ""
+
+    def busy(self) -> str:
+        return ""
+
+    def apply(self, e: LEntry, payload: dict, opts: dict) -> str:
+        raise NotImplementedError
+
+
+class SteamBackend(LauncherBackend):
+    name = "Steam"
+    blurb = ("Writes the launch options of an installed game into Steam's localconfig.vdf "
+             "(a timestamped .bak is kept next to it). Steam must be closed — it rewrites that "
+             "file on exit and would discard the change.")
+
+    @staticmethod
+    def roots() -> List[Path]:
+        h = Path.home()
+        cands = [h / ".local/share/Steam", h / ".steam/steam", h / ".steam/root",
+                 h / ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+                 h / ".var/app/com.valvesoftware.Steam/data/Steam"]
+        seen, out = set(), []
+        for c in cands:
+            try:
+                r = c.resolve()
+            except OSError:
+                continue
+            if (r / "userdata").is_dir() and r not in seen:
+                seen.add(r)
+                out.append(r)
+        return out
+
+    def unavailable(self):
+        return "" if self.roots() else "No Steam installation found (~/.local/share/Steam, flatpak)."
+
+    def accounts(self):
+        res = []
+        for root in self.roots():
+            for ud in sorted((root / "userdata").iterdir()):
+                cfg = ud / "config" / "localconfig.vdf"
+                if ud.name.isdigit() and ud.name != "0" and cfg.is_file():
+                    name = ""
+                    try:
+                        m = re.search(r'"PersonaName"\s+"([^"]*)"',
+                                      cfg.read_text(errors="replace")[:200000])
+                        name = m.group(1) if m else ""
+                    except OSError:
+                        pass
+                    res.append((f"{name or 'account'}  ({ud.name})", str(cfg)))
+        return res
+
+    @staticmethod
+    def _libraries(root: Path) -> List[Path]:
+        libs = [root / "steamapps"]
+        vf = root / "steamapps" / "libraryfolders.vdf"
+        try:
+            for m in re.finditer(r'"path"\s+"((?:[^"\\]|\\.)*)"', vf.read_text(errors="replace")):
+                p = Path(_vdf_unesc(m.group(1))) / "steamapps"
+                if p not in libs:
+                    libs.append(p)
+        except OSError:
+            pass
+        return [l for l in libs if l.is_dir()]
+
+    def scan(self, account=None):
+        cfg = Path(account) if account else None
+        if cfg is None:
+            acc = self.accounts()
+            cfg = Path(acc[0][1]) if acc else None
+        if cfg is None:
+            return []
+        root = cfg.parents[3]                      # <root>/userdata/<id>/config/localconfig.vdf
+        out, seen = [], set()
+        for lib in self._libraries(root):
+            for acf in sorted(lib.glob("appmanifest_*.acf")):
+                try:
+                    t = acf.read_text(errors="replace")
+                except OSError:
+                    continue
+                a = re.search(r'"appid"\s+"(\d+)"', t)
+                n = re.search(r'"name"\s+"((?:[^"\\]|\\.)*)"', t)
+                if not a or a.group(1) in seen:
+                    continue
+                name = _vdf_unesc(n.group(1)) if n else a.group(1)
+                if re.match(r"(Proton\b|Steam Linux Runtime|Steamworks Common)", name):
+                    continue
+                seen.add(a.group(1))
+                out.append(LEntry(a.group(1), f"{name}  [{a.group(1)}]", cfg))
+        out.sort(key=lambda e: e.title.lower())
+        return out
+
+    def current(self, e):
+        try:
+            return vdf_get_launch_options(e.path.read_text(errors="replace"), e.key)
+        except OSError:
+            return ""
+
+    def proposed(self, e, payload, opts):
+        return build_launch_line(payload, "%command%", opts.get("use_env", True))
+
+    def busy(self):
+        return "Steam is running — close it first (it rewrites localconfig.vdf on exit)." \
+            if _proc_running("steam", "steamwebhelper") else ""
+
+    def apply(self, e, payload, opts):
+        text = e.path.read_text(errors="replace")
+        new = vdf_set_launch_options(text, e.key, self.proposed(e, payload, opts))
+        # sanity: re-parse and read back
+        if vdf_get_launch_options(new, e.key) != self.proposed(e, payload, opts):
+            raise ValueError("Self-check failed: edited VDF does not read back identically — aborted.")
+        bak = _backup_file(e.path)
+        _atomic_write(e.path, new)
+        return f"Steam launch options written for {e.title}. Backup: {bak.name}"
+
+
+class HeroicBackend(LauncherBackend):
+    name = "Heroic"
+    blurb = ("Writes environment variables and gamescope/MangoHud wrappers into Heroic's "
+             "GamesConfig/<game>.json (or the global defaults). Only variables DRSTool owns are "
+             "replaced; your other entries stay. Close Heroic first, otherwise it may overwrite.")
+
+    @staticmethod
+    def roots() -> List[Path]:
+        h = Path.home()
+        return [p for p in (h / ".config/heroic",
+                            h / ".var/app/com.heroicgameslauncher.hgl/config/heroic") if p.is_dir()]
+
+    def unavailable(self):
+        return "" if self.roots() else "No Heroic config found (~/.config/heroic, flatpak)."
+
+    @staticmethod
+    def _titles(root: Path) -> Dict[str, str]:
+        titles: Dict[str, str] = {}
+        files = [root / "store_cache" / n for n in
+                 ("legendary_library.json", "gog_library.json", "nile_library.json",
+                  "zoom_library.json")] + [root / "sideload_apps" / "library.json"]
+
+        def walk(o):
+            if isinstance(o, dict):
+                if "app_name" in o and "title" in o:
+                    titles[str(o["app_name"])] = str(o["title"])
+                for v in o.values():
+                    walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    walk(v)
+        for f in files:
+            try:
+                walk(json.loads(f.read_text(errors="replace")))
+            except Exception:
+                pass
+        return titles
+
+    def scan(self, account=None):
+        out = []
+        for root in self.roots():
+            cfgf = root / "config.json"
+            out.append(LEntry("__global__", "★ All games (global defaults)", cfgf, {"global": True}))
+            titles = self._titles(root)
+            gdir = root / "GamesConfig"
+            if gdir.is_dir():
+                for f in sorted(gdir.glob("*.json")):
+                    out.append(LEntry(f.stem, f"{titles.get(f.stem, f.stem)}  [{f.stem}]", f))
+            break                                   # first existing root only
+        return out
+
+    @staticmethod
+    def _node(data: dict, e: LEntry) -> dict:
+        if e.extra.get("global"):
+            return data.setdefault("defaultSettings", {})
+        return data.setdefault(e.key, {})
+
+    def _load(self, e):
+        try:
+            d = json.loads(e.path.read_text(errors="replace"))
+            return d if isinstance(d, dict) else {}
+        except Exception:
+            return {}
+
+    def current(self, e):
+        d = self._load(e)
+        node = d.get("defaultSettings", {}) if e.extra.get("global") else d.get(e.key, {})
+        envs = [f'{x.get("key")}={x.get("value")}' for x in node.get("enviromentOptions", [])
+                if isinstance(x, dict)]
+        wr = [f'{x.get("exe")} {x.get("args", "")}'.strip() for x in node.get("wrapperOptions", [])
+              if isinstance(x, dict)]
+        return "env:\n  " + "\n  ".join(envs or ["(none)"]) + "\nwrappers:\n  " + "\n  ".join(wr or ["(none)"])
+
+    @staticmethod
+    def _wrappers(payload):
+        w = []
+        if payload.get("gs_on"):
+            args = gamescope_arg_string(payload.get("gs_flags") or {})
+            w.append({"exe": "gamescope", "args": (args + " --").strip()})
+            if payload.get("mangohud"):
+                w.append({"exe": "mangohud", "args": "--dlsym"})
+        return w
+
+    def proposed(self, e, payload, opts):
+        envs = [f"{k}={v}" for k, v in (payload.get("env") or {}).items()]
+        wr = [f'{w["exe"]} {w["args"]}' for w in self._wrappers(payload)]
+        return "env:\n  " + "\n  ".join(envs or ["(none)"]) + "\nwrappers:\n  " + "\n  ".join(wr or ["(none)"])
+
+    def busy(self):
+        return "Heroic is running — it may overwrite this file when it exits." \
+            if _proc_running("heroic") else ""
+
+    def apply(self, e, payload, opts):
+        data = self._load(e) if e.path.is_file() else {}
+        node = self._node(data, e)
+        owned = LutrisSyncWidget._managed_env_keys()
+        keep = [x for x in node.get("enviromentOptions", [])
+                if isinstance(x, dict) and x.get("key") not in owned]
+        keep += [{"key": k, "value": str(v)} for k, v in (payload.get("env") or {}).items()]
+        node["enviromentOptions"] = keep
+        wkeep = [w for w in node.get("wrapperOptions", [])
+                 if isinstance(w, dict) and os.path.basename(str(w.get("exe", ""))) not in ("gamescope", "mangohud")]
+        new_w = self._wrappers(payload)
+        node["wrapperOptions"] = new_w + wkeep
+        if any(w["exe"] == "mangohud" for w in new_w):
+            node["showMangohud"] = False           # avoid wrapping gamescope from the outside
+        bak = _backup_file(e.path) if e.path.is_file() else None
+        e.path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(e.path, json.dumps(data, indent=2, ensure_ascii=False))
+        return f"Heroic config written for {e.title}." + (f" Backup: {bak.name}" if bak else "")
+
+
+class BottlesBackend(LauncherBackend):
+    name = "Bottles"
+    blurb = ("Writes Environment_Variables and the gamescope/MangoHud toggles into the bottle's "
+             "bottle.yml. Bottles settings are per bottle (not per game). Gamescope flags without a "
+             "Bottles equivalent are listed in the preview and skipped.")
+
+    # gamescope flag -> (Parameters key, type)
+    _MAP = {"--nested-width": ("gamescope_game_width", int), "--nested-height": ("gamescope_game_height", int),
+            "--output-width": ("gamescope_window_width", int), "--output-height": ("gamescope_window_height", int),
+            "--framerate-limit": ("gamescope_fps", int), "--nested-unfocused-refresh": ("gamescope_fps_no_focus", int),
+            "--borderless": ("gamescope_borderless", bool), "--fullscreen": ("gamescope_fullscreen", bool)}
+
+    @staticmethod
+    def roots() -> List[Path]:
+        h = Path.home()
+        return [p for p in (h / ".local/share/bottles/bottles",
+                            h / ".var/app/com.usebottles.bottles/data/bottles/bottles") if p.is_dir()]
+
+    def unavailable(self):
+        if not _HAVE_YAML:
+            return "PyYAML is required to edit bottle.yml."
+        return "" if self.roots() else "No Bottles directory found (~/.local/share/bottles, flatpak)."
+
+    def scan(self, account=None):
+        out = []
+        for root in self.roots():
+            for d in sorted(root.iterdir()):
+                f = d / "bottle.yml"
+                if f.is_file():
+                    name = d.name
+                    try:
+                        name = (yaml.safe_load(f.read_text()) or {}).get("Name", d.name)
+                    except Exception:
+                        pass
+                    out.append(LEntry(d.name, f"{name}  [{d.name}]", f))
+        return out
+
+    def _load(self, e):
+        try:
+            d = yaml.safe_load(e.path.read_text()) or {}
+            return d if isinstance(d, dict) else {}
+        except Exception:
+            return {}
+
+    def _plan(self, payload):
+        params: Dict[str, object] = {}
+        skipped = []
+        gs_on = bool(payload.get("gs_on"))
+        params["gamescope"] = gs_on
+        params["mangohud"] = bool(payload.get("mangohud"))
+        if gs_on:
+            flags = payload.get("gs_flags") or {}
+            for flag, val in flags.items():
+                if flag == GamescopeFlagsWidget.MANGOHUD_KEY:
+                    continue
+                m = self._MAP.get(flag)
+                if not m:
+                    skipped.append(flag if val == "" else f"{flag} {val}")
+                    continue
+                key, typ = m
+                try:
+                    params[key] = True if typ is bool else int(val)
+                except ValueError:
+                    skipped.append(f"{flag} {val}")
+        return params, skipped
+
+    def current(self, e):
+        d = self._load(e)
+        envs = d.get("Environment_Variables") or {}
+        p = d.get("Parameters") or {}
+        gp = {k: v for k, v in p.items() if k.startswith("gamescope") or k == "mangohud"}
+        return ("Environment_Variables:\n  " + "\n  ".join(f"{k}={v}" for k, v in envs.items()) +
+                "\nParameters:\n  " + "\n  ".join(f"{k}: {v}" for k, v in gp.items()))
+
+    def proposed(self, e, payload, opts):
+        params, skipped = self._plan(payload)
+        txt = ("Environment_Variables (DRSTool-owned part):\n  " +
+               "\n  ".join(f"{k}={v}" for k, v in (payload.get("env") or {}).items()) +
+               "\nParameters:\n  " + "\n  ".join(f"{k}: {v}" for k, v in params.items()))
+        if skipped:
+            txt += "\n\nNo Bottles equivalent (skipped): " + ", ".join(skipped)
+        return txt
+
+    def apply(self, e, payload, opts):
+        d = self._load(e)
+        envs = dict(d.get("Environment_Variables") or {})
+        for k in list(envs):
+            if k in LutrisSyncWidget._managed_env_keys():
+                del envs[k]
+        envs.update({k: str(v) for k, v in (payload.get("env") or {}).items()})
+        d["Environment_Variables"] = envs
+        params = dict(d.get("Parameters") or {})
+        for k in [k for k in params if k.startswith("gamescope") and k not in ("gamescope",)]:
+            if k in {v[0] for v in self._MAP.values()}:
+                del params[k]
+        new_p, _skipped = self._plan(payload)
+        params.update(new_p)
+        d["Parameters"] = params
+        bak = _backup_file(e.path)
+        _atomic_write(e.path, yaml.safe_dump(d, sort_keys=False, allow_unicode=True,
+                                             default_flow_style=False))
+        return f"bottle.yml updated for {e.title}. Backup: {bak.name}"
+
+
+_LAUNCHER_QSS = (f"QListWidget{{background:{T['surface']};border:1px solid {T['border']};"
+                 f"border-radius:4px;color:{T['text2']};font-size:12px;}}"
+                 f"QListWidget::item{{padding:3px 6px;}}"
+                 f"QListWidget::item:selected{{background:rgba(118,185,0,0.18);color:{T['text']};}}")
+_MONO_BOX_QSS = (f"QPlainTextEdit{{background:{T['bg']};border:1px solid {T['border_hi']};"
+                 f"border-radius:4px;color:{T['text']};font-family:{T['mono']};font-size:12px;"
+                 "padding:4px 6px;}")
+
+
+class LauncherSyncWidget(QWidget):
+    """One tab per launcher (Steam / Heroic / Bottles): pick target -> preview -> apply."""
+
+    def __init__(self, backend: LauncherBackend, parent=None):
+        super().__init__(parent)
+        self.backend = backend
+        self._entries: List[LEntry] = []
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(8)
+
+        info = QLabel(backend.blurb)
+        info.setWordWrap(True)
+        info.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        lay.addWidget(info)
+
+        row = QHBoxLayout()
+        self._acct = QComboBox()
+        self._acct.setVisible(False)
+        self._acct.currentIndexChanged.connect(lambda _i: self.rescan(keep_account=True))
+        row.addWidget(self._acct)
+        self._filter = QLineEdit()
+        self._filter.setPlaceholderText("Filter targets…")
+        self._filter.setClearButtonEnabled(True)
+        self._filter.textChanged.connect(self._apply_filter)
+        row.addWidget(self._filter, 1)
+        b = _tool_btn("Rescan")
+        b.clicked.connect(lambda: self.rescan())
+        row.addWidget(b)
+        lay.addLayout(row)
+
+        self._list = QListWidget()
+        self._list.setStyleSheet(_LAUNCHER_QSS)
+        self._list.setMinimumHeight(150)
+        self._list.currentItemChanged.connect(lambda *_: self.refresh_preview())
+        lay.addWidget(self._list, 1)
+
+        self._use_env = QCheckBox("Prefix variables with  env  (env A=1 gamescope … -- %command%)")
+        self._use_env.setChecked(True)
+        self._use_env.setVisible(backend.name == "Steam")
+        self._use_env.toggled.connect(lambda _c: self.refresh_preview())
+        self._use_env.setStyleSheet(f"color:{T['text2']};")
+        lay.addWidget(self._use_env)
+
+        self._preview = QPlainTextEdit()
+        self._preview.setReadOnly(True)
+        self._preview.setStyleSheet(_MONO_BOX_QSS)
+        self._preview.setMinimumHeight(150)
+        lay.addWidget(self._preview, 1)
+
+        btns = QHBoxLayout()
+        self._apply_btn = _tool_btn(f"Apply to {backend.name}", bg="#26330f", border="#4a7300",
+                                    fg="#cfe9a0", bold=True)
+        self._apply_btn.clicked.connect(self._apply)
+        btns.addWidget(self._apply_btn)
+        cp = _tool_btn("Copy new value")
+        cp.clicked.connect(self._copy)
+        btns.addWidget(cp)
+        btns.addStretch(1)
+        lay.addLayout(btns)
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        lay.addWidget(self._status)
+
+        un = backend.unavailable()
+        if un:
+            self._status.setText("⚠ " + un)
+            self._apply_btn.setEnabled(False)
+        self._first_scan = True
+
+    def showEvent(self, ev):               # noqa: N802
+        super().showEvent(ev)
+        if self._first_scan:
+            self._first_scan = False
+            QTimer.singleShot(0, self.rescan)
+
+    # -- data -----------------------------------------------------------------
+    def _payload(self) -> dict:
+        w = self.window()
+        return w.collect_launch_payload() if hasattr(w, "collect_launch_payload") else {}
+
+    def rescan(self, keep_account: bool = False):
+        be = self.backend
+        if be.unavailable():
+            return
+        if not keep_account:
+            self._acct.blockSignals(True)
+            self._acct.clear()
+            for label, ident in be.accounts():
+                self._acct.addItem(label, ident)
+            self._acct.setVisible(self._acct.count() > 1)
+            self._acct.blockSignals(False)
+        acct = self._acct.currentData() if self._acct.count() else None
+        try:
+            self._entries = be.scan(acct)
+        except Exception as ex:
+            self._entries = []
+            self._status.setText(f"⚠ scan failed: {ex}")
+        self._list.clear()
+        for e in self._entries:
+            it = QListWidgetItem(e.title)
+            it.setData(Qt.UserRole, e)
+            self._list.addItem(it)
+        self._apply_filter(self._filter.text())
+        if self._entries:
+            self._status.setText(f"{len(self._entries)} target(s) found.")
+        elif not self._status.text().startswith("⚠"):
+            self._status.setText("No targets found.")
+        self.refresh_preview()
+
+    def _apply_filter(self, text):
+        t = text.lower().strip()
+        for i in range(self._list.count()):
+            it = self._list.item(i)
+            it.setHidden(bool(t) and t not in it.text().lower())
+
+    def _sel(self) -> Optional[LEntry]:
+        it = self._list.currentItem()
+        return it.data(Qt.UserRole) if it else None
+
+    def _opts(self) -> dict:
+        return {"use_env": self._use_env.isChecked()}
+
+    def refresh_preview(self):
+        e = self._sel()
+        if e is None:
+            self._preview.setPlainText("Select a target above to preview what will be written.")
+            return
+        p = self._payload()
+        try:
+            cur = self.backend.current(e)
+            new = self.backend.proposed(e, p, self._opts())
+        except Exception as ex:
+            self._preview.setPlainText(f"⚠ {ex}")
+            return
+        self._preview.setPlainText(f"── current ──\n{cur or '(empty)'}\n\n── new ──\n{new or '(empty)'}")
+
+    def _copy(self):
+        e = self._sel()
+        p = self._payload()
+        txt = (self.backend.proposed(e, p, self._opts()) if e else
+               build_launch_line(p, "%command%", True))
+        QApplication.clipboard().setText(txt)
+        self._status.setText("Copied.")
+
+    def _apply(self):
+        e = self._sel()
+        if e is None:
+            self._status.setText("Pick a target first.")
+            return
+        busy = self.backend.busy()
+        if busy:
+            QMessageBox.warning(self, self.backend.name, busy)
+            return
+        if QMessageBox.question(
+                self, f"Write to {self.backend.name}",
+                f"Write the current DRSTool configuration to:\n\n{e.title}\n\n"
+                "A timestamped backup of the file is kept.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        try:
+            msg = self.backend.apply(e, self._payload(), self._opts())
+            self._status.setText("✔ " + msg)
+        except Exception as ex:
+            self._status.setText(f"⚠ failed: {ex}")
+            QMessageBox.critical(self, self.backend.name, str(ex))
+        self.refresh_preview()
+
+
+class LaunchLineWidget(QWidget):
+    """One-click `env … gamescope … -- %command%` (or any other command)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(8)
+        t = QLabel("Runnable launch line")
+        t.setStyleSheet(f"color:{T['text']}; font-size:15px; font-weight:700;")
+        lay.addWidget(t)
+        d = QLabel("Built from everything currently set (arch, DRS settings, environment, "
+                   "gamescope, MangoHud). Use %command% for Steam, or type your own command to "
+                   "get a line you can paste into a terminal or save as a launcher script.")
+        d.setWordWrap(True)
+        d.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        lay.addWidget(d)
+
+        form = QHBoxLayout()
+        _cl = QLabel("Command:")
+        _cl.setStyleSheet(f"color:{T['text2']};")
+        form.addWidget(_cl)
+        self._cmd = QLineEdit("%command%")
+        self._cmd.setStyleSheet(f"QLineEdit{{background:{T['surface']};border:1px solid {T['border']};"
+                                f"color:{T['text']};padding:3px 8px;border-radius:4px;min-height:26px;"
+                                f"font-family:{T['mono']};}}")
+        self._cmd.textChanged.connect(lambda _t: self.refresh())
+        form.addWidget(self._cmd, 1)
+        self._use_env = QCheckBox("use  env  prefix")
+        self._use_env.setChecked(True)
+        self._use_env.setStyleSheet(f"color:{T['text2']};")
+        self._use_env.toggled.connect(lambda _c: self.refresh())
+        form.addWidget(self._use_env)
+        lay.addLayout(form)
+
+        self._out = QPlainTextEdit()
+        self._out.setReadOnly(True)
+        self._out.setStyleSheet(_MONO_BOX_QSS)
+        self._out.setMinimumHeight(140)
+        lay.addWidget(self._out, 1)
+
+        row = QHBoxLayout()
+        b1 = _tool_btn("Copy line", bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True)
+        b1.clicked.connect(self._copy)
+        row.addWidget(b1)
+        b2 = _tool_btn("Copy for Steam (%command%)")
+        b2.clicked.connect(self._copy_steam)
+        row.addWidget(b2)
+        b3 = _tool_btn("Save as launcher script…")
+        b3.clicked.connect(self._save_script)
+        row.addWidget(b3)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self._status = QLabel("")
+        self._status.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        lay.addWidget(self._status)
+        lay.addStretch(0)
+
+    def _payload(self):
+        w = self.window()
+        return w.collect_launch_payload() if hasattr(w, "collect_launch_payload") else {}
+
+    def refresh(self):
+        p = self._payload()
+        line = build_launch_line(p, self._cmd.text().strip() or "%command%", self._use_env.isChecked())
+        self._out.setPlainText(line)
+
+    def showEvent(self, ev):               # noqa: N802
+        super().showEvent(ev)
+        self.refresh()
+
+    def _copy(self):
+        QApplication.clipboard().setText(self._out.toPlainText())
+        self._status.setText("Copied.")
+
+    def _copy_steam(self):
+        QApplication.clipboard().setText(build_launch_line(self._payload(), "%command%", self._use_env.isChecked()))
+        self._status.setText("Copied Steam launch options.")
+
+    def _save_script(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save launcher script",
+                                              str(Path.home() / "drstool-launch.sh"), "Shell script (*.sh)")
+        if not path:
+            return
+        cmd = self._cmd.text().strip()
+        inner = '"$@"' if cmd in ("", "%command%") else cmd
+        line = build_launch_line(self._payload(), inner, self._use_env.isChecked())
+        try:
+            Path(path).write_text(f"#!/bin/sh\n# generated by DRSTool\nexec {line}\n")
+            os.chmod(path, 0o755)
+            self._status.setText(f"Saved {path}")
+        except OSError as ex:
+            self._status.setText(f"⚠ {ex}")
+
+
+# ============================================================================
+# Prefix doctor: DXVK / vkd3d-proton / dxvk-nvapi inside a Wine prefix
+# ============================================================================
+
+import tarfile
+import hashlib as _hashlib
+from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+
+PD_COMPONENTS = [
+    {"id": "dxvk", "name": "DXVK", "repo": "doitsujin/dxvk",
+     "dlls": ["d3d8", "d3d9", "d3d10core", "d3d11", "dxgi"],
+     "markers": [b"DXVK", b"dxvk"], "ver_prefix_required": True,
+     "asset_re": r"^dxvk-v?\d[\d.]*\.tar\.(gz|zst)$", "d64": "x64", "d32": "x32"},
+    {"id": "vkd3d", "name": "vkd3d-proton", "repo": "HansKristian-Work/vkd3d-proton",
+     "dlls": ["d3d12", "d3d12core"],
+     "markers": [b"vkd3d-proton", b"VKD3D_CONFIG"], "ver_prefix_required": False,
+     "asset_re": r"^vkd3d-proton-v?\d[\d.]*\.tar\.(zst|gz)$", "d64": "x64", "d32": "x86"},
+    {"id": "nvapi", "name": "dxvk-nvapi", "repo": "jp7677/dxvk-nvapi",
+     "dlls": ["nvapi64", "nvapi", "nvofapi64"],
+     "markers": [b"DXVK-NVAPI", b"dxvk-nvapi", b"NVAPI"], "ver_prefix_required": True,
+     "asset_re": r"^dxvk-nvapi-v?\d[\d.]*\.tar\.(gz|zst)$", "d64": "x64", "d32": "x32"},
+]
+_PD_UA = "DRSTool-prefix-doctor"
+_PD_MANIFEST = ".drstool-doctor.json"
+
+
+def _vtuple(s: str) -> tuple:
+    m = re.search(r"(\d+(?:\.\d+)+)", s or "")
+    return tuple(int(x) for x in m.group(1).split(".")) if m else ()
+
+
+def _vcmp(a: tuple, b: tuple) -> int:
+    n = max(len(a), len(b), 3)
+    a2, b2 = a + (0,) * (n - len(a)), b + (0,) * (n - len(b))
+    return (a2 > b2) - (a2 < b2)
+
+
+def scan_dll_version(path: Path, comp: dict) -> Optional[str]:
+    """Heuristic: version-looking string nearest to the component's marker; falls back to
+    the PE FileVersion resource. Returns None for 'not this component', '' for 'unknown'."""
+    try:
+        if path.stat().st_size > 80 * 1024 * 1024:
+            return ""
+        data = path.read_bytes()
+    except OSError:
+        return None
+    pos = [data.find(m) for m in comp["markers"] if data.find(m) >= 0]
+    if not pos:
+        return None                                    # a Wine builtin / something else
+    anchor = min(pos)
+    vpre = rb"v" if comp["ver_prefix_required"] else rb"v?"
+    pat = re.compile(rb"(?<![\w.])(" + vpre + rb"\d+\.\d+(?:\.\d+)?(?:-\d+-g[0-9a-f]{6,})?[+\w\-]{0,12})\x00")
+    cands = [(abs(m.start() - anchor), m.group(1).decode("ascii", "replace"))
+             for m in pat.finditer(data)]
+    if cands:
+        cands.sort()
+        if cands[0][0] < 4096:                         # must sit close to the marker
+            return cands[0][1]
+    m = re.search(rb"F\x00i\x00l\x00e\x00V\x00e\x00r\x00s\x00i\x00o\x00n\x00\x00\x00((?:[0-9A-Za-z.\-+_]\x00)+)", data)
+    if m:
+        v = m.group(1).decode("utf-16-le", "replace")
+        if re.match(r"\d+\.\d+", v) and not v.startswith(("0.0", "1.0.0.0")):
+            return v
+    return ""
+
+
+def _sha256(p: Path) -> str:
+    h = _hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def prefix_sysdirs(prefix: Path):
+    win = prefix / "drive_c" / "windows"
+    s32, s64 = win / "system32", win / "syswow64"
+    return win.is_dir(), s32, (s64 if s64.is_dir() else None)
+
+
+def detect_installed(prefix: Path, comp: dict) -> dict:
+    """-> {"state": none|ok|mixed|unknown, "version": str, "source": manifest|scan, "files": [...]}"""
+    ok, s32, s64 = prefix_sysdirs(prefix)
+    files = []
+    for d, tag in ((s32, "system32"), (s64, "syswow64")):
+        if d is None:
+            continue
+        for dll in comp["dlls"]:
+            p = d / f"{dll}.dll"
+            if p.is_file():
+                files.append((f"{tag}/{dll}.dll", p))
+    manifest = {}
+    try:
+        manifest = json.loads((prefix / _PD_MANIFEST).read_text()).get(comp["id"], {})
+    except Exception:
+        pass
+    res = {"state": "none", "version": "", "source": "", "files": [r for r, _ in files]}
+    if not files:
+        return res
+    # authoritative: DRSTool put these exact files there
+    mf = manifest.get("files") or {}
+    if mf and all(rel in mf and _sha256(p) == mf[rel] for rel, p in files if rel in mf) \
+            and any(rel in mf for rel, _ in files):
+        res.update(state="ok", version=manifest.get("version", ""), source="manifest")
+        return res
+    versions, other = set(), 0
+    for rel, p in files:
+        v = scan_dll_version(p, comp)
+        if v is None:
+            other += 1
+        else:
+            versions.add(v)
+    if not versions:
+        res["state"] = "none"                          # only Wine builtins present
+        return res
+    real = {v for v in versions if v}
+    if len(real) > 1 or (other and real):
+        res.update(state="mixed", version=" / ".join(sorted(real)) or "?", source="scan")
+    elif real:
+        res.update(state="ok", version=next(iter(real)), source="scan")
+    else:
+        res.update(state="unknown", version="?", source="scan")
+    return res
+
+
+def dll_override_gaps(prefix: Path, comp: dict) -> List[str]:
+    try:
+        t = (prefix / "user.reg").read_text(errors="replace")
+    except OSError:
+        return []
+    m = re.search(r"^\[Software\\\\Wine\\\\DllOverrides\][^\n]*\n(.*?)(?:\n\[|\Z)", t, re.S | re.M)
+    block = m.group(1) if m else ""
+    have = {k.lower(): v.lower() for k, v in re.findall(r'^"([^"]+)"="([^"]*)"', block, re.M)}
+    return [d for d in comp["dlls"]
+            if d in ("d3d9", "d3d10core", "d3d11", "dxgi", "d3d12", "d3d12core", "d3d8", "nvapi", "nvapi64", "nvofapi64")
+            and "native" not in have.get(d, "")]
+
+
+def find_prefixes() -> List[tuple]:
+    h = Path.home()
+    cands: List[tuple] = []
+
+    def add(label, p):
+        try:
+            p = Path(p)
+            if (p / "drive_c" / "windows").is_dir() and all(str(p) != str(c[1]) for c in cands):
+                cands.append((label, p))
+        except OSError:
+            pass
+    if os.environ.get("WINEPREFIX"):
+        add("$WINEPREFIX", os.environ["WINEPREFIX"])
+    add("~/.wine", h / ".wine")
+    for root in SteamBackend.roots():
+        for lib in SteamBackend._libraries(root):
+            cd = lib / "compatdata"
+            if cd.is_dir():
+                for d in sorted(cd.iterdir()):
+                    add(f"Steam/Proton {d.name}", d / "pfx")
+    for broot in BottlesBackend.roots():
+        for d in sorted(broot.iterdir()):
+            add(f"Bottles: {d.name}", d)
+    for base in (h / "Games", h / ".local/share/lutris/prefixes"):
+        if base.is_dir():
+            for d in sorted(base.iterdir()):
+                add(f"{base.name}/{d.name}", d)
+                if d.is_dir():
+                    for d2 in sorted(d.iterdir())[:40]:
+                        add(f"{base.name}/{d.name}/{d2.name}", d2)
+    return cands
+
+
+def _gh_release(repo: str) -> dict:
+    req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/latest",
+                                 headers={"User-Agent": _PD_UA, "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def _pick_asset(rel: dict, comp: dict) -> Optional[dict]:
+    pat = re.compile(comp["asset_re"])
+    assets = [a for a in rel.get("assets", []) if pat.match(a.get("name", ""))]
+    if not assets:
+        return None
+    assets.sort(key=lambda a: (a["name"].endswith(".zst"), a["name"]))   # prefer .gz
+    return assets[0]
+
+
+def _safe_extract(tf: tarfile.TarFile, dest: Path):
+    base = dest.resolve()
+    for m in tf.getmembers():
+        tgt = (dest / m.name).resolve()
+        if not str(tgt).startswith(str(base)) or m.issym() or m.islnk() or m.isdev():
+            raise RuntimeError(f"unsafe path in archive: {m.name}")
+    tf.extractall(dest)
+
+
+def _extract_archive(path: Path, dest: Path):
+    dest.mkdir(parents=True, exist_ok=True)
+    if path.name.endswith(".zst"):
+        try:
+            with tarfile.open(path, "r:zst") as tf:           # Python >= 3.14
+                _safe_extract(tf, dest)
+                return
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+        for cmd in (["tar", "--zstd", "-xf", str(path), "-C", str(dest)],
+                    ["tar", "--use-compress-program=unzstd", "-xf", str(path), "-C", str(dest)]):
+            try:
+                if subprocess.run(cmd, capture_output=True, timeout=300).returncode == 0:
+                    return
+            except Exception:
+                continue
+        raise RuntimeError("cannot unpack .tar.zst — install zstd (app-arch/zstd) or use Python ≥ 3.14")
+    with tarfile.open(path, "r:*") as tf:
+        _safe_extract(tf, dest)
+
+
+def _cache_dir() -> Path:
+    d = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "drstool" / "prefix-doctor"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def apply_component_update(prefix: Path, comp: dict, rel: dict, backup_root: Path, log) -> int:
+    asset = _pick_asset(rel, comp)
+    if asset is None:
+        raise RuntimeError(f"no matching release asset for {comp['name']}")
+    cache = _cache_dir() / rel.get("tag_name", "latest")
+    cache.mkdir(parents=True, exist_ok=True)
+    arch = cache / asset["name"]
+    if not arch.is_file() or arch.stat().st_size != asset.get("size", -1):
+        log(f"  downloading {asset['name']} …")
+        req = urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": _PD_UA})
+        tmp = arch.with_suffix(arch.suffix + ".part")
+        with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
+            shutil.copyfileobj(r, f)
+        os.replace(tmp, arch)
+    work = Path(tempfile.mkdtemp(prefix="pd-", dir=str(cache)))
+    try:
+        _extract_archive(arch, work)
+        tops = [p for p in work.iterdir() if p.is_dir()]
+        root = tops[0] if len(tops) == 1 else work
+        ok, s32, s64 = prefix_sysdirs(prefix)
+        if not ok:
+            raise RuntimeError("not a Wine prefix (drive_c/windows missing)")
+        jobs = []
+        if s64 is not None:                            # 64-bit prefix
+            jobs.append((root / comp["d64"], s32, "system32"))
+            jobs.append((root / comp["d32"], s64, "syswow64"))
+        else:                                          # 32-bit prefix
+            jobs.append((root / comp["d32"], s32, "system32"))
+        n, manifest_files = 0, {}
+        for src, dst, tag in jobs:
+            if not src.is_dir():
+                continue
+            for dll in comp["dlls"]:
+                f = src / f"{dll}.dll"
+                if not f.is_file():
+                    continue
+                target = dst / f.name
+                if target.exists() or target.is_symlink():
+                    bdir = backup_root / tag
+                    bdir.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(target, bdir / f.name)
+                    target.unlink()
+                shutil.copy2(f, target)
+                manifest_files[f"{tag}/{f.name}"] = _sha256(target)
+                n += 1
+                log(f"  {tag}/{f.name}")
+        mpath = prefix / _PD_MANIFEST
+        try:
+            man = json.loads(mpath.read_text())
+        except Exception:
+            man = {}
+        man[comp["id"]] = {"version": rel.get("tag_name", "").lstrip("v"), "files": manifest_files,
+                           "updated": datetime.now().isoformat(timespec="seconds")}
+        mpath.write_text(json.dumps(man, indent=2))
+        return n
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+class _PDWorker(QThread):
+    log = Signal(str)
+    checked = Signal(dict)
+    updated = Signal(bool)
+
+    def __init__(self, mode: str, prefix: Path, comps: List[dict], releases: Optional[dict] = None):
+        super().__init__()
+        self.mode, self.prefix, self.comps = mode, prefix, comps
+        self.releases = releases or {}
+
+    def run(self):
+        try:
+            if self.mode == "check":
+                out = {}
+                for c in self.comps:
+                    info = detect_installed(self.prefix, c)
+                    rel, err = None, ""
+                    try:
+                        rel = _gh_release(c["repo"])
+                    except Exception as ex:
+                        err = str(ex)
+                    out[c["id"]] = {"installed": info, "release": rel, "error": err,
+                                    "gaps": dll_override_gaps(self.prefix, c)}
+                self.checked.emit(out)
+            else:
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                backup = self.prefix / ".drstool-backup" / stamp
+                ok = True
+                for c in self.comps:
+                    rel = self.releases.get(c["id"])
+                    self.log.emit(f"{c['name']} → {rel.get('tag_name', '?') if rel else '?'}")
+                    try:
+                        n = apply_component_update(self.prefix, c, rel, backup, self.log.emit)
+                        self.log.emit(f"  ✔ {n} file(s) installed")
+                    except Exception as ex:
+                        ok = False
+                        self.log.emit(f"  ✘ {ex}")
+                if backup.exists():
+                    self.log.emit(f"Backup of replaced DLLs: {backup}")
+                self.updated.emit(ok)
+        except Exception as ex:
+            self.log.emit(f"✘ {ex}")
+            if self.mode == "check":
+                self.checked.emit({})
+            else:
+                self.updated.emit(False)
+
+
+class PrefixDoctorWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._worker: Optional[_PDWorker] = None
+        self._state: dict = {}
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(8)
+        t = QLabel("Prefix doctor")
+        t.setStyleSheet(f"color:{T['text']}; font-size:15px; font-weight:700;")
+        lay.addWidget(t)
+        d = QLabel("Compares the DXVK, vkd3d-proton and dxvk-nvapi DLLs inside a Wine prefix with the "
+                   "latest GitHub release and replaces outdated ones (originals are backed up). "
+                   "Versions are read from the DLLs heuristically; DLLs installed by this tool are "
+                   "tracked exactly. Proton prefixes are re-synced by Proton on launch — use this "
+                   "for Wine / Lutris / Bottles / Heroic prefixes.")
+        d.setWordWrap(True)
+        d.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        lay.addWidget(d)
+
+        row = QHBoxLayout()
+        self._combo = QComboBox()
+        self._combo.setEditable(True)
+        self._combo.setMinimumWidth(320)
+        self._combo.lineEdit().setPlaceholderText("Path to a Wine prefix (contains drive_c/)")
+        row.addWidget(self._combo, 1)
+        b = _tool_btn("Browse…")
+        b.clicked.connect(self._browse)
+        row.addWidget(b)
+        b = _tool_btn("Find prefixes")
+        b.clicked.connect(self._discover)
+        row.addWidget(b)
+        lay.addLayout(row)
+
+        self._table = QTableWidget(len(PD_COMPONENTS), 5)
+        self._table.setHorizontalHeaderLabels(["", "Component", "In prefix", "Latest", "Status"])
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._table.setSelectionMode(QTableWidget.NoSelection)
+        hh = self._table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(4, QHeaderView.Stretch)
+        self._table.setStyleSheet(
+            f"QTableWidget{{background:{T['surface']};border:1px solid {T['border']};color:{T['text2']};"
+            f"gridline-color:{T['border']};}}QHeaderView::section{{background:{T['raised']};"
+            f"color:{T['muted']};border:none;padding:4px;}}")
+        self._table.setFixedHeight(40 + 34 * len(PD_COMPONENTS))
+        self._checks: Dict[str, QCheckBox] = {}
+        for r, c in enumerate(PD_COMPONENTS):
+            cb = QCheckBox()
+            cb.setEnabled(False)
+            cb.toggled.connect(lambda _c: self._set_busy(False))
+            self._checks[c["id"]] = cb
+            holder = QWidget()
+            hl = QHBoxLayout(holder)
+            hl.setContentsMargins(8, 0, 0, 0)
+            hl.addWidget(cb)
+            self._table.setCellWidget(r, 0, holder)
+            self._table.setItem(r, 1, QTableWidgetItem(c["name"]))
+            for col in (2, 3, 4):
+                self._table.setItem(r, col, QTableWidgetItem("—"))
+        lay.addWidget(self._table)
+
+        row = QHBoxLayout()
+        self._btn_check = _tool_btn("Check prefix", bold=True)
+        self._btn_check.clicked.connect(self.check)
+        row.addWidget(self._btn_check)
+        self._btn_upd = _tool_btn("Update selected", bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True)
+        self._btn_upd.clicked.connect(self.update_selected)
+        self._btn_upd.setEnabled(False)
+        row.addWidget(self._btn_upd)
+        b = _tool_btn("Restore last backup")
+        b.clicked.connect(self._restore)
+        row.addWidget(b)
+        b = _tool_btn("Open prefix folder")
+        b.clicked.connect(lambda: self._prefix() and QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._prefix()))))
+        row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+
+        self._log = QPlainTextEdit()
+        self._log.setReadOnly(True)
+        self._log.setStyleSheet(_MONO_BOX_QSS)
+        self._log.setMinimumHeight(140)
+        lay.addWidget(self._log, 1)
+        QTimer.singleShot(0, self._discover)
+
+    # -- helpers --------------------------------------------------------------
+    def _say(self, msg: str):
+        self._log.appendPlainText(msg)
+
+    def _prefix(self) -> Optional[Path]:
+        txt = self._combo.currentText().strip()
+        i = self._combo.findText(txt)
+        if i >= 0 and self._combo.itemData(i):
+            txt = self._combo.itemData(i)
+        if not txt:
+            return None
+        p = Path(txt).expanduser()
+        return p if (p / "drive_c" / "windows").is_dir() else None
+
+    def _browse(self):
+        d = QFileDialog.getExistingDirectory(self, "Select Wine prefix", str(Path.home()))
+        if d:
+            self._combo.setEditText(d)
+            self.check()
+
+    def _discover(self):
+        cur = self._combo.currentText()
+        self._combo.clear()
+        for label, p in find_prefixes():
+            self._combo.addItem(f"{label}   —   {p}", str(p))
+        if cur:
+            self._combo.setEditText(cur)
+        if self._combo.count() and not cur:
+            self._combo.setCurrentIndex(0)
+
+    def _set_busy(self, busy: bool):
+        self._btn_check.setEnabled(not busy)
+        self._btn_upd.setEnabled(not busy and any(c.isEnabled() and c.isChecked() for c in self._checks.values()))
+
+    # -- check ----------------------------------------------------------------
+    def check(self):
+        p = self._prefix()
+        if p is None:
+            self._say("⚠ Select a valid Wine prefix first (the folder that contains drive_c/).")
+            return
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self._say(f"Checking {p} …")
+        self._set_busy(True)
+        self._worker = _PDWorker("check", p, PD_COMPONENTS)
+        self._worker.checked.connect(self._on_checked)
+        self._worker.log.connect(self._say)
+        self._worker.start()
+
+    def _on_checked(self, res: dict):
+        self._state = res
+        p = self._prefix()
+        is_proton = bool(p and ((p.parent / "version").is_file() or p.name == "pfx"))
+        for r, c in enumerate(PD_COMPONENTS):
+            e = res.get(c["id"])
+            cb = self._checks[c["id"]]
+            cb.setChecked(False)
+            cb.setEnabled(False)
+            if not e:
+                continue
+            inst, rel, err = e["installed"], e["release"], e["error"]
+            latest = (rel or {}).get("tag_name", "")
+            vi = {"none": "not installed", "mixed": f"mixed: {inst['version']}"}.get(
+                inst["state"], inst["version"] + (" (exact)" if inst["source"] == "manifest" else " (scan)"))
+            status, can = "", False
+            if rel is None:
+                status = f"⚠ cannot reach GitHub: {err}"[:120]
+            elif _pick_asset(rel, c) is None:
+                status = "⚠ no matching release asset"
+            elif inst["state"] == "none":
+                status, can = "Wine builtin / missing — can install", True
+            elif inst["state"] in ("mixed", "unknown"):
+                status, can = "version unclear — reinstall recommended", True
+            else:
+                a, b = _vtuple(inst["version"]), _vtuple(latest)
+                dev = bool(re.search(r"-\d+-g[0-9a-f]+", inst["version"]))
+                if a and b:
+                    cmp_ = _vcmp(a, b)
+                    if cmp_ < 0:
+                        status, can = "outdated", True
+                    elif dev:
+                        status = "up to date (dev build after the release)"
+                    else:
+                        status = "up to date" if cmp_ == 0 else "newer than latest release"
+                else:
+                    status, can = "version unreadable — update to be sure", True
+            gaps = e.get("gaps") or []
+            if gaps and not is_proton and inst["state"] != "none":
+                status += f"   (no native override: {', '.join(gaps[:4])}{'…' if len(gaps) > 4 else ''})"
+            self._table.item(r, 2).setText(vi)
+            self._table.item(r, 3).setText(latest.lstrip("v") or "?")
+            self._table.item(r, 4).setText(status)
+            col = T["warn"] if can else (T["accent"] if status.startswith("up to date") else T["muted"])
+            self._table.item(r, 4).setForeground(QColor(col))
+            cb.setEnabled(can)
+            cb.setChecked(can and inst["state"] != "none")
+        if is_proton:
+            self._say("Note: this looks like a Proton prefix — Proton re-copies its own DXVK/VKD3D on "
+                      "version change; a manual update may be overwritten.")
+        gaps_any = any((res.get(c["id"]) or {}).get("gaps") for c in PD_COMPONENTS)
+        if gaps_any and not is_proton:
+            self._say("Hint: DLLs without a native override are ignored by Wine. Run once with e.g. "
+                      "WINEDLLOVERRIDES=\"d3d11,dxgi,d3d9,d3d10core=n,b\" or set them in winecfg.")
+        self._say("Check finished.")
+        self._set_busy(False)
+
+    # -- update ---------------------------------------------------------------
+    def update_selected(self):
+        p = self._prefix()
+        if p is None:
+            return
+        comps = [c for c in PD_COMPONENTS if self._checks[c["id"]].isChecked()]
+        if not comps:
+            self._say("Nothing selected.")
+            return
+        if QMessageBox.question(
+                self, "Update prefix",
+                f"Replace {', '.join(c['name'] for c in comps)} DLLs in\n{p}\n\n"
+                "Replaced files are backed up inside the prefix (.drstool-backup).",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        rels = {c["id"]: self._state.get(c["id"], {}).get("release") for c in comps}
+        self._set_busy(True)
+        self._worker = _PDWorker("update", p, comps, rels)
+        self._worker.log.connect(self._say)
+        self._worker.updated.connect(self._on_updated)
+        self._worker.start()
+
+    def _on_updated(self, ok: bool):
+        self._say("Done." if ok else "Finished with errors — see log.")
+        self._set_busy(False)
+        self.check()
+
+    def _restore(self):
+        p = self._prefix()
+        if p is None:
+            return
+        bdir = p / ".drstool-backup"
+        stamps = sorted(x for x in bdir.iterdir() if x.is_dir()) if bdir.is_dir() else []
+        if not stamps:
+            self._say("No backups in this prefix.")
+            return
+        last = stamps[-1]
+        if QMessageBox.question(self, "Restore backup", f"Copy the DLLs from\n{last}\nback into the prefix?",
+                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        win = p / "drive_c" / "windows"
+        n = 0
+        for sub in ("system32", "syswow64"):
+            for f in (last / sub).glob("*.dll") if (last / sub).is_dir() else []:
+                shutil.copy2(f, win / sub / f.name)
+                n += 1
+        try:
+            (p / _PD_MANIFEST).unlink()
+        except OSError:
+            pass
+        self._say(f"Restored {n} file(s) from {last.name}.")
+        self.check()
+
+
+# ============================================================================
+# MangoHud / vkBasalt config builders
+# ============================================================================
+
+# (key, kind, default-or-choices, group, description)
+#   kind: bool (bare key) | int | float | str | enum | color
+MANGOHUD_OPTS: List[tuple] = [
+    ("fps", "bool", "", "Performance", "FPS counter"),
+    ("fps_only", "bool", "", "Performance", "Show only the FPS counter"),
+    ("frametime", "bool", "", "Performance", "Frametime in ms"),
+    ("frame_timing", "bool", "", "Performance", "Frametime graph"),
+    ("histogram", "bool", "", "Performance", "Histogram instead of line graph"),
+    ("fps_color_change", "bool", "", "Performance", "Colour the FPS by thresholds"),
+    ("fps_value", "str", "30,60", "Performance", "FPS thresholds for the colour change"),
+    ("fps_color", "str", "b22222,fdfd09,39f900", "Performance", "Colours: low, medium, high"),
+    ("show_fps_limit", "bool", "", "Performance", "Show the active FPS limit"),
+    ("fps_limit", "str", "0", "Performance", "FPS limit(s), e.g. 144 or 60,0 (0 = off)"),
+    ("fps_limit_method", "enum", ["late", "early"], "Performance", "late = lower latency, early = smoother"),
+    ("toggle_fps_limit", "str", "Shift_L+F1", "Performance", "Hotkey to cycle FPS limits"),
+    ("throttling_status", "bool", "", "Performance", "Show GPU throttling status"),
+    ("throttling_status_graph", "bool", "", "Performance", "Throttling history graph"),
+
+    ("cpu_stats", "bool", "", "CPU", "CPU load"),
+    ("cpu_temp", "bool", "", "CPU", "CPU temperature"),
+    ("cpu_power", "bool", "", "CPU", "CPU power draw"),
+    ("cpu_mhz", "bool", "", "CPU", "CPU clock"),
+    ("core_load", "bool", "", "CPU", "Per-core load"),
+    ("core_bars", "bool", "", "CPU", "Per-core load as bars"),
+    ("cpu_load_change", "bool", "", "CPU", "Colour CPU load by thresholds"),
+    ("cpu_text", "str", "CPU", "CPU", "Label text"),
+    ("cpu_color", "color", "2e97cb", "CPU", "Label colour (RRGGBB)"),
+
+    ("gpu_stats", "bool", "", "GPU", "GPU load"),
+    ("gpu_temp", "bool", "", "GPU", "GPU temperature"),
+    ("gpu_junction_temp", "bool", "", "GPU", "GPU junction/hotspot temperature"),
+    ("gpu_mem_temp", "bool", "", "GPU", "GPU memory temperature"),
+    ("gpu_power", "bool", "", "GPU", "GPU power draw"),
+    ("gpu_core_clock", "bool", "", "GPU", "GPU core clock"),
+    ("gpu_mem_clock", "bool", "", "GPU", "GPU memory clock"),
+    ("gpu_fan", "bool", "", "GPU", "GPU fan speed"),
+    ("gpu_name", "bool", "", "GPU", "GPU name"),
+    ("gpu_load_change", "bool", "", "GPU", "Colour GPU load by thresholds"),
+    ("gpu_text", "str", "GPU", "GPU", "Label text"),
+    ("gpu_color", "color", "2e9762", "GPU", "Label colour (RRGGBB)"),
+    ("vram", "bool", "", "GPU", "VRAM usage"),
+    ("vram_color", "color", "ad64c1", "GPU", "VRAM colour (RRGGBB)"),
+
+    ("ram", "bool", "", "Memory / IO", "System RAM usage"),
+    ("swap", "bool", "", "Memory / IO", "Swap usage"),
+    ("procmem", "bool", "", "Memory / IO", "Process memory (resident)"),
+    ("procmem_shared", "bool", "", "Memory / IO", "Process shared memory"),
+    ("procmem_virt", "bool", "", "Memory / IO", "Process virtual memory"),
+    ("io_read", "bool", "", "Memory / IO", "Disk read rate"),
+    ("io_write", "bool", "", "Memory / IO", "Disk write rate"),
+    ("ram_color", "color", "c26693", "Memory / IO", "RAM colour (RRGGBB)"),
+    ("io_color", "color", "a491d3", "Memory / IO", "IO colour (RRGGBB)"),
+
+    ("vulkan_driver", "bool", "", "Info", "Vulkan driver name/version"),
+    ("gamemode", "bool", "", "Info", "GameMode status"),
+    ("vkbasalt", "bool", "", "Info", "vkBasalt status"),
+    ("wine", "bool", "", "Info", "Wine/Proton version"),
+    ("engine_version", "bool", "", "Info", "Engine (DXVK / VKD3D) version"),
+    ("engine_short_names", "bool", "", "Info", "Short engine names"),
+    ("resolution", "bool", "", "Info", "Render resolution"),
+    ("display_server", "bool", "", "Info", "Display server (X11 / Wayland)"),
+    ("present_mode", "bool", "", "Info", "Present mode (FIFO / MAILBOX …)"),
+    ("refresh_rate", "bool", "", "Info", "Display refresh rate"),
+    ("hdr", "bool", "", "Info", "HDR state"),
+    ("fsr", "bool", "", "Info", "FSR state (gamescope)"),
+    ("arch", "bool", "", "Info", "Process architecture"),
+    ("time", "bool", "", "Info", "Clock"),
+    ("time_format", "str", "%T", "Info", "strftime format of the clock"),
+    ("version", "bool", "", "Info", "MangoHud version"),
+    ("battery", "bool", "", "Info", "Battery status"),
+    ("battery_watt", "bool", "", "Info", "Battery power draw"),
+    ("engine_color", "color", "eb5b5b", "Info", "Engine colour (RRGGBB)"),
+    ("wine_color", "color", "eb5b5b", "Info", "Wine colour (RRGGBB)"),
+    ("exec_name", "bool", "", "Info", "Executable name"),
+
+    ("position", "enum", ["top-left", "top-center", "top-right", "middle-left", "middle-right",
+                          "bottom-left", "bottom-center", "bottom-right"], "Layout", "HUD corner"),
+    ("horizontal", "bool", "", "Layout", "Horizontal bar layout"),
+    ("horizontal_stretch", "bool", "", "Layout", "Stretch the horizontal bar across the screen"),
+    ("hud_compact", "bool", "", "Layout", "Compact layout"),
+    ("hud_no_margin", "bool", "", "Layout", "Remove margins"),
+    ("legacy_layout", "bool", "", "Layout", "Old single-column layout"),
+    ("table_columns", "int", "3", "Layout", "Number of table columns"),
+    ("font_size", "int", "24", "Layout", "Font size"),
+    ("font_scale", "float", "1.0", "Layout", "Font scale"),
+    ("font_file", "str", "", "Layout", "Path to a TTF font"),
+    ("text_outline", "bool", "", "Layout", "Outline text"),
+    ("width", "int", "", "Layout", "Fixed width (px)"),
+    ("height", "int", "", "Layout", "Fixed height (px)"),
+    ("offset_x", "int", "0", "Layout", "Horizontal offset"),
+    ("offset_y", "int", "0", "Layout", "Vertical offset"),
+    ("background_alpha", "float", "0.5", "Layout", "Background opacity (0-1)"),
+    ("alpha", "float", "1.0", "Layout", "Overall opacity (0-1)"),
+    ("round_corners", "int", "0", "Layout", "Corner radius"),
+    ("background_color", "color", "020202", "Layout", "Background colour (RRGGBB)"),
+    ("text_color", "color", "ffffff", "Layout", "Text colour (RRGGBB)"),
+    ("frametime_color", "color", "00ff00", "Layout", "Frametime graph colour (RRGGBB)"),
+    ("no_display", "bool", "", "Layout", "Start with the HUD hidden"),
+
+    ("toggle_hud", "str", "Shift_R+F12", "Control / logging", "Hotkey to show/hide the HUD"),
+    ("toggle_logging", "str", "Shift_L+F2", "Control / logging", "Hotkey to start/stop logging"),
+    ("reload_cfg", "str", "Shift_L+F4", "Control / logging", "Hotkey to reload this config"),
+    ("output_folder", "str", "", "Control / logging", "Folder for log files"),
+    ("log_duration", "int", "30", "Control / logging", "Stop logging after N seconds"),
+    ("autostart_log", "int", "", "Control / logging", "Start logging N seconds after launch"),
+    ("log_interval", "int", "100", "Control / logging", "Log sample interval (ms)"),
+]
+
+MANGOHUD_PRESETS = {
+    "Minimal FPS": {"fps": "", "fps_only": "", "position": "top-left", "font_size": "24"},
+    "Frametime": {"fps": "", "frametime": "", "frame_timing": "", "position": "top-left",
+                  "fps_color_change": "", "fps_value": "60,120"},
+    "Everything (NVIDIA)": {"fps": "", "frametime": "", "frame_timing": "", "cpu_stats": "", "cpu_temp": "",
+                            "gpu_stats": "", "gpu_temp": "", "gpu_power": "", "gpu_core_clock": "",
+                            "vram": "", "ram": "", "vulkan_driver": "", "engine_version": "", "wine": "",
+                            "present_mode": "", "position": "top-left", "background_alpha": "0.4"},
+    "Latency / limiter": {"fps": "", "frametime": "", "frame_timing": "", "present_mode": "",
+                          "show_fps_limit": "", "fps_limit_method": "late", "toggle_fps_limit": "Shift_L+F1",
+                          "position": "top-right"},
+}
+
+
+def mangohud_conf_text(vals: Dict[str, str]) -> str:
+    lines = ["# generated by DRSTool"]
+    for k, v in vals.items():
+        lines.append(k if v == "" else f"{k}={v}")
+    return "\n".join(lines) + "\n"
+
+
+def mangohud_env_string(vals: Dict[str, str]) -> str:
+    parts = []
+    for k, v in vals.items():
+        parts.append(k if v == "" else f"{k}={v.replace(',', '+')}")
+    return ",".join(parts)
+
+
+def parse_kv_conf(text: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for ln in text.splitlines():
+        ln = ln.strip()
+        if not ln or ln.startswith("#"):
+            continue
+        if "=" in ln:
+            k, v = ln.split("=", 1)
+            out[k.strip()] = v.strip()
+        else:
+            out[ln] = ""
+    return out
+
+
+def _save_text_dialog(parent: QWidget, title: str, default: Path, text: str) -> Optional[Path]:
+    default.parent.mkdir(parents=True, exist_ok=True)
+    path, _ = QFileDialog.getSaveFileName(parent, title, str(default), "Config (*.conf);;All files (*)")
+    if not path:
+        return None
+    p = Path(path)
+    try:
+        if p.is_file():
+            _backup_file(p)
+        _atomic_write(p, text)
+    except OSError as ex:
+        QMessageBox.critical(parent, title, str(ex))
+        return None
+    return p
+
+
+def _set_env_on_window(w: QWidget, name: str, value: str) -> bool:
+    win = w.window()
+    if hasattr(win, "set_env_var"):
+        win.set_env_var(name, value)
+        return True
+    return False
+
+
+class MangoHudBuilder(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._rows: Dict[str, tuple] = {}
+        self._group_labels: Dict[str, QLabel] = {}
+        self._row_widgets: Dict[str, List[QWidget]] = {}
+        self._saved_path: Optional[Path] = None
+        root = QHBoxLayout(self)
+        root.setContentsMargins(4, 8, 4, 4)
+        root.setSpacing(10)
+
+        # left: options
+        left = QVBoxLayout()
+        top = QHBoxLayout()
+        self._filter = QLineEdit()
+        self._filter.setPlaceholderText("Filter options…")
+        self._filter.setClearButtonEnabled(True)
+        self._filter.setMinimumWidth(170)
+        self._filter.textChanged.connect(self._apply_filter)
+        top.addWidget(self._filter, 1)
+        for name in MANGOHUD_PRESETS:
+            b = _tool_btn(name)
+            b.clicked.connect(lambda _c=False, n=name: self._preset(n))
+            top.addWidget(b)
+        b = _tool_btn("Clear")
+        b.clicked.connect(lambda: self._load({}))
+        top.addWidget(b)
+        left.addLayout(top)
+
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+        host = QWidget()
+        grid = QGridLayout(host)
+        grid.setContentsMargins(4, 4, 8, 4)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(3)
+        grid.setColumnStretch(2, 1)
+        r = 0
+        cur_group = None
+        edit_ss = (f"QLineEdit{{background:{T['surface']};border:1px solid {T['border']};color:{T['text']};"
+                   f"padding:1px 6px;border-radius:3px;min-height:22px;font-family:{T['mono']};font-size:11px;}}")
+        for key, kind, dflt, group, desc in MANGOHUD_OPTS:
+            if group != cur_group:
+                cur_group = group
+                gl = QLabel(group.upper())
+                gl.setStyleSheet(f"color:{T['accent']}; font-size:11px; font-weight:700; padding-top:8px;")
+                grid.addWidget(gl, r, 0, 1, 3)
+                self._group_labels[group] = gl
+                r += 1
+            cb = QCheckBox(key)
+            cb.setStyleSheet(f"color:{T['text']}; font-family:{T['mono']}; font-size:11px;")
+            ed = None
+            if kind == "enum":
+                ed = QComboBox()
+                ed.addItems(dflt)
+                ed.setFixedHeight(22)
+                ed.installEventFilter(_NO_SCROLL_FILTER)
+                ed.currentIndexChanged.connect(lambda _i, k=key: self._on_edit(k))
+            elif kind != "bool":
+                ed = QLineEdit()
+                ed.setPlaceholderText(str(dflt))
+                ed.setStyleSheet(edit_ss)
+                ed.setFixedWidth(130)
+                ed.textEdited.connect(lambda _t, k=key: self._on_edit(k))
+            cb.toggled.connect(lambda _c, k=key: self._refresh())
+            d = QLabel(desc)
+            d.setStyleSheet(f"color:{T['muted']}; font-size:11px;")
+            grid.addWidget(cb, r, 0)
+            if ed is not None:
+                grid.addWidget(ed, r, 1)
+            grid.addWidget(d, r, 2)
+            self._rows[key] = (cb, ed, kind, dflt)
+            self._row_widgets[key] = [w for w in (cb, ed, d) if w is not None]
+            r += 1
+        sc.setWidget(host)
+        left.addWidget(sc, 1)
+        root.addLayout(left, 3)
+
+        # right: preview + actions
+        right = QVBoxLayout()
+        right.addWidget(self._cap("MangoHud.conf"))
+        self._prev = QPlainTextEdit()
+        self._prev.setReadOnly(True)
+        self._prev.setStyleSheet(_MONO_BOX_QSS)
+        right.addWidget(self._prev, 3)
+        right.addWidget(self._cap("MANGOHUD_CONFIG (env form)"))
+        self._envprev = QPlainTextEdit()
+        self._envprev.setReadOnly(True)
+        self._envprev.setStyleSheet(_MONO_BOX_QSS)
+        self._envprev.setMaximumHeight(90)
+        right.addWidget(self._envprev, 1)
+        self._also_on = QCheckBox("also set MANGOHUD=1")
+        self._also_on.setChecked(True)
+        self._also_on.setStyleSheet(f"color:{T['text2']};")
+        right.addWidget(self._also_on)
+        for label, fn, primary in (("Set as MANGOHUD_CONFIG env var", self._to_env, True),
+                                   ("Save config file…  (+ MANGOHUD_CONFIGFILE)", self._save, False),
+                                   ("Load .conf…", self._load_file, False),
+                                   ("Copy conf text", lambda: QApplication.clipboard().setText(self._prev.toPlainText()), False)):
+            b = (_tool_btn(label, bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True) if primary
+                 else _tool_btn(label))
+            b.clicked.connect(fn)
+            right.addWidget(b)
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet(f"color:{T['muted']}; font-size:11px;")
+        right.addWidget(self._status)
+        right.addStretch(1)
+        holder = QWidget()
+        holder.setLayout(right)
+        holder.setMinimumWidth(300)
+        holder.setMaximumWidth(420)
+        root.addWidget(holder, 2)
+        self._refresh()
+
+    @staticmethod
+    def _cap(t):
+        l = QLabel(t)
+        l.setStyleSheet(f"color:{T['muted']}; font-size:11px; font-weight:700;")
+        return l
+
+    def _on_edit(self, key):
+        cb = self._rows[key][0]
+        if not cb.isChecked():
+            cb.setChecked(True)               # typing a value implies "enabled"
+        self._refresh()
+
+    def values(self) -> Dict[str, str]:
+        out: Dict[str, str] = {}
+        for key, (cb, ed, kind, dflt) in self._rows.items():
+            if not cb.isChecked():
+                continue
+            if kind == "bool":
+                out[key] = ""
+            elif kind == "enum":
+                out[key] = ed.currentText()
+            else:
+                v = ed.text().strip() or (str(dflt) if dflt else "")
+                if v:
+                    out[key] = v.lstrip("#") if kind == "color" else v
+        return out
+
+    def _refresh(self):
+        v = self.values()
+        self._prev.setPlainText(mangohud_conf_text(v))
+        self._envprev.setPlainText(mangohud_env_string(v))
+
+    def _load(self, vals: Dict[str, str]):
+        for key, (cb, ed, kind, dflt) in self._rows.items():
+            cb.blockSignals(True)
+            cb.setChecked(key in vals)
+            cb.blockSignals(False)
+            if ed is not None:
+                if kind == "enum":
+                    i = ed.findText(vals.get(key, ""))
+                    ed.blockSignals(True)
+                    ed.setCurrentIndex(max(0, i))
+                    ed.blockSignals(False)
+                else:
+                    ed.setText(vals.get(key, "") if key in vals else "")
+        self._refresh()
+
+    def _preset(self, name):
+        self._load(dict(MANGOHUD_PRESETS[name]))
+
+    def _apply_filter(self, text):
+        t = text.lower().strip()
+        shown_groups = set()
+        for key, ws in self._row_widgets.items():
+            desc = ws[-1].text().lower()
+            vis = (not t) or t in key or t in desc
+            for w in ws:
+                w.setVisible(vis)
+            if vis:
+                shown_groups.add(next(o[3] for o in MANGOHUD_OPTS if o[0] == key))
+        for g, lbl in self._group_labels.items():
+            lbl.setVisible(g in shown_groups)
+
+    def _load_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load MangoHud config",
+                                              str(Path.home() / ".config/MangoHud"), "Config (*.conf);;All (*)")
+        if not path:
+            return
+        try:
+            vals = parse_kv_conf(Path(path).read_text(errors="replace"))
+        except OSError as ex:
+            self._status.setText(f"⚠ {ex}")
+            return
+        known = {k for k, *_ in MANGOHUD_OPTS}
+        self._load({k: v for k, v in vals.items() if k in known})
+        unk = [k for k in vals if k not in known]
+        self._status.setText(f"Loaded {len(vals) - len(unk)} option(s)" +
+                             (f"; ignored unknown: {', '.join(unk[:8])}" if unk else "."))
+
+    def _to_env(self):
+        v = self.values()
+        if not v:
+            self._status.setText("Nothing enabled.")
+            return
+        ok = _set_env_on_window(self, "MANGOHUD_CONFIG", mangohud_env_string(v))
+        if ok and self._also_on.isChecked():
+            _set_env_on_window(self, "MANGOHUD", "1")
+        self._status.setText("MANGOHUD_CONFIG written to the Environment tab (option values containing "
+                             "commas use '+' in this form)." if ok else "⚠ no main window")
+
+    def _save(self):
+        v = self.values()
+        p = _save_text_dialog(self, "Save MangoHud config",
+                              Path.home() / ".config/MangoHud/MangoHud.conf", mangohud_conf_text(v))
+        if p is None:
+            return
+        self._saved_path = p
+        default = Path.home() / ".config/MangoHud/MangoHud.conf"
+        if p != default:
+            _set_env_on_window(self, "MANGOHUD_CONFIGFILE", str(p))
+            self._status.setText(f"Saved {p} and set MANGOHUD_CONFIGFILE.")
+        else:
+            self._status.setText(f"Saved {p} (MangoHud reads this path by default).")
+
+
+# ── vkBasalt ────────────────────────────────────────────────────────────────
+
+VKB_EFFECTS = [("cas", "Contrast Adaptive Sharpening"), ("dls", "Denoised Luma Sharpening"),
+               ("fxaa", "FXAA"), ("smaa", "SMAA"), ("lut", "Colour LUT")]
+# key, kind, default, effect-or-None, (min, max, step) / choices, description
+VKB_PARAMS = [
+    ("casSharpness", "float", 0.4, "cas", (0.0, 1.0, 0.05), "CAS strength (0 = none, 1 = max)"),
+    ("dlsSharpness", "float", 0.5, "dls", (0.0, 1.0, 0.05), "DLS sharpness"),
+    ("dlsDenoise", "float", 0.17, "dls", (0.0, 1.0, 0.01), "DLS denoise"),
+    ("fxaaQualitySubpix", "float", 0.75, "fxaa", (0.0, 1.0, 0.05), "FXAA sub-pixel quality"),
+    ("fxaaQualityEdgeThreshold", "float", 0.125, "fxaa", (0.0, 1.0, 0.005), "FXAA edge threshold"),
+    ("fxaaQualityEdgeThresholdMin", "float", 0.0312, "fxaa", (0.0, 1.0, 0.001), "FXAA minimum edge threshold"),
+    ("smaaEdgeDetection", "enum", "luma", "smaa", ["luma", "color"], "SMAA edge detection mode"),
+    ("smaaThreshold", "float", 0.05, "smaa", (0.0, 0.5, 0.005), "SMAA threshold"),
+    ("smaaMaxSearchSteps", "int", 32, "smaa", (0, 112, 1), "SMAA search steps"),
+    ("smaaMaxSearchStepsDiag", "int", 16, "smaa", (0, 20, 1), "SMAA diagonal search steps"),
+    ("smaaCornerRounding", "int", 25, "smaa", (0, 100, 1), "SMAA corner rounding"),
+]
+
+
+def vkbasalt_conf_text(effects: List[str], params: Dict[str, str], extra_effects: Dict[str, str],
+                       reshade_tex: str, reshade_inc: str, toggle_key: str, on_launch: bool,
+                       lut_file: str) -> str:
+    names = list(effects) + list(extra_effects)
+    lines = ["# generated by DRSTool"]
+    lines.append("effects = " + (":".join(names) if names else ""))
+    for n, p in extra_effects.items():
+        lines.append(f"{n} = {p}")
+    if reshade_tex:
+        lines.append(f"reshadeTexturePath = {reshade_tex}")
+    if reshade_inc:
+        lines.append(f"reshadeIncludePath = {reshade_inc}")
+    for k, v in params.items():
+        lines.append(f"{k} = {v}")
+    if "lut" in effects and lut_file:
+        lines.append(f"lutFile = {lut_file}")
+    lines.append(f"toggleKey = {toggle_key or 'Home'}")
+    lines.append(f"enableOnLaunch = {'True' if on_launch else 'False'}")
+    return "\n".join(lines) + "\n"
+
+
+class VkBasaltBuilder(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._params: Dict[str, tuple] = {}
+        root = QHBoxLayout(self)
+        root.setContentsMargins(4, 8, 4, 4)
+        root.setSpacing(10)
+        left = QVBoxLayout()
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(4, 4, 8, 4)
+        lay.addWidget(MangoHudBuilder._cap("EFFECTS  (drag to reorder; checked ones run top→bottom)"))
+        self._effects = QListWidget()
+        self._effects.setStyleSheet(_LAUNCHER_QSS)
+        self._effects.setDragDropMode(QListWidget.InternalMove)
+        self._effects.setFixedHeight(28 * len(VKB_EFFECTS) + 10)
+        for eid, label in VKB_EFFECTS:
+            it = QListWidgetItem(f"{eid}  —  {label}")
+            it.setData(Qt.UserRole, eid)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Unchecked)
+            self._effects.addItem(it)
+        self._effects.itemChanged.connect(lambda _i: self._refresh())
+        self._effects.model().rowsMoved.connect(lambda *_: self._refresh())
+        lay.addWidget(self._effects)
+
+        lay.addWidget(MangoHudBuilder._cap("PARAMETERS"))
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignLeft)
+        for key, kind, dflt, eff, rng, desc in VKB_PARAMS:
+            if kind == "enum":
+                w = QComboBox()
+                w.addItems(rng)
+                w.setCurrentText(dflt)
+                w.currentIndexChanged.connect(lambda _i: self._refresh())
+                w.installEventFilter(_NO_SCROLL_FILTER)
+            elif kind == "int":
+                w = QSpinBox()
+                w.setRange(int(rng[0]), int(rng[1]))
+                w.setValue(int(dflt))
+                w.valueChanged.connect(lambda _v: self._refresh())
+                w.installEventFilter(_NO_SCROLL_FILTER)
+            else:
+                w = QDoubleSpinBox()
+                w.setDecimals(4)
+                w.setRange(rng[0], rng[1])
+                w.setSingleStep(rng[2])
+                w.setValue(dflt)
+                w.valueChanged.connect(lambda _v: self._refresh())
+                w.installEventFilter(_NO_SCROLL_FILTER)
+            w.setToolTip(desc)
+            self._params[key] = (w, kind, eff)
+            lab = QLabel(f"{key}")
+            lab.setToolTip(desc)
+            lab.setStyleSheet(f"color:{T['text2']}; font-family:{T['mono']}; font-size:11px;")
+            form.addRow(lab, w)
+        lay.addLayout(form)
+
+        lay.addWidget(MangoHudBuilder._cap("LUT / RESHADE / KEYS"))
+        ff = QFormLayout()
+        self._lut = QLineEdit()
+        self._lut.setPlaceholderText("lutFile  (only used when 'lut' is checked)")
+        self._rtex = QLineEdit()
+        self._rtex.setPlaceholderText("reshadeTexturePath")
+        self._rinc = QLineEdit()
+        self._rinc.setPlaceholderText("reshadeIncludePath")
+        self._key = QLineEdit("Home")
+        self._on = QCheckBox("enableOnLaunch")
+        self._on.setChecked(True)
+        for w in (self._lut, self._rtex, self._rinc, self._key):
+            w.textChanged.connect(lambda _t: self._refresh())
+        self._on.toggled.connect(lambda _c: self._refresh())
+        ff.addRow("lutFile", self._lut)
+        ff.addRow("reshadeTexturePath", self._rtex)
+        ff.addRow("reshadeIncludePath", self._rinc)
+        ff.addRow("toggleKey", self._key)
+        ff.addRow("", self._on)
+        lay.addLayout(ff)
+        lay.addWidget(MangoHudBuilder._cap("EXTRA RESHADE EFFECTS   (one per line:  name = /path/to/effect.fx)"))
+        self._extra = QPlainTextEdit()
+        self._extra.setStyleSheet(_MONO_BOX_QSS)
+        self._extra.setFixedHeight(80)
+        self._extra.textChanged.connect(self._refresh)
+        lay.addWidget(self._extra)
+        lay.addStretch(1)
+        sc.setWidget(host)
+        left.addWidget(sc, 1)
+        root.addLayout(left, 3)
+
+        right = QVBoxLayout()
+        right.addWidget(MangoHudBuilder._cap("vkBasalt.conf"))
+        self._prev = QPlainTextEdit()
+        self._prev.setReadOnly(True)
+        self._prev.setStyleSheet(_MONO_BOX_QSS)
+        right.addWidget(self._prev, 1)
+        self._also_on = QCheckBox("also set ENABLE_VKBASALT=1")
+        self._also_on.setChecked(True)
+        self._also_on.setStyleSheet(f"color:{T['text2']};")
+        right.addWidget(self._also_on)
+        for label, fn, primary in (("Save config file…  (+ VKBASALT_CONFIG_FILE)", self._save, True),
+                                   ("Load .conf…", self._load_file, False),
+                                   ("Copy conf text", lambda: QApplication.clipboard().setText(self._prev.toPlainText()), False)):
+            b = (_tool_btn(label, bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True) if primary
+                 else _tool_btn(label))
+            b.clicked.connect(fn)
+            right.addWidget(b)
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet(f"color:{T['muted']}; font-size:11px;")
+        right.addWidget(self._status)
+        holder = QWidget()
+        holder.setLayout(right)
+        holder.setMinimumWidth(300)
+        holder.setMaximumWidth(420)
+        root.addWidget(holder, 2)
+        self._refresh()
+
+    def checked_effects(self) -> List[str]:
+        out = []
+        for i in range(self._effects.count()):
+            it = self._effects.item(i)
+            if it.checkState() == Qt.Checked:
+                out.append(it.data(Qt.UserRole))
+        return out
+
+    def _extra_effects(self) -> Dict[str, str]:
+        out = {}
+        for ln in self._extra.toPlainText().splitlines():
+            if "=" in ln and not ln.strip().startswith("#"):
+                n, p = ln.split("=", 1)
+                if n.strip() and p.strip():
+                    out[n.strip()] = p.strip()
+        return out
+
+    def conf_text(self) -> str:
+        eff = self.checked_effects()
+        params: Dict[str, str] = {}
+        for key, (w, kind, e) in self._params.items():
+            if e not in eff:
+                continue
+            if kind == "enum":
+                params[key] = w.currentText()
+            elif kind == "int":
+                params[key] = str(w.value())
+            else:
+                params[key] = f"{w.value():g}"
+        return vkbasalt_conf_text(eff, params, self._extra_effects(), self._rtex.text().strip(),
+                                  self._rinc.text().strip(), self._key.text().strip(), self._on.isChecked(),
+                                  self._lut.text().strip())
+
+    def _refresh(self, *_):
+        self._prev.setPlainText(self.conf_text())
+
+    def _load_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load vkBasalt config",
+                                              str(Path.home() / ".config/vkBasalt"), "Config (*.conf);;All (*)")
+        if not path:
+            return
+        try:
+            raw = {}
+            for ln in Path(path).read_text(errors="replace").splitlines():
+                ln = ln.split("#", 1)[0].strip()
+                if "=" in ln:
+                    k, v = ln.split("=", 1)
+                    raw[k.strip()] = v.strip().strip('"')
+        except OSError as ex:
+            self._status.setText(f"⚠ {ex}")
+            return
+        names = [n for n in raw.get("effects", "").split(":") if n]
+        builtin = {e for e, _ in VKB_EFFECTS}
+        order = [n for n in names if n in builtin]
+        rest = [e for e, _ in VKB_EFFECTS if e not in order]
+        self._effects.blockSignals(True)
+        self._effects.clear()
+        for eid in order + rest:
+            label = dict(VKB_EFFECTS)[eid]
+            it = QListWidgetItem(f"{eid}  —  {label}")
+            it.setData(Qt.UserRole, eid)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if eid in order else Qt.Unchecked)
+            self._effects.addItem(it)
+        self._effects.blockSignals(False)
+        for key, (w, kind, e) in self._params.items():
+            if key in raw:
+                try:
+                    if kind == "enum":
+                        w.setCurrentText(raw[key])
+                    elif kind == "int":
+                        w.setValue(int(float(raw[key])))
+                    else:
+                        w.setValue(float(raw[key]))
+                except ValueError:
+                    pass
+        self._lut.setText(raw.get("lutFile", ""))
+        self._rtex.setText(raw.get("reshadeTexturePath", ""))
+        self._rinc.setText(raw.get("reshadeIncludePath", ""))
+        self._key.setText(raw.get("toggleKey", "Home"))
+        self._on.setChecked(raw.get("enableOnLaunch", "True").lower() != "false")
+        self._extra.setPlainText("\n".join(f"{n} = {raw[n]}" for n in names if n not in builtin and n in raw))
+        self._refresh()
+        self._status.setText(f"Loaded {path}")
+
+    def _save(self):
+        p = _save_text_dialog(self, "Save vkBasalt config",
+                              Path.home() / ".config/vkBasalt/vkBasalt.conf", self.conf_text())
+        if p is None:
+            return
+        _set_env_on_window(self, "VKBASALT_CONFIG_FILE", str(p))
+        if self._also_on.isChecked():
+            _set_env_on_window(self, "ENABLE_VKBASALT", "1")
+        self._status.setText(f"Saved {p}; VKBASALT_CONFIG_FILE set in the Environment tab.")
+
+
+# ============================================================================
+# Linter / System panels and the Ctrl+K palette
+# ============================================================================
+
+_SEV_STYLE = {"error": ("●", "#d05050"), "warn": ("▲", "#d2a03c"), "info": ("ℹ", "#7d8597")}
+
+
+class LinterWidget(QWidget):
+    fix_requested = Signal(object)          # LintIssue
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._issues: List[LintIssue] = []
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(8)
+        head = QHBoxLayout()
+        self._summary = QLabel("Consistency check")
+        self._summary.setStyleSheet(f"color:{T['text']}; font-size:15px; font-weight:700;")
+        head.addWidget(self._summary, 1)
+        b = _tool_btn("Re-run")
+        b.clicked.connect(lambda: hasattr(self.window(), "_run_lint") and self.window()._run_lint())
+        head.addWidget(b)
+        lay.addLayout(head)
+        d = QLabel("Looks for combinations that contradict each other or can't work on this "
+                   "system (PROTON_NVIDIA_LIBS + WoW64, FSR4 on NVIDIA, ENABLE_HDR_WSI on drivers ≥ 595, "
+                   "double latency stacks, …). Runs automatically whenever the configuration changes.")
+        d.setWordWrap(True)
+        d.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        lay.addWidget(d)
+        self._table = QTableWidget(0, 3)
+        self._table.setHorizontalHeaderLabels(["", "Finding", ""])
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._table.setSelectionMode(QTableWidget.NoSelection)
+        self._table.setWordWrap(True)
+        hh = self._table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self._table.setStyleSheet(
+            f"QTableWidget{{background:{T['surface']};border:1px solid {T['border']};color:{T['text2']};"
+            f"gridline-color:{T['border']};}}QHeaderView::section{{background:{T['raised']};"
+            f"color:{T['muted']};border:none;padding:4px;}}")
+        lay.addWidget(self._table, 1)
+
+    def set_issues(self, issues: List[LintIssue]):
+        self._issues = issues
+        t = self._table
+        t.setRowCount(0)
+        n_e = sum(1 for i in issues if i.sev == "error")
+        n_w = sum(1 for i in issues if i.sev == "warn")
+        n_i = len(issues) - n_e - n_w
+        self._summary.setText("Consistency check — " + (
+            "all clear ✔" if not issues else f"{n_e} error(s), {n_w} warning(s), {n_i} note(s)"))
+        for row, iss in enumerate(issues):
+            t.insertRow(row)
+            sym, col = _SEV_STYLE.get(iss.sev, ("•", T["muted"]))
+            s = QTableWidgetItem(sym)
+            s.setForeground(QColor(col))
+            s.setTextAlignment(Qt.AlignCenter)
+            t.setItem(row, 0, s)
+            txt = iss.msg + (f"\n  → {', '.join(iss.involved)}" if iss.involved else "")
+            m = QTableWidgetItem(txt)
+            t.setItem(row, 1, m)
+            if iss.fixes:
+                b = _tool_btn(iss.fix_label or "Fix")
+                b.clicked.connect(lambda _c=False, i=iss: self.fix_requested.emit(i))
+                t.setCellWidget(row, 2, b)
+        t.resizeRowsToContents()
+
+
+class SystemInfoWidget(QWidget):
+    WATCH = [("VK_NV_low_latency2", "Reflex / DXVK low-latency"),
+             ("VK_EXT_descriptor_heap", "descriptor heap (DXVK / VKD3D flag)"),
+             ("VK_EXT_descriptor_buffer", "descriptor buffer"),
+             ("VK_EXT_hdr_metadata", "HDR metadata"),
+             ("VK_EXT_swapchain_colorspace", "HDR colour spaces (instance)"),
+             ("VK_NV_present_barrier", "present barrier"),
+             ("VK_KHR_present_wait", "present wait"),
+             ("VK_KHR_present_id", "present id"),
+             ("VK_EXT_swapchain_maintenance1", "swapchain maintenance"),
+             ("VK_NV_optical_flow", "optical flow (frame gen)"),
+             ("VK_NV_cooperative_matrix2", "cooperative matrix 2"),
+             ("VK_EXT_mesh_shader", "mesh shaders")]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(8)
+        t = QLabel("System")
+        t.setStyleSheet(f"color:{T['text']}; font-size:15px; font-weight:700;")
+        lay.addWidget(t)
+        self._grey = QCheckBox("Grey out options this system can't run (you can still force them with “Edit anyway”)")
+        self._grey.setChecked(SYSHUB.enabled)
+        self._grey.setStyleSheet(f"color:{T['text2']};")
+        self._grey.toggled.connect(SYSHUB.set_enabled)
+        lay.addWidget(self._grey)
+        row = QHBoxLayout()
+        b = _tool_btn("Re-probe")
+        b.clicked.connect(SYSHUB.refresh)
+        row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self._text = QPlainTextEdit()
+        self._text.setReadOnly(True)
+        self._text.setStyleSheet(_MONO_BOX_QSS)
+        lay.addWidget(self._text, 1)
+        SYSHUB.info_changed.connect(self.update_info)
+        self.update_info(SYSHUB.info)
+
+    def update_info(self, si: SysInfo):
+        L = []
+        if not si.probed:
+            L.append("Probing…")
+        else:
+            L.append(f"NVIDIA driver : {si.nv_driver or 'not detected'}"
+                     + (f"   ({si.nv_kernel_flavor})" if si.nv_kernel_flavor else ""))
+            if si.nv_gpus:
+                L.append("nvidia-smi    : " + "; ".join(si.nv_gpus))
+            L.append(f"Session       : {si.session or 'unknown'}")
+            L.append(f"/dev/ntsync   : {'present' if si.ntsync_dev else 'missing'}")
+            for tname in ("gamescope", "mangohud", "vulkaninfo", "nvidia-smi", "wine", "zstd"):
+                L.append(f"{tname:<13} : {si.tools.get(tname, '—')}")
+            L.append("")
+            if si.vk_ok:
+                for i, g in enumerate(si.vk_gpus):
+                    L.append(f"Vulkan GPU{i}   : {g.name}  [{g.driver or 'driver ?'}]  {len(g.exts)} device exts")
+                L.append("")
+                L.append("Watched extensions (NVIDIA device if present, else all):")
+                for ext, what in self.WATCH:
+                    v = si.has_ext(ext)
+                    L.append(f"  {'✔' if v else '✘'}  {ext:<34} {what}")
+            else:
+                L.append(f"Vulkan        : {si.vulkaninfo_error or 'unknown'}")
+                L.append("  (nothing is greyed out while Vulkan data is unavailable)")
+        self._text.setPlainText("\n".join(L))
+
+
+class CommandPalette(QDialog):
+    """Ctrl+K: search every DRS setting / env var / GPU arch / tool page."""
+
+    def __init__(self, items: List[dict], parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setModal(True)
+        self.setStyleSheet(f"QDialog{{background:{T['raised']};border:1px solid {T['accent_dim']};border-radius:8px;}}")
+        self.resize(720, 480)
+        self._items = items
+        self.chosen: Optional[dict] = None
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(6)
+        self._edit = QLineEdit()
+        self._edit.setPlaceholderText("Search settings, env vars, GPU archs, tools…   "
+                                      "(Enter: open · Ctrl+D: favorite · Esc: close)")
+        self._edit.setStyleSheet(f"QLineEdit{{background:{T['surface']};border:1px solid {T['border_hi']};"
+                                 f"color:{T['text']};padding:6px 10px;border-radius:5px;font-size:14px;}}")
+        self._edit.textChanged.connect(self._refill)
+        self._edit.installEventFilter(self)
+        lay.addWidget(self._edit)
+        row = QHBoxLayout()
+        self._only_set = QCheckBox("only set")
+        self._only_fav = QCheckBox("★ favorites")
+        for c in (self._only_set, self._only_fav):
+            c.setStyleSheet(f"color:{T['text2']};")
+            c.toggled.connect(lambda _c: self._refill())
+            row.addWidget(c)
+        row.addStretch(1)
+        self._count = QLabel("")
+        self._count.setStyleSheet(f"color:{T['muted']}; font-size:11px;")
+        row.addWidget(self._count)
+        lay.addLayout(row)
+        self._list = QListWidget()
+        self._list.setStyleSheet(
+            f"QListWidget{{background:{T['bg']};border:1px solid {T['border']};border-radius:5px;outline:none;}}"
+            f"QListWidget::item{{padding:5px 8px;color:{T['text2']};}}"
+            f"QListWidget::item:selected{{background:rgba(118,185,0,0.20);color:{T['text']};}}")
+        self._list.itemActivated.connect(self._accept_item)
+        self._list.itemDoubleClicked.connect(self._accept_item)
+        lay.addWidget(self._list, 1)
+        self._refill()
+        self._edit.setFocus()
+
+    @staticmethod
+    def _score(q: List[str], it: dict) -> int:
+        name = it["title"].lower()
+        hay = f'{name} {it.get("key", "").lower()} {it.get("sub", "").lower()} {it.get("desc", "").lower()}'
+        s = 0
+        for tok in q:
+            if tok in name:
+                s += 100 - min(60, name.index(tok)) + (30 if name.startswith(tok) else 0)
+            elif tok in hay:
+                s += 25
+            else:
+                # subsequence fallback on the name
+                i = 0
+                for ch in name:
+                    if i < len(tok) and ch == tok[i]:
+                        i += 1
+                if i == len(tok) and len(tok) >= 3:
+                    s += 8
+                else:
+                    return -1
+        return s
+
+    def _refill(self):
+        q = self._edit.text().lower().split()
+        scored = []
+        for it in self._items:
+            if self._only_set.isChecked() and not it.get("is_set"):
+                continue
+            if self._only_fav.isChecked() and not it.get("fav"):
+                continue
+            sc = self._score(q, it) if q else (50 if it.get("fav") else 10 if it.get("is_set") else 0)
+            if sc < 0:
+                continue
+            if it.get("fav"):
+                sc += 15
+            if it.get("is_set"):
+                sc += 10
+            scored.append((-sc, it["title"].lower(), it))
+        scored.sort(key=lambda x: (x[0], x[1]))
+        self._list.clear()
+        for _s, _n, it in scored[:300]:
+            star = "★ " if it.get("fav") else "   "
+            dot = "● " if it.get("is_set") else "   "
+            val = f'   = {it["value"]}' if it.get("value") else ""
+            li = QListWidgetItem(f'{star}{dot}{it["title"]}{val}    ·  {it.get("sub", "")}')
+            li.setData(Qt.UserRole, it)
+            if it.get("unavail"):
+                li.setForeground(QColor(T["muted"]))
+                li.setToolTip(it["unavail"])
+            self._list.addItem(li)
+        self._count.setText(f"{min(len(scored), 300)} of {len(self._items)}")
+        if self._list.count():
+            self._list.setCurrentRow(0)
+
+    def _accept_item(self, li):
+        self.chosen = li.data(Qt.UserRole)
+        self.accept()
+
+    def eventFilter(self, obj, ev):           # noqa: N802
+        if obj is self._edit and ev.type() == QEvent.KeyPress:
+            k = ev.key()
+            if k in (Qt.Key_Down, Qt.Key_Up):
+                r = self._list.currentRow() + (1 if k == Qt.Key_Down else -1)
+                self._list.setCurrentRow(max(0, min(self._list.count() - 1, r)))
+                return True
+            if k in (Qt.Key_Return, Qt.Key_Enter):
+                if self._list.currentItem():
+                    self._accept_item(self._list.currentItem())
+                return True
+            if k == Qt.Key_D and ev.modifiers() & Qt.ControlModifier:
+                self._toggle_fav()
+                return True
+        return super().eventFilter(obj, ev)
+
+    def _toggle_fav(self):
+        li = self._list.currentItem()
+        if not li:
+            return
+        it = li.data(Qt.UserRole)
+        if it.get("fav_kind") and it.get("fav_key"):
+            it["fav"] = FAVS.toggle(it["fav_kind"], it["fav_key"])
+            row = self._list.currentRow()
+            self._refill()
+            self._list.setCurrentRow(min(row, self._list.count() - 1))
 
 
 # ============================================================================
@@ -11473,6 +14516,14 @@ class MainWindow(QMainWindow):
         self._log_btn.setFixedHeight(24)
         self._log_btn.clicked.connect(self._toggle_logging)
         nav_layout.addWidget(self._log_btn)
+        nav_layout.addSpacing(6)
+        self._lint_btn = QPushButton("Lint \u2714")
+        self._lint_btn.setCursor(Qt.PointingHandCursor)
+        self._lint_btn.setFixedHeight(24)
+        self._lint_btn.setToolTip("Configuration consistency check — click to see the findings")
+        self._lint_btn.clicked.connect(self._open_linter)
+        self._set_lint_button(0, 0)
+        nav_layout.addWidget(self._lint_btn)
         nav_layout.addSpacing(10)
 
         self._profile_chip = QLabel()
@@ -11500,7 +14551,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.setSpacing(6)
 
         self._search = QLineEdit()
-        self._search.setPlaceholderText("Filter  (Ctrl+F)")
+        self._search.setPlaceholderText("Filter  (Ctrl+F)   ·   search everything: Ctrl+K")
         self._search.setClearButtonEnabled(True)
         self._search.setStyleSheet(f"""
             QLineEdit {{
@@ -11518,6 +14569,31 @@ class MainWindow(QMainWindow):
         self._filter_timer.timeout.connect(lambda: self._filter(self._search.text()))
         self._search.textChanged.connect(lambda _t: self._filter_timer.start())
         sidebar_layout.addWidget(self._search)
+
+        # Filter chips: "only set" and "★ favorites" for the DRS / Arch / Env lists
+        self._chips = QWidget()
+        _cl = QHBoxLayout(self._chips)
+        _cl.setContentsMargins(0, 0, 0, 0)
+        _cl.setSpacing(6)
+        _chip_ss = (f"QToolButton{{background:transparent;border:1px solid {T['border_hi']};"
+                    f"border-radius:10px;color:{T['text2']};padding:2px 10px;font-size:11px;}}"
+                    f"QToolButton:hover{{border-color:{T['accent_dim']};}}"
+                    f"QToolButton:checked{{background:rgba(118,185,0,0.18);border-color:{T['accent']};"
+                    f"color:{T['text']};}}")
+        self._chip_set = QToolButton()
+        self._chip_set.setText("\u25cf Only set")
+        self._chip_set.setToolTip("Show only entries that are part of the launch string")
+        self._chip_fav = QToolButton()
+        self._chip_fav.setText("\u2605 Favorites")
+        self._chip_fav.setToolTip("Show only favorites  (right-click an entry or Ctrl+D to star it)")
+        for _c in (self._chip_set, self._chip_fav):
+            _c.setCheckable(True)
+            _c.setCursor(Qt.PointingHandCursor)
+            _c.setStyleSheet(_chip_ss)
+            _c.toggled.connect(lambda _x: self._on_chips())
+            _cl.addWidget(_c)
+        _cl.addStretch(1)
+        sidebar_layout.addWidget(self._chips)
 
         self._sidebar_stack = QStackedWidget()
         sidebar_layout.addWidget(self._sidebar_stack)
@@ -11560,6 +14636,24 @@ class MainWindow(QMainWindow):
         lutris_scroll.setWidgetResizable(True)
         lutris_scroll.setWidget(self._lutris_sync_widget)
         lutris_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+
+        # Launcher sync tabs: runnable line + Lutris + Steam + Heroic + Bottles
+        self._launch_line = LaunchLineWidget()
+        self._steam_sync = LauncherSyncWidget(SteamBackend())
+        self._heroic_sync = LauncherSyncWidget(HeroicBackend())
+        self._bottles_sync = LauncherSyncWidget(BottlesBackend())
+        self._sync_tabs = QTabWidget()
+        self._sync_tabs.setStyleSheet(ExtraToolsWidget._TAB_SS)
+        self._sync_tabs.addTab(self._launch_line, "Launch line")
+        self._sync_tabs.addTab(lutris_scroll, "Lutris")
+        for _w, _t in ((self._steam_sync, "Steam"), (self._heroic_sync, "Heroic"),
+                       (self._bottles_sync, "Bottles")):
+            _sc = QScrollArea()
+            _sc.setWidgetResizable(True)
+            _sc.setWidget(_w)
+            _sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+            self._sync_tabs.addTab(_sc, _t)
+        self._sync_tabs.currentChanged.connect(lambda _i: self._refresh_sync_previews())
 
         splitter.addWidget(sidebar)
 
@@ -11610,7 +14704,7 @@ class MainWindow(QMainWindow):
         self._right_stack.addWidget(self._extra_tools)
 
         # Page 6: Lutris Sync (Profiles tab)
-        self._right_stack.addWidget(lutris_scroll)
+        self._right_stack.addWidget(self._sync_tabs)
 
         # Wire the Gamescope CLI-flag builder into the Lutris sync mapping
         self._lutris_sync_widget.set_gamescope_widget(self._gamescope)
@@ -11656,6 +14750,29 @@ class MainWindow(QMainWindow):
             lambda: self._env_widget.set_gamescope_enabled(self._gamescope.is_enabled()))
         self._gamescope.changed.connect(self._refresh_badges)
 
+        # Feature pack: lint, system probe, favorites, launcher previews
+        self._lint_timer = QTimer(self)
+        self._lint_timer.setSingleShot(True)
+        self._lint_timer.setInterval(250)
+        self._lint_timer.timeout.connect(self._run_lint)
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setSingleShot(True)
+        self._sync_timer.setInterval(200)
+        self._sync_timer.timeout.connect(self._refresh_sync_previews)
+        self._lint_issue_count = (0, 0)
+        for _sig in (self.settings_manager.settings_changed, self._env_widget.env_changed,
+                     self._gamescope.changed):
+            _sig.connect(self._schedule_lint)
+            _sig.connect(lambda *_: self._sync_timer.start())
+        self._extra_tools.linter.fix_requested.connect(self._apply_lint_fix)
+        SYSHUB.info_changed.connect(self._on_sysinfo)
+        FAVS.changed.connect(self._on_favs_changed)
+        install_fav_menu(self._settings_list, "drs")
+        install_fav_menu(self._env_widget, "env")
+        install_fav_menu(self._arch_list, "arch", key_of=lambda a: getattr(a, "code", None))
+        self._seen_set_ids = frozenset()
+        self._seen_env_keys = frozenset()
+
         # Initial population
         self._populate_settings()
         self._populate_arch_list()
@@ -11672,6 +14789,227 @@ class MainWindow(QMainWindow):
         self._refresh_badges()
         self._update_window_title()
         self._restore_ui_state()
+        self._chips.setVisible(self._sidebar_stack.currentIndex() in (self.TAB_DRS, self.TAB_ARCH, self.TAB_ENV))
+        QTimer.singleShot(300, SYSHUB.refresh)
+        self._schedule_lint()
+
+    # ===== Feature pack: launch payload / lint / system / favorites / palette =====
+    def collect_launch_payload(self) -> dict:
+        """Everything the launch string is made of, as plain data."""
+        env: Dict[str, str] = {}
+        arch = self.settings_manager.get_arch()
+        if arch:
+            env["DXVK_NVAPI_GPU_ARCH"] = arch.code
+        drs = self.settings_manager.get_settings_list()
+        sstr = self.settings_manager.get_settings_string()
+        if sstr:
+            env["DXVK_NVAPI_DRS_SETTINGS"] = sstr
+        env.update(self._env_widget.get_env_dict())
+        gs_on = self._gamescope.is_enabled()
+        return {"env": env, "drs": drs, "arch": arch.code if arch else "",
+                "gs_on": gs_on,
+                "gs_flags": self._gamescope.get_flag_values() if gs_on else {},
+                "mangohud": self._gamescope.mangohud_enabled(),
+                "gs_cmd": self._gamescope.build_command() if gs_on else ""}
+
+    def set_env_var(self, name: str, value: str):
+        """Set (or, with an empty value, clear) an environment variable programmatically."""
+        if value:
+            self._env_widget.set_value(name, value)
+        else:
+            self._env_widget.clear_value(name)
+        if getattr(self._env_editor, "_current_name", "") == name:
+            ev = next((e for e in ALL_ENV_VARS if e.name == name), None)
+            if ev:
+                self._env_editor.set_var(ev)
+
+    def _refresh_sync_previews(self):
+        w = self._sync_tabs.currentWidget()
+        if isinstance(w, QScrollArea):
+            w = w.widget()
+        for fn in ("refresh_preview", "refresh"):
+            if hasattr(w, fn):
+                getattr(w, fn)()
+                break
+
+    def _schedule_lint(self, *_):
+        self._lint_timer.start()
+
+    def _set_lint_button(self, n_err: int, n_warn: int):
+        if n_err:
+            txt, col = f"Lint: {n_err} \u25cf", T["danger"]
+        elif n_warn:
+            txt, col = f"Lint: {n_warn} \u25b2", T["warn"]
+        else:
+            txt, col = "Lint \u2714", T["muted"]
+        self._lint_btn.setText(txt)
+        self._lint_btn.setStyleSheet(
+            f"QPushButton {{ color:{col}; background:transparent; border:1px solid {col};"
+            f" border-radius:4px; padding:0 10px; font-size:12px; }}"
+            f"QPushButton:hover {{ background:{T['surface']}; }}")
+
+    def _run_lint(self):
+        p = self.collect_launch_payload()
+        try:
+            issues = lint_config(p["env"], p["drs"], p["arch"], p["gs_on"], p["gs_flags"],
+                                 p["mangohud"], SYSHUB.info)
+        except Exception as ex:                      # a linter bug must never break the editor
+            issues = [LintIssue("info", "lint-crash", f"Linter failed: {ex}")]
+        self._extra_tools.linter.set_issues(issues)
+        self._set_lint_button(sum(1 for i in issues if i.sev == "error"),
+                              sum(1 for i in issues if i.sev == "warn"))
+
+    def _open_linter(self):
+        self._switch_tab(self.TAB_TOOLS)
+        self._extra_tools.show_tab("Linter")
+
+    def _apply_lint_fix(self, issue):
+        for fx in issue.fixes:
+            kind = fx[0]
+            if kind == "env_unset":
+                self.set_env_var(fx[1], "")
+            elif kind == "env_set":
+                self.set_env_var(fx[1], fx[2])
+            elif kind == "drs_unset":
+                self.settings_manager.remove_setting(fx[1])
+            elif kind == "gamescope_off":
+                self._gamescope._enable_chk.setChecked(False)
+        self.statusBar().showMessage(f"Applied fix: {issue.fix_label}", 3000)
+        self._run_lint()
+
+    def _on_sysinfo(self, info):
+        self._refresh_availability()
+        self._schedule_lint()
+        if info.probed:
+            drv = info.nv_driver or "no NVIDIA driver"
+            self.statusBar().showMessage(
+                f"System probe: {drv}" + (f" \u00b7 Vulkan: {len(info.vk_gpus)} GPU(s)" if info.vk_ok else ""), 4000)
+
+    def _refresh_availability(self):
+        tab = self._sidebar_stack.currentIndex()
+        self._populate_settings(self._search.text() if tab == self.TAB_DRS else "", quiet=True)
+        self._env_widget.populate(self._search.text() if tab == self.TAB_ENV else "")
+        cur = self._setting_editor._current_setting
+        if cur is not None:
+            self._setting_editor.set_setting(cur)
+        name = getattr(self._env_editor, "_current_name", "")
+        ev = next((e for e in ALL_ENV_VARS if e.name == name), None)
+        if ev:
+            self._env_editor.set_var(ev)
+
+    def _on_favs_changed(self):
+        tab = self._sidebar_stack.currentIndex()
+        self._populate_settings(self._search.text() if tab == self.TAB_DRS else "", quiet=True)
+        self._env_widget.populate(self._search.text() if tab == self.TAB_ENV else "")
+        self._populate_arch_list()
+
+    def _on_chips(self):
+        so, sf = self._chip_set.isChecked(), self._chip_fav.isChecked()
+        for lw in (self._settings_list, self._env_widget):
+            lw.only_set, lw.only_fav = so, sf
+        tab = self._sidebar_stack.currentIndex()
+        self._populate_settings(self._search.text() if tab == self.TAB_DRS else "", quiet=True)
+        self._env_widget.populate(self._search.text() if tab == self.TAB_ENV else "")
+        self._populate_arch_list()
+
+    def _toggle_current_fav(self):
+        tab = self._sidebar_stack.currentIndex()
+        kind, key = None, None
+        if tab == self.TAB_DRS and self._settings_list.currentItem():
+            kind, key = "drs", self._settings_list.currentItem().data(Qt.UserRole)
+        elif tab == self.TAB_ENV and self._env_widget.currentItem():
+            kind, key = "env", self._env_widget.currentItem().data(Qt.UserRole)
+        elif tab == self.TAB_ARCH and self._arch_list.currentItem():
+            a = self._arch_list.currentItem().data(Qt.UserRole)
+            kind, key = "arch", getattr(a, "code", None)
+        if not key or (isinstance(key, str) and key.startswith("__")):
+            return
+        now = FAVS.toggle(kind, key)
+        verb = "\u2605 Added" if now else "Removed"
+        self.statusBar().showMessage(f"{verb} favorite: {key}", 2500)
+
+    def _palette_items(self) -> List[dict]:
+        items: List[dict] = []
+        state = self.settings_manager.get_settings_list()
+        for s in self.all_settings:
+            cur = state.get(s.id)
+            items.append(dict(kind="drs", key=s.id, title=s.name, sub=f"DRS \u00b7 {s.cat}", desc=s.desc,
+                              is_set=cur is not None,
+                              value=_fmt_drs_value(s, cur) if cur is not None else "",
+                              fav=FAVS.is_fav("drs", s.id), fav_kind="drs", fav_key=s.id,
+                              unavail=drs_unavailable(s)))
+        vals = self._env_widget.get_env_dict()
+        for ev in ALL_ENV_VARS:
+            items.append(dict(kind="env", key=ev.name, title=ev.name, sub=f"Env \u00b7 {ev.cat}", desc=ev.desc,
+                              is_set=ev.name in vals, value=vals.get(ev.name, ""),
+                              fav=FAVS.is_fav("env", ev.name), fav_kind="env", fav_key=ev.name,
+                              unavail=env_unavailable(ev)))
+        sel = self.settings_manager.get_arch()
+        for a in GPU_ARCHS:
+            items.append(dict(kind="arch", key=a.code, title=f"{a.name} ({a.arch})", sub="GPU arch",
+                              desc=a.example, is_set=bool(sel and sel.code == a.code), value=a.code,
+                              fav=FAVS.is_fav("arch", a.code), fav_kind="arch", fav_key=a.code))
+        items.append(dict(kind="gamescope", key="gamescope", title="Gamescope launch flags", sub="Builder",
+                          desc="gamescope CLI flags", is_set=self._gamescope.is_enabled()))
+        for title in ("Linter", "System", "Prefix Doctor", "MangoHud", "vkBasalt"):
+            items.append(dict(kind="tool", key=title, title=f"{title}", sub="Extra Tools", desc=""))
+        for title in ("Launch line", "Lutris", "Steam", "Heroic", "Bottles"):
+            items.append(dict(kind="sync", key=title, title=f"{title} sync" if title != "Launch line" else title,
+                              sub="Profiles \u203a sync", desc=""))
+        return items
+
+    def _open_palette(self):
+        dlg = CommandPalette(self._palette_items(), self)
+        g = self.geometry()
+        dlg.move(g.center().x() - dlg.width() // 2, g.top() + 90)
+        if dlg.exec() == QDialog.Accepted and dlg.chosen:
+            self.navigate_to(dlg.chosen)
+
+    def navigate_to(self, it: dict):
+        kind, key = it["kind"], it["key"]
+        if kind in ("drs", "env", "arch"):
+            for c in (self._chip_set, self._chip_fav):          # never hide the target
+                c.blockSignals(True)
+                c.setChecked(False)
+                c.blockSignals(False)
+            for lw in (self._settings_list, self._env_widget):
+                lw.only_set = lw.only_fav = False
+            self._search.blockSignals(True)
+            self._search.clear()
+            self._search.blockSignals(False)
+        if kind == "drs":
+            self._switch_tab(self.TAB_DRS)
+            self._select_item(self._settings_list, key)
+        elif kind == "env":
+            self._switch_tab(self.TAB_ENV)
+            self._select_item(self._env_widget, key)
+        elif kind == "arch":
+            self._switch_tab(self.TAB_ARCH)
+            for i in range(self._arch_list.count()):
+                a = self._arch_list.item(i).data(Qt.UserRole)
+                if getattr(a, "code", None) == key:
+                    self._arch_list.scrollToItem(self._arch_list.item(i), QListWidget.PositionAtCenter)
+                    break
+        elif kind == "gamescope":
+            self._switch_tab(self.TAB_ENV)
+            self._right_stack.setCurrentIndex(self.PAGE_GAMESCOPE)
+        elif kind == "tool":
+            self._switch_tab(self.TAB_TOOLS)
+            self._extra_tools.show_tab(key)
+        elif kind == "sync":
+            self._switch_tab(self.TAB_PROFILES)
+            for i in range(self._sync_tabs.count()):
+                if self._sync_tabs.tabText(i) == key:
+                    self._sync_tabs.setCurrentIndex(i)
+                    break
+
+    def _select_item(self, lw: QListWidget, key: str):
+        for i in range(lw.count()):
+            item = lw.item(i)
+            if item.data(Qt.UserRole) == key:
+                lw.setCurrentItem(item)
+                lw.scrollToItem(item, QListWidget.PositionAtCenter)
+                return
 
     # ===== Shortcuts / persisted UI state =====
     def _install_shortcuts(self):
@@ -11687,6 +15025,8 @@ class MainWindow(QMainWindow):
             sc(f"Ctrl+{i + 1}", lambda i=i: self._switch_tab(i))
         sc("Ctrl+S", self._shortcut_save)
         sc("Ctrl+Shift+C", lambda: self._output_bar._copy_all(steam=False))
+        sc("Ctrl+K", self._open_palette)
+        sc("Ctrl+D", self._toggle_current_fav)
 
     def _focus_search(self):
         if self._search.isEnabled():
@@ -11743,6 +15083,11 @@ class MainWindow(QMainWindow):
             self._qsettings.setValue("window/tab", self._sidebar_stack.currentIndex())
         except Exception:
             pass
+        try:
+            SYSHUB.shutdown()
+            self._extra_tools.prefix_doctor._worker and self._extra_tools.prefix_doctor._worker.wait(3000)
+        except Exception:
+            pass
         super().closeEvent(event)
 
     # ===== Dirty tracking / badges =====
@@ -11781,6 +15126,7 @@ class MainWindow(QMainWindow):
         filterable = idx in (self.TAB_DRS, self.TAB_ENV)
         self._search.setEnabled(filterable)
         self._search.setVisible(filterable)
+        self._chips.setVisible(idx in (self.TAB_DRS, self.TAB_ARCH, self.TAB_ENV))
 
         # Re-apply whatever is typed in the search box to the list we just
         # switched to, so filtering never looks stale across tabs.
@@ -11788,6 +15134,8 @@ class MainWindow(QMainWindow):
             self._populate_settings(self._search.text())
         elif idx == self.TAB_ENV:
             self._env_widget.populate(self._search.text())
+        elif idx == self.TAB_ARCH:
+            self._populate_arch_list()
 
         self._placeholder.setText(self.EMPTY_HINTS.get(idx, ""))
 
@@ -11809,18 +15157,23 @@ class MainWindow(QMainWindow):
                 self._right_stack.setCurrentIndex(self.PAGE_EMPTY)
 
     # ===== Settings =====
-    def _populate_settings(self, filter_text: str = ""):
+    def _populate_settings(self, filter_text: str = "", quiet: bool = False):
         current_item = self._settings_list.currentItem()
         current_id = current_item.data(Qt.UserRole) if current_item else None
 
         state = self.settings_manager.get_settings_list()
         self._settings_list.populate(self.all_settings, state, filter_text)
+        self._seen_set_ids = frozenset(state)
 
         if current_id:
             for i in range(self._settings_list.count()):
                 item = self._settings_list.item(i)
                 if item.data(Qt.UserRole) == current_id:
+                    if quiet:
+                        self._settings_list.blockSignals(True)
                     self._settings_list.setCurrentItem(item)
+                    if quiet:
+                        self._settings_list.blockSignals(False)
                     break
 
     def _filter(self, text):
@@ -11875,7 +15228,8 @@ class MainWindow(QMainWindow):
 
     # ===== Architecture =====
     def _populate_arch_list(self):
-        self._arch_list.populate(GPU_ARCHS, self.settings_manager.get_arch())
+        self._arch_list.populate(GPU_ARCHS, self.settings_manager.get_arch(),
+                                 self._chip_set.isChecked(), self._chip_fav.isChecked())
 
     def _select_architecture(self, arch: GPUArch):
         self.settings_manager.set_arch(arch)
@@ -11921,6 +15275,10 @@ class MainWindow(QMainWindow):
         env_str = f" · {env_count} env var{'s' if env_count != 1 else ''}" if env_count else ""
         self.statusBar().showMessage(f"{count} setting{'s' if count != 1 else ''} configured{arch_str}{env_str}")
         self._settings_list.refresh_colors(self.settings_manager.get_settings_list())
+        if self._settings_list.only_set and \
+                frozenset(self.settings_manager.get_settings_list()) != self._seen_set_ids:
+            self._populate_settings(self._search.text() if self._sidebar_stack.currentIndex() == self.TAB_DRS else "",
+                                    quiet=True)
         self._refresh_badges()
 
     def _toggle_logging(self):
@@ -11961,6 +15319,9 @@ class MainWindow(QMainWindow):
         # Keep output bar Copy All up to date
         self._output_bar._update()
         self._refresh_badges()
+        if self._env_widget.only_set and frozenset(self._env_widget.get_env_dict()) != self._seen_env_keys:
+            self._env_widget.populate(self._search.text() if self._sidebar_stack.currentIndex() == self.TAB_ENV else "")
+        self._seen_env_keys = frozenset(self._env_widget.get_env_dict())
 
     def _on_profile_loaded(self, name):
         # 1. Reset and reload env vars from profile
