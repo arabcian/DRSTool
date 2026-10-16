@@ -2588,16 +2588,66 @@ class SettingsManager(QObject):
             self.startup_notice = msg
             self.profile_save_error.emit(msg)
 
+    # ── Profile history (snapshots of the state each save replaces) ──────────
+    _HISTORY_KEEP = 60
+
+    @staticmethod
+    def _history_dir() -> Path:
+        return SettingsManager._profiles_path().parent / "history"
+
+    def list_snapshots(self) -> List[Path]:
+        try:
+            return sorted(self._history_dir().glob("profiles-*.json"), reverse=True)
+        except OSError:
+            return []
+
+    def _snapshot_old(self, data_file: Path, new_text: str):
+        """Keep the file we are about to overwrite, unless nothing actually changes."""
+        try:
+            if not data_file.exists():
+                return
+            old = data_file.read_bytes()
+            if not old.strip() or old == new_text.encode("utf-8"):
+                return
+            hd = self._history_dir()
+            hd.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            (hd / f"profiles-{stamp}.json").write_bytes(old)
+            for p in sorted(hd.glob("profiles-*.json"))[:-self._HISTORY_KEEP]:
+                p.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def restore_profile(self, name: str, data) -> bool:
+        if not isinstance(data, dict):
+            return False
+        self._profiles[name] = json.loads(json.dumps(data))
+        ok = self._save_profiles()
+        self.profiles_changed.emit()
+        return ok
+
+    def restore_all_profiles(self, profiles: Dict) -> bool:
+        if not isinstance(profiles, dict):
+            return False
+        self._profiles = json.loads(json.dumps(profiles))
+        if self._current_profile not in self._profiles:
+            self._current_profile = None
+        ok = self._save_profiles()
+        self.profiles_changed.emit()
+        return ok
+
     def _save_profiles(self) -> bool:
         """Write profiles to disk atomically. Returns True on success."""
         data_file = self._profiles_path()
         try:
             data_file.parent.mkdir(parents=True, exist_ok=True)
             tmp_file = data_file.with_suffix(".json.tmp")
+            text = json.dumps(self._profiles, indent=2)
             with open(tmp_file, "w", encoding="utf-8") as f:
-                json.dump(self._profiles, f, indent=2)
+                f.write(text)
                 f.flush()
                 os.fsync(f.fileno())
+            self._snapshot_old(data_file, text)
             os.replace(tmp_file, data_file)  # atomic on POSIX — no partial-write corruption
             return True
         except Exception as e:
@@ -8304,7 +8354,7 @@ class LutrisSyncWidget(QWidget):
         )
         return new_text, sys_changed, env_changed, sys_removed, env_removed
 
-    _BACKUP_KEEP = 5
+    _BACKUP_KEEP = 20
 
     @classmethod
     def _prune_backups(cls, target: Path):
@@ -11509,6 +11559,12 @@ QTabBar::tab:hover { color: #c8cdd8; }
         tabs.addTab(self.mangohud, "MangoHud")
         self.vkbasalt = VkBasaltBuilder()
         tabs.addTab(self.vkbasalt, "vkBasalt")
+        self.cache = CacheManagerWidget()
+        tabs.addTab(self.cache, "Cache")
+        self.cache.stale_changed.connect(
+            lambda stale: tabs.setTabText(tabs.indexOf(self.cache), "Cache ⚠" if stale else "Cache"))
+        self.drift = UpstreamDriftWidget()
+        tabs.addTab(self.drift, "Upstream drift")
 
         layout.addWidget(tabs)
 
@@ -12164,9 +12220,9 @@ def gamescope_arg_string(flags: Dict[str, str]) -> str:
 def _backup_file(path: Path) -> Path:
     bak = path.with_name(f"{path.name}.drstool-{datetime.now():%Y%m%d-%H%M%S}.bak")
     shutil.copy2(path, bak)
-    # keep the 5 newest backups of this file
+    # keep the 20 newest backups of this file
     olds = sorted(path.parent.glob(f"{path.name}.drstool-*.bak"))
-    for o in olds[:-5]:
+    for o in olds[:-20]:
         try:
             o.unlink()
         except OSError:
@@ -14441,6 +14497,1654 @@ class CommandPalette(QDialog):
 
 
 # ============================================================================
+# Feature pack 2 — history / diff / restore, shader-cache manager,
+# NVIDIA Profile Inspector (.nip) import, upstream drift check.
+# Self-contained: touches the rest of the program only through
+# SettingsManager (snapshots / restore) and a few tab registrations.
+# ============================================================================
+
+import difflib
+from PySide6.QtWidgets import QTextEdit, QTreeWidget, QTreeWidgetItem
+
+_SETTING_BY_ID: Dict[str, "Setting"] = {s.id.upper(): s for s in ALL_SETTINGS}
+
+
+def _fmt_bytes(n: float) -> str:
+    n = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if n < 1024 or unit == "TiB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TiB"
+
+
+def _pack2_table_ss() -> str:
+    return (f"QTableWidget,QTreeWidget{{background:{T['surface']};border:1px solid {T['border']};"
+            f"color:{T['text2']};gridline-color:{T['border']};}}"
+            f"QHeaderView::section{{background:{T['raised']};color:{T['muted']};border:none;padding:4px;}}"
+            f"QTreeWidget::item:selected,QTableWidget::item:selected{{background:rgba(118,185,0,0.20);"
+            f"color:{T['text']};}}")
+
+
+def _pack2_title(text: str, sub: str = "") -> QWidget:
+    w = QWidget()
+    v = QVBoxLayout(w)
+    v.setContentsMargins(0, 0, 0, 0)
+    v.setSpacing(2)
+    t = QLabel(text)
+    t.setStyleSheet(f"color:{T['text']}; font-size:15px; font-weight:700;")
+    v.addWidget(t)
+    if sub:
+        d = QLabel(sub)
+        d.setWordWrap(True)
+        d.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        v.addWidget(d)
+    return w
+
+
+# ----------------------------------------------------------------------------
+# Profile flatten / diff
+# ----------------------------------------------------------------------------
+
+def _flat_profile(p) -> Dict[tuple, str]:
+    out: Dict[tuple, str] = {}
+    if not isinstance(p, dict):
+        return out
+    for k, v in _as_dict(p.get("settings")).items():
+        out[("DRS", str(k).upper())] = str(v)
+    if p.get("arch"):
+        out[("Arch", "GPU arch")] = str(p["arch"])
+    for k, v in _as_dict(p.get("env_vars")).items():
+        out[("Env", str(k))] = str(v)
+    if p.get("gamescope_enabled"):
+        out[("Gamescope", "enabled")] = "on"
+    for k, v in _as_dict(p.get("gamescope_flags")).items():
+        out[("Gamescope", str(k))] = str(v)
+    return out
+
+
+def diff_profiles(a, b) -> List[tuple]:
+    """(section, key, value_in_a, value_in_b) for every difference; None = absent."""
+    fa, fb = _flat_profile(a), _flat_profile(b)
+    order = {"Arch": 0, "DRS": 1, "Env": 2, "Gamescope": 3}
+    rows = []
+    for key in sorted(set(fa) | set(fb), key=lambda k: (order.get(k[0], 9), k[1])):
+        va, vb = fa.get(key), fb.get(key)
+        if va != vb:
+            rows.append((key[0], key[1], va, vb))
+    return rows
+
+
+class ProfileDiffTable(QTableWidget):
+    def __init__(self):
+        super().__init__(0, 4)
+        self.setHorizontalHeaderLabels(["Section", "Key", "A", "B"])
+        self.verticalHeader().setVisible(False)
+        self.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.setSelectionBehavior(QTableWidget.SelectRows)
+        hh = self.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.setStyleSheet(_pack2_table_ss())
+
+    @staticmethod
+    def _label(section: str, key: str, val):
+        if section == "DRS":
+            s = _SETTING_BY_ID.get(key)
+            shown_key = f"{s.name}  ({key})" if s else key
+            if val is not None and s is not None:
+                try:
+                    return shown_key, f"{_fmt_drs_value(s, val)}  [{val}]" if _fmt_drs_value(s, val) != val else val
+                except Exception:
+                    pass
+            return shown_key, val
+        return key, val
+
+    def show_diff(self, a, b, label_a: str, label_b: str) -> int:
+        rows = diff_profiles(a, b)
+        self.setHorizontalHeaderLabels(["Section", "Key", label_a, label_b])
+        self.setRowCount(0)
+        for r, (sec, key, va, vb) in enumerate(rows):
+            self.insertRow(r)
+            shown_key, _ = self._label(sec, key, None)
+            _, sa = self._label(sec, key, va)
+            _, sb = self._label(sec, key, vb)
+            col = (T["accent"] if va is None else T["danger"] if vb is None else T["warn"])
+            cells = [sec, shown_key, "—" if sa is None else sa, "—" if sb is None else sb]
+            for c, txt in enumerate(cells):
+                it = QTableWidgetItem(txt)
+                if c >= 2:
+                    it.setForeground(QColor(col))
+                self.setItem(r, c, it)
+        return len(rows)
+
+
+# ----------------------------------------------------------------------------
+# History widget: profile snapshots, config-file backups, profile compare
+# ----------------------------------------------------------------------------
+
+def _diff_html(old_lines: List[str], new_lines: List[str], from_label: str, to_label: str) -> str:
+    import html as _html
+    out = []
+    for ln in difflib.unified_diff(old_lines, new_lines, from_label, to_label, lineterm="", n=2):
+        esc = _html.escape(ln.rstrip("\n"))
+        if ln.startswith("+++") or ln.startswith("---"):
+            col = T["muted"]
+        elif ln.startswith("@@"):
+            col = "#6aa0d8"
+        elif ln.startswith("+"):
+            col = T["accent"]
+        elif ln.startswith("-"):
+            col = T["danger"]
+        else:
+            col = T["text2"]
+        out.append(f'<span style="color:{col}">{esc or "&nbsp;"}</span>')
+    if not out:
+        return f'<span style="color:{T["muted"]}">No differences.</span>'
+    return ('<pre style="font-family:monospace;font-size:12px;margin:0">'
+            + "<br>".join(out) + "</pre>")
+
+
+class HistoryWidget(QWidget):
+    def __init__(self, settings_manager: "SettingsManager"):
+        super().__init__()
+        self.sm = settings_manager
+        self._snap_data: Dict = {}
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        tabs = QTabWidget()
+        tabs.setStyleSheet(ExtraToolsWidget._TAB_SS)
+        tabs.addTab(self._build_snapshots(), "Profile history")
+        tabs.addTab(self._build_files(), "Config backups")
+        tabs.addTab(self._build_compare(), "Compare profiles")
+        lay.addWidget(tabs)
+        self.sm.profiles_changed.connect(self._on_profiles_changed)
+        self._reload_snapshots()
+        self._scan_lutris()
+
+    # ── Profile history ───────────────────────────────────────────────────
+    def _build_snapshots(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.addWidget(_pack2_title(
+            "Profile history",
+            "Every time profiles.json is overwritten (save, overwrite, delete, restore) the previous "
+            "state is kept as a snapshot. Pick a snapshot, pick a profile inside it, and compare it "
+            "with the live profile of the same name."))
+        split = QSplitter(Qt.Horizontal)
+        left = QWidget()
+        lv = QVBoxLayout(left)
+        lv.setContentsMargins(0, 0, 0, 0)
+        lv.addWidget(QLabel("Snapshots (newest first)"))
+        self._snap_list = QListWidget()
+        self._snap_list.setStyleSheet(_LAUNCHER_QSS)
+        self._snap_list.currentRowChanged.connect(self._snap_selected)
+        lv.addWidget(self._snap_list, 1)
+        lv.addWidget(QLabel("Profiles in snapshot   (= same · ≠ differs · ＋ deleted since)"))
+        self._snap_profiles = QListWidget()
+        self._snap_profiles.setStyleSheet(_LAUNCHER_QSS)
+        self._snap_profiles.currentRowChanged.connect(self._snap_profile_selected)
+        lv.addWidget(self._snap_profiles, 1)
+        split.addWidget(left)
+        right = QWidget()
+        rv = QVBoxLayout(right)
+        rv.setContentsMargins(0, 0, 0, 0)
+        self._snap_summary = QLabel("")
+        self._snap_summary.setStyleSheet(f"color:{T['muted']};font-size:12px;")
+        rv.addWidget(self._snap_summary)
+        self._snap_diff = ProfileDiffTable()
+        rv.addWidget(self._snap_diff, 1)
+        row = QHBoxLayout()
+        self._btn_restore_one = _tool_btn("Restore this profile", bold=True)
+        self._btn_restore_one.clicked.connect(self._restore_one)
+        self._btn_restore_all = _tool_btn("Restore whole snapshot")
+        self._btn_restore_all.clicked.connect(self._restore_all)
+        b_open = _tool_btn("Open history folder")
+        b_open.clicked.connect(lambda: QDesktopServices.openUrl(
+            QUrl.fromLocalFile(str(SettingsManager._history_dir()))))
+        for b in (self._btn_restore_one, self._btn_restore_all, b_open):
+            row.addWidget(b)
+        row.addStretch(1)
+        rv.addLayout(row)
+        split.addWidget(right)
+        split.setChildrenCollapsible(False)
+        split.setSizes([320, 560])
+        v.addWidget(split, 1)
+        return w
+
+    def refresh(self):
+        self._reload_snapshots()
+        self._scan_lutris()
+
+    def _on_profiles_changed(self):
+        self._reload_snapshots()
+        self._refresh_compare_combos()
+
+    def _reload_snapshots(self):
+        cur = self._snap_list.currentItem()
+        cur_path = cur.data(Qt.UserRole) if cur else None
+        self._snap_list.blockSignals(True)
+        self._snap_list.clear()
+        for p in self.sm.list_snapshots():
+            n = ""
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                n = f" · {len(data)} profile(s)" if isinstance(data, dict) else " · unreadable"
+            except Exception:
+                n = " · unreadable"
+            it = QListWidgetItem(f"{self._stamp_of(p)}{n}")
+            it.setData(Qt.UserRole, p)
+            self._snap_list.addItem(it)
+            if cur_path is not None and p == cur_path:
+                self._snap_list.setCurrentItem(it)
+        self._snap_list.blockSignals(False)
+        if self._snap_list.count() == 0:
+            self._snap_list.addItem(QListWidgetItem("(no snapshots yet — they appear after the next save)"))
+            self._snap_list.item(0).setFlags(Qt.NoItemFlags)
+        if self._snap_list.currentRow() < 0 and self._snap_list.count() and \
+                self._snap_list.item(0).flags() != Qt.NoItemFlags:
+            self._snap_list.setCurrentRow(0)
+        else:
+            self._snap_selected(self._snap_list.currentRow())
+
+    @staticmethod
+    def _stamp_of(p: Path) -> str:
+        m = re.match(r"profiles-(\d{8})-(\d{6})", p.name)
+        if not m:
+            return p.name
+        try:
+            return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").strftime(
+                "%Y-%m-%d %H:%M:%S  (replaced)")
+        except ValueError:
+            return p.name
+
+    def _snap_selected(self, _row: int):
+        self._snap_profiles.blockSignals(True)
+        self._snap_profiles.clear()
+        self._snap_diff.setRowCount(0)
+        self._snap_data = {}
+        it = self._snap_list.currentItem()
+        p = it.data(Qt.UserRole) if it else None
+        if p is not None:
+            try:
+                data = json.loads(Path(p).read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    self._snap_data = data
+            except Exception:
+                pass
+        live = self.sm.get_profiles()
+        for name in sorted(self._snap_data, key=str.lower):
+            if name not in live:
+                mark = "＋"
+            elif diff_profiles(self._snap_data[name], live[name]):
+                mark = "≠"
+            else:
+                mark = "="
+            li = QListWidgetItem(f"{mark}  {name}")
+            li.setData(Qt.UserRole, name)
+            self._snap_profiles.addItem(li)
+        self._snap_profiles.blockSignals(False)
+        self._snap_summary.setText(
+            "" if self._snap_data else "Select a snapshot.")
+        self._btn_restore_all.setEnabled(bool(self._snap_data))
+        self._btn_restore_one.setEnabled(False)
+
+    def _snap_profile_selected(self, _row: int):
+        it = self._snap_profiles.currentItem()
+        if it is None:
+            self._btn_restore_one.setEnabled(False)
+            return
+        name = it.data(Qt.UserRole)
+        live = self.sm.get_profiles().get(name)
+        n = self._snap_diff.show_diff(self._snap_data.get(name), live, "Snapshot", "Live now")
+        self._snap_summary.setText(
+            f'"{name}": {n} difference(s)' if live is not None
+            else f'"{name}" no longer exists in the live profiles (deleted since).')
+        self._btn_restore_one.setEnabled(True)
+
+    def _restore_one(self):
+        it = self._snap_profiles.currentItem()
+        if it is None:
+            return
+        name = it.data(Qt.UserRole)
+        if QMessageBox.question(
+                self, "Restore profile",
+                f'Replace the live profile "{name}" with the snapshot version?\n'
+                "The current state is kept as a new snapshot first.") != QMessageBox.Yes:
+            return
+        self.sm.restore_profile(name, self._snap_data.get(name))
+
+    def _restore_all(self):
+        if not self._snap_data:
+            return
+        if QMessageBox.question(
+                self, "Restore snapshot",
+                f"Replace ALL live profiles with this snapshot ({len(self._snap_data)} profile(s))?\n"
+                "The current state is kept as a new snapshot first.") != QMessageBox.Yes:
+            return
+        self.sm.restore_all_profiles(self._snap_data)
+
+    # ── Config backups (Lutris YAML / any file with .bak siblings) ──────────
+    def _build_files(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.addWidget(_pack2_title(
+            "Config file backups",
+            "Browse the timestamped .bak files DRSTool wrote next to Lutris game YAMLs (and Steam / "
+            "Heroic / Bottles files). One backup selected: shows what restoring it would change. "
+            "Two selected: diff between them. Restoring keeps the current file as a new backup."))
+        row = QHBoxLayout()
+        self._file_combo = QComboBox()
+        self._file_combo.setMinimumWidth(300)
+        self._file_combo.currentIndexChanged.connect(self._file_selected)
+        row.addWidget(self._file_combo, 1)
+        b_scan = _tool_btn("Rescan Lutris")
+        b_scan.clicked.connect(self._scan_lutris)
+        b_other = _tool_btn("Other file…")
+        b_other.clicked.connect(self._pick_other_file)
+        row.addWidget(b_scan)
+        row.addWidget(b_other)
+        v.addLayout(row)
+        split = QSplitter(Qt.Horizontal)
+        self._bak_list = QListWidget()
+        self._bak_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self._bak_list.setStyleSheet(_LAUNCHER_QSS)
+        self._bak_list.itemSelectionChanged.connect(self._bak_selection)
+        split.addWidget(self._bak_list)
+        self._bak_diff = QTextEdit()
+        self._bak_diff.setReadOnly(True)
+        self._bak_diff.setStyleSheet(
+            f"QTextEdit{{background:{T['bg']};border:1px solid {T['border_hi']};border-radius:4px;}}")
+        split.addWidget(self._bak_diff)
+        split.setChildrenCollapsible(False)
+        split.setSizes([300, 580])
+        v.addWidget(split, 1)
+        r2 = QHBoxLayout()
+        self._btn_bak_restore = _tool_btn("Restore selected backup", bold=True)
+        self._btn_bak_restore.setEnabled(False)
+        self._btn_bak_restore.clicked.connect(self._restore_backup)
+        r2.addWidget(self._btn_bak_restore)
+        self._bak_status = QLabel("")
+        self._bak_status.setStyleSheet(f"color:{T['muted']};font-size:12px;")
+        r2.addWidget(self._bak_status, 1)
+        v.addLayout(r2)
+        return w
+
+    def _lutris_dir(self) -> Path:
+        win = self.window()
+        d = getattr(getattr(win, "_lutris_sync_widget", None), "_games_dir", None)
+        return Path(d) if d else LutrisSyncWidget._default_games_dir()
+
+    @staticmethod
+    def _backups_of(target: Path) -> List[Path]:
+        try:
+            baks = [p for p in target.parent.glob(glob.escape(target.name) + ".*")
+                    if p.name.endswith(".bak") and p.is_file()]
+        except OSError:
+            return []
+        return sorted(baks, key=lambda p: p.stat().st_mtime, reverse=True)
+
+    def _scan_lutris(self):
+        keep = self._file_combo.currentData()
+        self._file_combo.blockSignals(True)
+        self._file_combo.clear()
+        d = self._lutris_dir()
+        files = sorted(list(d.glob("*.yml")) + list(d.glob("*.yaml"))) if d.is_dir() else []
+        for p in files:
+            n = len(self._backups_of(p))
+            self._file_combo.addItem(f"{p.name}   ({n} backup{'s' if n != 1 else ''})", str(p))
+        self._file_combo.blockSignals(False)
+        if keep:
+            i = self._file_combo.findData(keep)
+            if i >= 0:
+                self._file_combo.setCurrentIndex(i)
+        self._file_selected()
+
+    def _pick_other_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "File whose backups to browse", str(Path.home()))
+        if path:
+            i = self._file_combo.findData(path)
+            if i < 0:
+                self._file_combo.addItem(path, path)
+                i = self._file_combo.count() - 1
+            self._file_combo.setCurrentIndex(i)
+
+    def _cur_file(self) -> Optional[Path]:
+        d = self._file_combo.currentData()
+        return Path(d) if d else None
+
+    def _file_selected(self, *_):
+        self._bak_list.clear()
+        self._bak_diff.clear()
+        f = self._cur_file()
+        if f is None:
+            self._bak_status.setText(f"No game configs found in {self._lutris_dir()}")
+            return
+        baks = self._backups_of(f)
+        for p in baks:
+            st = p.stat()
+            tail = p.name[len(f.name) + 1:]
+            it = QListWidgetItem(f"{datetime.fromtimestamp(st.st_mtime):%Y-%m-%d %H:%M:%S}  ·  "
+                                 f"{_fmt_bytes(st.st_size)}  ·  {tail}")
+            it.setData(Qt.UserRole, p)
+            self._bak_list.addItem(it)
+        self._bak_status.setText(f"{len(baks)} backup(s) of {f.name}" if baks
+                                 else f"No backups of {f.name} yet.")
+        self._bak_selection()
+
+    @staticmethod
+    def _read_lines(p: Path) -> List[str]:
+        return p.read_text(encoding="utf-8", errors="replace").splitlines()
+
+    def _bak_selection(self):
+        sel = [i.data(Qt.UserRole) for i in self._bak_list.selectedItems()]
+        f = self._cur_file()
+        self._btn_bak_restore.setEnabled(len(sel) == 1)
+        if f is None or not sel:
+            self._bak_diff.clear()
+            return
+        try:
+            if len(sel) == 1:
+                cur = self._read_lines(f) if f.exists() else []
+                html_ = _diff_html(cur, self._read_lines(sel[0]), f"{f.name} (current)",
+                                   f"{sel[0].name} (after restore)")
+            else:
+                a, b = sorted(sel[:2], key=lambda p: p.stat().st_mtime)
+                html_ = _diff_html(self._read_lines(a), self._read_lines(b), a.name, b.name)
+        except OSError as e:
+            html_ = f"Could not read: {e}"
+        self._bak_diff.setHtml(html_)
+
+    def _restore_backup(self):
+        sel = self._bak_list.selectedItems()
+        f = self._cur_file()
+        if len(sel) != 1 or f is None:
+            return
+        bak: Path = sel[0].data(Qt.UserRole)
+        if QMessageBox.question(
+                self, "Restore backup",
+                f"Restore {bak.name}\ninto {f}?\n\nThe current file is saved as a new .bak first.") != QMessageBox.Yes:
+            return
+        try:
+            target = Path(os.path.realpath(f))
+            if target.exists():
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                shutil.copy2(target, target.with_name(f"{target.name}.{stamp}.pre-restore.bak"))
+            fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "wb") as out, open(bak, "rb") as src:
+                    shutil.copyfileobj(src, out)
+                    out.flush()
+                    os.fsync(out.fileno())
+                shutil.copymode(target if target.exists() else bak, tmp)
+                os.replace(tmp, target)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        except Exception as e:
+            QMessageBox.critical(self, "Restore failed", str(e))
+            return
+        self._bak_status.setText(f"Restored {bak.name}")
+        self._file_selected()
+        win = self.window()
+        lw = getattr(win, "_lutris_sync_widget", None)
+        if lw is not None and hasattr(lw, "_on_game_selected"):
+            try:
+                lw._on_game_selected(lw._game_combo.currentIndex())
+            except Exception:
+                pass
+
+    # ── Compare profiles ──────────────────────────────────────────────────
+    def _build_compare(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.addWidget(_pack2_title(
+            "Compare two profiles",
+            "Shows only the differences in DRS settings, GPU arch, env vars and gamescope flags. "
+            "“Current editor state” is what the output bar would produce right now."))
+        row = QHBoxLayout()
+        self._cmp_a = QComboBox()
+        self._cmp_b = QComboBox()
+        for c in (self._cmp_a, self._cmp_b):
+            c.setMinimumWidth(200)
+            c.currentIndexChanged.connect(self._update_compare)
+        row.addWidget(QLabel("A"))
+        row.addWidget(self._cmp_a, 1)
+        row.addWidget(QLabel("B"))
+        row.addWidget(self._cmp_b, 1)
+        v.addLayout(row)
+        self._cmp_summary = QLabel("")
+        self._cmp_summary.setStyleSheet(f"color:{T['muted']};font-size:12px;")
+        v.addWidget(self._cmp_summary)
+        self._cmp_table = ProfileDiffTable()
+        v.addWidget(self._cmp_table, 1)
+        self._refresh_compare_combos()
+        return w
+
+    def _refresh_compare_combos(self):
+        names = sorted(self.sm.get_profiles(), key=str.lower)
+        for c, default in ((self._cmp_a, 0), (self._cmp_b, 1)):
+            keep = c.currentData()
+            c.blockSignals(True)
+            c.clear()
+            c.addItem("● Current editor state", "__current__")
+            for n in names:
+                c.addItem(n, n)
+            i = c.findData(keep) if keep else -1
+            c.setCurrentIndex(i if i >= 0 else min(default, c.count() - 1))
+            c.blockSignals(False)
+        self._update_compare()
+
+    def _current_state(self) -> dict:
+        win = self.window()
+        env, gs_on, gs_flags = {}, False, {}
+        if hasattr(win, "_env_widget"):
+            env = win._env_widget.get_env_dict()
+        if hasattr(win, "_gamescope"):
+            gs_on = win._gamescope.is_enabled()
+            gs_flags = win._gamescope.get_flag_values()
+        arch = self.sm.get_arch()
+        return {"settings": self.sm.get_settings_list(), "arch": arch.code if arch else None,
+                "env_vars": env, "gamescope_enabled": gs_on, "gamescope_flags": gs_flags}
+
+    def _get_profile(self, key):
+        if key == "__current__":
+            return self._current_state()
+        return self.sm.get_profiles().get(key)
+
+    def _update_compare(self, *_):
+        ka, kb = self._cmp_a.currentData(), self._cmp_b.currentData()
+        if ka is None or kb is None:
+            return
+        n = self._cmp_table.show_diff(self._get_profile(ka), self._get_profile(kb),
+                                      self._cmp_a.currentText(), self._cmp_b.currentText())
+        self._cmp_summary.setText("Identical." if n == 0 else f"{n} difference(s)")
+
+
+# ----------------------------------------------------------------------------
+# NVIDIA Profile Inspector (.nip) import
+# ----------------------------------------------------------------------------
+
+def parse_nip(text: str) -> List[dict]:
+    """Parse a Profile Inspector export. Returns [{name, exes, settings:[{id,value,vtype,label}]}]."""
+    if re.search(r"<!\s*(DOCTYPE|ENTITY)", text, re.I):
+        raise ValueError("DTD / entity declarations are not allowed in a .nip file")
+    root = ET.fromstring(text)
+    out = []
+    for prof in root.iter("Profile"):
+        settings = []
+        for ps in prof.findall("./Settings/ProfileSetting"):
+            try:
+                sid = int((ps.findtext("SettingID") or "").strip(), 0)
+            except ValueError:
+                continue
+            raw = (ps.findtext("SettingValue") or "").strip()
+            vtype = (ps.findtext("ValueType") or "Dword").strip()
+            val: Optional[int] = None
+            if vtype.lower() == "dword":
+                try:
+                    val = int(raw, 0) & 0xFFFFFFFF
+                except ValueError:
+                    val = None
+            settings.append({"id": sid, "value": val, "raw": raw, "vtype": vtype,
+                             "label": (ps.findtext("SettingNameInfo") or "").strip()})
+        out.append({"name": (prof.findtext("ProfileName") or "").strip(),
+                    "exes": [(e.text or "").strip() for e in prof.findall("./Executeables/string")],
+                    "settings": settings})
+    return out
+
+
+def decode_nip_bytes(data: bytes) -> str:
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16")
+    return data.decode("utf-8-sig", errors="replace")
+
+
+class NipImportWidget(QWidget):
+    COL_USE, COL_NAME, COL_ID, COL_VAL, COL_STATUS = range(5)
+
+    def __init__(self, settings_manager: "SettingsManager"):
+        super().__init__()
+        self.sm = settings_manager
+        self._profiles: List[dict] = []
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.addWidget(_pack2_title(
+            "Import NVIDIA Profile Inspector (.nip)",
+            "Reads a .nip export and converts its DWORD settings into DXVK_NVAPI_DRS_SETTINGS pairs "
+            "(0xID=0xVALUE). Settings are applied to the editor — nothing is written to the driver. "
+            "String / binary values cannot be expressed in DXVK_NVAPI_DRS_SETTINGS and are skipped."))
+        row = QHBoxLayout()
+        b = _tool_btn("Open .nip…", bold=True)
+        b.clicked.connect(self._open)
+        row.addWidget(b)
+        self._prof_combo = QComboBox()
+        self._prof_combo.currentIndexChanged.connect(self._fill)
+        row.addWidget(self._prof_combo, 1)
+        lay.addLayout(row)
+        self._info = QLabel("")
+        self._info.setWordWrap(True)
+        self._info.setStyleSheet(f"color:{T['muted']};font-size:12px;")
+        lay.addWidget(self._info)
+        self._table = QTableWidget(0, 5)
+        self._table.setHorizontalHeaderLabels(["Use", "Setting", "ID", "Value", "Status"])
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        hh = self._table.horizontalHeader()
+        hh.setSectionResizeMode(self.COL_NAME, QHeaderView.Stretch)
+        for c in (self.COL_USE, self.COL_ID, self.COL_VAL, self.COL_STATUS):
+            hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        self._table.setStyleSheet(_pack2_table_ss())
+        self._table.itemChanged.connect(lambda _i: self._update_preview())
+        lay.addWidget(self._table, 1)
+        self._preview = QLineEdit()
+        self._preview.setReadOnly(True)
+        self._preview.setStyleSheet(
+            f"QLineEdit{{background:{T['bg']};border:1px solid {T['border_hi']};color:{T['text']};"
+            f"font-family:{T['mono']};padding:4px 6px;}}")
+        lay.addWidget(self._preview)
+        r2 = QHBoxLayout()
+        self._mode = QComboBox()
+        self._mode.addItems(["Merge into current settings", "Replace current DRS settings"])
+        r2.addWidget(self._mode)
+        self._btn_apply = _tool_btn("Apply to editor", bold=True)
+        self._btn_apply.clicked.connect(self._apply)
+        self._btn_apply.setEnabled(False)
+        b_copy = _tool_btn("Copy DXVK_NVAPI_DRS_SETTINGS=…")
+        b_copy.clicked.connect(lambda: QApplication.clipboard().setText(self._preview.text()))
+        r2.addWidget(self._btn_apply)
+        r2.addWidget(b_copy)
+        r2.addStretch(1)
+        lay.addLayout(r2)
+
+    def _open(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "NVIDIA Profile Inspector export", str(Path.home()), "Profile Inspector (*.nip);;All files (*)")
+        if path:
+            self.load_file(Path(path))
+
+    def load_file(self, path: Path):
+        try:
+            if path.stat().st_size > 8 * 1024 * 1024:
+                raise ValueError("file is larger than 8 MiB")
+            self._profiles = parse_nip(decode_nip_bytes(path.read_bytes()))
+        except Exception as e:
+            self._profiles = []
+            self._prof_combo.clear()
+            self._table.setRowCount(0)
+            self._info.setText(f"Could not read {path.name}: {e}")
+            self._update_preview()
+            return
+        self._prof_combo.blockSignals(True)
+        self._prof_combo.clear()
+        for p in self._profiles:
+            self._prof_combo.addItem(f'{p["name"] or "(unnamed)"}  ·  {len(p["settings"])} setting(s)')
+        self._prof_combo.blockSignals(False)
+        self._info.setText(f"{path.name}: {len(self._profiles)} profile(s)")
+        self._fill()
+
+    @staticmethod
+    def _fmt_value(v: int) -> str:
+        return f"0x{v:X}"
+
+    def _fill(self, *_):
+        t = self._table
+        t.blockSignals(True)
+        t.setRowCount(0)
+        i = self._prof_combo.currentIndex()
+        if not (0 <= i < len(self._profiles)):
+            t.blockSignals(False)
+            self._update_preview()
+            return
+        prof = self._profiles[i]
+        exes = ", ".join(e for e in prof["exes"] if e)
+        self._info.setText((f"Profile applies to: {exes}" if exes else "Profile has no executables listed")
+                           + "  ·  ✓ rows are converted")
+        for r, s in enumerate(prof["settings"]):
+            t.insertRow(r)
+            key = f'0x{s["id"]:08X}'
+            known = _SETTING_BY_ID.get(key)
+            ok = s["value"] is not None
+            if not ok:
+                status = f'skipped: {s["vtype"]} value'
+            elif known is None:
+                status = "not in DRSTool catalog (kept as raw pair)"
+            else:
+                status = "known"
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled if ok else Qt.NoItemFlags)
+            chk.setCheckState(Qt.Checked if ok else Qt.Unchecked)
+            chk.setData(Qt.UserRole, (key, self._fmt_value(s["value"]) if ok else None))
+            t.setItem(r, self.COL_USE, chk)
+            name = known.name if known else (s["label"] or "(unknown)")
+            val_txt = (f"{_fmt_drs_value(known, self._fmt_value(s['value']))}  [{self._fmt_value(s['value'])}]"
+                       if ok and known and _fmt_drs_value(known, self._fmt_value(s['value'])) != self._fmt_value(s['value'])
+                       else (self._fmt_value(s["value"]) if ok else s["raw"][:40]))
+            for c, txt in ((self.COL_NAME, name), (self.COL_ID, key), (self.COL_VAL, val_txt),
+                           (self.COL_STATUS, status)):
+                it = QTableWidgetItem(txt)
+                it.setFlags(Qt.ItemIsEnabled)
+                if not ok:
+                    it.setForeground(QColor(T["muted"]))
+                elif known is None and c == self.COL_STATUS:
+                    it.setForeground(QColor(T["warn"]))
+                t.setItem(r, c, it)
+        t.blockSignals(False)
+        self._update_preview()
+
+    def _checked_pairs(self) -> List[tuple]:
+        pairs = []
+        for r in range(self._table.rowCount()):
+            it = self._table.item(r, self.COL_USE)
+            if it is not None and it.checkState() == Qt.Checked:
+                k, v = it.data(Qt.UserRole)
+                if v is not None:
+                    pairs.append((k, v))
+        return pairs
+
+    def _update_preview(self):
+        pairs = self._checked_pairs()
+        self._preview.setText("DXVK_NVAPI_DRS_SETTINGS=" + ",".join(f"{k}={v}" for k, v in pairs)
+                              if pairs else "")
+        self._btn_apply.setEnabled(bool(pairs))
+
+    def _apply(self):
+        pairs = self._checked_pairs()
+        if not pairs:
+            return
+        replace = self._mode.currentIndex() == 1
+        if replace and QMessageBox.question(
+                self, "Replace settings",
+                "Clear all current DRS settings in the editor before applying?") != QMessageBox.Yes:
+            return
+        if replace:
+            self.sm.clear_all()
+        for k, v in pairs:
+            self.sm.set_setting(k, v)
+        self._info.setText(f"Applied {len(pairs)} setting(s) to the editor.")
+
+
+# ----------------------------------------------------------------------------
+# Shader / pipeline cache manager
+# ----------------------------------------------------------------------------
+
+def _path_stats(path: str) -> tuple:
+    """(disk bytes, file count, newest mtime) of a file or directory tree; symlinks not followed."""
+    total = files = 0
+    newest = 0.0
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return 0, 0, 0.0
+    if not os.path.isdir(path) or os.path.islink(path):
+        return getattr(st, "st_blocks", 0) * 512 or st.st_size, 1, st.st_mtime
+    stack = [path]
+    while stack:
+        d = stack.pop()
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    try:
+                        if e.is_symlink():
+                            continue
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(e.path)
+                            continue
+                        s = e.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    total += getattr(s, "st_blocks", 0) * 512 or s.st_size
+                    files += 1
+                    if s.st_mtime > newest:
+                        newest = s.st_mtime
+        except OSError:
+            continue
+    return total, files, newest
+
+
+def _steam_roots() -> List[Path]:
+    home = Path.home()
+    cands = [home / ".local/share/Steam", home / ".steam/steam", home / ".steam/root",
+             home / ".var/app/com.valvesoftware.Steam/.local/share/Steam"]
+    seen, out = set(), []
+    for c in cands:
+        try:
+            rp = c.resolve()
+        except OSError:
+            continue
+        if rp.is_dir() and rp not in seen:
+            seen.add(rp)
+            out.append(rp)
+    return out
+
+
+def _steam_libraries() -> List[Path]:
+    libs, seen = [], set()
+    for root in _steam_roots():
+        paths = [root]
+        vdf = root / "steamapps" / "libraryfolders.vdf"
+        try:
+            paths += [Path(m) for m in re.findall(r'"path"\s+"([^"]+)"', vdf.read_text(errors="replace"))]
+        except OSError:
+            pass
+        for p in paths:
+            try:
+                rp = p.resolve()
+            except OSError:
+                continue
+            if rp not in seen and (rp / "steamapps").is_dir():
+                seen.add(rp)
+                libs.append(rp)
+    return libs
+
+
+def _classify_cache_entry(name: str) -> tuple:
+    """(group, driver_bound) for an entry inside steamapps/shadercache/<appid>/."""
+    n = name.lower()
+    if n.startswith("nvidia"):
+        return "NVIDIA GL / compute", True
+    if n.startswith("vkd3d"):
+        return "vkd3d-proton", True
+    if "dxvk" in n:
+        return "DXVK", False
+    if n.startswith(("mesa", "radv", "foz", "fossilize")):
+        return "Mesa / Fossilize", False
+    return "Other", False
+
+
+CACHE_GROUP_ORDER = ["NVIDIA GL / compute", "vkd3d-proton", "DXVK", "Mesa / Fossilize",
+                     "Lutris (per game)", "Custom folders", "Other"]
+
+
+def discover_cache_nodes(user_env: Dict[str, str], extra: List[str]) -> List[dict]:
+    """Every cache location we know about. Pure filesystem work — safe in a thread."""
+    home = Path.home()
+    xdg_cache = Path(os.environ.get("XDG_CACHE_HOME", home / ".cache"))
+
+    def env(name: str) -> str:
+        return (user_env.get(name) or os.environ.get(name) or "").strip()
+
+    nodes: List[dict] = []
+    seen = set()
+
+    def add(group: str, label: str, path, driver: bool = False, note: str = ""):
+        p = str(path)
+        try:
+            rp = os.path.realpath(p)
+        except OSError:
+            return
+        if rp in seen or not os.path.exists(p):
+            return
+        seen.add(rp)
+        nodes.append({"group": group, "label": label, "path": p, "driver": driver, "note": note})
+
+    # NVIDIA driver caches (keyed by driver version → stale after an update)
+    for var in ("__GL_SHADER_DISK_CACHE_PATH",):
+        if env(var):
+            add("NVIDIA GL / compute", f"{var} (your setting)", env(var), True)
+    add("NVIDIA GL / compute", "OpenGL/Vulkan shader cache (~/.nv/GLCache)", home / ".nv/GLCache", True)
+    add("NVIDIA GL / compute", "OpenGL/Vulkan shader cache (~/.cache/nvidia/GLCache)",
+        xdg_cache / "nvidia/GLCache", True)
+    add("NVIDIA GL / compute", "CUDA compute cache (~/.nv/ComputeCache)", home / ".nv/ComputeCache", True)
+    add("NVIDIA GL / compute", "CUDA compute cache (~/.cache/nvidia/ComputeCache)",
+        xdg_cache / "nvidia/ComputeCache", True)
+    # Mesa
+    md = env("MESA_SHADER_CACHE_DIR")
+    for base in ([Path(md)] if md else []) + [xdg_cache]:
+        add("Mesa / Fossilize", f"Mesa shader cache ({base})", base / "mesa_shader_cache")
+        add("Mesa / Fossilize", f"Mesa shader cache DB ({base})", base / "mesa_shader_cache_db")
+    add("Mesa / Fossilize", "RADV built-in shaders", xdg_cache / "radv_builtin_shaders")
+    # user-configured paths
+    for var, grp, drv in (("DXVK_STATE_CACHE_PATH", "DXVK", False), ("DXVK_SHADER_CACHE_PATH", "DXVK", False),
+                          ("VKD3D_SHADER_CACHE_PATH", "vkd3d-proton", True)):
+        v = env(var)
+        if v and v != "0":
+            add(grp, f"{var} (your setting)", v, drv)
+    # Lutris keeps per-game shader caches here
+    lut = xdg_cache / "lutris" / "shaders"
+    if lut.is_dir():
+        try:
+            for sub in sorted(lut.iterdir()):
+                add("Lutris (per game)", sub.name, sub)
+        except OSError:
+            pass
+    # Steam: shadercache/<appid>/<kind>
+    for lib in _steam_libraries():
+        sc = lib / "steamapps" / "shadercache"
+        if not sc.is_dir():
+            continue
+        try:
+            apps = sorted(sc.iterdir())
+        except OSError:
+            continue
+        for app in apps:
+            if not app.name.isdigit() or not app.is_dir():
+                continue
+            gname = app.name
+            try:
+                m = re.search(r'"name"\s+"([^"]+)"',
+                              (lib / "steamapps" / f"appmanifest_{app.name}.acf").read_text(errors="replace"))
+                if m:
+                    gname = f"{m.group(1)} ({app.name})"
+            except OSError:
+                pass
+            try:
+                entries = sorted(app.iterdir())
+            except OSError:
+                continue
+            for ent in entries:
+                grp, drv = _classify_cache_entry(ent.name)
+                add(grp, f"{gname} — {ent.name}", ent, drv)
+    for p in extra:
+        add("Custom folders", p, p)
+    return nodes
+
+
+def _safe_cache_path(p: str, extra: List[str]) -> bool:
+    """Refuse to delete anything that is not clearly a cache location."""
+    try:
+        rp = Path(os.path.realpath(p))
+        home = Path(os.path.realpath(Path.home()))
+    except OSError:
+        return False
+    if rp == home or rp == Path("/") or len(rp.parts) < 4:
+        return False
+    if p in extra:
+        return True
+    return home in rp.parents or "shadercache" in rp.parts
+
+
+class _CacheScanThread(QThread):
+    done = Signal(object)
+
+    def __init__(self, user_env: Dict[str, str], extra: List[str]):
+        super().__init__()
+        self._env, self._extra = user_env, extra
+
+    def run(self):
+        nodes = discover_cache_nodes(self._env, self._extra)
+        for n in nodes:
+            n["size"], n["files"], n["mtime"] = _path_stats(n["path"])
+        self.done.emit(nodes)
+
+
+class CacheManagerWidget(QWidget):
+    driver_changed = Signal(str)      # human message, emitted when the driver differs from the last acknowledged one
+    stale_changed = Signal(bool)
+
+    CACHE_ENV = ("__GL_SHADER_DISK_CACHE", "__GL_SHADER_DISK_CACHE_SIZE", "__GL_SHADER_DISK_CACHE_PATH",
+                 "__GL_SHADER_DISK_CACHE_SKIP_CLEANUP", "DXVK_STATE_CACHE_PATH", "DXVK_SHADER_CACHE_PATH",
+                 "DXVK_SHADER_CACHE", "VKD3D_SHADER_CACHE_PATH", "MESA_SHADER_CACHE_DIR")
+
+    def __init__(self):
+        super().__init__()
+        self._thread: Optional[_CacheScanThread] = None
+        self._nodes: List[dict] = []
+        self._stale = False
+        self._driver_msg_sent = False
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(8)
+        lay.addWidget(_pack2_title(
+            "Shader / pipeline caches",
+            "Sizes of the NVIDIA, Mesa, DXVK and vkd3d-proton caches DRSTool can find: the driver "
+            "caches, Steam's shadercache/<appid> folders (every library), Lutris' per-game folder and "
+            "the paths you set in the Env Vars tab. Use “Add folder…” for .dxvk-cache files next to "
+            "game executables."))
+        self._banner = QLabel("")
+        self._banner.setWordWrap(True)
+        self._banner.setStyleSheet(
+            f"background:rgba(210,80,80,0.14);border:1px solid {T['danger']};border-radius:5px;"
+            f"color:{T['text']};padding:6px 10px;font-size:12px;")
+        self._banner.hide()
+        lay.addWidget(self._banner)
+        brow = QHBoxLayout()
+        self._btn_clear_stale = _tool_btn("Clear driver-bound caches")
+        self._btn_clear_stale.clicked.connect(self._clear_stale)
+        self._btn_ack = _tool_btn("Keep & acknowledge")
+        self._btn_ack.clicked.connect(self._acknowledge)
+        brow.addWidget(self._btn_clear_stale)
+        brow.addWidget(self._btn_ack)
+        brow.addStretch(1)
+        self._banner_btns = QWidget()
+        self._banner_btns.setLayout(brow)
+        self._banner_btns.hide()
+        lay.addWidget(self._banner_btns)
+        self._env_line = QLabel("")
+        self._env_line.setWordWrap(True)
+        self._env_line.setStyleSheet(f"color:{T['muted']};font-size:12px;")
+        lay.addWidget(self._env_line)
+        self._tree = QTreeWidget()
+        self._tree.setColumnCount(5)
+        self._tree.setHeaderLabels(["Cache", "Size", "Files", "Last written", "Path"])
+        self._tree.setSelectionMode(QTreeWidget.ExtendedSelection)
+        self._tree.setUniformRowHeights(True)
+        self._tree.setStyleSheet(_pack2_table_ss())
+        hdr = self._tree.header()
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        for c in (1, 2, 3):
+            hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(4, QHeaderView.Interactive)
+        self._tree.setColumnWidth(4, 260)
+        lay.addWidget(self._tree, 1)
+        row = QHBoxLayout()
+        b_scan = _tool_btn("Rescan", bold=True)
+        b_scan.clicked.connect(self.rescan)
+        b_add = _tool_btn("Add folder…")
+        b_add.clicked.connect(self._add_folder)
+        b_open = _tool_btn("Open folder")
+        b_open.clicked.connect(self._open_selected)
+        b_clear = _tool_btn("Clear selected")
+        b_clear.clicked.connect(self._clear_selected)
+        for b in (b_scan, b_add, b_open, b_clear):
+            row.addWidget(b)
+        row.addStretch(1)
+        self._total = QLabel("")
+        self._total.setStyleSheet(f"color:{T['text2']};font-size:12px;")
+        row.addWidget(self._total)
+        lay.addLayout(row)
+        SYSHUB.info_changed.connect(lambda _i: self._driver_check())
+        QTimer.singleShot(600, self.rescan)
+
+    # ── data ──────────────────────────────────────────────────────────────
+    def _user_env(self) -> Dict[str, str]:
+        win = self.window()
+        w = getattr(win, "_env_widget", None)
+        try:
+            return dict(w.get_env_dict()) if w is not None else {}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _extra_folders() -> List[str]:
+        try:
+            v = QSettings(APP_ID, APP_ID).value("cache/extra_folders", [])
+            if isinstance(v, str):
+                v = [v] if v else []
+            return [str(x) for x in (v or [])]
+        except Exception:
+            return []
+
+    def _save_extra(self, lst: List[str]):
+        try:
+            QSettings(APP_ID, APP_ID).setValue("cache/extra_folders", list(lst))
+        except Exception:
+            pass
+
+    def rescan(self):
+        if self._thread is not None and self._thread.isRunning():
+            return
+        env = self._user_env()
+        shown = [f"{k}={env[k]}" for k in self.CACHE_ENV if env.get(k)]
+        self._env_line.setText("Cache variables set in the Env Vars tab: " + "  ".join(shown)
+                               if shown else "No cache-related variables are set in the Env Vars tab.")
+        self._total.setText("Scanning…")
+        self._thread = _CacheScanThread(env, self._extra_folders())
+        self._thread.done.connect(self._on_scanned)
+        self._thread.start()
+
+    def _on_scanned(self, nodes):
+        self._nodes = nodes
+        self._rebuild()
+        self._driver_check()
+
+    def _rebuild(self):
+        self._tree.clear()
+        groups: Dict[str, QTreeWidgetItem] = {}
+        order = {g: i for i, g in enumerate(CACHE_GROUP_ORDER)}
+        by_group: Dict[str, List[dict]] = {}
+        for n in self._nodes:
+            by_group.setdefault(n["group"], []).append(n)
+        total = 0
+        for g in sorted(by_group, key=lambda x: order.get(x, 99)):
+            items = sorted(by_group[g], key=lambda n: -n["size"])
+            gsize = sum(n["size"] for n in items)
+            gfiles = sum(n["files"] for n in items)
+            total += gsize
+            newest = max((n["mtime"] for n in items), default=0)
+            top = QTreeWidgetItem([g, _fmt_bytes(gsize), str(gfiles), self._fmt_time(newest), ""])
+            f = top.font(0)
+            f.setBold(True)
+            top.setFont(0, f)
+            groups[g] = top
+            self._tree.addTopLevelItem(top)
+            for n in items:
+                warn = self._stale and n["driver"]
+                child = QTreeWidgetItem([("⚠ " if warn else "") + n["label"], _fmt_bytes(n["size"]),
+                                         str(n["files"]), self._fmt_time(n["mtime"]), n["path"]])
+                child.setData(0, Qt.UserRole, n)
+                if warn:
+                    for c in range(5):
+                        child.setForeground(c, QColor(T["warn"]))
+                    child.setToolTip(0, "Built for an older NVIDIA driver — stale, will be rebuilt.")
+                top.addChild(child)
+            top.setExpanded(len(items) <= 12)
+        self._total.setText(f"{len(self._nodes)} location(s) · {_fmt_bytes(total)} total")
+
+    @staticmethod
+    def _fmt_time(ts: float) -> str:
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "—"
+
+    # ── driver change detection ───────────────────────────────────────────
+    def _driver_check(self):
+        cur = SYSHUB.info.nv_driver
+        if not cur:
+            return
+        qs = QSettings(APP_ID, APP_ID)
+        seen = str(qs.value("cache/driver_seen", "") or "")
+        if not seen:
+            qs.setValue("cache/driver_seen", cur)
+            seen = cur
+        stale = seen != cur
+        if stale != self._stale:
+            self._stale = stale
+            self._rebuild()
+            self.stale_changed.emit(stale)
+        if stale:
+            self._banner.setText(
+                f"⚠ NVIDIA driver changed: {seen} → {cur}. Driver-bound caches (NVIDIA GL/compute, "
+                f"vkd3d-proton pipeline caches — marked ⚠) were built for the old driver and are "
+                f"invalid: the first run of each game rebuilds them, so expect shader-compile stutter "
+                f"once. DXVK state caches and Mesa/Fossilize data stay valid.")
+            self._banner.show()
+            self._banner_btns.show()
+            if not self._driver_msg_sent:
+                self._driver_msg_sent = True
+                self.driver_changed.emit(
+                    f"NVIDIA driver changed ({seen} → {cur}): shader caches are invalid — see Extra Tools → Cache")
+        else:
+            self._banner.hide()
+            self._banner_btns.hide()
+
+    def _acknowledge(self):
+        cur = SYSHUB.info.nv_driver
+        if cur:
+            QSettings(APP_ID, APP_ID).setValue("cache/driver_seen", cur)
+        self._driver_msg_sent = False
+        self._driver_check()
+
+    # ── actions ───────────────────────────────────────────────────────────
+    def _selected_nodes(self) -> List[dict]:
+        out = []
+        for it in self._tree.selectedItems():
+            n = it.data(0, Qt.UserRole)
+            if n:
+                out.append(n)
+            else:                                   # group row → all its children
+                for i in range(it.childCount()):
+                    out.append(it.child(i).data(0, Qt.UserRole))
+        seen, uniq = set(), []
+        for n in out:
+            if n["path"] not in seen:
+                seen.add(n["path"])
+                uniq.append(n)
+        return uniq
+
+    def _add_folder(self):
+        d = QFileDialog.getExistingDirectory(self, "Cache folder to track", str(Path.home()))
+        if d:
+            lst = self._extra_folders()
+            if d not in lst:
+                lst.append(d)
+                self._save_extra(lst)
+            self.rescan()
+
+    def _open_selected(self):
+        nodes = self._selected_nodes()
+        if not nodes:
+            return
+        p = Path(nodes[0]["path"])
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(p if p.is_dir() else p.parent)))
+
+    def _clear_selected(self):
+        self._clear(self._selected_nodes())
+
+    def _clear_stale(self):
+        self._clear([n for n in self._nodes if n["driver"]])
+
+    def _clear(self, nodes: List[dict]):
+        if not nodes:
+            return
+        extra = self._extra_folders()
+        ok = [n for n in nodes if _safe_cache_path(n["path"], extra)]
+        refused = len(nodes) - len(ok)
+        if not ok:
+            QMessageBox.warning(self, "Clear caches", "Nothing selected is a recognised cache location.")
+            return
+        size = sum(n["size"] for n in ok)
+        preview = "\n".join(f"  • {n['path']}  ({_fmt_bytes(n['size'])})" for n in ok[:12])
+        if len(ok) > 12:
+            preview += f"\n  … and {len(ok) - 12} more"
+        if QMessageBox.question(
+                self, "Clear caches",
+                f"Delete the contents of {len(ok)} location(s), freeing about {_fmt_bytes(size)}?\n\n{preview}"
+                + (f"\n\n{refused} location(s) skipped (not recognised as caches)." if refused else "")
+                + "\n\nGames rebuild their caches on the next run (one-time stutter).") != QMessageBox.Yes:
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        errors = 0
+        try:
+            for n in ok:
+                p = Path(n["path"])
+                try:
+                    if p.is_dir() and not p.is_symlink():
+                        for child in p.iterdir():
+                            if child.is_dir() and not child.is_symlink():
+                                shutil.rmtree(child, ignore_errors=True)
+                            else:
+                                child.unlink(missing_ok=True)
+                    else:
+                        p.unlink(missing_ok=True)
+                except OSError:
+                    errors += 1
+        finally:
+            QApplication.restoreOverrideCursor()
+        if errors:
+            QMessageBox.warning(self, "Clear caches", f"{errors} location(s) could not be fully cleared.")
+        self.rescan()
+
+
+# ----------------------------------------------------------------------------
+# Upstream drift check
+# ----------------------------------------------------------------------------
+
+_DRIFT_RAW = "https://raw.githubusercontent.com"
+_DRIFT_UA = "DRSTool/upstream-drift (+https://github.com/arabcian/DRSTool)"
+_DRIFT_MAX_BYTES = 4 * 1024 * 1024
+
+_DXVK_FILES = ["README.md", "dxvk.conf", "src/util/util_env.cpp", "src/util/config/config.cpp",
+               "src/util/log/log.cpp", "src/dxvk/dxvk_instance.cpp", "src/dxvk/dxvk_options.cpp",
+               "src/dxvk/dxvk_device_filter.cpp", "src/dxvk/hud/dxvk_hud.cpp", "src/wsi/wsi_platform.cpp",
+               "src/dxgi/dxgi_options.cpp", "src/d3d9/d3d9_options.cpp", "src/d3d11/d3d11_options.cpp",
+               "src/d3d8/d3d8_options.cpp", "src/dxvk/dxvk_shader_cache.cpp", "src/dxvk/dxvk_latency_builtin.cpp"]
+_VKD3D_FILES = ["README.md", "include/private/config_flag_decl.h", "libs/vkd3d/vkd3d_main.c",
+                "libs/vkd3d/device.c", "libs/vkd3d/state.c", "libs/vkd3d/command.c", "libs/vkd3d/utils.c",
+                "libs/vkd3d/cache.c", "libs/vkd3d/swapchain.c", "libs/vkd3d/breadcrumbs.c",
+                "libs/vkd3d-common/debug.c", "libs/vkd3d-shader/vkd3d_shader_main.c"]
+_NVAPI_FILES = ["README.md", "src/util/util_env.cpp", "src/nvapi.cpp", "src/nvapi_globals.cpp",
+                "src/nvapi_d3d12.cpp", "src/nvapi_drs.cpp", "src/sysinfo/nvapi_adapter.cpp",
+                "src/vkreflex/vkreflex_layer.cpp"]
+
+DRIFT_SOURCES: List[dict] = [
+    {"key": "dxvk", "title": "DXVK", "repo": "doitsujin/dxvk", "ref": "master", "files": _DXVK_FILES,
+     "env": {"prefixes": ("DXVK_",), "exclude": ("DXVK_NVAPI_",), "cats": ("DXVK",)},
+     "conf_keys": True},
+    {"key": "vkd3d", "title": "vkd3d-proton", "repo": "HansKristian-Work/vkd3d-proton", "ref": "master",
+     "files": _VKD3D_FILES,
+     "env": {"prefixes": ("VKD3D_",), "exclude": (), "cats": ("VKD3D-Proton",)},
+     "vkd3d_flags": "include/private/config_flag_decl.h"},
+    {"key": "dxvk-nvapi", "title": "dxvk-nvapi", "repo": "jp7677/dxvk-nvapi", "ref": "master",
+     "files": _NVAPI_FILES,
+     "env": {"prefixes": ("DXVK_NVAPI_", "DISABLE_DXVK_NVAPI"), "exclude": (), "cats": ("DXVK-NVAPI",)}},
+    {"key": "gamescope", "title": "gamescope", "repo": "ValveSoftware/gamescope", "ref": "master",
+     "files": ["README.md", "src/main.cpp"],
+     "env": {"prefixes": ("GAMESCOPE_", "ENABLE_GAMESCOPE"), "exclude": (), "cats": ("Gamescope",)},
+     "gs_flags": "src/main.cpp"},
+    {"key": "nvapi-hdr", "title": "NVAPI header", "repo": "NVIDIA/nvapi", "ref": "main",
+     "files": ["NvApiDriverSettings.h"], "drs_header": "NvApiDriverSettings.h"},
+]
+
+
+def _drift_catalog() -> dict:
+    env_by_cat: Dict[str, set] = {}
+    for ev in ALL_ENV_VARS:
+        env_by_cat.setdefault(ev.cat, set()).add(ev.name)
+    vk_flags = set(VKD3D_CONFIG_DESCS)
+    for ev in VKD3D_ENV_VARS:
+        if ev.name == "VKD3D_CONFIG":
+            vk_flags |= set(ev.options)
+    return {
+        # DRS_SETTINGS / GPU_ARCH are generated from the DRS and Arch tabs, not catalogued as env vars
+        "env_all": {ev.name for ev in ALL_ENV_VARS} | {"DXVK_NVAPI_DRS_SETTINGS", "DXVK_NVAPI_GPU_ARCH"},
+        "env_by_cat": env_by_cat,
+        "conf_keys": set(DXVK_CONFIG_KEY_NAMES),
+        "vkd3d_flags": vk_flags,
+        "gs_flags": {g.flag.lstrip("-") for g in GAMESCOPE_FLAGS},
+        "drs_ids": set(_SETTING_BY_ID),
+    }
+
+
+def _drift_fetch(url: str, timeout: float = 25.0) -> Optional[str]:
+    req = urllib.request.Request(url, headers={"User-Agent": _DRIFT_UA})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = r.read(_DRIFT_MAX_BYTES + 1)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+    if len(data) > _DRIFT_MAX_BYTES:
+        data = data[:_DRIFT_MAX_BYTES]
+    return data.decode("utf-8", errors="replace")
+
+
+def _line_of(text: str, pos: int) -> int:
+    return text.count("\n", 0, pos) + 1
+
+
+def _drift_env_names(files: Dict[str, str], prefixes: tuple, exclude: tuple) -> Dict[str, str]:
+    """name -> 'file:line' of first sighting. Code: quoted strings only. Docs/conf: any word."""
+    pfx = "|".join(re.escape(p) for p in prefixes)
+    quoted = re.compile(r'"((?:%s)[A-Z0-9_]*)"' % pfx)
+    word = re.compile(r'(?<![A-Za-z0-9_])((?:%s)[A-Z0-9_]*)(?![A-Za-z0-9_])' % pfx)
+    found: Dict[str, str] = {}
+    for rel, txt in files.items():
+        rx = word if rel.lower().endswith((".md", ".conf", ".txt")) else quoted
+        for m in rx.finditer(txt):
+            name = m.group(1)
+            if name.endswith("_") or "_TEST_" in name or any(name.startswith(x) for x in exclude):
+                continue
+            if len(name) <= min(len(p) for p in prefixes) + 1:
+                continue
+            found.setdefault(name, f"{rel}:{_line_of(txt, m.start())}")
+    return found
+
+
+def _drift_analyse(src: dict, files: Dict[str, str], cat: dict) -> List[dict]:
+    rows: List[dict] = []
+    title = src["title"]
+
+    def row(kind, name, status, where="", note=""):
+        rows.append({"src": title, "kind": kind, "name": name, "status": status,
+                     "where": where, "note": note})
+
+    gone_note = "not found in the scanned files (removed upstream, fork-only, or defined in a file not scanned)"
+    spec = src.get("env")
+    if spec:
+        found = _drift_env_names(files, spec["prefixes"], spec["exclude"])
+        for name, where in sorted(found.items()):
+            if name not in cat["env_all"]:
+                row("env var", name, "new", where)
+        mine = set()
+        for c in spec["cats"]:
+            mine |= cat["env_by_cat"].get(c, set())
+        for name in sorted(mine):
+            if name.startswith(spec["prefixes"]) and not name.startswith(spec["exclude"] or ("\0",)) \
+                    and name not in found:
+                row("env var", name, "gone", note=gone_note)
+    if src.get("conf_keys"):
+        keys: Dict[str, str] = {}
+        conf_rx = re.compile(r'^\s*#?\s*([A-Za-z0-9_]+\.[A-Za-z0-9_.]+)\s*=', re.M)
+        opt_rx = re.compile(r'"((?:dxvk|dxgi|d3d8|d3d9|d3d10|d3d11)\.[A-Za-z0-9_.]+)"')
+        for rel, txt in files.items():
+            rx = conf_rx if rel.endswith(".conf") else opt_rx
+            for m in rx.finditer(txt):
+                keys.setdefault(m.group(1), f"{rel}:{_line_of(txt, m.start())}")
+        # config.cpp holds per-game blocks → ignore it for 'gone' detection, only options files count
+        for k, where in sorted(keys.items()):
+            if k not in cat["conf_keys"] and not k.endswith(".conf") \
+                    and k.startswith(("dxvk.", "dxgi.", "d3d9.", "d3d11.", "d3d8.")):
+                row("dxvk.conf key", k, "new", where)
+        for k in sorted(cat["conf_keys"] - set(keys)):
+            row("dxvk.conf key", k, "gone", note=gone_note)
+    rel = src.get("vkd3d_flags")
+    if rel and rel in files:
+        txt = files[rel]
+        up: Dict[str, str] = {}
+        for m in re.finditer(r'VKD3D_DECL_CONFIG\(\s*"([a-z0-9_]+)"', txt):
+            up.setdefault(m.group(1), f"{rel}:{_line_of(txt, m.start())}")
+        for m in re.finditer(r'VKD3D_DECL_CONFIG_PLAIN\(\s*([A-Z0-9_]+)\s*\)', txt):
+            up.setdefault(m.group(1).lower(),
+                          f"{rel}:{_line_of(txt, m.start())}  (declared without a config string — may be internal)")
+        for k, where in sorted(up.items()):
+            if k not in cat["vkd3d_flags"]:
+                row("VKD3D_CONFIG flag", k, "new", where)
+        for k in sorted(cat["vkd3d_flags"] - set(up)):
+            row("VKD3D_CONFIG flag", k, "gone", note=gone_note)
+    rel = src.get("gs_flags")
+    if rel and rel in files:
+        txt = files[rel]
+        up = {}
+        for m in re.finditer(r'\{\s*"([a-z0-9-]+)"\s*,\s*(?:no|required|optional)_argument', txt):
+            up.setdefault(m.group(1), f"{rel}:{_line_of(txt, m.start())}")
+        up.pop("help", None)
+        up.pop("version", None)
+        for k, where in sorted(up.items()):
+            if k not in cat["gs_flags"]:
+                row("CLI flag", f"--{k}", "new", where)
+        for k in sorted(cat["gs_flags"] - set(up)):
+            row("CLI flag", f"--{k}", "gone", note=gone_note)
+    rel = src.get("drs_header")
+    if rel and rel in files:
+        txt = files[rel]
+        up = {}
+        for m in re.finditer(r'^\s*#define\s+([A-Z0-9_]+)_ID\s+0x([0-9A-Fa-f]{1,8})\b', txt, re.M):
+            up.setdefault(f"0x{int(m.group(2), 16):08X}", (m.group(1), f"{rel}:{_line_of(txt, m.start())}"))
+        for sid, (nm, where) in sorted(up.items()):
+            if sid not in cat["drs_ids"]:
+                row("DRS setting", f"{sid}  {nm}", "new", where)
+        for sid in sorted(cat["drs_ids"] - set(up)):
+            s = _SETTING_BY_ID.get(sid)
+            row("DRS setting", f"{sid}  {s.name if s else ''}".strip(), "gone",
+                note="catalog ID is not in the public NvApiDriverSettings.h (undocumented / private setting?)")
+    return rows
+
+
+class _DriftWorker(QThread):
+    progress = Signal(str)
+    done = Signal(list, list)
+
+    def __init__(self, sources: List[dict], cat: dict):
+        super().__init__()
+        self._sources, self._cat = sources, cat
+
+    def run(self):
+        rows: List[dict] = []
+        notes: List[str] = []
+        for src in self._sources:
+            if self.isInterruptionRequested():
+                break
+            files: Dict[str, str] = {}
+            net_err = ""
+            total = len(src["files"])
+            for i, rel in enumerate(src["files"], 1):
+                if self.isInterruptionRequested():
+                    break
+                self.progress.emit(f'{src["title"]}: {rel}  ({i}/{total})')
+                try:
+                    txt = _drift_fetch(f'{_DRIFT_RAW}/{src["repo"]}/{src["ref"]}/{rel}')
+                except Exception as e:                         # network / TLS / timeout
+                    net_err = f"{type(e).__name__}: {e}"
+                    break
+                if txt is not None:
+                    files[rel] = txt
+            if net_err:
+                notes.append(f'{src["title"]}: network error — {net_err}')
+                continue
+            if not files:
+                notes.append(f'{src["title"]}: none of the {total} source files exist at {src["repo"]}@{src["ref"]}')
+                continue
+            rows += _drift_analyse(src, files, self._cat)
+            notes.append(f'{src["title"]}: scanned {len(files)}/{total} files')
+        self.done.emit(rows, notes)
+
+
+class UpstreamDriftWidget(QWidget):
+    def __init__(self):
+        super().__init__()
+        self._rows: List[dict] = []
+        self._worker: Optional[_DriftWorker] = None
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(8)
+        lay.addWidget(_pack2_title(
+            "Upstream drift check",
+            "Downloads the current DXVK, vkd3d-proton, dxvk-nvapi, gamescope sources and NVIDIA's "
+            "NvApiDriverSettings.h and compares them with DRSTool's catalog: env vars, dxvk.conf keys, "
+            "VKD3D_CONFIG flags, gamescope CLI flags and DRS setting IDs. “New” = upstream has it, the "
+            "catalog does not. “Gone” = the catalog has it, upstream no longer mentions it. Mark rows "
+            "as reviewed to hide them next time."))
+        srow = QHBoxLayout()
+        self._src_checks: Dict[str, QCheckBox] = {}
+        for s in DRIFT_SOURCES:
+            c = QCheckBox(s["title"])
+            c.setChecked(True)
+            c.setStyleSheet(f"color:{T['text2']};")
+            self._src_checks[s["key"]] = c
+            srow.addWidget(c)
+        srow.addStretch(1)
+        self._btn_check = _tool_btn("Check now", bold=True)
+        self._btn_check.clicked.connect(self._start)
+        srow.addWidget(self._btn_check)
+        lay.addLayout(srow)
+        frow = QHBoxLayout()
+        self._filter = QComboBox()
+        self._filter.addItems(["New upstream", "Gone upstream", "All"])
+        self._filter.currentIndexChanged.connect(self._refill)
+        self._hide_ack = QCheckBox("Hide reviewed")
+        self._hide_ack.setChecked(True)
+        self._hide_ack.setStyleSheet(f"color:{T['text2']};")
+        self._hide_ack.toggled.connect(self._refill)
+        frow.addWidget(QLabel("Show"))
+        frow.addWidget(self._filter)
+        frow.addWidget(self._hide_ack)
+        frow.addStretch(1)
+        self._status = QLabel("Not checked yet.")
+        self._status.setStyleSheet(f"color:{T['muted']};font-size:12px;")
+        frow.addWidget(self._status)
+        lay.addLayout(frow)
+        self._table = QTableWidget(0, 5)
+        self._table.setHorizontalHeaderLabels(["Source", "Kind", "Name", "Status", "Where / note"])
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._table.setSelectionMode(QTableWidget.ExtendedSelection)
+        hh = self._table.horizontalHeader()
+        for c in (0, 1, 3):
+            hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(2, QHeaderView.Stretch)
+        hh.setSectionResizeMode(4, QHeaderView.Stretch)
+        self._table.setStyleSheet(_pack2_table_ss())
+        lay.addWidget(self._table, 1)
+        brow = QHBoxLayout()
+        b1 = _tool_btn("Mark selected reviewed")
+        b1.clicked.connect(lambda: self._ack(selected_only=True))
+        b2 = _tool_btn("Mark all shown reviewed")
+        b2.clicked.connect(lambda: self._ack(selected_only=False))
+        b3 = _tool_btn("Copy report")
+        b3.clicked.connect(self._copy_report)
+        b4 = _tool_btn("Forget reviewed")
+        b4.clicked.connect(self._forget)
+        for b in (b1, b2, b3, b4):
+            brow.addWidget(b)
+        brow.addStretch(1)
+        lay.addLayout(brow)
+
+    # reviewed set (QSettings) ------------------------------------------------
+    @staticmethod
+    def _acks() -> set:
+        try:
+            v = QSettings(APP_ID, APP_ID).value("drift/reviewed", [])
+            if isinstance(v, str):
+                v = [v] if v else []
+            return set(str(x) for x in (v or []))
+        except Exception:
+            return set()
+
+    @staticmethod
+    def _row_key(r: dict) -> str:
+        return f'{r["src"]}|{r["kind"]}|{r["status"]}|{r["name"]}'
+
+    def _save_acks(self, s: set):
+        try:
+            QSettings(APP_ID, APP_ID).setValue("drift/reviewed", sorted(s))
+        except Exception:
+            pass
+
+    def _start(self):
+        if self._worker is not None and self._worker.isRunning():
+            return
+        srcs = [s for s in DRIFT_SOURCES if self._src_checks[s["key"]].isChecked()]
+        if not srcs:
+            return
+        self._btn_check.setEnabled(False)
+        self._status.setText("Checking…")
+        self._worker = _DriftWorker(srcs, _drift_catalog())
+        self._worker.progress.connect(self._status.setText)
+        self._worker.done.connect(self._on_done)
+        self._worker.start()
+
+    def _on_done(self, rows, notes):
+        self._rows = rows
+        self._btn_check.setEnabled(True)
+        n_new = sum(1 for r in rows if r["status"] == "new")
+        n_gone = sum(1 for r in rows if r["status"] == "gone")
+        self._status.setText(f"{n_new} new · {n_gone} gone")
+        self._status.setToolTip("\n".join(notes))
+        if any("error" in n or "none of" in n for n in notes):
+            QMessageBox.warning(self, "Upstream drift", "\n".join(notes))
+        self._refill()
+
+    def _visible_rows(self) -> List[dict]:
+        mode = self._filter.currentIndex()
+        acks = self._acks() if self._hide_ack.isChecked() else set()
+        out = []
+        for r in self._rows:
+            if mode == 0 and r["status"] != "new":
+                continue
+            if mode == 1 and r["status"] != "gone":
+                continue
+            if self._row_key(r) in acks:
+                continue
+            out.append(r)
+        return out
+
+    def _refill(self, *_):
+        rows = self._visible_rows()
+        t = self._table
+        t.setRowCount(0)
+        for i, r in enumerate(rows):
+            t.insertRow(i)
+            col = T["accent"] if r["status"] == "new" else T["warn"]
+            vals = [r["src"], r["kind"], r["name"], "NEW" if r["status"] == "new" else "gone",
+                    r["where"] or r["note"]]
+            for c, v in enumerate(vals):
+                it = QTableWidgetItem(v)
+                if c == 3:
+                    it.setForeground(QColor(col))
+                if c == 4 and not r["where"]:
+                    it.setForeground(QColor(T["muted"]))
+                if c == 0:
+                    it.setData(Qt.UserRole, r)
+                t.setItem(i, c, it)
+
+    def _ack(self, selected_only: bool):
+        if selected_only:
+            rows = sorted({i.row() for i in self._table.selectedItems()})
+            targets = [self._table.item(r, 0).data(Qt.UserRole) for r in rows]
+        else:
+            targets = self._visible_rows()
+        if not targets:
+            return
+        acks = self._acks()
+        acks.update(self._row_key(r) for r in targets)
+        self._save_acks(acks)
+        self._refill()
+
+    def _forget(self):
+        self._save_acks(set())
+        self._refill()
+
+    def _copy_report(self):
+        rows = self._visible_rows()
+        lines = [f"# DRSTool upstream drift — {datetime.now():%Y-%m-%d}", ""]
+        cur = None
+        for r in sorted(rows, key=lambda r: (r["src"], r["kind"], r["status"], r["name"])):
+            if (r["src"], r["kind"]) != cur:
+                cur = (r["src"], r["kind"])
+                lines += ["", f'## {r["src"]} — {r["kind"]}']
+            lines.append(f'- {"NEW" if r["status"] == "new" else "gone"}: `{r["name"]}`'
+                         + (f' ({r["where"]})' if r["where"] else ""))
+        QApplication.clipboard().setText("\n".join(lines))
+        self._status.setText(f"Copied report ({len(rows)} rows)")
+
+
+# ============================================================================
 # Main Window
 # ============================================================================
 
@@ -14653,6 +16357,10 @@ class MainWindow(QMainWindow):
             _sc.setWidget(_w)
             _sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
             self._sync_tabs.addTab(_sc, _t)
+        self._history = HistoryWidget(self.settings_manager)
+        self._nip_import = NipImportWidget(self.settings_manager)
+        self._sync_tabs.addTab(self._history, "History")
+        self._sync_tabs.addTab(self._nip_import, "Import .nip")
         self._sync_tabs.currentChanged.connect(lambda _i: self._refresh_sync_previews())
 
         splitter.addWidget(sidebar)
@@ -14765,6 +16473,8 @@ class MainWindow(QMainWindow):
             _sig.connect(self._schedule_lint)
             _sig.connect(lambda *_: self._sync_timer.start())
         self._extra_tools.linter.fix_requested.connect(self._apply_lint_fix)
+        self._extra_tools.cache.driver_changed.connect(
+            lambda msg: self.statusBar().showMessage(msg, 20000))
         SYSHUB.info_changed.connect(self._on_sysinfo)
         FAVS.changed.connect(self._on_favs_changed)
         install_fav_menu(self._settings_list, "drs")

@@ -44,10 +44,14 @@ Builds `gamescope` command lines from a flag catalog (upscaling, frame pacing, i
 ### Profiles
 - Save and load full profiles (DRS settings + environment variables)
 - XDG-compliant storage: `$XDG_CONFIG_HOME/drstool/` (default `~/.config/drstool/`), written atomically
+- **History** (Profiles → History): every overwrite or delete of `profiles.json` keeps a snapshot (last 60) in `drstool/history/`. Browse snapshots, diff a profile against its live version, restore one profile or the whole file. A second sub-tab browses the `.bak` files written next to Lutris YAMLs (and Steam / Heroic / Bottles files) with a diff and one-click restore; a third compares any two profiles (or the current editor state)
+- **Import .nip** (Profiles → Import .nip): converts an NVIDIA Profile Inspector export into `DXVK_NVAPI_DRS_SETTINGS` pairs and applies them to the editor (DWORD values only)
 
 ### Extra Tools
 - **vk_flip_meter**: edit FLM settings, live tuning (writes `FLM_CONFIG` and sends `SIGUSR1`)
 - **lutris-game-tune**: edit the tuner config and the per-game Lutris settings
+- **Cache**: sizes of the NVIDIA GL/compute, Mesa, DXVK and vkd3d-proton caches (driver caches, Steam `shadercache/<appid>` in every library, Lutris per-game caches, paths from the Env Vars tab, folders you add), with open / clear actions. When the NVIDIA driver version changes the driver-bound caches are flagged as invalid
+- **Upstream drift**: downloads the current DXVK, vkd3d-proton, dxvk-nvapi, gamescope sources and `NvApiDriverSettings.h` and lists env vars, `dxvk.conf` keys, `VKD3D_CONFIG` flags, gamescope CLI flags and DRS IDs that are new upstream or gone; rows can be marked as reviewed
 - **DLSS Updater**: list every DLSS SR / RR / FG and Streamline build on NVIDIA's NGX servers (incl. staged builds) and download the selected ones as `nvngx_dlss*.dll` / `sl.*.dll` into a version-named folder, SHA-256 checked
 
 ### Lutris Game Sync
