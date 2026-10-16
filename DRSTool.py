@@ -8539,7 +8539,7 @@ QPushButton:disabled{{ color:#3a4250; border:1px solid #232a36; background:#1215
 class ExtraToolsSidebarWidget(QWidget):
     """
     Left-sidebar page for the Extra Tools tab.  Not a selectable list —
-    just orientation text for both sub-tools.
+    just orientation text for all ten sub-tabs.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -8628,6 +8628,64 @@ class ExtraToolsSidebarWidget(QWidget):
         ngx_info.setWordWrap(True)
         ngx_info.setStyleSheet("color:#a7afbc; font-size:12px; line-height:145%;")
         layout.addWidget(ngx_info)
+
+        # ── remaining sub-tabs (Linter … Upstream drift) ─────────────────────
+        _more = (
+            ("Linter", "Configuration consistency check",
+             "Scans the current configuration for combinations that contradict "
+             "each other or cannot work on this system (e.g. PROTON_NVIDIA_LIBS + "
+             "WoW64, FSR4 on NVIDIA, ENABLE_HDR_WSI on drivers \u2265 595, double "
+             "latency stacks).  Re-runs automatically on every change; each "
+             "finding can be jumped to."),
+            ("System", "Detected hardware / driver / Vulkan info",
+             "Shows the NVIDIA driver, session type (X11/Wayland) and each Vulkan "
+             "GPU with the device extensions DRSTool cares about (Reflex low-"
+             "latency, descriptor heap/buffer, HDR, present wait/id, optical "
+             "flow, mesh shaders…).  Optionally greys out options this system "
+             "can't run \u2014 you can still force them with \u201cEdit anyway\u201d."),
+            ("Prefix Doctor", "Wine prefix DLL checker / updater",
+             "Compares the DXVK, vkd3d-proton and dxvk-nvapi DLLs inside a Wine "
+             "prefix with the latest GitHub releases and replaces outdated ones "
+             "(originals are backed up).  For Wine / Lutris / Bottles / Heroic "
+             "prefixes \u2014 Proton re-syncs its own prefixes on launch."),
+            ("MangoHud", "MangoHud overlay config builder",
+             "Pick overlay options (with filter and presets) and either set the "
+             "result as the MANGOHUD_CONFIG env var or save a config file and "
+             "point MANGOHUD_CONFIGFILE at it."),
+            ("vkBasalt", "vkBasalt post-processing builder",
+             "Choose and drag-reorder vkBasalt effects (checked ones run top to "
+             "bottom), tweak their parameters, set a LUT file and add extra "
+             "ReShade effects (name = /path/to/effect.fx) to generate a "
+             "vkBasalt config."),
+            ("Cache", "Shader / pipeline cache manager",
+             "Shows sizes of the NVIDIA, Mesa, DXVK and vkd3d-proton caches: "
+             "driver caches, Steam shadercache/<appid> folders (all libraries), "
+             "Lutris per-game folders and paths from the Env Vars tab.  Lets you "
+             "clear them; \u201cAdd folder\u2026\u201d includes .dxvk-cache files "
+             "next to game executables.  The tab shows \u26a0 when caches are stale."),
+            ("Upstream drift", "Catalog vs. upstream comparison",
+             "Downloads current DXVK, vkd3d-proton, dxvk-nvapi and gamescope "
+             "sources plus NVIDIA's NvApiDriverSettings.h and compares them with "
+             "DRSTool's catalog (env vars, dxvk.conf keys, VKD3D_CONFIG flags, "
+             "gamescope flags, DRS IDs).  \u201cNew\u201d = upstream only, "
+             "\u201cGone\u201d = catalog only; reviewed rows can be hidden."),
+        )
+        for _t, _s, _i in _more:
+            _sep = QFrame()
+            _sep.setFrameShape(QFrame.HLine)
+            _sep.setStyleSheet("color:#1e2535;")
+            layout.addWidget(_sep)
+            _tl = QLabel(_t)
+            _tl.setStyleSheet("color:#c8cdd8; font-size:13px; font-weight:700;")
+            layout.addWidget(_tl)
+            _sl = QLabel(_s)
+            _sl.setWordWrap(True)
+            _sl.setStyleSheet("color:#8a92a5; font-size:13px;")
+            layout.addWidget(_sl)
+            _il = QLabel(_i)
+            _il.setWordWrap(True)
+            _il.setStyleSheet("color:#a7afbc; font-size:12px; line-height:145%;")
+            layout.addWidget(_il)
 
         layout.addStretch()
 
@@ -16321,7 +16379,11 @@ class MainWindow(QMainWindow):
 
         # Page 3: Extra Tools sidebar (orientation text for both sub-tools)
         self._flm_sidebar = ExtraToolsSidebarWidget()
-        self._sidebar_stack.addWidget(self._flm_sidebar)
+        _flm_sb_scroll = QScrollArea()
+        _flm_sb_scroll.setWidgetResizable(True)
+        _flm_sb_scroll.setWidget(self._flm_sidebar)
+        _flm_sb_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+        self._sidebar_stack.addWidget(_flm_sb_scroll)
 
         # Page 4: Saved profiles (sidebar) — Lutris Sync lives on the right
         # now; it used to be a sub-tab squeezed into this narrow column while
