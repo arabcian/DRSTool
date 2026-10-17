@@ -17085,7 +17085,7 @@ def fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
     except Exception as ex:
         res["errors"].append(f"ProtonDB: {ex}")
     try:        # community reports (unofficial mirror of ProtonDB data) -> env tinkering seen in reports
-        body, _u = _http_get(PROTONDB_REPORTS_URL.format(appid=appid), limit=8_000_000)
+        body, _u = _http_get(PROTONDB_REPORTS_URL.format(appid=appid), timeout=25.0, limit=24_000_000)
         res["reports"] = parse_community_reports(json.loads(body.decode("utf-8", "replace")),
                                                  {e.name for e in ALL_ENV_VARS})
     except Exception as ex:
@@ -17128,7 +17128,7 @@ def fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
     return res
 
 
-_HINT_CACHE_VER = 2
+_HINT_CACHE_VER = 3
 # Unofficial community mirror of ProtonDB report data (ProtonDB itself has no public reports API).
 # If it moves or changes shape the lookup just reports an error; nothing else depends on it.
 PROTONDB_REPORTS_URL = "https://protondb.max-p.me/games/{appid}/reports/"
@@ -17138,50 +17138,127 @@ _COMMUNITY_SKIP = ("DXVK_HUD", "MANGOHUD", "PROTON_LOG", "WINEDEBUG", "DXVK_LOG"
 _ENV_RX = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]{2,})=(\"[^\"]*\"|'[^']*'|[^\s\"']+)")
 
 
-def _walk_strings(o, out: list, depth: int = 0):
+def _walk_kv(o, out: list, key: str = "", depth: int = 0):
     if depth > 6:
         return
     if isinstance(o, str):
-        out.append(o)
+        out.append((key, o))
     elif isinstance(o, dict):
-        for v in o.values():
-            _walk_strings(v, out, depth + 1)
+        for k, v in o.items():
+            _walk_kv(v, out, str(k), depth + 1)
     elif isinstance(o, (list, tuple)):
         for v in o:
-            _walk_strings(v, out, depth + 1)
+            _walk_kv(v, out, key, depth + 1)
+
+
+def _find_key(o, names: set, depth: int = 0):
+    """First scalar whose key (lower-cased, no '_' / '-') is in names — the mirror's schema is not guaranteed."""
+    if depth > 4:
+        return None
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if str(k).lower().replace("_", "").replace("-", "") in names and isinstance(v, (str, int, float)) \
+                    and not isinstance(v, bool) and str(v).strip():
+                return str(v).strip()
+        for v in o.values():
+            r = _find_key(v, names, depth + 1)
+            if r:
+                return r
+    elif isinstance(o, (list, tuple)):
+        for v in o[:6]:
+            r = _find_key(v, names, depth + 1)
+            if r:
+                return r
+    return None
+
+
+_NV_RX = re.compile(r"nvidia|geforce|\brtx\b|\bgtx\b", re.I)
+_AMD_RX = re.compile(r"\bamd\b|radeon|\brx\s?\d|\bnavi|\brdna|\bvega", re.I)
+_INTEL_RX = re.compile(r"\barc\b|\biris\b|\buhd\b|intel.*graphics", re.I)
+
+
+def _vendor_of(gpu: str, blob: str) -> str:
+    if gpu:
+        return "nvidia" if _NV_RX.search(gpu) else "amd" if _AMD_RX.search(gpu) else \
+            "intel" if _INTEL_RX.search(gpu) else ""
+    return "nvidia" if _NV_RX.search(blob) else ""
+
+
+def _parse_ts(v: Optional[str]) -> Optional[float]:
+    if not v:
+        return None
+    try:
+        x = float(v)
+        return x / 1000 if x > 1e12 else x
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+_F_GPU = {"gpu", "gpumodel", "gpuinfo", "graphicscard", "videocard"}
+_F_DRV = {"gpudriver", "driver", "graphicsdriver", "driverversion", "drivername"}
+_F_OS = {"os", "distro", "operatingsystem", "osname"}
+_F_KERN = {"kernel", "kernelversion"}
+_F_CPU = {"cpu", "processor"}
+_F_RAM = {"ram", "memory"}
+_F_PROTON = {"protonversion", "proton"}
+_F_TS = {"timestamp", "time", "date", "created", "createdat", "reportdate", "submitted", "submittedat"}
+_F_VERDICT = {"rating", "verdict", "tier", "protondbrating"}
 
 
 def parse_community_reports(j, names: set) -> dict:
-    """Env assignments that several reports mention (catalog variables, harmless-looking values only).
-    Treated strictly as untrusted data: only KEY=VALUE tokens, KEY must be a known variable."""
+    """Per-report records (hardware, Proton, date, env assignments). Untrusted data: only KEY=VALUE tokens with
+    a plausible variable name and a harmless-looking value are kept; nothing is ever applied automatically."""
     reps = j if isinstance(j, list) else ((j.get("reports") or []) if isinstance(j, dict) else [])
-    envs: Dict[tuple, list] = {}
+    items: list = []
     protons: Dict[str, int] = {}
+    agg: Dict[tuple, int] = {}
     total = 0
+    keys: list = []
     for r in reps:
         if not isinstance(r, dict):
             continue
         total += 1
-        strs: list = []
-        _walk_strings(r, strs)
-        blob = "\n".join(strs)
-        nv = "nvidia" in blob.lower()
-        seen = set()
-        for m in _ENV_RX.finditer(blob):
-            k, v = m.group(1), m.group(2).strip("\"'")
-            if k not in names or k.startswith(_COMMUNITY_SKIP) or (k, v) in seen:
-                continue
-            if not re.fullmatch(r"[A-Za-z0-9_.,:+-]{1,48}", v):
-                continue
-            seen.add((k, v))
-            c = envs.setdefault((k, v), [0, 0])
-            c[0] += 1
-            c[1] += 1 if nv else 0
-        pv = r.get("protonVersion") or r.get("proton_version")
-        if isinstance(pv, str) and 0 < len(pv) < 40:
+        if not keys:
+            keys = sorted(r.keys())[:24]
+        kv: list = []
+        _walk_kv(r, kv)
+        envs, seen = [], set()
+        for where_key, text in kv:
+            for m in _ENV_RX.finditer(text):
+                k, v = m.group(1), m.group(2).strip("\"'")
+                if k.startswith(_COMMUNITY_SKIP) or (k, v) in seen:
+                    continue
+                if k not in names and not re.fullmatch(r"[A-Z_][A-Z0-9_]{2,}", k):
+                    continue
+                if not re.fullmatch(r"[A-Za-z0-9_.,:+-]{1,48}", v):
+                    continue
+                seen.add((k, v))
+                envs.append([k, v, "launch options" if "launch" in where_key.lower() else "notes"])
+        pv = _find_key(r, _F_PROTON)
+        if pv and len(pv) < 40:
             protons[pv] = protons.get(pv, 0) + 1
-    top = sorted(((k, v, c[0], c[1]) for (k, v), c in envs.items() if c[0] >= 2), key=lambda x: -x[2])[:20]
-    return {"n": total, "envs": [list(t) for t in top],
+        if not envs:
+            continue
+        for k, v, _w in envs:
+            agg[(k, v)] = agg.get((k, v), 0) + 1
+        gpu = _find_key(r, _F_GPU) or ""
+        blob = " ".join(t for _k, t in kv)
+        sysinfo = ""
+        if not gpu:
+            m = re.search(r"[^\n|;]{0,60}(?:nvidia|geforce|radeon)[^\n|;]{0,90}", blob, re.I)
+            sysinfo = m.group(0).strip() if m else ""
+        items.append({"t": _parse_ts(_find_key(r, _F_TS)), "gpu": gpu[:80], "drv": (_find_key(r, _F_DRV) or "")[:40],
+                      "os": (_find_key(r, _F_OS) or "")[:60], "kern": (_find_key(r, _F_KERN) or "")[:40],
+                      "cpu": (_find_key(r, _F_CPU) or "")[:70], "ram": (_find_key(r, _F_RAM) or "")[:20],
+                      "proton": (pv or "")[:40], "verdict": (_find_key(r, _F_VERDICT) or "")[:20],
+                      "vendor": _vendor_of(gpu, blob), "sys": sysinfo[:120], "envs": envs[:12]})
+    items.sort(key=lambda x: -(x["t"] or 0))
+    return {"n": total, "n_env": len(items), "items": items[:600], "keys": keys,
+            "envs": [[k, v, c, 0] for (k, v), c in sorted(agg.items(), key=lambda kv: -kv[1])[:20] if c >= 2],
             "proton": sorted(protons.items(), key=lambda kv: -kv[1])[:5]}
 
 
@@ -17273,17 +17350,35 @@ def hint_suggestions(info: dict, si, cur_env: Dict[str, str]):
     return rows, notes
 
 
-def community_rows(info: dict, si, cur_env: Dict[str, str]) -> List[dict]:
-    """Settings that >= 2 ProtonDB user reports mention (catalog variables only; unverified)."""
+def community_entries(info: dict, si, cur_env: Dict[str, str], months: int = 6,
+                      nvidia_only: bool = True, catalog_only: bool = False):
+    """-> (entries, stats). One entry per (report, variable): even a single mention is listed, together with the
+    reporter's hardware / Proton / system so the user can judge whether it applies to them."""
     names = {e.name for e in ALL_ENV_VARS}
-    nv = bool(si.has_nvidia)
-    out = []
-    for n, v, cnt, cnv in (info.get("reports") or {}).get("envs", []):
-        if n not in names or cur_env.get(n) == v:
+    items = (info.get("reports") or {}).get("items", [])
+    cutoff = time.time() - months * 30.44 * 86400 if months else 0
+    vendors_known = any(it.get("vendor") for it in items)
+    sel = []
+    for it in items:
+        if it.get("t") and it["t"] < cutoff:
             continue
-        if (cnv if nv else cnt - cnv) >= 2:
-            out.append({"name": n, "value": v, "reports": cnt, "nvidia": cnv, "current": cur_env.get(n, "")})
-    return out
+        if nvidia_only and vendors_known and it.get("vendor") != "nvidia":
+            continue
+        sel.append(it)
+    count: Dict[tuple, int] = {}
+    for it in sel:
+        for k, v, _w in it["envs"]:
+            count[(k, v)] = count.get((k, v), 0) + 1
+    out = []
+    for it in sel:
+        for k, v, w in it["envs"]:
+            known = k in names
+            if catalog_only and not known:
+                continue
+            out.append({"name": k, "value": v, "seen": count[(k, v)], "where": w, "known": known,
+                        "current": cur_env.get(k, ""), "item": it})
+    out.sort(key=lambda e: (-e["seen"], -(e["item"].get("t") or 0)))
+    return out[:300], {"total": len(items), "window": len(sel), "vendors_known": vendors_known}
 
 
 _EDITION_RX = re.compile(r"\b(game of the year|goty|definitive|complete|deluxe|ultimate|enhanced|gold|"
@@ -17593,13 +17688,13 @@ class GameHintsWidget(QWidget):
         w = self.window()
         cur = w.collect_launch_payload().get("env", {}) if hasattr(w, "collect_launch_payload") else {}
         rows, notes = hint_suggestions(info, SYSHUB.info, cur)
-        crows = community_rows(info, SYSHUB.info, cur)
+        crows, _st = community_entries(info, SYSHUB.info, cur, 6, bool(SYSHUB.info.has_nvidia), False)
         if crows:
-            notes.append(f"{len(crows)} setting(s) mentioned in ProtonDB user reports are on the “Community tips” "
-                         "tab — unverified, use at your own risk.")
+            notes.append(f"{len(crows)} setting example(s) from recent ProtonDB user reports (with the reporters' hardware "
+                         "and Proton) are on the “Community tips” tab — unverified, use at your own risk.")
         ct = getattr(getattr(w, "_extra_tools", None), "community", None)
         if ct is not None:
-            ct.set_data(info, crows)
+            ct.set_data(info)
         lines += [f"→ {n}" for n in notes]
         lines += [f"⚠ {e}" for e in info.get("errors", [])]
         self._summary.setPlainText("\n".join(lines))
@@ -17706,6 +17801,7 @@ class CommunityTipsWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._appid = ""
+        self._info: dict = {}
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 8, 4, 4)
         lay.setSpacing(8)
@@ -17714,23 +17810,43 @@ class CommunityTipsWidget(QWidget):
             "<b>USE AT YOUR OWN RISK.</b> These settings were mentioned in ProtonDB <i>user reports</i>. "
             "They are individual experiences, not tested or verified by DRSTool or the game's developers, and can "
             "behave differently on other hardware, GPU drivers, kernels, Proton builds and Linux setups — they may "
-            "cause crashes, lower performance or reduce stability. <b>Never apply them blindly:</b> change one at a "
-            "time, test the game, and keep only what helps.")
+            "cause crashes, lower performance or reduce stability. Compare the reporter's hardware, Proton and "
+            "system with yours before trying anything. <b>Never apply them blindly:</b> change one at a time, test "
+            "the game, and keep only what helps.")
         warn.setWordWrap(True)
         warn.setStyleSheet(f"color:{T['text']}; background:#2a1414; border:1px solid {T['danger']};"
                            "border-radius:4px; padding:8px 10px; font-size:12px;")
         lay.addWidget(warn)
-        self._info = QLabel("Look up a game on the Game hints tab first.")
-        self._info.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
-        self._info.setWordWrap(True)
-        lay.addWidget(self._info)
-        self._table = QTableWidget(0, 5)
-        self._table.setHorizontalHeaderLabels(["Use", "Variable", "Value", "Reports (NVIDIA)", "Currently"])
+        frow = QHBoxLayout()
+        self._nv = QCheckBox("NVIDIA reports only")
+        self._nv.setChecked(bool(SYSHUB.info.has_nvidia))
+        self._period = QComboBox()
+        self._period.setStyleSheet(_COMBO_QSS)
+        for label, months in (("last 6 months", 6), ("last 12 months", 12), ("all time", 0)):
+            self._period.addItem(label, months)
+        self._cat = QCheckBox("only variables DRSTool can set")
+        for w_ in (self._nv, self._cat):
+            w_.setStyleSheet(f"color:{T['text2']};")
+            w_.toggled.connect(lambda _c: self._rebuild())
+        self._period.currentIndexChanged.connect(lambda _i: self._rebuild())
+        frow.addWidget(self._nv)
+        frow.addWidget(self._period)
+        frow.addWidget(self._cat)
+        frow.addStretch(1)
+        lay.addLayout(frow)
+        self._info_lbl = QLabel("Look up a game on the Game hints tab first.")
+        self._info_lbl.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        self._info_lbl.setWordWrap(True)
+        lay.addWidget(self._info_lbl)
+        self._table = QTableWidget(0, 10)
+        self._table.setHorizontalHeaderLabels(["Use", "Variable", "Value", "Seen", "Date", "GPU · driver",
+                                               "Proton", "OS · kernel", "Verdict", "Where"])
         self._table.verticalHeader().setVisible(False)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setSelectionMode(QTableWidget.NoSelection)
         hh = self._table.horizontalHeader()
-        hh.setSectionResizeMode(1, QHeaderView.Stretch)
+        hh.setSectionResizeMode(QHeaderView.ResizeToContents)
+        hh.setStretchLastSection(True)
         self._table.setStyleSheet(_table_qss())
         lay.addWidget(self._table, 1)
         self._ack = QCheckBox("I understand these are unverified user reports and I use them at my own risk")
@@ -17756,34 +17872,70 @@ class CommunityTipsWidget(QWidget):
     def _sync_btn(self):
         self._apply.setEnabled(self._ack.isChecked() and self._table.rowCount() > 0)
 
-    def set_data(self, info: dict, rows: List[dict]):
+    def set_data(self, info: dict):
+        self._info = info
         self._appid = str(info.get("appid", ""))
-        rp = info.get("reports")
         self._ack.setChecked(False)
+        self._rebuild()
+
+    @staticmethod
+    def _date(t) -> str:
+        return datetime.fromtimestamp(t).strftime("%Y-%m-%d") if t else "?"
+
+    def _rebuild(self):
+        info = self._info
         t = self._table
         t.setRowCount(0)
-        for r, d in enumerate(rows):
+        if not info:
+            self._sync_btn()
+            return
+        w = self.window()
+        cur = w.collect_launch_payload().get("env", {}) if hasattr(w, "collect_launch_payload") else {}
+        rp = info.get("reports")
+        if rp is None:
+            self._info_lbl.setText(f"appid {self._appid}: no report data (the community mirror was unreachable "
+                                   "— see the error on the Game hints tab).")
+            self._sync_btn()
+            return
+        ents, st = community_entries(info, SYSHUB.info, cur, self._period.currentData() or 0,
+                                     self._nv.isChecked(), self._cat.isChecked())
+        for r, e in enumerate(ents):
+            it = e["item"]
             t.insertRow(r)
             chk = QTableWidgetItem("")
-            chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            chk.setCheckState(Qt.Unchecked)
+            if e["known"]:
+                chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+                chk.setCheckState(Qt.Unchecked)
+            else:
+                chk.setFlags(Qt.ItemIsEnabled)
+                chk.setToolTip("Not in DRSTool's variable catalog — shown for information; add it by hand if you want it.")
             t.setItem(r, 0, chk)
-            for c, txt in enumerate((d["name"], d["value"], f"{d['reports']}  ({d['nvidia']})", d["current"] or "—"), 1):
-                it = QTableWidgetItem(txt)
-                it.setForeground(QColor(T["warn"]))
-                t.setItem(r, c, it)
-        if rp is None:
-            self._info.setText(f"appid {self._appid}: no report data (the community mirror was unreachable — see Game hints).")
-        else:
-            self._info.setText(f"appid {self._appid}: {rp.get('n', 0)} report(s) scanned; "
-                               + (f"{len(rows)} setting(s) mentioned by at least two of them."
-                                  if rows else "no setting was mentioned by at least two reports."))
+            gpu = " · ".join(x for x in (it["gpu"], it["drv"]) if x) or it["sys"] or "?"
+            osk = " · ".join(x for x in (it["os"], it["kern"]) if x) or "?"
+            cells = (e["name"], e["value"] + ("   (set now)" if e["current"] == e["value"] else ""),
+                     f"{e['seen']}×", self._date(it["t"]), gpu, it["proton"] or "?", osk,
+                     it["verdict"] or "?", e["where"])
+            tip = (f"GPU: {it['gpu'] or '?'}  driver: {it['drv'] or '?'}\nCPU: {it['cpu'] or '?'}  RAM: {it['ram'] or '?'}\n"
+                   f"OS: {it['os'] or '?'}  kernel: {it['kern'] or '?'}\nProton: {it['proton'] or '?'}  "
+                   f"verdict: {it['verdict'] or '?'}\nReport date: {self._date(it['t'])}\n"
+                   f"Currently here: {e['current'] or '(not set)'}")
+            for c, txt in enumerate(cells, 1):
+                cell = QTableWidgetItem(txt)
+                cell.setToolTip(tip)
+                cell.setForeground(QColor(T["warn"] if e["known"] else T["muted"]))
+                t.setItem(r, c, cell)
+        self._info_lbl.setText(
+            f"appid {self._appid}: {st['total']} report(s) with settings"
+            f" ({rp.get('n', 0)} scanned); {st['window']} match the filters; {len(ents)} setting example(s) shown. "
+            "Hover a row for the reporter's CPU, RAM and full system details."
+            + ("" if st["vendors_known"] else " (GPU vendor not present in the data — NVIDIA filter not applied.)")
+            + (f"  Report fields seen: {', '.join(rp.get('keys', [])[:14])}" if not st["total"] and rp.get("keys") else ""))
         self._status.setText("")
         self._sync_btn()
 
     def _apply_checked(self):
         t = self._table
-        pick = [(t.item(r, 1).text(), t.item(r, 2).text()) for r in range(t.rowCount())
+        pick = [(t.item(r, 1).text(), t.item(r, 2).text().replace("   (set now)", "")) for r in range(t.rowCount())
                 if t.item(r, 0).checkState() == Qt.Checked]
         if not pick:
             self._status.setText("Tick the settings you want to try first.")
