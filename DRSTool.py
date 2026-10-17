@@ -17046,12 +17046,12 @@ class DxvkConfWidget(QWidget):
 # Game hints: ProtonDB summary + PCGamingWiki API facts (read-only, cached)
 # ----------------------------------------------------------------------------
 
-def _http_get(url: str, timeout: float = 12.0):
+def _http_get(url: str, timeout: float = 12.0, limit: int = 2_000_000):
     req = urllib.request.Request(url, headers={
         "User-Agent": "DRSTool/1.0 (+https://github.com/arabcian/DRSTool; game hint lookup) python-urllib",
         "Accept": "application/json, text/plain;q=0.9, */*;q=0.5", "Accept-Language": "en"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read(2_000_000), r.geturl()
+        return r.read(limit), r.geturl()
 
 
 def _hints_cache_path(appid: str) -> Path:
@@ -17068,12 +17068,13 @@ def fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
     if use_cache:
         try:
             d = json.loads(cp.read_text())
-            if time.time() - d.get("ts", 0) < 7 * 86400:
+            if d.get("v") == _HINT_CACHE_VER and time.time() - d.get("ts", 0) < 7 * 86400:
                 d["cached"] = True
                 return d
         except (OSError, ValueError):
             pass
-    res = {"appid": appid, "ts": time.time(), "protondb": None, "pcgw": None, "errors": []}
+    res = {"v": _HINT_CACHE_VER, "appid": appid, "ts": time.time(), "protondb": None, "pcgw": None,
+           "reports": None, "errors": []}
     try:
         body, _u = _http_get(f"https://www.protondb.com/api/v1/reports/summaries/{appid}.json")
         j = json.loads(body.decode("utf-8", "replace"))
@@ -17081,6 +17082,12 @@ def fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
                                                 "score", "confidence", "total")}
     except Exception as ex:
         res["errors"].append(f"ProtonDB: {ex}")
+    try:        # community reports (unofficial mirror of ProtonDB data) -> env tinkering seen in reports
+        body, _u = _http_get(PROTONDB_REPORTS_URL.format(appid=appid), limit=8_000_000)
+        res["reports"] = parse_community_reports(json.loads(body.decode("utf-8", "replace")),
+                                                 {e.name for e in ALL_ENV_VARS})
+    except Exception as ex:
+        res["errors"].append(f"ProtonDB reports: {ex}")
     try:
         api = "https://www.pcgamingwiki.com/w/api.php"
         title = ""
@@ -17110,7 +17117,7 @@ def fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
                        "opengl": nums(_pcgw_param(txt, "opengl versions"))}
     except Exception as ex:
         res["errors"].append(f"PCGamingWiki: {ex}")
-    if res["protondb"] or res["pcgw"]:
+    if res["protondb"] or res["pcgw"] or res["reports"]:
         try:
             cp.parent.mkdir(parents=True, exist_ok=True)
             cp.write_text(json.dumps(res))
@@ -17119,18 +17126,154 @@ def fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
     return res
 
 
-def hint_suggestions(info: dict, has_nvidia: bool) -> List[tuple]:
-    """[(VAR, value, reason)] — heuristics only, and only variables that exist in the catalog."""
-    names = {e.name for e in ALL_ENV_VARS}
+_HINT_CACHE_VER = 2
+# Unofficial community mirror of ProtonDB report data (ProtonDB itself has no public reports API).
+# If it moves or changes shape the lookup just reports an error; nothing else depends on it.
+PROTONDB_REPORTS_URL = "https://protondb.max-p.me/games/{appid}/reports/"
+_TIER_RANK = {"borked": 0, "bronze": 1, "silver": 2, "gold": 3, "platinum": 4}
+_COMMUNITY_SKIP = ("DXVK_HUD", "MANGOHUD", "PROTON_LOG", "WINEDEBUG", "DXVK_LOG", "VKD3D_DEBUG",
+                   "VKD3D_LOG", "WINE_LOG")
+_ENV_RX = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]{2,})=(\"[^\"]*\"|'[^']*'|[^\s\"']+)")
+
+
+def _walk_strings(o, out: list, depth: int = 0):
+    if depth > 6:
+        return
+    if isinstance(o, str):
+        out.append(o)
+    elif isinstance(o, dict):
+        for v in o.values():
+            _walk_strings(v, out, depth + 1)
+    elif isinstance(o, (list, tuple)):
+        for v in o:
+            _walk_strings(v, out, depth + 1)
+
+
+def parse_community_reports(j, names: set) -> dict:
+    """Env assignments that several reports mention (catalog variables, harmless-looking values only).
+    Treated strictly as untrusted data: only KEY=VALUE tokens, KEY must be a known variable."""
+    reps = j if isinstance(j, list) else ((j.get("reports") or []) if isinstance(j, dict) else [])
+    envs: Dict[tuple, list] = {}
+    protons: Dict[str, int] = {}
+    total = 0
+    for r in reps:
+        if not isinstance(r, dict):
+            continue
+        total += 1
+        strs: list = []
+        _walk_strings(r, strs)
+        blob = "\n".join(strs)
+        nv = "nvidia" in blob.lower()
+        seen = set()
+        for m in _ENV_RX.finditer(blob):
+            k, v = m.group(1), m.group(2).strip("\"'")
+            if k not in names or k.startswith(_COMMUNITY_SKIP) or (k, v) in seen:
+                continue
+            if not re.fullmatch(r"[A-Za-z0-9_.,:+-]{1,48}", v):
+                continue
+            seen.add((k, v))
+            c = envs.setdefault((k, v), [0, 0])
+            c[0] += 1
+            c[1] += 1 if nv else 0
+        pv = r.get("protonVersion") or r.get("proton_version")
+        if isinstance(pv, str) and 0 < len(pv) < 40:
+            protons[pv] = protons.get(pv, 0) + 1
+    top = sorted(((k, v, c[0], c[1]) for (k, v), c in envs.items() if c[0] >= 2), key=lambda x: -x[2])[:20]
+    return {"n": total, "envs": [list(t) for t in top],
+            "proton": sorted(protons.items(), key=lambda kv: -kv[1])[:5]}
+
+
+def proton_fork_advice(pd: Optional[dict], installed: List[str]) -> List[str]:
+    """Which Proton to try, from ProtonDB's overall and trending tier."""
+    if not pd:
+        return []
+    tier, trend = str(pd.get("tier") or "").lower(), str(pd.get("trendingTier") or "").lower()
+    r, t = _TIER_RANK.get(tier), _TIER_RANK.get(trend)
     out = []
+    if r is None:
+        out.append("ProtonDB has no usable rating yet — start with Proton Experimental, then GE-Proton.")
+    elif r >= 3:
+        out.append(f"ProtonDB {tier}: stock Valve Proton (latest / Experimental) should be fine — no fork needed.")
+    elif r == 2:
+        out.append("ProtonDB silver: try Proton Experimental or the latest GE-Proton before tuning env vars.")
+    else:
+        out.append(f"ProtonDB {tier}: try GE-Proton or Proton-CachyOS; if it used to work, try an older Valve "
+                   "Proton (e.g. 9.0) — regressions are common.")
+    if r is not None and t is not None and t > r:
+        out.append(f"Trending tier ({trend}) is better than the overall tier: recent Proton builds improved it.")
+    elif r is not None and t is not None and t < r:
+        out.append(f"Trending tier ({trend}) is worse than the overall tier: a recent regression is likely — "
+                   "consider the previous Proton build.")
+    ins = [n for n in installed if re.search(r"ge-proton|cachyos|proton-em|experimental|proton_9|proton_10", n, re.I)]
+    if ins:
+        out.append("Installed here: " + ", ".join(ins[:6]) + "  (set per game on the Steam sync tab).")
+    return out
+
+
+def hint_suggestions(info: dict, si, cur_env: Dict[str, str]):
+    """-> (rows[(VAR, value, why, source, preselected)], notes[str]). Variables must exist in the catalog."""
+    names = {e.name for e in ALL_ENV_VARS}
+    rows: list = []
+    notes: List[str] = []
+
+    def add(n, v, why, src, pre=True):
+        if n not in names:
+            return
+        cur = cur_env.get(n)
+        if cur == v:
+            return                                   # already configured
+        rows.append((n, v, why + (f"  (currently {cur})" if cur not in (None, "") else ""), src, pre))
+
     pc = info.get("pcgw") or {}
     d3d = {x.split(".")[0] for x in pc.get("d3d", [])}
-    if has_nvidia and d3d & {"11", "12"} and "PROTON_ENABLE_NVAPI" in names:
-        out.append(("PROTON_ENABLE_NVAPI", "1",
-                    "Direct3D 11/12 title on NVIDIA: dxvk-nvapi exposes DLSS / Reflex"))
-    if pc and not d3d and pc.get("opengl") and "__GL_THREADED_OPTIMIZATIONS" in names:
-        out.append(("__GL_THREADED_OPTIMIZATIONS", "1", "OpenGL-only title: NVIDIA threaded optimization"))
-    return [o for o in out if o[0] in names]
+    engines = " ".join(pc.get("engines", [])).lower()
+    nv = bool(si.has_nvidia)
+    if nv and d3d & {"11", "12"}:
+        add("PROTON_ENABLE_NVAPI", "1", "Direct3D 11/12 title on NVIDIA: dxvk-nvapi exposes DLSS / Reflex", "heuristic")
+        add("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP", "1",
+            "stops the NVIDIA driver from pruning its shader cache between runs (fewer repeat compile stutters)",
+            "heuristic")
+    if pc and not d3d and pc.get("opengl"):
+        add("__GL_THREADED_OPTIMIZATIONS", "1", "OpenGL-only title: NVIDIA threaded optimization", "heuristic")
+    # engine-based
+    if "unreal engine" in engines:
+        notes.append("Unreal Engine: first-run shader compilation stutter is normal — keep the shader caches "
+                     "(Cache tab) instead of clearing them.")
+    if "unity" in engines:
+        notes.append("Unity: if the game crashes or stutters, try its renderer launch arguments "
+                     "(-force-vulkan / -force-d3d11) — game arguments, not environment variables.")
+    if (pc.get("vulkan") and not d3d) or re.search(r"source 2|idtech|godot|id tech", engines):
+        notes.append("Native Vulkan/OpenGL engine: DXVK / vkd3d-proton variables do not apply to this game.")
+    if d3d and max(int(x) for x in d3d if x.isdigit()) <= 9:
+        notes.append("Direct3D 9-era engine: DXVK's d3d9 layer is used — per-game d3d9.* keys in dxvk.conf "
+                     "(dxvk.conf tab) often matter more than environment variables.")
+    # system-aware
+    if si.ntsync_dev:
+        add("PROTON_USE_NTSYNC", "1", "/dev/ntsync exists; needs a Proton build with NTSync (GE, CachyOS, recent Valve)",
+            "system", False)
+    gpus = list(getattr(si, "vk_gpus", []) or [])
+    if any(g.is_nvidia for g in gpus) and any(not g.is_nvidia for g in gpus):
+        add("__NV_PRIME_RENDER_OFFLOAD", "1", "hybrid graphics: render on the NVIDIA GPU", "system")
+        add("__VK_LAYER_NV_optimus", "NVIDIA_only", "hybrid graphics: Vulkan picks the NVIDIA device", "system")
+        add("__GLX_VENDOR_LIBRARY_NAME", "nvidia", "hybrid graphics: OpenGL/GLX on NVIDIA", "system")
+    if str(si.session).lower() == "wayland":
+        add("PROTON_ENABLE_WAYLAND", "1", "Wayland session; native Wayland driver is experimental (overlays / Steam "
+            "Input may break)", "system", False)
+    # ProtonDB tier -> Proton fork advice
+    installed: List[str] = []
+    for root in SteamBackend.roots()[:1]:
+        installed = [n for n, _l in steam_compat_tools(root)]
+    notes = proton_fork_advice(info.get("protondb"), installed) + notes
+    # community env reports (user experiences — never preselected)
+    rep = info.get("reports") or {}
+    for n, v, cnt, cnv in rep.get("envs", []):
+        eff = cnv if nv else cnt - cnv
+        if eff >= 2:
+            add(n, v, f"mentioned in {cnt} ProtonDB report(s) ({cnv} with NVIDIA)", "⚠ community", False)
+    if rep.get("proton"):
+        notes.append("Proton builds most used in reports: " +
+                     ", ".join(f"{v} ×{c}" for v, c in rep["proton"][:4]))
+    return rows, notes
 
 
 class _HintWorker(QThread):
@@ -17155,8 +17298,9 @@ class GameHintsWidget(QWidget):
         lay.addWidget(_title_label("Game hints (ProtonDB · PCGamingWiki)"))
         lay.addWidget(_desc_label(
             "Looks up a Steam appid: ProtonDB rating and PCGamingWiki's graphics-API facts, cached for a week. "
-            "Suggested variables are simple heuristics derived from those facts, never copied from user reports; "
-            "apply them with one click and review them in the Linter."))
+            "Suggestions come from (1) simple heuristics on those facts and on this system, (2) the engine, "
+            "(3) the ProtonDB tier (which Proton build to try) and (4) env settings that several ProtonDB user reports mention — "
+            "those are flagged “community” and never preselected."))
         row = QHBoxLayout()
         self._games = QComboBox()
         self._games.setStyleSheet(_COMBO_QSS)
@@ -17182,14 +17326,23 @@ class GameHintsWidget(QWidget):
         self._summary = QPlainTextEdit()
         self._summary.setReadOnly(True)
         self._summary.setStyleSheet(_MONO_BOX_QSS)
-        self._summary.setMaximumHeight(170)
+        self._summary.setMaximumHeight(230)
         lay.addWidget(self._summary)
-        self._table = QTableWidget(0, 3)
-        self._table.setHorizontalHeaderLabels(["Variable", "Value", "Why"])
+        self._warn = QLabel("⚠ Rows marked “community” come from ProtonDB user reports. They are individual "
+                            "experiences and can behave differently on other hardware, drivers, kernels and Linux "
+                            "setups; DRSTool has not verified them. They are never preselected — try one at a time.")
+        self._warn.setWordWrap(True)
+        self._warn.setStyleSheet(f"color:{T['warn']}; font-size:12px; border:1px solid {T['warn']};"
+                                 "border-radius:4px; padding:4px 8px;")
+        self._warn.hide()
+        lay.addWidget(self._warn)
+        self._table = QTableWidget(0, 4)
+        self._table.setHorizontalHeaderLabels(["Variable", "Value", "Source", "Why"])
         self._table.verticalHeader().setVisible(False)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self._table.setSelectionMode(QTableWidget.MultiSelection)
+        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self._table.setStyleSheet(_table_qss())
         lay.addWidget(self._table, 1)
         btns = QHBoxLayout()
@@ -17239,8 +17392,6 @@ class GameHintsWidget(QWidget):
         if pd:
             lines.append(f"ProtonDB: {pd.get('tier')}  (trending {pd.get('trendingTier')}, best {pd.get('bestReportedTier')}, "
                          f"{pd.get('total')} reports, confidence {pd.get('confidence')})")
-            if str(pd.get("tier")) in ("borked", "bronze", "pending"):
-                lines.append("  → few/poor working reports: try another Proton build (Steam tab) before tuning.")
         pc = info.get("pcgw")
         if pc:
             lines.append(f"PCGamingWiki: {pc['title']}")
@@ -17248,16 +17399,28 @@ class GameHintsWidget(QWidget):
             lines.append("  Direct3D: " + (", ".join(pc["d3d"]) or "—") +
                          "   Vulkan: " + (", ".join(pc["vulkan"]) or "—") +
                          "   OpenGL: " + (", ".join(pc["opengl"]) or "—"))
+        rp = info.get("reports")
+        if rp:
+            lines.append(f"ProtonDB reports scanned: {rp.get('n', 0)}")
+        w = self.window()
+        cur = w.collect_launch_payload().get("env", {}) if hasattr(w, "collect_launch_payload") else {}
+        rows, notes = hint_suggestions(info, SYSHUB.info, cur)
+        lines += [f"→ {n}" for n in notes]
         lines += [f"⚠ {e}" for e in info.get("errors", [])]
         self._summary.setPlainText("\n".join(lines))
-        sug = hint_suggestions(info, bool(SYSHUB.info.has_nvidia))
+        self._warn.setVisible(any("community" in r[3] for r in rows))
         self._table.setRowCount(0)
-        for r, (n, v, why) in enumerate(sug):
+        for r, (n, v, why, src, pre) in enumerate(rows):
             self._table.insertRow(r)
-            for c, t in enumerate((n, v, why)):
-                self._table.setItem(r, c, QTableWidgetItem(t))
-        self._table.selectAll()
-        self._status.setText(f"{len(sug)} suggestion(s)." if sug else "No heuristic suggestions for this title.")
+            for c, t in enumerate((n, v, src, why)):
+                it = QTableWidgetItem(t)
+                if "community" in src:
+                    it.setForeground(QColor(T["warn"]))
+                self._table.setItem(r, c, it)
+            if pre:
+                self._table.selectRow(r)
+        self._status.setText(f"{len(rows)} suggestion(s); {sum(1 for x in rows if x[4])} preselected."
+                             if rows else "No suggestions for this title.")
 
     def _apply_selected(self):
         w = self.window()
