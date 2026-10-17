@@ -2396,6 +2396,8 @@ class SettingsManager(QObject):
     # even though the set of saved profiles hadn't changed at all.
     profiles_changed = Signal()
     profile_save_error = Signal(str)
+    # Fired after profiles.json was (re)written or (re)read by us; the external-change watcher uses it.
+    disk_written = Signal()
     # Emitted after a profile was written successfully (drives the
     # "unsaved changes" indicator back to clean).
     profile_saved = Signal(str)
@@ -2636,6 +2638,34 @@ class SettingsManager(QObject):
         self.profiles_changed.emit()
         return ok
 
+    def reload_from_disk(self, merge: bool) -> str:
+        """Adopt an externally modified profiles.json. merge=True keeps our profiles on
+        name conflicts and only adds the ones that exist solely on disk."""
+        data_file = self._profiles_path()
+        try:
+            with open(data_file, "r", encoding="utf-8") as f:
+                disk = json.load(f)
+            if not isinstance(disk, dict):
+                raise ValueError("not a JSON object")
+        except Exception as ex:
+            self.disk_written.emit()
+            return f"profiles.json on disk is unreadable ({ex}) — kept the in-memory profiles."
+        if merge:
+            added = [n for n in disk if n not in self._profiles]
+            clash = [n for n in disk if n in self._profiles and disk[n] != self._profiles[n]]
+            for n in added:
+                self._profiles[n] = disk[n]
+            ok = self._save_profiles()
+            self.profiles_changed.emit()
+            return (f"Merged: {len(added)} profile(s) added from disk, "
+                    f"{len(clash)} differing one(s) kept as in DRSTool." + ("" if ok else " (save failed)"))
+        self._profiles = disk
+        if self._current_profile not in self._profiles:
+            self._current_profile = None
+        self.disk_written.emit()
+        self.profiles_changed.emit()
+        return f"Reloaded {len(disk)} profile(s) from disk."
+
     def _save_profiles(self) -> bool:
         """Write profiles to disk atomically. Returns True on success."""
         data_file = self._profiles_path()
@@ -2649,6 +2679,7 @@ class SettingsManager(QObject):
                 os.fsync(f.fileno())
             self._snapshot_old(data_file, text)
             os.replace(tmp_file, data_file)  # atomic on POSIX — no partial-write corruption
+            self.disk_written.emit()
             return True
         except Exception as e:
             self.profile_save_error.emit(f"Failed to save profiles to {data_file}: {e}")
@@ -7857,7 +7888,21 @@ class LutrisSyncWidget(QWidget):
                     self._current_yaml_text = f.read()
             except Exception as e:
                 self._status_label.setText(f"Could not read {entry.path}: {e}")
+            w = self.window()
+            if hasattr(w, "_ext_track_lutris"):
+                w._ext_track_lutris(entry.path)
         self._update_preview()
+
+    def refresh_yaml_from_disk(self):
+        """Re-read the selected game's YAML (after an outside edit) and redraw the preview."""
+        index = self._game_combo.currentIndex()
+        if 0 <= index < len(self._games):
+            try:
+                self._current_yaml_text = self._games[index].path.read_text(encoding="utf-8")
+            except Exception as e:
+                self._status_label.setText(f"Could not read {self._games[index].path}: {e}")
+                return
+            self._update_preview()
 
     def _collect_all_env(self) -> Dict[str, str]:
         """All env vars currently set in DRSTool (DRS settings + every env
@@ -8454,6 +8499,9 @@ class LutrisSyncWidget(QWidget):
             return
 
         self._current_yaml_text = new_text
+        w = self.window()
+        if hasattr(w, "_ext_mark_lutris"):
+            w._ext_mark_lutris()
         self._status_label.setText(
             f"Wrote {total} change(s) to {entry.path.name}  (backup: {backup_path.name})"
         )
@@ -11623,6 +11671,14 @@ QTabBar::tab:hover { color: #c8cdd8; }
             lambda stale: tabs.setTabText(tabs.indexOf(self.cache), "Cache ⚠" if stale else "Cache"))
         self.drift = UpstreamDriftWidget()
         tabs.addTab(self.drift, "Upstream drift")
+        self.hints = GameHintsWidget()
+        tabs.addTab(self.hints, "Game hints")
+        self.frametime = FrametimeWidget()
+        tabs.addTab(self.frametime, "Frametime")
+        self.live = LiveProcessWidget()
+        tabs.addTab(self.live, "Live process")
+        self.logview = LogViewerWidget()
+        tabs.addTab(self.logview, "Logs")
 
         layout.addWidget(tabs)
 
@@ -12445,6 +12501,9 @@ class LauncherBackend:
     def busy(self) -> str:
         return ""
 
+    def extra_preview(self, e: LEntry, opts: dict) -> str:
+        return ""
+
     def apply(self, e: LEntry, payload: dict, opts: dict) -> str:
         raise NotImplementedError
 
@@ -12550,9 +12609,42 @@ class SteamBackend(LauncherBackend):
         # sanity: re-parse and read back
         if vdf_get_launch_options(new, e.key) != self.proposed(e, payload, opts):
             raise ValueError("Self-check failed: edited VDF does not read back identically — aborted.")
+        ct = opts.get("compat_tool") or ""
+        cfg_new = None
+        if ct:                                     # prepare first so a failure aborts before any write
+            cfg = steam_config_vdf(e.path)
+            ctext = cfg.read_text(errors="replace")
+            if ct == "__default__":
+                cfg_new = vdf_remove_app_block(ctext, STEAM_COMPAT_PATH, e.key)
+                ok = vdf_get_app_value(cfg_new, STEAM_COMPAT_PATH, e.key, "name") == ""
+            else:
+                cfg_new = vdf_set_app_value(ctext, STEAM_COMPAT_PATH, e.key, "name", ct)
+                cfg_new = vdf_set_app_value(cfg_new, STEAM_COMPAT_PATH, e.key, "config",
+                                            vdf_get_app_value(cfg_new, STEAM_COMPAT_PATH, e.key, "config"))
+                if not vdf_get_app_value(cfg_new, STEAM_COMPAT_PATH, e.key, "priority"):
+                    cfg_new = vdf_set_app_value(cfg_new, STEAM_COMPAT_PATH, e.key, "priority", "250")
+                ok = vdf_get_app_value(cfg_new, STEAM_COMPAT_PATH, e.key, "name") == ct
+            if not ok:
+                raise ValueError("Self-check failed: config.vdf does not read back as intended — aborted.")
         bak = _backup_file(e.path)
         _atomic_write(e.path, new)
-        return f"Steam launch options written for {e.title}. Backup: {bak.name}"
+        msg = f"Steam launch options written for {e.title}. Backup: {bak.name}"
+        if cfg_new is not None:
+            cbak = _backup_file(cfg)
+            _atomic_write(cfg, cfg_new)
+            msg += (" Proton override removed." if ct == "__default__" else f" Proton set to {ct}.") + \
+                f" Backup: {cbak.name}"
+        return msg
+
+    def extra_preview(self, e, opts):
+        try:
+            cur = vdf_get_app_value(steam_config_vdf(e.path).read_text(errors="replace"),
+                                    STEAM_COMPAT_PATH, e.key, "name")
+        except OSError:
+            cur = ""
+        ct = opts.get("compat_tool") or ""
+        new = ("remove the per-game override" if ct == "__default__" else ct) if ct else "unchanged"
+        return f"── Proton (config.vdf) ──\ncurrent: {cur or '(Steam default)'}\nnew:     {new}"
 
 
 class HeroicBackend(LauncherBackend):
@@ -12824,6 +12916,15 @@ class LauncherSyncWidget(QWidget):
         self._use_env.setStyleSheet(f"color:{T['text2']};")
         lay.addWidget(self._use_env)
 
+        self._compat_root = None
+        self._compat = QComboBox()
+        self._compat.setStyleSheet(_COMBO_QSS)
+        self._compat.setVisible(backend.name == "Steam")
+        self._compat.setToolTip("Writes the per-game compatibility tool (CompatToolMapping in "
+                                "config.vdf) together with the launch options.")
+        self._compat.currentIndexChanged.connect(lambda _i: self.refresh_preview())
+        lay.addWidget(self._compat)
+
         self._preview = QPlainTextEdit()
         self._preview.setReadOnly(True)
         self._preview.setStyleSheet(_MONO_BOX_QSS)
@@ -12902,7 +13003,23 @@ class LauncherSyncWidget(QWidget):
         return it.data(Qt.UserRole) if it else None
 
     def _opts(self) -> dict:
-        return {"use_env": self._use_env.isChecked()}
+        return {"use_env": self._use_env.isChecked(),
+                "compat_tool": (self._compat.currentData() or "") if self.backend.name == "Steam" else ""}
+
+    def _fill_compat(self, e):
+        if self.backend.name != "Steam":
+            return
+        root = e.path.parents[3]
+        if root == self._compat_root:
+            return
+        self._compat_root = root
+        self._compat.blockSignals(True)
+        self._compat.clear()
+        self._compat.addItem("Proton: leave unchanged", "")
+        self._compat.addItem("Proton: Steam default (remove per-game override)", "__default__")
+        for name, label in steam_compat_tools(root):
+            self._compat.addItem("Proton: " + label, name)
+        self._compat.blockSignals(False)
 
     def refresh_preview(self):
         e = self._sel()
@@ -12911,12 +13028,15 @@ class LauncherSyncWidget(QWidget):
             return
         p = self._payload()
         try:
+            self._fill_compat(e)
             cur = self.backend.current(e)
             new = self.backend.proposed(e, p, self._opts())
+            more = self.backend.extra_preview(e, self._opts())
         except Exception as ex:
             self._preview.setPlainText(f"⚠ {ex}")
             return
-        self._preview.setPlainText(f"── current ──\n{cur or '(empty)'}\n\n── new ──\n{new or '(empty)'}")
+        self._preview.setPlainText(f"── current ──\n{cur or '(empty)'}\n\n── new ──\n{new or '(empty)'}"
+                                   + (f"\n\n{more}" if more else ""))
 
     def _copy(self):
         e = self._sel()
@@ -12985,6 +13105,44 @@ class LaunchLineWidget(QWidget):
         form.addWidget(self._use_env)
         lay.addLayout(form)
 
+        # umu-launcher: run the .exe through umu-run with PROTONPATH / GAMEID / STORE
+        urow = QHBoxLayout()
+        self._umu = QCheckBox("umu-run")
+        self._umu.setToolTip("Wrap the command with umu-launcher (command = path to the .exe). "
+                             "Adds PROTONPATH, GAMEID, STORE and WINEPREFIX.")
+        self._umu.setStyleSheet(f"color:{T['text2']};")
+        self._umu.toggled.connect(lambda _c: self.refresh())
+        urow.addWidget(self._umu)
+        self._umu_proton = QComboBox()
+        self._umu_proton.setEditable(True)
+        self._umu_proton.setStyleSheet(_COMBO_QSS)
+        self._umu_proton.setToolTip("PROTONPATH: GE-Proton / UMU-Latest (umu downloads it) or an installed Proton directory")
+        self._umu_proton.addItem("GE-Proton")
+        self._umu_proton.addItem("UMU-Latest")
+        for label, d in proton_tool_dirs():
+            self._umu_proton.addItem(label, d)
+        self._umu_proton.currentTextChanged.connect(lambda _t: self.refresh())
+        urow.addWidget(self._umu_proton, 2)
+        self._umu_gid = QLineEdit("umu-0")
+        self._umu_gid.setToolTip("GAMEID: umu-<steam appid> picks umu's protonfixes for that game; umu-0 = none")
+        self._umu_gid.setStyleSheet(_LINEEDIT_QSS)
+        self._umu_gid.setMaximumWidth(120)
+        self._umu_gid.textChanged.connect(lambda _t: self.refresh())
+        urow.addWidget(self._umu_gid)
+        self._umu_store = QComboBox()
+        self._umu_store.setStyleSheet(_COMBO_QSS)
+        self._umu_store.setToolTip("STORE")
+        for st in UMU_STORES:
+            self._umu_store.addItem(st or "(no STORE)", st)
+        self._umu_store.currentIndexChanged.connect(lambda _i: self.refresh())
+        urow.addWidget(self._umu_store)
+        self._umu_pfx = QLineEdit()
+        self._umu_pfx.setPlaceholderText("WINEPREFIX (optional)")
+        self._umu_pfx.setStyleSheet(_LINEEDIT_QSS)
+        self._umu_pfx.textChanged.connect(lambda _t: self.refresh())
+        urow.addWidget(self._umu_pfx, 2)
+        lay.addLayout(urow)
+
         self._out = QPlainTextEdit()
         self._out.setReadOnly(True)
         self._out.setStyleSheet(_MONO_BOX_QSS)
@@ -13012,10 +13170,27 @@ class LaunchLineWidget(QWidget):
         w = self.window()
         return w.collect_launch_payload() if hasattr(w, "collect_launch_payload") else {}
 
+    def build_line(self, cmd: Optional[str] = None, steam: bool = False, force_env: bool = False) -> str:
+        """The launch line; with umu-run enabled the command is wrapped as `umu-run <exe>`."""
+        p = dict(self._payload())
+        cmd = (self._cmd.text().strip() if cmd is None else cmd.strip()) or "%command%"
+        if self._umu.isChecked() and not steam:
+            env = dict(p.get("env") or {})
+            pp = self._umu_proton.currentData() or self._umu_proton.currentText().strip()
+            if pp:
+                env["PROTONPATH"] = pp
+            if self._umu_gid.text().strip():
+                env["GAMEID"] = self._umu_gid.text().strip()
+            if self._umu_store.currentData():
+                env["STORE"] = self._umu_store.currentData()
+            if self._umu_pfx.text().strip():
+                env["WINEPREFIX"] = os.path.expanduser(self._umu_pfx.text().strip())
+            p["env"] = env
+            cmd = "umu-run " + ("<game.exe>" if cmd == "%command%" else cmd)
+        return build_launch_line(p, cmd, self._use_env.isChecked() or force_env)
+
     def refresh(self):
-        p = self._payload()
-        line = build_launch_line(p, self._cmd.text().strip() or "%command%", self._use_env.isChecked())
-        self._out.setPlainText(line)
+        self._out.setPlainText(self.build_line())
 
     def showEvent(self, ev):               # noqa: N802
         super().showEvent(ev)
@@ -13026,7 +13201,7 @@ class LaunchLineWidget(QWidget):
         self._status.setText("Copied.")
 
     def _copy_steam(self):
-        QApplication.clipboard().setText(build_launch_line(self._payload(), "%command%", self._use_env.isChecked()))
+        QApplication.clipboard().setText(self.build_line("%command%", steam=True))
         self._status.setText("Copied Steam launch options.")
 
     def _save_script(self):
@@ -13036,7 +13211,7 @@ class LaunchLineWidget(QWidget):
             return
         cmd = self._cmd.text().strip()
         inner = '"$@"' if cmd in ("", "%command%") else cmd
-        line = build_launch_line(self._payload(), inner, self._use_env.isChecked())
+        line = self.build_line(inner)
         try:
             Path(path).write_text(f"#!/bin/sh\n# generated by DRSTool\nexec {line}\n")
             os.chmod(path, 0o755)
@@ -16203,6 +16378,1712 @@ class UpstreamDriftWidget(QWidget):
 
 
 # ============================================================================
+# Feature pack 2: Steam per-game Proton, umu, shortcuts, dxvk.conf, game hints,
+# frametime analyser, live process check, log viewer, external-change watcher
+# ============================================================================
+
+import hashlib as _hl
+import difflib as _dl
+from PySide6.QtCore import QFileSystemWatcher
+from PySide6.QtGui import QSyntaxHighlighter, QTextCharFormat, QBrush
+
+
+def _table_qss() -> str:
+    return (f"QTableWidget{{background:{T['surface']};border:1px solid {T['border']};color:{T['text2']};"
+            f"gridline-color:{T['border']};}}QHeaderView::section{{background:{T['raised']};"
+            f"color:{T['muted']};border:none;padding:4px;}}")
+
+
+def _title_label(text: str) -> QLabel:
+    t = QLabel(text)
+    t.setStyleSheet(f"color:{T['text']}; font-size:15px; font-weight:700;")
+    return t
+
+
+def _desc_label(text: str) -> QLabel:
+    d = QLabel(text)
+    d.setWordWrap(True)
+    d.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+    return d
+
+
+_LINEEDIT_QSS = (f"QLineEdit{{background:{T['surface']};border:1px solid {T['border']};"
+                 f"color:{T['text']};padding:3px 8px;border-radius:4px;min-height:26px;"
+                 f"font-family:{T['mono']};}}")
+_COMBO_QSS = (f"QComboBox{{background:{T['surface']};border:1px solid {T['border']};"
+              f"color:{T['text']};padding:3px 8px;border-radius:4px;min-height:26px;}}"
+              f"QComboBox QAbstractItemView{{background:{T['surface']};color:{T['text']};}}")
+
+
+def _main_win(w: QWidget):
+    return w.window()
+
+
+def _slugify(s: str) -> str:
+    s = re.sub(r"[^A-Za-z0-9._-]+", "-", s.strip()).strip("-.")
+    return s[:60] or "game"
+
+
+def _xdg(var: str, default: str) -> Path:
+    return Path(os.environ.get(var) or (Path.home() / default))
+
+
+def _file_sha(path: Path) -> str:
+    try:
+        return _hl.sha1(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+# ----------------------------------------------------------------------------
+# VDF: generic "set a value inside <path>/<appid>" (Steam config.vdf)
+# ----------------------------------------------------------------------------
+
+def _vdf_indent_at(text: str, close_tok) -> str:
+    pos = close_tok[2]
+    ls = text.rfind("\n", 0, pos) + 1
+    ind = text[ls:pos]
+    return ind if ind.strip() == "" else ""
+
+
+def _vdf_insert_before_close(text: str, close_tok, body: str) -> str:
+    pos = close_tok[2]
+    ls = text.rfind("\n", 0, pos) + 1
+    if text[ls:pos].strip() == "":
+        return text[:ls] + body + text[ls:]
+    return text[:pos] + "\n" + body + text[pos:]
+
+
+def _vdf_descend(text: str, path: tuple):
+    """-> (deepest existing block or None, #path parts that exist)."""
+    node, blk, depth = _vdf_parse(text), None, 0
+    for part in path:
+        b = _vdf_find(node, part, "block")
+        if b is None:
+            break
+        blk, node, depth = b, b[1], depth + 1
+    return blk, depth
+
+
+def vdf_get_app_value(text: str, path: tuple, appid: str, key: str) -> str:
+    blk, depth = _vdf_descend(text, path)
+    if blk is None or depth < len(path):
+        return ""
+    app = _vdf_find(blk[1], str(appid), "block")
+    if app is None:
+        return ""
+    v = _vdf_find(app[1], key, "val")
+    return v[1] if v else ""
+
+
+def vdf_set_app_value(text: str, path: tuple, appid: str, key: str, value: str) -> str:
+    appid, esc = str(appid), _vdf_esc(value)
+    blk, depth = _vdf_descend(text, path)
+    if blk is None:
+        raise ValueError(f'"{path[0]}" section not found in the VDF file')
+    if depth < len(path):                      # container missing -> create the chain
+        cur = _vdf_indent_at(text, blk[2]) + "\t"
+        lines = []
+        for n in path[depth:]:
+            lines.append(f'{cur}"{n}"\n{cur}{{\n')
+            cur += "\t"
+        lines.append(f'{cur}"{appid}"\n{cur}{{\n{cur}\t"{key}"\t\t"{esc}"\n{cur}}}\n')
+        for _ in path[depth:]:
+            cur = cur[:-1]
+            lines.append(f"{cur}}}\n")
+        return _vdf_insert_before_close(text, blk[2], "".join(lines))
+    app = _vdf_find(blk[1], appid, "block")
+    if app is None:
+        ind = _vdf_indent_at(text, blk[2]) + "\t"
+        return _vdf_insert_before_close(
+            text, blk[2], f'{ind}"{appid}"\n{ind}{{\n{ind}\t"{key}"\t\t"{esc}"\n{ind}}}\n')
+    v = _vdf_find(app[1], key, "val")
+    if v is not None:
+        return text[:v[2]] + f'"{esc}"' + text[v[3]:]
+    ind = _vdf_indent_at(text, app[2]) + "\t"
+    return _vdf_insert_before_close(text, app[2], f'{ind}"{key}"\t\t"{esc}"\n')
+
+
+def vdf_remove_app_block(text: str, path: tuple, appid: str) -> str:
+    blk, depth = _vdf_descend(text, path)
+    if blk is None or depth < len(path):
+        return text
+    app = _vdf_find(blk[1], str(appid), "block")
+    if app is None:
+        return text
+    # app = (open_tok, items, close_tok); the key token sits right before open_tok
+    open_tok, close_tok = app[0], app[2]
+    items = blk[1]
+    key_tok = next((k for k, kd, pl in items if kd == "block" and pl is app), None)
+    if key_tok is None:
+        return text
+    start = text.rfind("\n", 0, key_tok[2]) + 1
+    if text[start:key_tok[2]].strip():
+        start = key_tok[2]
+    end = close_tok[3]
+    if text[end:end + 1] == "\n":
+        end += 1
+    return text[:start] + text[end:]
+
+
+STEAM_COMPAT_PATH = ("InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping")
+
+
+def _official_proton_name(dirname: str) -> str:
+    low = dirname.lower()
+    if "experimental" in low:
+        return "proton_experimental"
+    if "hotfix" in low:
+        return "proton_hotfix"
+    m = re.match(r"proton\s+(\d+)\.(\d+)", low)
+    if m:
+        major, minor = m.groups()
+        return f"proton_{major}" if minor == "0" else f"proton_{major}{minor}"
+    return ""
+
+
+def steam_compat_tools(root: Path) -> List[tuple]:
+    """[(internal_name, label)] of Proton builds Steam can use (custom + official)."""
+    out, seen = [], set()
+    cdirs = [root / "compatibilitytools.d", Path.home() / ".steam/root/compatibilitytools.d",
+             Path("/usr/share/steam/compatibilitytools.d"),
+             Path("/usr/local/share/steam/compatibilitytools.d")]
+    for cd in cdirs:
+        try:
+            subs = sorted(p for p in cd.iterdir() if p.is_dir())
+        except OSError:
+            continue
+        for d in subs:
+            internal, disp = d.name, ""
+            try:
+                t = (d / "compatibilitytool.vdf").read_text(errors="replace")
+                m = re.search(r'"compat_tools"\s*\{\s*"([^"]+)"', t)
+                if m:
+                    internal = m.group(1)
+                m = re.search(r'"display_name"\s+"([^"]+)"', t)
+                if m:
+                    disp = m.group(1)
+            except OSError:
+                pass
+            if internal not in seen:
+                seen.add(internal)
+                out.append((internal, f"{disp or d.name}  ({internal})" if (disp or d.name) != internal
+                            else internal))
+    for lib in SteamBackend._libraries(root):
+        try:
+            subs = sorted(p for p in (lib / "common").iterdir()
+                          if p.is_dir() and p.name.lower().startswith("proton") and (p / "proton").exists())
+        except OSError:
+            continue
+        for d in subs:
+            nm = _official_proton_name(d.name)
+            if nm and nm not in seen:
+                seen.add(nm)
+                out.append((nm, f"{d.name}  ({nm})"))
+    return out
+
+
+def steam_config_vdf(localconfig: Path) -> Path:
+    return localconfig.parents[3] / "config" / "config.vdf"
+
+
+def steam_install_dirs() -> List[tuple]:
+    """[(label, installdir Path)] of installed Steam games."""
+    res, seen = [], set()
+    for root in SteamBackend.roots():
+        for lib in SteamBackend._libraries(root):
+            for acf in sorted(lib.glob("appmanifest_*.acf")):
+                try:
+                    t = acf.read_text(errors="replace")
+                except OSError:
+                    continue
+                a = re.search(r'"appid"\s+"(\d+)"', t)
+                n = re.search(r'"name"\s+"((?:[^"\\]|\\.)*)"', t)
+                d = re.search(r'"installdir"\s+"((?:[^"\\]|\\.)*)"', t)
+                if not (a and d) or a.group(1) in seen:
+                    continue
+                p = lib / "common" / _vdf_unesc(d.group(1))
+                name = _vdf_unesc(n.group(1)) if n else a.group(1)
+                if p.is_dir() and not re.match(r"(Proton\b|Steam Linux Runtime|Steamworks Common)", name):
+                    seen.add(a.group(1))
+                    res.append((f"{name}  [{a.group(1)}]", p, a.group(1)))
+    res.sort(key=lambda x: x[0].lower())
+    return res
+
+
+# ----------------------------------------------------------------------------
+# umu-launcher helpers
+# ----------------------------------------------------------------------------
+
+UMU_STORES = ["", "none", "steam", "gog", "egs", "amazon", "battlenet", "ea", "humble",
+              "itchio", "ubisoft", "zoomplatform"]
+
+
+def proton_tool_dirs() -> List[tuple]:
+    """[(label, absolute dir)] of installed Proton builds, for umu's PROTONPATH."""
+    out, seen = [], set()
+    roots = [Path.home() / ".local/share/Steam", Path.home() / ".steam/root"]
+    cds = [r / "compatibilitytools.d" for r in roots]
+    cds += [Path.home() / ".local/share/umu/compatibilitytools",
+            Path("/usr/share/steam/compatibilitytools.d")]
+    for cd in cds:
+        try:
+            for d in sorted(cd.iterdir()):
+                rp = d.resolve()
+                if d.is_dir() and (d / "proton").exists() and rp not in seen:
+                    seen.add(rp)
+                    out.append((d.name, str(d)))
+        except OSError:
+            continue
+    return out
+
+
+# ----------------------------------------------------------------------------
+# Shortcut: standalone launcher script + .desktop entry
+# ----------------------------------------------------------------------------
+
+class ShortcutWidget(QWidget):
+    """Writes ~/.local/share/drstool/launchers/<slug>.sh and a .desktop entry that runs it —
+    the current DRSTool configuration baked into a launcher that works without Lutris/Steam."""
+
+    LGTUNE = "/usr/local/bin/lutris-game-tune-wrapper"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(8)
+        lay.addWidget(_title_label("Standalone launcher shortcut"))
+        lay.addWidget(_desc_label(
+            "Bakes the current configuration (env, DRS settings, gamescope, MangoHud, and the "
+            "umu-run wrapper if enabled on the Launch line tab) into a shell script plus a "
+            ".desktop entry. The script is a snapshot: re-create it after changing the setup."))
+        form = QGridLayout()
+        form.setSpacing(6)
+        form.setColumnStretch(1, 1)
+
+        def row(r, label, widget, extra=None):
+            l = QLabel(label)
+            l.setStyleSheet(f"color:{T['text2']};")
+            form.addWidget(l, r, 0)
+            form.addWidget(widget, r, 1)
+            if extra is not None:
+                form.addWidget(extra, r, 2)
+
+        self._name = QLineEdit()
+        self._name.setPlaceholderText("Alan Wake 2")
+        self._cmd = QLineEdit()
+        self._cmd.setPlaceholderText("exe or script — with umu: path to the .exe; e.g. ~/Games/aw2/AlanWake2.exe")
+        self._wd = QLineEdit()
+        self._wd.setPlaceholderText("optional working directory (cd before launch)")
+        self._icon = QLineEdit()
+        self._icon.setPlaceholderText("optional icon path or theme icon name")
+        for w in (self._name, self._cmd, self._wd, self._icon):
+            w.setStyleSheet(_LINEEDIT_QSS)
+            w.textChanged.connect(lambda _t: self.refresh())
+        b_cmd = _tool_btn("Browse…")
+        b_cmd.clicked.connect(lambda: self._browse(self._cmd, False))
+        b_wd = _tool_btn("Browse…")
+        b_wd.clicked.connect(lambda: self._browse(self._wd, True))
+        b_ic = _tool_btn("Browse…")
+        b_ic.clicked.connect(lambda: self._browse(self._icon, False))
+        row(0, "Name:", self._name)
+        row(1, "Command:", self._cmd, b_cmd)
+        row(2, "Working dir:", self._wd, b_wd)
+        row(3, "Icon:", self._icon, b_ic)
+        lay.addLayout(form)
+
+        opt = QHBoxLayout()
+        self._lg = QCheckBox("run through lutris-game-tune (PRE → RUN → POST)")
+        self._lg.setStyleSheet(f"color:{T['text2']};")
+        self._lg.setEnabled(Path(self.LGTUNE).exists())
+        self._lg.setToolTip(f"{self.LGTUNE}" + ("" if Path(self.LGTUNE).exists() else "  — not installed"))
+        self._lg.toggled.connect(lambda _c: self.refresh())
+        opt.addWidget(self._lg)
+        self._nice = QSpinBox()
+        self._nice.setRange(-20, 19)
+        self._nice.setValue(-10)
+        self._nice.valueChanged.connect(lambda _v: self.refresh())
+        opt.addWidget(QLabel("nice"))
+        opt.addWidget(self._nice)
+        opt.addStretch(1)
+        lay.addLayout(opt)
+
+        self._out = QPlainTextEdit()
+        self._out.setReadOnly(True)
+        self._out.setStyleSheet(_MONO_BOX_QSS)
+        self._out.setMinimumHeight(150)
+        lay.addWidget(self._out, 1)
+
+        btns = QHBoxLayout()
+        self._create = _tool_btn("Create launcher", bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True)
+        self._create.clicked.connect(self._write)
+        btns.addWidget(self._create)
+        btns.addWidget(QLabel("Existing:"))
+        self._existing = QComboBox()
+        self._existing.setStyleSheet(_COMBO_QSS)
+        self._existing.setMinimumWidth(200)
+        btns.addWidget(self._existing)
+        rm = _tool_btn("Remove")
+        rm.clicked.connect(self._remove)
+        btns.addWidget(rm)
+        btns.addStretch(1)
+        lay.addLayout(btns)
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        lay.addWidget(self._status)
+        self._list_existing()
+
+    # -- paths ------------------------------------------------------------
+    @staticmethod
+    def _script_dir() -> Path:
+        return _xdg("XDG_DATA_HOME", ".local/share") / "drstool" / "launchers"
+
+    @staticmethod
+    def _desktop_dir() -> Path:
+        return _xdg("XDG_DATA_HOME", ".local/share") / "applications"
+
+    def _browse(self, edit: QLineEdit, folder: bool):
+        if folder:
+            p = QFileDialog.getExistingDirectory(self, "Working directory", edit.text() or str(Path.home()))
+        else:
+            p, _ = QFileDialog.getOpenFileName(self, "Select file", edit.text() or str(Path.home()))
+        if p:
+            edit.setText(p)
+
+    def _list_existing(self):
+        self._existing.clear()
+        try:
+            for p in sorted(self._desktop_dir().glob("drstool-*.desktop")):
+                self._existing.addItem(p.stem[len("drstool-"):], p)
+        except OSError:
+            pass
+
+    # -- content ----------------------------------------------------------
+    def _line_cmd(self) -> str:
+        c = self._cmd.text().strip()
+        return c
+
+    def build_script(self) -> str:
+        w = self.window()
+        ll = getattr(w, "_launch_line", None)
+        cmd = self._line_cmd()
+        payload = w.collect_launch_payload() if hasattr(w, "collect_launch_payload") else {}
+        if ll is not None:
+            line = ll.build_line(cmd or "<command>", force_env=self._lg.isChecked())
+        else:
+            line = build_launch_line(payload, cmd or "<command>", True)
+        lines = ["#!/bin/sh", f"# generated by DRSTool for: {self._name.text().strip() or '(unnamed)'}"]
+        wd = self._wd.text().strip()
+        if wd:
+            lines.append(f"cd {shlex.quote(os.path.expanduser(wd))} || exit 1")
+        if self._lg.isChecked():
+            lines += [f"W={shlex.quote(self.LGTUNE)}", '"$W" PRE', "trap '\"$W\" POST' EXIT",
+                      f'"$W" RUN {self._nice.value()} {line}']
+        else:
+            lines.append(f"exec {line}")
+        return "\n".join(lines) + "\n"
+
+    def refresh(self):
+        self._out.setPlainText(self.build_script())
+
+    def showEvent(self, ev):               # noqa: N802
+        super().showEvent(ev)
+        self.refresh()
+
+    def _write(self):
+        name = self._name.text().strip()
+        if not name or not self._cmd.text().strip():
+            self._status.setText("⚠ Name and command are required.")
+            return
+        slug = _slugify(name)
+        sp = self._script_dir() / f"{slug}.sh"
+        dp = self._desktop_dir() / f"drstool-{slug}.desktop"
+        if (sp.exists() or dp.exists()) and QMessageBox.question(
+                self, "Overwrite launcher", f"{dp.name} already exists. Overwrite it?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        icon = self._icon.text().strip()
+        qn = name.replace("\n", " ")
+        exec_path = str(sp).replace("\\", "\\\\").replace('"', '\\"')
+        desktop = ("[Desktop Entry]\nType=Application\n"
+                   f"Name={qn}\nExec=\"{exec_path}\"\n"
+                   + (f"Icon={icon}\n" if icon else "") +
+                   "Terminal=false\nCategories=Game;\nX-DRSTool=true\n")
+        try:
+            sp.parent.mkdir(parents=True, exist_ok=True)
+            dp.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write(sp, self.build_script())
+            os.chmod(sp, 0o755)
+            _atomic_write(dp, desktop)
+            os.chmod(dp, 0o755)
+        except OSError as ex:
+            self._status.setText(f"⚠ {ex}")
+            return
+        if shutil.which("update-desktop-database"):
+            _run(["update-desktop-database", str(self._desktop_dir())], 5)
+        self._status.setText(f"✔ Created {dp}  →  {sp}")
+        self._list_existing()
+
+    def _remove(self):
+        dp = self._existing.currentData()
+        if not dp:
+            return
+        slug = dp.stem[len("drstool-"):]
+        if QMessageBox.question(self, "Remove launcher", f"Delete {dp.name} and its script?",
+                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        for p in (dp, self._script_dir() / f"{slug}.sh"):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        self._status.setText(f"Removed {dp.name}")
+        self._list_existing()
+
+
+# ----------------------------------------------------------------------------
+# dxvk.conf writer (DXVK_CONFIG -> file)
+# ----------------------------------------------------------------------------
+
+_DXVK_MARK_B = "# >>> DRSTool (managed) >>>"
+_DXVK_MARK_E = "# <<< DRSTool <<<"
+
+
+def _strip_dxvk_block(text: str) -> str:
+    return re.sub(re.escape(_DXVK_MARK_B) + r".*?" + re.escape(_DXVK_MARK_E) + r"\n?", "",
+                  text, flags=re.S)
+
+
+def merge_dxvk_conf(existing: str, pairs: List[tuple]) -> str:
+    """Hand-written lines stay; keys DRSTool sets are moved into one managed block."""
+    keys = {k for k, _ in pairs}
+    out = []
+    for ln in _strip_dxvk_block(existing).splitlines():
+        m = re.match(r"\s*([A-Za-z0-9_.]+)\s*=", ln)
+        if m and m.group(1) in keys:
+            continue
+        out.append(ln)
+    while out and not out[-1].strip():
+        out.pop()
+    block = [_DXVK_MARK_B] + [f"{k} = {v}" for k, v in pairs] + [_DXVK_MARK_E]
+    return ("\n".join(out) + "\n\n" if out else "") + "\n".join(block) + "\n"
+
+
+class DxvkConfWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(8)
+        lay.addWidget(_title_label("dxvk.conf writer"))
+        lay.addWidget(_desc_label(
+            "Turns the DXVK_CONFIG key picker (Environment tab) into a real dxvk.conf. DXVK reads "
+            "dxvk.conf from the game's working directory, or from the file named by DXVK_CONFIG_FILE. "
+            "Hand-written lines in an existing file are kept; DRSTool's keys live in one marked block. "
+            "vkd3d-proton has no config file — VKD3D_CONFIG stays an environment variable."))
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Mode:"))
+        self._mode = QComboBox()
+        self._mode.setStyleSheet(_COMBO_QSS)
+        self._mode.addItem("dxvk.conf in the game folder", 0)
+        self._mode.addItem("File in ~/.config/drstool/dxvk/ + set DXVK_CONFIG_FILE", 1)
+        self._mode.currentIndexChanged.connect(lambda _i: self.refresh())
+        row.addWidget(self._mode, 1)
+        lay.addLayout(row)
+        row = QHBoxLayout()
+        self._steam = QComboBox()
+        self._steam.setStyleSheet(_COMBO_QSS)
+        self._steam.addItem("Steam game…", None)
+        for label, p, _aid in steam_install_dirs():
+            self._steam.addItem(label, p)
+        self._steam.currentIndexChanged.connect(self._pick_steam)
+        row.addWidget(self._steam, 1)
+        self._dir = QLineEdit()
+        self._dir.setPlaceholderText("game folder (where the .exe runs) / name for mode 2")
+        self._dir.setStyleSheet(_LINEEDIT_QSS)
+        self._dir.textChanged.connect(lambda _t: self.refresh())
+        row.addWidget(self._dir, 2)
+        b = _tool_btn("Browse…")
+        b.clicked.connect(self._browse)
+        row.addWidget(b)
+        lay.addLayout(row)
+        self._clear_env = QCheckBox("clear DXVK_CONFIG from the environment after writing "
+                                    "(the file replaces it)")
+        self._clear_env.setStyleSheet(f"color:{T['text2']};")
+        lay.addWidget(self._clear_env)
+        self._out = QPlainTextEdit()
+        self._out.setReadOnly(True)
+        self._out.setStyleSheet(_MONO_BOX_QSS)
+        lay.addWidget(self._out, 1)
+        btns = QHBoxLayout()
+        self._wr = _tool_btn("Write dxvk.conf", bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True)
+        self._wr.clicked.connect(self._write)
+        btns.addWidget(self._wr)
+        rm = _tool_btn("Remove DRSTool block")
+        rm.clicked.connect(self._remove)
+        btns.addWidget(rm)
+        btns.addStretch(1)
+        lay.addLayout(btns)
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        lay.addWidget(self._status)
+
+    def _pick_steam(self, _i):
+        p = self._steam.currentData()
+        if p is not None:
+            self._dir.setText(str(p) if self._mode.currentData() == 0
+                              else _slugify(re.sub(r"\s*\[\d+\]$", "", self._steam.currentText())))
+
+    def _browse(self):
+        p = QFileDialog.getExistingDirectory(self, "Game folder", self._dir.text() or str(Path.home()))
+        if p:
+            self._dir.setText(p)
+
+    def _pairs(self) -> List[tuple]:
+        w = self.window()
+        env = w.collect_launch_payload().get("env", {}) if hasattr(w, "collect_launch_payload") else {}
+        return [(k, v) for k, v in EnvVarEditorWidget._parse_dxvk_config(env.get("DXVK_CONFIG", ""))
+                if v is not None]
+
+    def _target(self) -> Optional[Path]:
+        t = self._dir.text().strip()
+        if not t:
+            return None
+        if self._mode.currentData() == 1:
+            return _xdg("XDG_CONFIG_HOME", ".config") / "drstool" / "dxvk" / f"{_slugify(t)}.conf"
+        p = Path(os.path.expanduser(t))
+        return p if p.name == "dxvk.conf" else p / "dxvk.conf"
+
+    def _new_text(self, path: Path) -> str:
+        try:
+            old = path.read_text(errors="replace")
+        except OSError:
+            old = ""
+        return merge_dxvk_conf(old, self._pairs()), old
+
+    def refresh(self):
+        pairs = self._pairs()
+        path = self._target()
+        if not pairs:
+            self._out.setPlainText("DXVK_CONFIG is empty — set some keys in Environment → DXVK_CONFIG first.")
+            return
+        if path is None:
+            self._out.setPlainText("Pick a game folder (or a name in mode 2).\n\nGenerated block:\n" +
+                                   "\n".join(f"{k} = {v}" for k, v in pairs))
+            return
+        new, old = self._new_text(path)
+        diff = "\n".join(_dl.unified_diff(old.splitlines(), new.splitlines(),
+                                          f"{path} (current)", f"{path} (new)", lineterm=""))
+        self._out.setPlainText(f"{path}\n\n" + (diff or "(no changes)"))
+
+    def showEvent(self, ev):               # noqa: N802
+        super().showEvent(ev)
+        self.refresh()
+
+    def _write(self):
+        path = self._target()
+        if path is None or not self._pairs():
+            self._status.setText("⚠ Nothing to write (no DXVK_CONFIG keys or no destination).")
+            return
+        new, old = self._new_text(path)
+        if new == old:
+            self._status.setText("Already up to date.")
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                _backup_file(path)
+            _atomic_write(path, new)
+        except OSError as ex:
+            self._status.setText(f"⚠ {ex}")
+            return
+        msg = f"✔ Wrote {path}"
+        w = self.window()
+        if self._mode.currentData() == 1 and hasattr(w, "set_env_var"):
+            w.set_env_var("DXVK_CONFIG_FILE", str(path))
+            msg += "  (DXVK_CONFIG_FILE set)"
+        if self._clear_env.isChecked() and hasattr(w, "set_env_var"):
+            w.set_env_var("DXVK_CONFIG", "")
+            msg += "  (DXVK_CONFIG cleared)"
+        self._status.setText(msg)
+        self.refresh()
+
+    def _remove(self):
+        path = self._target()
+        if path is None or not path.exists():
+            self._status.setText("No file at the destination.")
+            return
+        old = path.read_text(errors="replace")
+        new = _strip_dxvk_block(old)
+        if new == old:
+            self._status.setText("No DRSTool block in that file.")
+            return
+        try:
+            _backup_file(path)
+            _atomic_write(path, new.rstrip("\n") + "\n" if new.strip() else "")
+        except OSError as ex:
+            self._status.setText(f"⚠ {ex}")
+            return
+        self._status.setText(f"✔ Removed the DRSTool block from {path}")
+        self.refresh()
+
+
+# ----------------------------------------------------------------------------
+# Game hints: ProtonDB summary + PCGamingWiki API facts (read-only, cached)
+# ----------------------------------------------------------------------------
+
+def _http_get(url: str, timeout: float = 12.0):
+    req = urllib.request.Request(url, headers={"User-Agent": "DRSTool/1.0 (hint lookup)"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read(2_000_000), r.geturl()
+
+
+def _hints_cache_path(appid: str) -> Path:
+    return _xdg("XDG_CACHE_HOME", ".cache") / "drstool" / "hints" / f"{appid}.json"
+
+
+def _pcgw_param(raw: str, name: str) -> str:
+    m = re.search(r"\|\s*" + re.escape(name) + r"\s*=\s*([^\n|}]*)", raw, re.I)
+    return m.group(1).strip() if m else ""
+
+
+def fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
+    cp = _hints_cache_path(appid)
+    if use_cache:
+        try:
+            d = json.loads(cp.read_text())
+            if time.time() - d.get("ts", 0) < 7 * 86400:
+                d["cached"] = True
+                return d
+        except (OSError, ValueError):
+            pass
+    res = {"appid": appid, "ts": time.time(), "protondb": None, "pcgw": None, "errors": []}
+    try:
+        body, _u = _http_get(f"https://www.protondb.com/api/v1/reports/summaries/{appid}.json")
+        j = json.loads(body.decode("utf-8", "replace"))
+        res["protondb"] = {k: j.get(k) for k in ("tier", "bestReportedTier", "trendingTier",
+                                                "score", "confidence", "total")}
+    except Exception as ex:
+        res["errors"].append(f"ProtonDB: {ex}")
+    try:
+        _b, final = _http_get(f"https://www.pcgamingwiki.com/api/appid.php?appid={appid}")
+        title = urllib.parse.unquote(final.rstrip("/").rsplit("/", 1)[-1])
+        raw, _u = _http_get("https://www.pcgamingwiki.com/w/index.php?title="
+                            f"{urllib.parse.quote(title)}&action=raw")
+        txt = raw.decode("utf-8", "replace")
+        nums = lambda s: re.findall(r"\d+(?:\.\d+)?", s)
+        res["pcgw"] = {"title": title.replace("_", " "), "url": final,
+                       "engines": [e.strip() for e in re.findall(r"Infobox game/row/engine\|([^}|]+)", txt)],
+                       "d3d": nums(_pcgw_param(txt, "direct3d versions")),
+                       "vulkan": nums(_pcgw_param(txt, "vulkan versions")),
+                       "opengl": nums(_pcgw_param(txt, "opengl versions"))}
+    except Exception as ex:
+        res["errors"].append(f"PCGamingWiki: {ex}")
+    if res["protondb"] or res["pcgw"]:
+        try:
+            cp.parent.mkdir(parents=True, exist_ok=True)
+            cp.write_text(json.dumps(res))
+        except OSError:
+            pass
+    return res
+
+
+def hint_suggestions(info: dict, has_nvidia: bool) -> List[tuple]:
+    """[(VAR, value, reason)] — heuristics only, and only variables that exist in the catalog."""
+    names = {e.name for e in ALL_ENV_VARS}
+    out = []
+    pc = info.get("pcgw") or {}
+    d3d = {x.split(".")[0] for x in pc.get("d3d", [])}
+    if has_nvidia and d3d & {"11", "12"} and "PROTON_ENABLE_NVAPI" in names:
+        out.append(("PROTON_ENABLE_NVAPI", "1",
+                    "Direct3D 11/12 title on NVIDIA: dxvk-nvapi exposes DLSS / Reflex"))
+    if pc and not d3d and pc.get("opengl") and "__GL_THREADED_OPTIMIZATIONS" in names:
+        out.append(("__GL_THREADED_OPTIMIZATIONS", "1", "OpenGL-only title: NVIDIA threaded optimization"))
+    return [o for o in out if o[0] in names]
+
+
+class _HintWorker(QThread):
+    done = Signal(dict)
+
+    def __init__(self, appid: str, force: bool, parent=None):
+        super().__init__(parent)
+        self._appid, self._force = appid, force
+
+    def run(self):
+        self.done.emit(fetch_game_hints(self._appid, not self._force))
+
+
+class GameHintsWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._worker: Optional[_HintWorker] = None
+        self._info: dict = {}
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(8)
+        lay.addWidget(_title_label("Game hints (ProtonDB · PCGamingWiki)"))
+        lay.addWidget(_desc_label(
+            "Looks up a Steam appid: ProtonDB rating and PCGamingWiki's graphics-API facts, cached for a week. "
+            "Suggested variables are simple heuristics derived from those facts, never copied from user reports; "
+            "apply them with one click and review them in the Linter."))
+        row = QHBoxLayout()
+        self._games = QComboBox()
+        self._games.setStyleSheet(_COMBO_QSS)
+        self._games.addItem("Installed Steam game…", None)
+        for label, _p, aid in steam_install_dirs():
+            self._games.addItem(label, aid)
+        self._games.currentIndexChanged.connect(
+            lambda _i: self._games.currentData() and self._appid.setText(self._games.currentData()))
+        row.addWidget(self._games, 1)
+        self._appid = QLineEdit()
+        self._appid.setPlaceholderText("Steam appid")
+        self._appid.setMaximumWidth(140)
+        self._appid.setStyleSheet(_LINEEDIT_QSS)
+        self._appid.returnPressed.connect(lambda: self._fetch(False))
+        row.addWidget(self._appid)
+        self._go = _tool_btn("Look up", bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True)
+        self._go.clicked.connect(lambda: self._fetch(False))
+        row.addWidget(self._go)
+        rf = _tool_btn("Refresh")
+        rf.clicked.connect(lambda: self._fetch(True))
+        row.addWidget(rf)
+        lay.addLayout(row)
+        self._summary = QPlainTextEdit()
+        self._summary.setReadOnly(True)
+        self._summary.setStyleSheet(_MONO_BOX_QSS)
+        self._summary.setMaximumHeight(170)
+        lay.addWidget(self._summary)
+        self._table = QTableWidget(0, 3)
+        self._table.setHorizontalHeaderLabels(["Variable", "Value", "Why"])
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self._table.setStyleSheet(_table_qss())
+        lay.addWidget(self._table, 1)
+        btns = QHBoxLayout()
+        self._apply = _tool_btn("Apply selected", bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True)
+        self._apply.clicked.connect(self._apply_selected)
+        btns.addWidget(self._apply)
+        for label, fn in (("Open ProtonDB", lambda: self._open("https://www.protondb.com/app/{id}")),
+                          ("Open PCGamingWiki", self._open_pcgw)):
+            b = _tool_btn(label)
+            b.clicked.connect(fn)
+            btns.addWidget(b)
+        btns.addStretch(1)
+        lay.addLayout(btns)
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        lay.addWidget(self._status)
+
+    def _open(self, tmpl: str):
+        aid = self._appid.text().strip()
+        if aid.isdigit():
+            QDesktopServices.openUrl(QUrl(tmpl.format(id=aid)))
+
+    def _open_pcgw(self):
+        aid = self._appid.text().strip()
+        if aid.isdigit():
+            QDesktopServices.openUrl(QUrl(f"https://www.pcgamingwiki.com/api/appid.php?appid={aid}"))
+
+    def _fetch(self, force: bool):
+        aid = self._appid.text().strip()
+        if not aid.isdigit():
+            self._status.setText("⚠ Enter a numeric Steam appid.")
+            return
+        if self._worker and self._worker.isRunning():
+            return
+        self._status.setText("Looking up…")
+        self._go.setEnabled(False)
+        self._worker = _HintWorker(aid, force, self)
+        self._worker.done.connect(self._show)
+        self._worker.start()
+
+    def _show(self, info: dict):
+        self._go.setEnabled(True)
+        self._info = info
+        lines = [f"appid {info['appid']}" + ("  (cached)" if info.get("cached") else "")]
+        pd = info.get("protondb")
+        if pd:
+            lines.append(f"ProtonDB: {pd.get('tier')}  (trending {pd.get('trendingTier')}, best {pd.get('bestReportedTier')}, "
+                         f"{pd.get('total')} reports, confidence {pd.get('confidence')})")
+            if str(pd.get("tier")) in ("borked", "bronze", "pending"):
+                lines.append("  → few/poor working reports: try another Proton build (Steam tab) before tuning.")
+        pc = info.get("pcgw")
+        if pc:
+            lines.append(f"PCGamingWiki: {pc['title']}")
+            lines.append("  Engine: " + (", ".join(pc["engines"]) or "?"))
+            lines.append("  Direct3D: " + (", ".join(pc["d3d"]) or "—") +
+                         "   Vulkan: " + (", ".join(pc["vulkan"]) or "—") +
+                         "   OpenGL: " + (", ".join(pc["opengl"]) or "—"))
+        lines += [f"⚠ {e}" for e in info.get("errors", [])]
+        self._summary.setPlainText("\n".join(lines))
+        sug = hint_suggestions(info, bool(SYSHUB.info.has_nvidia))
+        self._table.setRowCount(0)
+        for r, (n, v, why) in enumerate(sug):
+            self._table.insertRow(r)
+            for c, t in enumerate((n, v, why)):
+                self._table.setItem(r, c, QTableWidgetItem(t))
+        self._table.selectAll()
+        self._status.setText(f"{len(sug)} suggestion(s)." if sug else "No heuristic suggestions for this title.")
+
+    def _apply_selected(self):
+        w = self.window()
+        rows = sorted({i.row() for i in self._table.selectedIndexes()})
+        for r in rows:
+            w.set_env_var(self._table.item(r, 0).text(), self._table.item(r, 1).text())
+        self._status.setText(f"Applied {len(rows)} variable(s) to the Environment tab.")
+
+
+# ----------------------------------------------------------------------------
+# Frametime analyser (MangoHud CSV / FLM_CSV) with A/B comparison
+# ----------------------------------------------------------------------------
+
+import statistics as _stat
+
+
+def load_frametimes(path: str) -> dict:
+    lines = Path(path).read_text(errors="replace").splitlines()
+    hdr, kind = None, ""
+    for i, ln in enumerate(lines[:12]):
+        low = ln.lower()
+        if low.startswith("flip_ns,"):
+            hdr, kind = i, "flm"
+            break
+        if "frametime" in low and "," in low:
+            hdr, kind = i, "mangohud"
+            break
+    if hdr is None:
+        raise ValueError("not a MangoHud log (no 'frametime' column) or an FLM_CSV file")
+    cols = [c.strip().lower() for c in lines[hdr].split(",")]
+    ft: List[float] = []
+    extra = {}
+    if kind == "mangohud":
+        ix = cols.index("frametime")
+        for ln in lines[hdr + 1:]:
+            p = ln.split(",")
+            try:
+                v = float(p[ix])
+            except (ValueError, IndexError):
+                continue
+            if 0 < v < 10000:
+                ft.append(v)
+    else:
+        ix = cols.index("interval_ns")
+        ih = cols.index("is_hitch") if "is_hitch" in cols else -1
+        hit = 0
+        for ln in lines[hdr + 1:]:
+            p = ln.split(",")
+            try:
+                v = float(p[ix]) / 1e6
+            except (ValueError, IndexError):
+                continue
+            if 0 < v < 10000:
+                ft.append(v)
+                if ih >= 0 and p[ih].strip() == "1":
+                    hit += 1
+        extra["FLM hitches"] = hit
+    if len(ft) < 10:
+        raise ValueError("fewer than 10 frames in the log")
+    return {"name": Path(path).name, "ft": ft, "kind": kind, "extra": extra}
+
+
+def frame_stats(ft: List[float]) -> List[tuple]:
+    """[(label, value, higher_is_better|None, fmt)]"""
+    n, total = len(ft), sum(ft)
+    s = sorted(ft)
+    med = s[n // 2]
+
+    def worst(frac):
+        k = max(1, int(n * frac))
+        return sum(s[-k:]) / k
+
+    def pct(p):
+        return s[min(n - 1, int(p / 100 * n))]
+    return [("Frames", n, None, "{:.0f}"),
+            ("Duration (s)", total / 1000, None, "{:.1f}"),
+            ("Average FPS", 1000 * n / total, True, "{:.1f}"),
+            ("1% low FPS", 1000 / worst(0.01), True, "{:.1f}"),
+            ("0.1% low FPS", 1000 / worst(0.001), True, "{:.1f}"),
+            ("Median frametime (ms)", med, False, "{:.2f}"),
+            ("p99 frametime (ms)", pct(99), False, "{:.2f}"),
+            ("p99.9 frametime (ms)", pct(99.9), False, "{:.2f}"),
+            ("Max frametime (ms)", s[-1], False, "{:.1f}"),
+            ("Frametime σ (ms)", _stat.pstdev(ft), False, "{:.2f}"),
+            ("Stutters (> 2× median)", sum(1 for x in ft if x > 2 * med), False, "{:.0f}"),
+            ("Hitches (> 50 ms)", sum(1 for x in ft if x > 50), False, "{:.0f}")]
+
+
+class FrametimePlot(QWidget):
+    COLORS = ["#76b900", "#5aa0ff"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._series: List[tuple] = []          # (label, ft)
+        self.setMinimumHeight(170)
+
+    def set_series(self, series: List[tuple]):
+        self._series = series
+        self.update()
+
+    def paintEvent(self, _ev):              # noqa: N802
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(T["surface"]))
+        if not self._series:
+            p.setPen(QColor(T["muted"]))
+            p.drawText(self.rect(), Qt.AlignCenter, "Load a log to see the frametime graph")
+            return
+        L, B, R, TOP = 46, 20, 8, 8
+        W, H = self.width() - L - R, self.height() - B - TOP
+        if W < 20 or H < 20:
+            return
+        ymax = max(max(sorted(ft)[int(len(ft) * 0.999)] for _l, ft in self._series) * 1.4, 10.0)
+        tmax = max(sum(ft) for _l, ft in self._series) / 1000
+        p.setPen(QPen(QColor(T["border"])))
+        f = QFont()
+        f.setPointSize(8)
+        p.setFont(f)
+        for i in range(5):
+            y = TOP + H - H * i / 4
+            p.drawLine(L, int(y), L + W, int(y))
+            p.setPen(QColor(T["muted"]))
+            p.drawText(2, int(y) + 4, f"{ymax * i / 4:.0f} ms")
+            p.setPen(QPen(QColor(T["border"])))
+        for i in range(0, 5):
+            p.setPen(QColor(T["muted"]))
+            p.drawText(L + int(W * i / 4) - 10, self.height() - 5, f"{tmax * i / 4:.0f}s")
+        for si, (label, ft) in enumerate(self._series):
+            col = QColor(self.COLORS[si % 2])
+            buckets: List[Optional[float]] = [None] * W
+            t = 0.0
+            for v in ft:
+                t += v
+                b = min(W - 1, int(t / 1000 / tmax * (W - 1)))
+                if buckets[b] is None or v > buckets[b]:
+                    buckets[b] = v
+            p.setPen(QPen(col, 1))
+            last = None
+            for x, v in enumerate(buckets):
+                if v is None:
+                    continue
+                y = TOP + H - min(v, ymax) / ymax * H
+                if last is not None:
+                    p.drawLine(L + last[0], int(last[1]), L + x, int(y))
+                last = (x, y)
+            p.setPen(col)
+            p.drawText(L + 8 + si * 200, TOP + 12, "■ " + label[:28])
+
+
+class FrametimeWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._data: List[Optional[dict]] = [None, None]
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(8)
+        lay.addWidget(_title_label("Frametime analyser"))
+        lay.addWidget(_desc_label(
+            "Loads MangoHud logs (enable output_folder in the MangoHud tab, log with the toggle key) or "
+            "vk_flip_meter FLM_CSV dumps. Load a second run to compare two configurations side by side."))
+        self._edits: List[QLineEdit] = []
+        for i, nm in enumerate(("A", "B")):
+            row = QHBoxLayout()
+            lab = QLabel(f"Run {nm}:")
+            lab.setStyleSheet(f"color:{FrametimePlot.COLORS[i]}; font-weight:700;")
+            row.addWidget(lab)
+            e = QLineEdit()
+            e.setReadOnly(True)
+            e.setPlaceholderText("no file" + (" (optional)" if i else ""))
+            e.setStyleSheet(_LINEEDIT_QSS)
+            self._edits.append(e)
+            row.addWidget(e, 1)
+            b = _tool_btn("Open…")
+            b.clicked.connect(lambda _c=False, k=i: self._open(k))
+            row.addWidget(b)
+            c = _tool_btn("Clear")
+            c.clicked.connect(lambda _c=False, k=i: self._set(k, None, ""))
+            row.addWidget(c)
+            lay.addLayout(row)
+        self._plot = FrametimePlot()
+        lay.addWidget(self._plot)
+        self._table = QTableWidget(0, 4)
+        self._table.setHorizontalHeaderLabels(["Metric", "A", "B", "B vs A"])
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._table.setSelectionMode(QTableWidget.NoSelection)
+        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self._table.setStyleSheet(_table_qss())
+        lay.addWidget(self._table, 1)
+        self._status = QLabel("")
+        self._status.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        self._status.setWordWrap(True)
+        lay.addWidget(self._status)
+        self._qs = QSettings(APP_ID, APP_ID)
+
+    def _open(self, k: int):
+        start = str(self._qs.value("frametime/last_dir", str(Path.home())))
+        p, _ = QFileDialog.getOpenFileName(self, "Open frametime log", start,
+                                           "Logs (*.csv *.log *.txt);;All files (*)")
+        if not p:
+            return
+        self._qs.setValue("frametime/last_dir", str(Path(p).parent))
+        try:
+            d = load_frametimes(p)
+        except Exception as ex:
+            self._status.setText(f"⚠ {Path(p).name}: {ex}")
+            return
+        self._set(k, d, p)
+
+    def _set(self, k: int, d: Optional[dict], path: str):
+        self._data[k] = d
+        self._edits[k].setText(path)
+        self._render()
+
+    def _render(self):
+        ds = self._data
+        self._plot.set_series([(d["name"], d["ft"]) for d in ds if d])
+        stats = [frame_stats(d["ft"]) if d else None for d in ds]
+        ref = next((s for s in stats if s), None)
+        t = self._table
+        t.setRowCount(0)
+        if ref is None:
+            return
+        for r, (label, _v, hib, fmt) in enumerate(ref):
+            t.insertRow(r)
+            t.setItem(r, 0, QTableWidgetItem(label))
+            vals = [s[r][1] if s else None for s in stats]
+            for c in (0, 1):
+                t.setItem(r, c + 1, QTableWidgetItem("" if vals[c] is None else fmt.format(vals[c])))
+            if vals[0] is not None and vals[1] is not None and vals[0] != 0 and hib is not None:
+                dpct = (vals[1] - vals[0]) / vals[0] * 100
+                good = (dpct > 0) == hib
+                it = QTableWidgetItem(f"{dpct:+.1f}%")
+                it.setForeground(QColor(T["accent"] if abs(dpct) < 0.05 or good else T["danger"]))
+                if abs(dpct) < 0.5:
+                    it.setForeground(QColor(T["muted"]))
+                t.setItem(r, 3, it)
+        extra = [f"{d['name']}: " + ", ".join(f"{k}={v}" for k, v in d["extra"].items())
+                 for d in ds if d and d["extra"]]
+        self._status.setText("  ".join(extra))
+
+
+# ----------------------------------------------------------------------------
+# Live process check: did the configured environment / DLLs reach the game?
+# ----------------------------------------------------------------------------
+
+_WINE_HINTS = (".exe", "wine", "proton", "gamescope", "umu-run", "reaper")
+_WINE_NOISE = ("services.exe", "winedevice.exe", "plugplay.exe", "explorer.exe", "rpcss.exe",
+               "svchost.exe", "conhost.exe", "start.exe", "tabtip.exe", "wineserver", "crashhandler",
+               "steamwebhelper", "steam.exe", "pressure-vessel", "reaper", "lsteamclient", "winedbg")
+
+_MOD_RULES = [
+    ("DXVK (d3d8/9/10/11/dxgi)", r"/(d3d8|d3d9|d3d10core|d3d11|dxgi)\.dll$"),
+    ("D3D12 (vkd3d-proton)", r"/(d3d12|d3d12core)\.dll$"),
+    ("dxvk-nvapi", r"/nvapi(64)?\.dll$"),
+    ("NGX / DLSS", r"/_?nvngx[^/]*\.dll$"),
+    ("Streamline", r"/sl\.[a-z_.]+\.dll$"),
+    ("nvcuda / PhysX", r"/(nvcuda|physxcore|physx3)[^/]*\.dll$"),
+    ("winevulkan", r"/winevulkan\.(dll|so)$"),
+    ("MangoHud", r"libMangoHud"),
+    ("vk_flip_meter", r"cpu_flip_meter"),
+    ("Vulkan layer / overlay", r"VkLayer|vkbasalt|libgamescope|gamescope_layer"),
+    ("OptiScaler / ReShade", r"(?i)optiscaler|reshade"),
+    ("NVIDIA driver", r"libGLX_nvidia|libnvidia-glcore|libnvidia-vulkan|libnvidia-rtcore|libnvidia-eglcore"),
+    ("Mesa Vulkan", r"libvulkan_(radeon|intel|lvp)"),
+]
+
+
+def _origin(path: str) -> str:
+    lp = path.lower()
+    for key, name in (("dxvk-nvapi", "dxvk-nvapi"), ("vkd3d", "vkd3d-proton"), ("dxvk", "DXVK")):
+        if key in lp:
+            return name
+    if "/lib/wine/" in lp or "/lib64/wine/" in lp or "/files/lib" in lp:
+        return "Wine builtin"
+    if "/steamapps/common/" in lp:
+        return "game / Proton folder"
+    return ""
+
+
+def list_game_procs(only_wine: bool = True) -> List[tuple]:
+    """[(pid, rss_mb, name, cmdline)] of this user's processes, biggest first."""
+    uid, me, page = os.getuid(), os.getpid(), os.sysconf("SC_PAGE_SIZE")
+    out = []
+    try:
+        names = [n for n in os.listdir("/proc") if n.isdigit()]
+    except OSError:
+        return out
+    for n in names:
+        pid = int(n)
+        if pid == me:
+            continue
+        try:
+            if os.stat(f"/proc/{n}").st_uid != uid:
+                continue
+            cmd = Path(f"/proc/{n}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+            if not cmd:
+                continue
+            low = cmd.lower()
+            if only_wine and (not any(h in low for h in _WINE_HINTS)
+                              or any(x in low for x in _WINE_NOISE)):
+                continue
+            rss = int(Path(f"/proc/{n}/statm").read_text().split()[1]) * page / 1048576
+            comm = Path(f"/proc/{n}/comm").read_text().strip()
+        except (OSError, ValueError, IndexError):
+            continue
+        out.append((pid, rss, comm, cmd))
+    out.sort(key=lambda r: -r[1])
+    return out
+
+
+def read_proc_environ(pid: int) -> Dict[str, str]:
+    env = {}
+    raw = Path(f"/proc/{pid}/environ").read_bytes()
+    for item in raw.split(b"\0"):
+        if b"=" in item:
+            k, v = item.split(b"=", 1)
+            env[k.decode("utf-8", "replace")] = v.decode("utf-8", "replace")
+    return env
+
+
+def read_proc_modules(pid: int) -> List[str]:
+    paths, seen = [], set()
+    with open(f"/proc/{pid}/maps", "rb") as f:
+        for ln in f:
+            parts = ln.decode("utf-8", "replace").rstrip("\n").split(None, 5)
+            if len(parts) == 6 and parts[5].startswith("/"):
+                p = parts[5].replace(" (deleted)", "")
+                if p not in seen:
+                    seen.add(p)
+                    paths.append(p)
+    return paths
+
+
+class LiveProcessWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(8)
+        lay.addWidget(_title_label("Live process check"))
+        lay.addWidget(_desc_label(
+            "Select the running game and compare what DRSTool is configured to set with the environment "
+            "the process really received, plus which DXVK / vkd3d-proton / dxvk-nvapi / NGX DLLs and Vulkan "
+            "layers are actually mapped into it. Answers “did the launcher swallow my variables?”."))
+        row = QHBoxLayout()
+        self._only = QCheckBox("only Wine / Proton processes")
+        self._only.setChecked(True)
+        self._only.setStyleSheet(f"color:{T['text2']};")
+        self._only.toggled.connect(lambda _c: self.rescan())
+        row.addWidget(self._only)
+        row.addStretch(1)
+        rb = _tool_btn("Refresh")
+        rb.clicked.connect(self.rescan)
+        row.addWidget(rb)
+        lay.addLayout(row)
+        self._plist = QListWidget()
+        self._plist.setStyleSheet(_LAUNCHER_QSS)
+        self._plist.setMaximumHeight(130)
+        self._plist.currentItemChanged.connect(lambda *_: self.inspect())
+        lay.addWidget(self._plist)
+        self._sum = QLabel("")
+        self._sum.setWordWrap(True)
+        self._sum.setStyleSheet(f"color:{T['text2']}; font-size:12px;")
+        lay.addWidget(self._sum)
+        self._env = QTableWidget(0, 4)
+        self._env.setHorizontalHeaderLabels(["Variable", "DRSTool", "Process", ""])
+        self._mod = QTableWidget(0, 3)
+        self._mod.setHorizontalHeaderLabels(["Component", "File", "Origin"])
+        for t, stretch in ((self._env, 1), (self._mod, 1)):
+            t.verticalHeader().setVisible(False)
+            t.setEditTriggers(QTableWidget.NoEditTriggers)
+            t.setSelectionMode(QTableWidget.NoSelection)
+            t.setStyleSheet(_table_qss())
+            t.horizontalHeader().setStretchLastSection(True)
+            lay.addWidget(t, stretch)
+        self._first = True
+
+    def showEvent(self, ev):               # noqa: N802
+        super().showEvent(ev)
+        if self._first:
+            self._first = False
+            self.rescan()
+
+    def rescan(self):
+        self._plist.blockSignals(True)
+        self._plist.clear()
+        for pid, rss, comm, cmd in list_game_procs(self._only.isChecked()):
+            it = QListWidgetItem(f"{pid:>7}  {rss:7.0f} MB  {comm[:18]:<18}  {cmd[:110]}")
+            it.setData(Qt.UserRole, pid)
+            self._plist.addItem(it)
+        self._plist.blockSignals(False)
+        if self._plist.count():
+            self._plist.setCurrentRow(0)
+        else:
+            self._env.setRowCount(0)
+            self._mod.setRowCount(0)
+            self._sum.setText("No matching process running.")
+
+    def inspect(self):
+        it = self._plist.currentItem()
+        if it is None:
+            return
+        pid = it.data(Qt.UserRole)
+        w = self.window()
+        exp = w.collect_launch_payload().get("env", {}) if hasattr(w, "collect_launch_payload") else {}
+        try:
+            env = read_proc_environ(pid)
+            mods = read_proc_modules(pid)
+        except OSError as ex:
+            self._sum.setText(f"⚠ cannot read process {pid}: {ex}")
+            return
+        t = self._env
+        t.setRowCount(0)
+        ok = bad = 0
+        names = set(exp)
+        known = {e.name for e in ALL_ENV_VARS}
+        extra = sorted(k for k in env if k in known and k not in names)
+        for k in sorted(exp) + extra:
+            r = t.rowCount()
+            t.insertRow(r)
+            want, got = exp.get(k), env.get(k)
+            if want is None:
+                st, col = "process only", T["muted"]
+            elif got is None:
+                st, col = "✗ missing", T["danger"]
+                bad += 1
+            elif str(got) != str(want):
+                st, col = "≠ differs", T["warn"]
+                bad += 1
+            else:
+                st, col = "✔", T["accent"]
+                ok += 1
+            for c, txt in enumerate((k, "" if want is None else str(want), "" if got is None else str(got), st)):
+                cell = QTableWidgetItem(txt)
+                if c == 3:
+                    cell.setForeground(QColor(col))
+                t.setItem(r, c, cell)
+        m = self._mod
+        m.setRowCount(0)
+        found = {}
+        for path in mods:
+            for label, rx in _MOD_RULES:
+                if re.search(rx, path):
+                    r = m.rowCount()
+                    m.insertRow(r)
+                    for c, txt in enumerate((label, os.path.basename(path), _origin(path) or path)):
+                        cell = QTableWidgetItem(txt)
+                        cell.setToolTip(path)
+                        m.setItem(r, c, cell)
+                    found.setdefault(label, []).append(path)
+                    break
+        notes = []
+        if "DXVK_NVAPI_DRS_SETTINGS" in exp and "dxvk-nvapi" not in found:
+            notes.append("⚠ DRS settings are configured but no nvapi DLL is mapped — they cannot take effect "
+                         "(PROTON_ENABLE_NVAPI / DXVK_ENABLE_NVAPI missing, or the game has not loaded NVAPI yet).")
+        if _on(exp, "MANGOHUD") and "MangoHud" not in found:
+            notes.append("⚠ MANGOHUD is set but libMangoHud is not loaded.")
+        self._sum.setText(f"pid {pid}: {ok} variable(s) match, {bad} do not. "
+                          f"{len(found)} component group(s) loaded. " + " ".join(notes))
+
+
+# ----------------------------------------------------------------------------
+# Log viewer (Proton / DXVK / vkd3d-proton) with known-problem detection
+# ----------------------------------------------------------------------------
+
+_LOG_ERR = re.compile(r"\b(?:err|error|fatal)\b\s*:|VK_ERROR_|\bERR\b:", re.I)
+_LOG_WARN = re.compile(r"\bwarn(?:ing)?\b\s*:", re.I)
+_LOG_FIXME = re.compile(r"\bfixme\b\s*:", re.I)
+
+# (code, regex, title, hint, fixes[(var, value)])
+_LOG_RULES = [
+    ("nvapi", r"(?i)nvapi\w*\.dll.*(not found|failed)|nvapi.*(initiali[sz]e|init).*(fail|error)",
+     "NVAPI unavailable",
+     "dxvk-nvapi did not initialise. Needs PROTON_ENABLE_NVAPI=1 (Proton) / DXVK_ENABLE_NVAPI=1 and an NVIDIA GPU "
+     "that is not hidden (Linter: nvapi-hidden).", [("PROTON_ENABLE_NVAPI", "1")]),
+    ("nvcuda", r"(?i)library nvcuda\.dll.*not found|nvcuda\.dll.*not found",
+     "nvcuda.dll missing",
+     "CUDA/PhysX path: enable NVAPI/NVIDIA libs in Proton (PROTON_ENABLE_NVAPI, PROTON_NVIDIA_LIBS).", []),
+    ("device-lost", r"VK_ERROR_DEVICE_LOST|\bdevice lost\b",
+     "GPU device lost (hang/reset)",
+     "Often an unstable GPU overclock/undervolt or driver fault: test at stock clocks and a default V/F curve.", []),
+    ("oom", r"VK_ERROR_OUT_OF_(DEVICE|HOST)_MEMORY|out of (video|device|gpu) memory",
+     "Out of memory",
+     "VRAM or RAM exhausted: lower textures/resolution; DXVK_CONFIG dxgi.maxDeviceMemory caps reported VRAM.", []),
+    ("ntsync", r"(?i)ntsync.*(fail|cannot|unavailable|not (found|supported))|/dev/ntsync",
+     "ntsync not usable",
+     "Kernel module not loaded (modprobe ntsync / CONFIG_NTSYNC) — or unset PROTON_USE_NTSYNC (Linter: ntsync-missing).", []),
+    ("esync", r"(?i)too many open files|esync:.*(limit|fail)",
+     "esync/fsync file-descriptor limit",
+     "Raise the nofile hard limit (≥ 524288) in limits.conf / the service, or set PROTON_NO_ESYNC=1.", []),
+    ("vk-device", r"(?i)vkCreate(Device|Instance).*fail|VK_ERROR_INCOMPATIBLE_DRIVER|VK_ERROR_INITIALIZATION_FAILED|"
+                  r"no suitable vulkan|failed to create (a )?vulkan (instance|device)",
+     "Vulkan device/instance creation failed",
+     "Driver/ICD problem: check the System tab (vulkaninfo), DXVK_FILTER_DEVICE_NAME and the PRIME offload variables.", []),
+    ("vk-ext", r"VK_ERROR_(EXTENSION|FEATURE)_NOT_PRESENT|required vulkan (extension|feature)|(unsupported|not supported) vulkan",
+     "Missing Vulkan extension/feature",
+     "Driver too old for this DXVK/vkd3d-proton build: update the driver or use an older build (Prefix Doctor).", []),
+    ("ngx", r"(?i)(ngx|nvngx).*(fail|error|not found)",
+     "NGX / DLSS failed to load",
+     "Check the DLSS Updater tab and PROTON_ENABLE_NVAPI=1; a mismatching nvngx_dlss.dll in the game folder also causes this.",
+     [("PROTON_ENABLE_NVAPI", "1")]),
+    ("import-dll", r"err:module:import_dll",
+     "Missing DLL import",
+     "A required runtime DLL is absent in the prefix (VC++ redistributables, d3dcompiler_47, xinput …).", []),
+]
+
+
+class LogHighlighter(QSyntaxHighlighter):
+    def __init__(self, doc):
+        super().__init__(doc)
+        self._fmts = []
+        for rx, col in ((_LOG_ERR, T["danger"]), (_LOG_WARN, T["warn"]), (_LOG_FIXME, T["muted"])):
+            f = QTextCharFormat()
+            f.setForeground(QColor(col))
+            self._fmts.append((rx, f))
+
+    def highlightBlock(self, text):        # noqa: N802
+        for rx, f in self._fmts:
+            if rx.search(text):
+                self.setFormat(0, len(text), f)
+                return
+
+
+class LogViewerWidget(QWidget):
+    MAX_READ = 6 * 1024 * 1024
+    MAX_SHOW = 4000
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._path: Optional[Path] = None
+        self._pos = 0
+        self._lines: List[str] = []
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(8)
+        lay.addWidget(_title_label("Log viewer"))
+        lay.addWidget(_desc_label(
+            "Opens a Proton log (PROTON_LOG=1 → ~/steam-<appid>.log), DXVK / vkd3d-proton logs, or any text log. "
+            "Filters by severity, follows a running game, and recognises common failure signatures "
+            "(NVAPI, ntsync, device lost, OOM, esync limits …)."))
+        row = QHBoxLayout()
+        self._combo = QComboBox()
+        self._combo.setStyleSheet(_COMBO_QSS)
+        self._combo.currentIndexChanged.connect(self._on_pick)
+        row.addWidget(self._combo, 1)
+        for label, fn in (("Browse…", self._browse), ("Rescan", self._scan_logs),
+                          ("Enable logging vars", self._enable_logging)):
+            b = _tool_btn(label)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        lay.addLayout(row)
+        row = QHBoxLayout()
+        self._chk = {}
+        for key, label, on in (("err", "errors", True), ("warn", "warnings", True),
+                               ("fixme", "fixme", False), ("info", "other", False)):
+            c = QCheckBox(label)
+            c.setChecked(on)
+            c.setStyleSheet(f"color:{T['text2']};")
+            c.toggled.connect(lambda _c: self._render())
+            self._chk[key] = c
+            row.addWidget(c)
+        self._find = QLineEdit()
+        self._find.setPlaceholderText("search…")
+        self._find.setClearButtonEnabled(True)
+        self._find.setStyleSheet(_LINEEDIT_QSS)
+        self._find.textChanged.connect(lambda _t: self._render())
+        row.addWidget(self._find, 1)
+        self._follow = QCheckBox("follow")
+        self._follow.setStyleSheet(f"color:{T['text2']};")
+        self._follow.toggled.connect(lambda on: self._timer.start() if on else self._timer.stop())
+        row.addWidget(self._follow)
+        lay.addLayout(row)
+        self._rules = QTableWidget(0, 4)
+        self._rules.setHorizontalHeaderLabels(["Detected", "×", "Hint", ""])
+        self._rules.verticalHeader().setVisible(False)
+        self._rules.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._rules.setSelectionMode(QTableWidget.NoSelection)
+        self._rules.setWordWrap(True)
+        self._rules.setMaximumHeight(150)
+        hh = self._rules.horizontalHeader()
+        hh.setSectionResizeMode(2, QHeaderView.Stretch)
+        self._rules.setStyleSheet(_table_qss())
+        lay.addWidget(self._rules)
+        self._view = QPlainTextEdit()
+        self._view.setReadOnly(True)
+        self._view.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self._view.setStyleSheet(_MONO_BOX_QSS)
+        self._hl = LogHighlighter(self._view.document())
+        lay.addWidget(self._view, 1)
+        self._status = QLabel("")
+        self._status.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        self._status.setWordWrap(True)
+        lay.addWidget(self._status)
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._tail)
+        self._first = True
+
+    # -- discovery --------------------------------------------------------
+    @staticmethod
+    def _log_dirs() -> List[Path]:
+        dirs = [Path.home(), _xdg("XDG_CACHE_HOME", ".cache") / "drstool" / "logs",
+                _xdg("XDG_DATA_HOME", ".local/share") / "lutris" / "logs"]
+        return dirs
+
+    def _scan_logs(self):
+        w = self.window()
+        env = w.collect_launch_payload().get("env", {}) if hasattr(w, "collect_launch_payload") else {}
+        dirs = self._log_dirs()
+        for k in ("PROTON_LOG_DIR", "DXVK_LOG_PATH"):
+            if env.get(k):
+                dirs.append(Path(os.path.expanduser(env[k])))
+        found = {}
+        for d in dirs:
+            try:
+                for p in list(d.glob("steam-*.log")) + list(d.glob("*.log")):
+                    if p.is_file():
+                        found[p] = p.stat().st_mtime
+            except OSError:
+                continue
+        cur = self._combo.currentData()
+        self._combo.blockSignals(True)
+        self._combo.clear()
+        self._combo.addItem("Select a log…", None)
+        for p, mt in sorted(found.items(), key=lambda kv: -kv[1])[:60]:
+            self._combo.addItem(f"{p.name}   {datetime.fromtimestamp(mt):%m-%d %H:%M}   "
+                                f"{p.stat().st_size / 1048576:.1f} MB   {p.parent}", p)
+        i = self._combo.findData(cur) if cur else -1
+        self._combo.setCurrentIndex(max(i, 0))
+        self._combo.blockSignals(False)
+
+    def showEvent(self, ev):               # noqa: N802
+        super().showEvent(ev)
+        if self._first:
+            self._first = False
+            self._scan_logs()
+
+    def _browse(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Open log", str(Path.home()), "Logs (*.log *.txt);;All files (*)")
+        if p:
+            self._combo.blockSignals(True)
+            self._combo.addItem(Path(p).name + "   (browsed)", Path(p))
+            self._combo.setCurrentIndex(self._combo.count() - 1)
+            self._combo.blockSignals(False)
+            self._load(Path(p))
+
+    def _on_pick(self, _i):
+        p = self._combo.currentData()
+        if p:
+            self._load(p)
+
+    def _enable_logging(self):
+        w = self.window()
+        d = _xdg("XDG_CACHE_HOME", ".cache") / "drstool" / "logs"
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError as ex:
+            self._status.setText(f"⚠ {ex}")
+            return
+        for k, v in (("PROTON_LOG", "1"), ("PROTON_LOG_DIR", str(d)), ("DXVK_LOG_PATH", str(d))):
+            w.set_env_var(k, v)
+        self._status.setText(f"Logging variables set (PROTON_LOG, PROTON_LOG_DIR, DXVK_LOG_PATH → {d}). "
+                             "Run the game, then Rescan.")
+
+    # -- reading ----------------------------------------------------------
+    def _load(self, path: Path):
+        self._path = path
+        try:
+            size = path.stat().st_size
+            with open(path, "rb") as f:
+                if size > self.MAX_READ:
+                    f.seek(size - self.MAX_READ)
+                    f.readline()
+                data = f.read()
+            self._pos = size
+        except OSError as ex:
+            self._status.setText(f"⚠ {ex}")
+            return
+        self._lines = data.decode("utf-8", "replace").splitlines()
+        self._render()
+
+    def _tail(self):
+        p = self._path
+        if p is None:
+            return
+        try:
+            size = p.stat().st_size
+        except OSError:
+            return
+        if size < self._pos:
+            self._load(p)
+            return
+        if size == self._pos:
+            return
+        with open(p, "rb") as f:
+            f.seek(self._pos)
+            data = f.read(self.MAX_READ)
+        self._pos += len(data)
+        self._lines += data.decode("utf-8", "replace").splitlines()
+        if len(self._lines) > 200000:
+            self._lines = self._lines[-150000:]
+        self._render()
+
+    @staticmethod
+    def _level(ln: str) -> str:
+        if _LOG_ERR.search(ln):
+            return "err"
+        if _LOG_WARN.search(ln):
+            return "warn"
+        if _LOG_FIXME.search(ln):
+            return "fixme"
+        return "info"
+
+    def _render(self):
+        want = {k for k, c in self._chk.items() if c.isChecked()}
+        needle = self._find.text().lower()
+        shown = [ln for ln in self._lines
+                 if self._level(ln) in want and (not needle or needle in ln.lower())]
+        trimmed = len(shown) > self.MAX_SHOW
+        sb = self._view.verticalScrollBar()
+        at_end = sb.value() >= sb.maximum() - 4
+        self._view.setPlainText("\n".join(shown[-self.MAX_SHOW:]))
+        if at_end or self._follow.isChecked():
+            sb.setValue(sb.maximum())
+        # signature scan over the whole buffer
+        self._rules.setRowCount(0)
+        text = "\n".join(self._lines)
+        w = self.window()
+        for code, rx, title, hint, fixes in _LOG_RULES:
+            hits = re.findall(rx, text)
+            if not hits:
+                continue
+            r = self._rules.rowCount()
+            self._rules.insertRow(r)
+            self._rules.setItem(r, 0, QTableWidgetItem(title))
+            self._rules.setItem(r, 1, QTableWidgetItem(str(len(hits))))
+            self._rules.setItem(r, 2, QTableWidgetItem(hint))
+            if fixes and hasattr(w, "set_env_var"):
+                b = _tool_btn("Apply: " + ", ".join(f"{k}={v}" for k, v in fixes))
+                b.clicked.connect(lambda _c=False, fx=fixes: [w.set_env_var(k, v) for k, v in fx])
+                self._rules.setCellWidget(r, 3, b)
+        self._rules.resizeRowsToContents()
+        n_err = sum(1 for ln in self._lines if _LOG_ERR.search(ln))
+        self._status.setText(f"{self._path.name if self._path else ''}: {len(self._lines)} lines, {n_err} error line(s)"
+                             + (f" — showing the last {self.MAX_SHOW}" if trimmed else ""))
+
+
+# ----------------------------------------------------------------------------
+# External-change watcher + banner (profiles.json, the selected Lutris YAML)
+# ----------------------------------------------------------------------------
+
+class ExternalChangeBanner(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(f"QFrame{{background:#2a2410;border-bottom:1px solid {T['warn']};}}"
+                           f"QLabel{{color:{T['text']};}}")
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(10, 4, 10, 4)
+        self._lay.setSpacing(2)
+        self._rows: Dict[str, QWidget] = {}
+        self.hide()
+
+    def post(self, key: str, text: str, actions: List[tuple]):
+        self.drop(key)
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        lab = QLabel("⚠ " + text)
+        lab.setWordWrap(True)
+        h.addWidget(lab, 1)
+        for label, cb in actions:
+            b = _tool_btn(label)
+            b.clicked.connect(lambda _c=False, f=cb: (self.drop(key), f()))
+            h.addWidget(b)
+        ig = _tool_btn("Ignore")
+        ig.clicked.connect(lambda _c=False: self.drop(key))
+        h.addWidget(ig)
+        self._rows[key] = row
+        self._lay.addWidget(row)
+        self.show()
+
+    def drop(self, key: str):
+        row = self._rows.pop(key, None)
+        if row is not None:
+            row.setParent(None)
+            row.deleteLater()
+        if not self._rows:
+            self.hide()
+
+
+class ExternalChangeWatcher(QObject):
+    """Content-hash based, so our own writes (mark()) and plain `touch`es never raise a notice."""
+    changed = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._w = QFileSystemWatcher(self)
+        self._items: Dict[str, dict] = {}
+        self._pending: set = set()
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(500)
+        self._timer.timeout.connect(self._flush)
+        self._w.fileChanged.connect(self._on_path)
+        self._w.directoryChanged.connect(self._on_path)
+
+    def _arm(self, path: Path):
+        have = set(self._w.files()) | set(self._w.directories())
+        for p in (path, path.parent):
+            if p.exists() and str(p) not in have:
+                self._w.addPath(str(p))
+
+    def track(self, key: str, path):
+        self.untrack(key)
+        path = Path(path)
+        self._items[key] = {"path": path, "known": _file_sha(path)}
+        self._arm(path)
+
+    def untrack(self, key: str):
+        it = self._items.pop(key, None)
+        if it is None:
+            return
+        still = [i["path"] for i in self._items.values()]
+        if it["path"] not in still:
+            self._w.removePath(str(it["path"]))
+        if it["path"].parent not in [p.parent for p in still]:
+            self._w.removePath(str(it["path"].parent))
+
+    def mark(self, key: str):
+        it = self._items.get(key)
+        if it:
+            it["known"] = _file_sha(it["path"])
+            self._arm(it["path"])
+
+    def _on_path(self, p: str):
+        for key, it in self._items.items():
+            if str(it["path"]) == p or str(it["path"].parent) == p:
+                self._pending.add(key)
+        self._timer.start()
+
+    def _flush(self):
+        keys, self._pending = self._pending, set()
+        for key in keys:
+            it = self._items.get(key)
+            if not it:
+                continue
+            self._arm(it["path"])
+            cur = _file_sha(it["path"])
+            if cur != it["known"]:
+                it["known"] = cur
+                self.changed.emit(key)
+
+
+# ============================================================================
 # Main Window
 # ============================================================================
 
@@ -16292,6 +18173,8 @@ class MainWindow(QMainWindow):
         self._profile_chip.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
         nav_layout.addWidget(self._profile_chip)
         main_layout.addWidget(nav)
+        self._ext_banner = ExternalChangeBanner()
+        main_layout.addWidget(self._ext_banner)
 
         splitter = QSplitter(Qt.Horizontal)
         self._splitter = splitter
@@ -16421,6 +18304,10 @@ class MainWindow(QMainWindow):
             self._sync_tabs.addTab(_sc, _t)
         self._history = HistoryWidget(self.settings_manager)
         self._nip_import = NipImportWidget(self.settings_manager)
+        self._dxvk_conf = DxvkConfWidget()
+        self._shortcut = ShortcutWidget()
+        self._sync_tabs.addTab(self._dxvk_conf, "dxvk.conf")
+        self._sync_tabs.addTab(self._shortcut, "Shortcut")
         self._sync_tabs.addTab(self._history, "History")
         self._sync_tabs.addTab(self._nip_import, "Import .nip")
         self._sync_tabs.currentChanged.connect(lambda _i: self._refresh_sync_previews())
@@ -16535,6 +18422,10 @@ class MainWindow(QMainWindow):
             _sig.connect(self._schedule_lint)
             _sig.connect(lambda *_: self._sync_timer.start())
         self._extra_tools.linter.fix_requested.connect(self._apply_lint_fix)
+        self._ext_watch = ExternalChangeWatcher(self)
+        self._ext_watch.track("profiles", SettingsManager._profiles_path())
+        self.settings_manager.disk_written.connect(lambda: self._ext_watch.mark("profiles"))
+        self._ext_watch.changed.connect(self._on_external_change)
         self._extra_tools.cache.driver_changed.connect(
             lambda msg: self.statusBar().showMessage(msg, 20000))
         SYSHUB.info_changed.connect(self._on_sysinfo)
@@ -16619,6 +18510,34 @@ class MainWindow(QMainWindow):
             f"QPushButton {{ color:{col}; background:transparent; border:1px solid {col};"
             f" border-radius:4px; padding:0 10px; font-size:12px; }}"
             f"QPushButton:hover {{ background:{T['surface']}; }}")
+
+    # -- external change notices (item: profiles.json / selected Lutris YAML) --
+    def _ext_track_lutris(self, path):
+        self._ext_watch.track("lutris", path)
+
+    def _ext_mark_lutris(self):
+        self._ext_watch.mark("lutris")
+
+    def _on_external_change(self, key: str):
+        sb = self.statusBar()
+        if key == "profiles":
+            def do(merge):
+                sb.showMessage(self.settings_manager.reload_from_disk(merge), 8000)
+            self._ext_banner.post(
+                "profiles", "profiles.json was changed outside DRSTool (another instance or a script). "
+                "Saving now would overwrite those changes.",
+                [("Reload from disk", lambda: do(False)), ("Merge (add new)", lambda: do(True))])
+        elif key == "lutris":
+            lw = self._lutris_sync_widget
+            def refresh():
+                lw.refresh_yaml_from_disk()
+                sb.showMessage("Lutris preview refreshed from disk.", 5000)
+            def load():
+                lw.refresh_yaml_from_disk()
+                lw._import_from_yaml()
+            self._ext_banner.post(
+                "lutris", "The selected Lutris game config changed on disk outside DRSTool.",
+                [("Refresh preview", refresh), ("Load into DRSTool…", load)])
 
     def _run_lint(self):
         p = self.collect_launch_payload()

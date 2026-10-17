@@ -53,6 +53,17 @@ Builds `gamescope` command lines from a flag catalog (upscaling, frame pacing, i
 - **Cache**: sizes of the NVIDIA GL/compute, Mesa, DXVK and vkd3d-proton caches (driver caches, Steam `shadercache/<appid>` in every library, Lutris per-game caches, paths from the Env Vars tab, folders you add), with open / clear actions. When the NVIDIA driver version changes the driver-bound caches are flagged as invalid
 - **Upstream drift**: downloads the current DXVK, vkd3d-proton, dxvk-nvapi, gamescope sources and `NvApiDriverSettings.h` and lists env vars, `dxvk.conf` keys, `VKD3D_CONFIG` flags, gamescope CLI flags and DRS IDs that are new upstream or gone; rows can be marked as reviewed
 - **DLSS Updater**: list every DLSS SR / RR / FG and Streamline build on NVIDIA's NGX servers (incl. staged builds) and download the selected ones as `nvngx_dlss*.dll` / `sl.*.dll` into a version-named folder, SHA-256 checked
+- **Game hints**: ProtonDB rating and PCGamingWiki graphics-API facts for a Steam appid (cached for a week), plus a few catalog-checked heuristic variables you can apply with one click
+- **Frametime**: MangoHud logs and `FLM_CSV` dumps: average / 1% / 0.1% lows, percentiles, stutter counts and a frametime graph; load a second run to compare two configurations
+- **Live process**: compares the environment DRSTool is configured to set with what a running game process actually received, and lists the DXVK / vkd3d-proton / dxvk-nvapi / NGX DLLs and Vulkan layers mapped into it
+- **Logs**: Proton / DXVK / vkd3d-proton log viewer with severity filters, search, follow mode and detection of common failures (NVAPI, ntsync, device lost, OOM, esync limits …)
+
+### Launchers
+- **Launch line**: optional `umu-run` mode (`PROTONPATH`, `GAMEID`, `STORE`, `WINEPREFIX`)
+- **Steam**: besides the launch options, can set the per-game Proton build (`CompatToolMapping` in `config.vdf`; Steam must be closed, backups are kept)
+- **dxvk.conf**: writes the `DXVK_CONFIG` key picker into a real `dxvk.conf` (game folder) or into `~/.config/drstool/dxvk/` plus `DXVK_CONFIG_FILE`; hand-written lines are preserved
+- **Shortcut**: creates a standalone launcher script and `.desktop` entry (optionally through lutris-game-tune)
+- **External changes**: a banner appears when `profiles.json` or the selected Lutris YAML is modified outside DRSTool (reload / merge / refresh)
 
 ### Lutris Game Sync
 - Reads and writes a Lutris game's YAML config (`system.*` keys, env vars, Gamescope options, Lutris Game Tune prelaunch/postexit commands)

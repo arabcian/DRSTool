@@ -53,6 +53,17 @@ Bayrak kataloğundan (ölçekleme, kare sıralaması, girdi, oturum seçenekleri
 - **Cache**: NVIDIA GL/compute, Mesa, DXVK ve vkd3d-proton önbelleklerinin boyutları (sürücü önbellekleri, her kütüphanedeki Steam `shadercache/<appid>`, Lutris oyun başı önbellekleri, Env Vars sekmesindeki yollar, eklediğiniz klasörler); aç / temizle işlemleri. NVIDIA sürücü sürümü değişince sürüme bağlı önbellekler geçersiz olarak işaretlenir
 - **Upstream drift**: güncel DXVK, vkd3d-proton, dxvk-nvapi, gamescope kaynaklarını ve `NvApiDriverSettings.h` dosyasını indirip kataloğa karşı yeni / kaldırılmış env var, `dxvk.conf` anahtarı, `VKD3D_CONFIG` flag'i, gamescope CLI flag'i ve DRS ID'lerini listeler; satırlar "incelendi" olarak işaretlenebilir
 - **DLSS Updater**: NVIDIA NGX sunucularındaki tüm DLSS SR / RR / FG ve Streamline sürümlerini (henüz yayınlanmamış staged sürümler dahil) listeler; seçilenleri `nvngx_dlss*.dll` / `sl.*.dll` adlarıyla, sürüm adlı klasöre SHA-256 doğrulamalı indirir
+- **Game hints**: bir Steam appid için ProtonDB puanı ve PCGamingWiki grafik API bilgileri (1 hafta önbellek) ve katalogla doğrulanmış birkaç sezgisel değişken; tek tıkla uygulanır
+- **Frametime**: MangoHud logları ve `FLM_CSV` dökümleri: ortalama / %1 / %0.1 low, yüzdelikler, stutter sayısı ve frametime grafiği; ikinci bir koşuyu yükleyip iki yapılandırmayı karşılaştırır
+- **Live process**: DRSTool'un ayarladığı ortam ile çalışan oyun sürecinin gerçekten aldığı ortamı karşılaştırır; sürece yüklenmiş DXVK / vkd3d-proton / dxvk-nvapi / NGX DLL'lerini ve Vulkan katmanlarını listeler
+- **Logs**: Proton / DXVK / vkd3d-proton log görüntüleyici: önem filtresi, arama, takip modu ve yaygın hataların tespiti (NVAPI, ntsync, device lost, OOM, esync limiti …)
+
+### Başlatıcılar
+- **Launch line**: isteğe bağlı `umu-run` modu (`PROTONPATH`, `GAMEID`, `STORE`, `WINEPREFIX`)
+- **Steam**: başlatma seçeneklerine ek olarak oyun başına Proton sürümünü de ayarlar (`config.vdf` içindeki `CompatToolMapping`; Steam kapalı olmalı, yedek alınır)
+- **dxvk.conf**: `DXVK_CONFIG` anahtar seçicisini gerçek bir `dxvk.conf` dosyasına (oyun klasörü) ya da `~/.config/drstool/dxvk/` + `DXVK_CONFIG_FILE` olarak yazar; elle yazılmış satırlar korunur
+- **Shortcut**: bağımsız bir başlatıcı betiği ve `.desktop` girdisi oluşturur (isteğe bağlı lutris-game-tune ile)
+- **Dış değişiklikler**: `profiles.json` ya da seçili Lutris YAML'ı DRSTool dışında değiştirilirse bir şerit çıkar (yeniden yükle / birleştir / önizlemeyi yenile)
 
 ### Lutris Oyun Senkronizasyonu
 - Bir Lutris oyununun YAML yapılandırmasını okur ve yazar (`system.*` anahtarları, ortam değişkenleri, Gamescope seçenekleri, Lutris Game Tune oyun öncesi/sonrası komutları)
