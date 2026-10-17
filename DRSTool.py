@@ -16146,14 +16146,25 @@ def _drift_analyse(src: dict, files: Dict[str, str], cat: dict) -> List[dict]:
     if rel and rel in files:
         txt = files[rel]
         up = {}
-        for m in re.finditer(r'^\s*#define\s+([A-Z0-9_]+)_ID\s+0x([0-9A-Fa-f]{1,8})\b', txt, re.M):
-            up.setdefault(f"0x{int(m.group(2), 16):08X}", (m.group(1), f"{rel}:{_line_of(txt, m.start())}"))
+        # Current header: enum entries `NAME_ID = 0x1234ABCD,`; older ones: `#define NAME_ID 0x1234ABCD`.
+        for m in re.finditer(r'^\s*(?:#define\s+)?([A-Z0-9_]+)_ID\s*(?:=\s*)?0x([0-9A-Fa-f]{1,8})\b', txt, re.M):
+            up.setdefault(f"0X{int(m.group(2), 16):08X}", (m.group(1), f"{rel}:{_line_of(txt, m.start())}"))
+        if not up:      # never report the whole catalog as "gone" because the parser found nothing
+            row("DRS setting", "(header parse)", "gone",
+                note="no setting IDs found in NvApiDriverSettings.h — format changed or file truncated; "
+                     "DRS comparison skipped")
+            return rows
+        mine = {}
+        for k, st in _SETTING_BY_ID.items():
+            try:
+                mine[f"0X{int(k, 16):08X}"] = st
+            except ValueError:
+                pass
         for sid, (nm, where) in sorted(up.items()):
-            if sid not in cat["drs_ids"]:
-                row("DRS setting", f"{sid}  {nm}", "new", where)
-        for sid in sorted(cat["drs_ids"] - set(up)):
-            s = _SETTING_BY_ID.get(sid)
-            row("DRS setting", f"{sid}  {s.name if s else ''}".strip(), "gone",
+            if sid not in mine:
+                row("DRS setting", f"0x{sid[2:]}  {nm}", "new", where)
+        for sid in sorted(set(mine) - set(up)):
+            row("DRS setting", f"{mine[sid].id}  {mine[sid].name}".strip(), "gone",
                 note="catalog ID is not in the public NvApiDriverSettings.h (undocumented / private setting?)")
     return rows
 
@@ -17036,7 +17047,9 @@ class DxvkConfWidget(QWidget):
 # ----------------------------------------------------------------------------
 
 def _http_get(url: str, timeout: float = 12.0):
-    req = urllib.request.Request(url, headers={"User-Agent": "DRSTool/1.0 (hint lookup)"})
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "DRSTool/1.0 (+https://github.com/arabcian/DRSTool; game hint lookup) python-urllib",
+        "Accept": "application/json, text/plain;q=0.9, */*;q=0.5", "Accept-Language": "en"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read(2_000_000), r.geturl()
 
@@ -17069,11 +17082,26 @@ def fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
     except Exception as ex:
         res["errors"].append(f"ProtonDB: {ex}")
     try:
-        _b, final = _http_get(f"https://www.pcgamingwiki.com/api/appid.php?appid={appid}")
-        title = urllib.parse.unquote(final.rstrip("/").rsplit("/", 1)[-1])
-        raw, _u = _http_get("https://www.pcgamingwiki.com/w/index.php?title="
-                            f"{urllib.parse.quote(title)}&action=raw")
-        txt = raw.decode("utf-8", "replace")
+        api = "https://www.pcgamingwiki.com/w/api.php"
+        title = ""
+        try:        # 1) Cargo: Steam appid -> page name (bot-friendly API endpoint)
+            q = urllib.parse.urlencode({"action": "cargoquery", "format": "json", "tables": "Infobox_game",
+                                        "fields": "_pageName=Page", "limit": "1",
+                                        "where": f'Steam_AppID HOLDS "{appid}"'})
+            j = json.loads(_http_get(f"{api}?{q}")[0].decode("utf-8", "replace"))
+            title = j["cargoquery"][0]["title"]["Page"]
+        except Exception as ex1:
+            res["errors"].append(f"PCGamingWiki (cargo lookup): {ex1}")
+        if not title:   # 2) documented redirect helper
+            _b, final = _http_get(f"https://www.pcgamingwiki.com/api/appid.php?appid={appid}")
+            title = urllib.parse.unquote(final.rstrip("/").rsplit("/", 1)[-1])
+        final = "https://www.pcgamingwiki.com/wiki/" + urllib.parse.quote(title.replace(" ", "_"))
+        # 3) wikitext through the MediaWiki API (not index.php?action=raw)
+        q = urllib.parse.urlencode({"action": "query", "prop": "revisions", "rvprop": "content",
+                                    "rvslots": "main", "format": "json", "formatversion": "2", "titles": title})
+        j = json.loads(_http_get(f"{api}?{q}")[0].decode("utf-8", "replace"))
+        txt = j["query"]["pages"][0]["revisions"][0]["slots"]["main"]["content"]
+        res["errors"] = [e for e in res["errors"] if not e.startswith("PCGamingWiki (cargo")]
         nums = lambda s: re.findall(r"\d+(?:\.\d+)?", s)
         res["pcgw"] = {"title": title.replace("_", " "), "url": final,
                        "engines": [e.strip() for e in re.findall(r"Infobox game/row/engine\|([^}|]+)", txt)],
