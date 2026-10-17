@@ -2,7 +2,7 @@
 
 > ⚠️ **Riski size aittir.** DRSTool GPU sürücü ayarlarını ve isteğe bağlı olarak sistem ayarlarını değiştirir. Kullanmadan önce [DISCLAIMER.md](DISCLAIMER.md) dosyasını okuyun.
 
-**DRSTool**, [dxvk-nvapi](https://github.com/jp7677/dxvk-nvapi) ve NVIDIA DRS (Driver Registry Settings) profilini yapılandırmak için PySide6 (Qt6) tabanlı bir arayüzdür. Ayrıca Wine, Proton, DXVK, VKD3D-Proton, Gamescope ve NVIDIA'ya özgü ayarlar için ortam değişkeni üreticileri içerir. Sonucu doğrudan bir Lutris oyun yapılandırmasına yazabilir.
+**DRSTool**, [dxvk-nvapi](https://github.com/jp7677/dxvk-nvapi) ve NVIDIA DRS (Driver Registry Settings) profilini yapılandırmak için PySide6 (Qt6) tabanlı bir arayüzdür. Ayrıca Wine, Proton, DXVK, VKD3D-Proton, Gamescope ve NVIDIA'ya özgü ayarlar için ortam değişkeni üreticileri içerir. Sonucu doğrudan bir Lutris, Steam, Heroic veya Bottles oyun yapılandırmasına, bir `dxvk.conf` dosyasına ya da bağımsız bir başlatıcıya yazabilir; ayarların gerçekten işe yaradığını doğrulamak için tanılama araçları (linter, canlı süreç kontrolü, log görüntüleyici, frametime analizi) içerir.
 
 English version: [README.md](README.md)
 
@@ -12,7 +12,7 @@ English version: [README.md](README.md)
 
 | Bileşen | Yol | Açıklama |
 |---|---|---|
-| DRSTool arayüzü | `DRSTool.py` | Ana uygulama: DRS ayarları, ortam değişkenleri, Gamescope bayrakları, profiller, Lutris senkronizasyonu |
+| DRSTool arayüzü | `DRSTool.py` | Ana uygulama: DRS ayarları, ortam değişkenleri, Gamescope bayrakları, profiller, başlatıcı senkronizasyonu, tanılama |
 | vk_flip_meter (FLM) | `vk-flip-meter-main/` | VRR panellerde kare sıralaması (frame pacing) ve hassas FPS sınırlayıcısı sağlayan Vulkan katmanı. Ayrıntılar için [README](vk-flip-meter-main/README.tr.md) |
 | lutris-game-tune | `lutris-game-tune-main/` | Lutris için oyun öncesi/sonrası sistem ayarları, CCD/CCX çekirdek izolasyonu ve daha düşük nice değeriyle oyun başlatma (setuid C sarmalayıcı + Bash) |
 | Ebuild | `drstool-9999.ebuild` | Yukarıdakilerin tümünü derleyip kuran Gentoo live ebuild (`games-util/drstool`) |
@@ -41,34 +41,71 @@ Sabit değer kümesi olan değişkenler onay kutusu veya açılır liste olarak,
 ### Gamescope
 Bayrak kataloğundan (ölçekleme, kare sıralaması, girdi, oturum seçenekleri) `gamescope` komut satırları üretir.
 
+### Gezinme ve günlük yardımcılar
+- **Ctrl+K** tüm DRS ayarlarında, ortam değişkenlerinde, GPU mimarilerinde ve araç sayfalarında arar; **Ctrl+F** geçerli listeyi filtreler; **Ctrl+1…5** üst sekmeleri değiştirir; **Ctrl+D** favori ekler/çıkarır; **Ctrl+S** geçerli profili kaydeder
+- "Only set" ve "Favorites" çipleri listeleri ayarlanmış ya da yıldızlanmış olanlarla sınırlar
+- **Lint** düğmesi tüm yapılandırmayı birbiriyle çelişen kombinasyonlara karşı kontrol eder (aşağıda Linter)
+
 ### Profiller
 - Tam profilleri (DRS ayarları + ortam değişkenleri) kaydetme ve yükleme
 - XDG uyumlu depolama: `$XDG_CONFIG_HOME/drstool/` (varsayılan `~/.config/drstool/`), atomik yazma
 - **Geçmiş** (Profiller → History): `profiles.json` her üzerine yazıldığında veya silindiğinde `drstool/history/` altına anlık görüntü (son 60) alınır. Anlık görüntülerde gezinebilir, bir profili güncel hâliyle karşılaştırabilir, tek profili ya da dosyanın tamamını geri yükleyebilirsiniz. İkinci alt sekme Lutris YAML'larının (ve Steam / Heroic / Bottles dosyalarının) yanındaki `.bak` yedeklerinde diff ile gezinip tek tıkla geri yükler; üçüncüsü iki profili (veya mevcut editör durumunu) karşılaştırır
 - **.nip içe aktarma** (Profiller → Import .nip): NVIDIA Profile Inspector dışa aktarımını `DXVK_NVAPI_DRS_SETTINGS` çiftlerine çevirir ve editöre uygular (yalnızca DWORD değerler)
+- **Dış değişiklikler**: `profiles.json` veya seçili Lutris YAML'ı DRSTool dışında değiştirilirse (başka bir örnek, bir betik, Lutris'in kendisi) bir şerit çıkar: *Yeniden yükle / Birleştir* (profiller) ya da *Önizlemeyi yenile / DRSTool'a yükle* (Lutris). Tespit içerik tabanlıdır; DRSTool'un kendi yazmaları ve sade bir `touch` şeridi tetiklemez
+
+### Başlatıcılar ve senkronizasyon
+Senkronizasyon sekmeleri geçerli yapılandırmayı oyunun başlatıldığı yere yazar. Her yazmada zaman damgalı yedek alınır.
+
+| Sekme | Ne yapar |
+|---|---|
+| **Launch line** | Çalıştırılabilir `env … gamescope … -- <komut>` satırı. İsteğe bağlı **umu-launcher** modu komutu `umu-run <exe>` olarak sarar ve `PROTONPATH` (GE-Proton / UMU-Latest / kurulu bir Proton), `GAMEID`, `STORE` ve `WINEPREFIX` ekler. Kabuk betiği olarak kaydedilebilir |
+| **Lutris** | Bir oyunun YAML'ını okur ve yazar (`system.*` anahtarları, ortam değişkenleri, Gamescope seçenekleri, Lutris Game Tune komutları) ve geri alır ("Seçili oyundan yükle"). Yalnızca DRSTool'un yönettiği anahtarlar değişir; elle yazılmış anahtarlar korunur ve onay penceresi silinecek her şeyi listeler |
+| **Steam** | Kurulu bir oyunun başlatma seçeneklerini `localconfig.vdf` içine yazar; isteğe bağlı olarak **oyun başına Proton sürümünü** de (`config.vdf` içindeki `CompatToolMapping`): GE-Proton, Proton-CachyOS ve resmi Valve sürümleri listelenir, "Steam default" override'ı kaldırır. Steam kapalı olmalıdır; yazmadan önce geri okuma kontrolü yapılır |
+| **Heroic / Bottles** | Ortam değişkenlerini ve sarmalayıcıları başlatıcının kendi oyun yapılandırmasına yazar |
+| **dxvk.conf** | `DXVK_CONFIG` anahtar seçicisini oyun klasöründe gerçek bir `dxvk.conf` dosyasına ya da `~/.config/drstool/dxvk/<ad>.conf` + `DXVK_CONFIG_FILE` olarak yazar. Elle yazılmış satırlar korunur, DRSTool'un anahtarları işaretli tek bir blokta durur, önce diff gösterilir. (vkd3d-proton'un yapılandırma dosyası yoktur; `VKD3D_CONFIG` ortam değişkeni olarak kalır.) |
+| **Shortcut** | Bağımsız bir başlatıcı betiği (`~/.local/share/drstool/launchers/`) ve `.desktop` girdisi oluşturur; isteğe bağlı lutris-game-tune ile (PRE → RUN → POST). Betik, oluşturulduğu andaki yapılandırmanın anlık görüntüsüdür |
+| **History / Import .nip** | Bkz. Profiller |
 
 ### Ek Araçlar
+**Derleme ve ayarlama**
 - **vk_flip_meter**: FLM ayarlarını düzenleme, canlı ayarlama (`FLM_CONFIG` yazar ve `SIGUSR1` gönderir)
 - **lutris-game-tune**: ayarlayıcı yapılandırmasını ve oyun bazlı Lutris ayarlarını düzenleme
-- **Cache**: NVIDIA GL/compute, Mesa, DXVK ve vkd3d-proton önbelleklerinin boyutları (sürücü önbellekleri, her kütüphanedeki Steam `shadercache/<appid>`, Lutris oyun başı önbellekleri, Env Vars sekmesindeki yollar, eklediğiniz klasörler); aç / temizle işlemleri. NVIDIA sürücü sürümü değişince sürüme bağlı önbellekler geçersiz olarak işaretlenir
-- **Upstream drift**: güncel DXVK, vkd3d-proton, dxvk-nvapi, gamescope kaynaklarını ve `NvApiDriverSettings.h` dosyasını indirip kataloğa karşı yeni / kaldırılmış env var, `dxvk.conf` anahtarı, `VKD3D_CONFIG` flag'i, gamescope CLI flag'i ve DRS ID'lerini listeler; satırlar "incelendi" olarak işaretlenebilir
 - **DLSS Updater**: NVIDIA NGX sunucularındaki tüm DLSS SR / RR / FG ve Streamline sürümlerini (henüz yayınlanmamış staged sürümler dahil) listeler; seçilenleri `nvngx_dlss*.dll` / `sl.*.dll` adlarıyla, sürüm adlı klasöre SHA-256 doğrulamalı indirir
-- **Game hints**: bir Steam appid için ProtonDB puanı ve PCGamingWiki grafik API bilgileri (1 hafta önbellek) ve katalogla doğrulanmış birkaç sezgisel değişken; tek tıkla uygulanır
-- **Frametime**: MangoHud logları ve `FLM_CSV` dökümleri: ortalama / %1 / %0.1 low, yüzdelikler, stutter sayısı ve frametime grafiği; ikinci bir koşuyu yükleyip iki yapılandırmayı karşılaştırır
-- **Live process**: DRSTool'un ayarladığı ortam ile çalışan oyun sürecinin gerçekten aldığı ortamı karşılaştırır; sürece yüklenmiş DXVK / vkd3d-proton / dxvk-nvapi / NGX DLL'lerini ve Vulkan katmanlarını listeler
-- **Logs**: Proton / DXVK / vkd3d-proton log görüntüleyici: önem filtresi, arama, takip modu ve yaygın hataların tespiti (NVAPI, ntsync, device lost, OOM, esync limiti …)
+- **MangoHud** ve **vkBasalt**: kaplama / son işlem yapılandırması için seçenek üreticileri
+- **Prefix Doctor**: Wine prefix'indeki DXVK, vkd3d-proton ve dxvk-nvapi DLL'lerini en son GitHub sürümüyle karşılaştırır ve eskileri değiştirir (orijinaller yedeklenir)
 
-### Başlatıcılar
-- **Launch line**: isteğe bağlı `umu-run` modu (`PROTONPATH`, `GAMEID`, `STORE`, `WINEPREFIX`)
-- **Steam**: başlatma seçeneklerine ek olarak oyun başına Proton sürümünü de ayarlar (`config.vdf` içindeki `CompatToolMapping`; Steam kapalı olmalı, yedek alınır)
-- **dxvk.conf**: `DXVK_CONFIG` anahtar seçicisini gerçek bir `dxvk.conf` dosyasına (oyun klasörü) ya da `~/.config/drstool/dxvk/` + `DXVK_CONFIG_FILE` olarak yazar; elle yazılmış satırlar korunur
-- **Shortcut**: bağımsız bir başlatıcı betiği ve `.desktop` girdisi oluşturur (isteğe bağlı lutris-game-tune ile)
-- **Dış değişiklikler**: `profiles.json` ya da seçili Lutris YAML'ı DRSTool dışında değiştirilirse bir şerit çıkar (yeniden yükle / birleştir / önizlemeyi yenile)
+**Kontrol ve teşhis**
+- **Linter**: birbiriyle çelişen ya da bu sistemde çalışamayacak kombinasyonları bulur (ör. WoW64 ile `PROTON_NVIDIA_LIBS`, NVIDIA'da FSR4, çift gecikme yığını); çoğu bulgunun tek tıkla düzeltmesi vardır
+- **System**: NVIDIA sürücüsü, Vulkan aygıtları, ntsync, oturum türü ve kurulu araçlar; bir kez sorgulanır, Linter ve kullanılamayan öğelerin grileştirilmesiyle paylaşılır
+- **Cache**: NVIDIA GL/compute, Mesa, DXVK ve vkd3d-proton önbelleklerinin boyutları (sürücü önbellekleri, her kütüphanedeki Steam `shadercache/<appid>`, Lutris oyun başı önbellekleri, Env Vars sekmesindeki yollar, eklediğiniz klasörler); aç / temizle işlemleri. NVIDIA sürücü sürümü değişince sürüme bağlı önbellekler geçersiz olarak işaretlenir
+- **Upstream drift**: güncel DXVK, vkd3d-proton, dxvk-nvapi, gamescope kaynaklarını ve `NvApiDriverSettings.h` dosyasını indirip kataloğa karşı yeni / kaldırılmış env var, `dxvk.conf` anahtarı, `VKD3D_CONFIG` flag'i, gamescope CLI flag'i ve DRS ID'lerini listeler; satırlar "incelendi" olarak işaretlenebilir. "gone" işaretli env var satırları "yeni sürümde kaldırıldı, fork'lar veya eski sürümler için hâlâ geçerli" anlamına da gelebilir
+- **Frametime**: MangoHud CSV logları ve `FLM_CSV` dökümleri: ortalama FPS, %1 / %0.1 low, yüzdelikler, stutter ve hitch sayıları ve frametime grafiği. İkinci bir koşuyu yükleyerek iki yapılandırmayı yan yana karşılaştırın (B, A'ya göre %)
+- **Live process**: çalışan oyunu seçin; DRSTool'un ayarladığı ortamı sürecin gerçekten aldığı ortamla (`/proc/<pid>/environ`: ✔ eşleşiyor / ≠ farklı / ✗ eksik) karşılaştırır. Sürece yüklenmiş DXVK, vkd3d-proton, dxvk-nvapi, NGX / Streamline DLL'lerini ve Vulkan katmanlarını da listeler; DRS ayarı yapılmış ama NVAPI DLL'i yüklenmemişse uyarır
+- **Logs**: Proton (`steam-<appid>.log`), DXVK ve vkd3d-proton log görüntüleyici: önem filtresi, arama ve takip modu. Yaygın hataları (NVAPI yok, nvcuda, GPU device lost, bellek yetersiz, ntsync, esync dosya tanımlayıcı sınırı, Vulkan aygıt/uzantı hataları, NGX, eksik DLL importu) ipucuyla ve güvenli olduğu yerde tek tıkla düzeltmeyle tanır. "Enable logging vars" `PROTON_LOG`, `PROTON_LOG_DIR` ve `DXVK_LOG_PATH` değerlerini ayarlar
+- **Game hints**: bir Steam appid'si arayın; öneriler dört kaynaktan gelir ve her biri *Source* sütununda etiketlenir:
+  1. *heuristic*: oyunun grafik API'sine dair basit kurallar (ör. NVIDIA'da Direct3D 11/12 için `PROTON_ENABLE_NVAPI=1`)
+  2. *system*: bu makineden türetilir (ntsync aygıtı var, hibrit NVIDIA + iGPU → PRIME offload değişkenleri, Wayland oturumu)
+  3. engine ve **ProtonDB tier** notları: Unreal / Unity / native Vulkan / D3D9 dönemi uyarıları ve hangi Proton sürümünün denenmesi gerektiği (gold/platinum için stok Proton, silver için Experimental veya GE-Proton, bronze/borked için GE-Proton / Proton-CachyOS ya da eski bir Valve sürümü, trending tier'dan regresyon veya iyileşme ipuçları ve kurulu sürümleriniz)
+  4. **⚠ community**: en az iki ProtonDB kullanıcı raporunda geçen ortam ayarları. Bunlar bireysel deneyimlerdir; farklı donanım, sürücü, kernel ve Linux kurulumlarında farklı sonuç verebilir, DRSTool bunları doğrulamamıştır. Turuncu gösterilir, asla önceden seçilmez ve tablonun üstünde uyarı çıkar
+  
+  Yalnızca DRSTool kataloğunda bulunan değişkenler önerilir, zaten ayarlı değerler atlanır ve sonuçlar bir hafta önbellekte tutulur.
 
-### Lutris Oyun Senkronizasyonu
-- Bir Lutris oyununun YAML yapılandırmasını okur ve yazar (`system.*` anahtarları, ortam değişkenleri, Gamescope seçenekleri, Lutris Game Tune oyun öncesi/sonrası komutları)
-- Mevcut bir oyun yapılandırmasından ayarları geri alır ("Seçili oyundan yükle")
-- Yalnızca DRSTool'un yönettiği anahtarları değiştirir. Elle yazılmış anahtarlar korunur ve onay penceresi silinecek her şeyi listeler
+### Lutris notları
+Lutris de kendi yapılandırmasına yazar; bir oyunu iki yerde de düzenlerseniz yukarıdaki dış değişiklik şeridini ve *Seçili oyundan yükle* düğmesini kullanarak DRSTool'u yeniden eşitleyin.
+
+### Ağ erişimi
+DRSTool'un çoğu çevrimdışı çalışır. Şu özellikler yalnızca düğmelerine bastığınızda internete bağlanır: **Upstream drift** (GitHub raw dosyaları), **Prefix Doctor** (GitHub sürümleri), **DLSS Updater** (NVIDIA NGX sunucuları), **Game hints** (ProtonDB, PCGamingWiki ve ProtonDB raporlarının topluluk yansısı; sonuncusu resmî değildir, değişebilir veya kaybolabilir, bu durumda yalnızca rapor tabanlı satırlar eksik kalır).
+
+### DRSTool dosyalarını nerede tutar
+| Yol | İçerik |
+|---|---|
+| `~/.config/drstool/profiles.json`, `history/` | profiller ve anlık görüntüleri |
+| `~/.config/drstool/dxvk/` | "config dir" modunda oluşturulan `dxvk.conf` dosyaları |
+| `~/.local/share/drstool/launchers/` | Shortcut sekmesinin betikleri (`.desktop` dosyaları `~/.local/share/applications/drstool-*.desktop` altına gider) |
+| `~/.cache/drstool/hints/`, `~/.cache/drstool/logs/` | Game hints önbelleği; "Enable logging vars" ile yazılan loglar |
+| düzenlenen dosyaların yanı | zaman damgalı `.bak` kopyaları |
+
+(`XDG_CONFIG_HOME`, `XDG_DATA_HOME` ve `XDG_CACHE_HOME` dikkate alınır.)
 
 ## Gereksinimler
 
