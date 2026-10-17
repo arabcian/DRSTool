@@ -82,13 +82,15 @@ The sync tabs write the current configuration to wherever the game is started fr
 - **Frametime**: MangoHud CSV logs and `FLM_CSV` dumps: average FPS, 1% / 0.1% lows, percentiles, stutter and hitch counts and a frametime graph. Load a second run to compare two configurations side by side (B vs A in %)
 - **Live process**: pick the running game and compare the environment DRSTool is configured to set with what the process really received (`/proc/<pid>/environ`: ✔ match / ≠ differs / ✗ missing). Also lists the DXVK, vkd3d-proton, dxvk-nvapi, NGX / Streamline DLLs and Vulkan layers mapped into it and warns when DRS settings are configured but no NVAPI DLL is loaded
 - **Logs**: Proton (`steam-<appid>.log`), DXVK and vkd3d-proton log viewer with severity filters, search and follow mode. Recognises common failures (NVAPI missing, nvcuda, GPU device lost, out of memory, ntsync, esync file-descriptor limit, Vulkan device/extension errors, NGX, missing DLL imports) with a hint and, where it is safe, a one-click fix. "Enable logging vars" sets `PROTON_LOG`, `PROTON_LOG_DIR` and `DXVK_LOG_PATH`
-- **Game hints**: look up a Steam appid and get suggestions from four sources, each labelled in the *Source* column:
+- **Game hints**: look up a Steam appid and get suggestions from three sources, each labelled in the *Source* column:
   1. *heuristic*: simple rules on the game's graphics API (e.g. `PROTON_ENABLE_NVAPI=1` for Direct3D 11/12 on NVIDIA)
   2. *system*: derived from this machine (ntsync device present, hybrid NVIDIA + iGPU → PRIME offload variables, Wayland session)
   3. engine and **ProtonDB tier** notes: Unreal / Unity / native-Vulkan / D3D9-era remarks, and which Proton build to try (stock Proton for gold/platinum, Experimental or GE-Proton for silver, GE-Proton / Proton-CachyOS or an older Valve build for bronze/borked, regression and improvement hints from the trending tier, plus the builds you already have installed)
-  4. **⚠ community**: environment settings that at least two ProtonDB user reports mention. These are individual experiences that can behave differently on other hardware, drivers, kernels and Linux setups; DRSTool has not verified them. They are shown in orange, are never preselected, and a warning is displayed above the table
-  
+
   Only variables that exist in DRSTool's catalog are ever suggested, values already set are skipped, and results are cached for a week.
+
+  **Games that are not on Steam** (Lutris, Heroic, Bottles, manual): type the game's name, or pick it from your launchers, and *Find appid* searches the Steam store and lists matches with a similarity score. *Use selected appid* runs the lookup; *Use + set as umu GAMEID* also fills the Launch line tab's `GAMEID` with `umu-<appid>`. A game that is not sold on Steam simply has no match (use `umu-0`).
+- **Community tips ⚠**: environment settings that at least two ProtonDB *user reports* mention, kept on their own tab on purpose. **Use at your own risk**: these are individual experiences that DRSTool has not verified; they can behave differently on other hardware, drivers, kernels, Proton builds and Linux setups and may cause crashes or lower performance. Nothing is preselected, the Apply button stays disabled until you tick an acknowledgement, a confirmation dialog repeats the warning, and only variables from DRSTool's catalog with harmless-looking values are listed
 
 ### Lutris notes
 Lutris writes to its own config as well; if you edit a game in both places, use the external-change banner (above) and *Load from selected game* to bring DRSTool back in sync.

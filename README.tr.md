@@ -82,13 +82,15 @@ Senkronizasyon sekmeleri geçerli yapılandırmayı oyunun başlatıldığı yer
 - **Frametime**: MangoHud CSV logları ve `FLM_CSV` dökümleri: ortalama FPS, %1 / %0.1 low, yüzdelikler, stutter ve hitch sayıları ve frametime grafiği. İkinci bir koşuyu yükleyerek iki yapılandırmayı yan yana karşılaştırın (B, A'ya göre %)
 - **Live process**: çalışan oyunu seçin; DRSTool'un ayarladığı ortamı sürecin gerçekten aldığı ortamla (`/proc/<pid>/environ`: ✔ eşleşiyor / ≠ farklı / ✗ eksik) karşılaştırır. Sürece yüklenmiş DXVK, vkd3d-proton, dxvk-nvapi, NGX / Streamline DLL'lerini ve Vulkan katmanlarını da listeler; DRS ayarı yapılmış ama NVAPI DLL'i yüklenmemişse uyarır
 - **Logs**: Proton (`steam-<appid>.log`), DXVK ve vkd3d-proton log görüntüleyici: önem filtresi, arama ve takip modu. Yaygın hataları (NVAPI yok, nvcuda, GPU device lost, bellek yetersiz, ntsync, esync dosya tanımlayıcı sınırı, Vulkan aygıt/uzantı hataları, NGX, eksik DLL importu) ipucuyla ve güvenli olduğu yerde tek tıkla düzeltmeyle tanır. "Enable logging vars" `PROTON_LOG`, `PROTON_LOG_DIR` ve `DXVK_LOG_PATH` değerlerini ayarlar
-- **Game hints**: bir Steam appid'si arayın; öneriler dört kaynaktan gelir ve her biri *Source* sütununda etiketlenir:
+- **Game hints**: bir Steam appid'si arayın; öneriler üç kaynaktan gelir ve her biri *Source* sütununda etiketlenir:
   1. *heuristic*: oyunun grafik API'sine dair basit kurallar (ör. NVIDIA'da Direct3D 11/12 için `PROTON_ENABLE_NVAPI=1`)
   2. *system*: bu makineden türetilir (ntsync aygıtı var, hibrit NVIDIA + iGPU → PRIME offload değişkenleri, Wayland oturumu)
   3. engine ve **ProtonDB tier** notları: Unreal / Unity / native Vulkan / D3D9 dönemi uyarıları ve hangi Proton sürümünün denenmesi gerektiği (gold/platinum için stok Proton, silver için Experimental veya GE-Proton, bronze/borked için GE-Proton / Proton-CachyOS ya da eski bir Valve sürümü, trending tier'dan regresyon veya iyileşme ipuçları ve kurulu sürümleriniz)
-  4. **⚠ community**: en az iki ProtonDB kullanıcı raporunda geçen ortam ayarları. Bunlar bireysel deneyimlerdir; farklı donanım, sürücü, kernel ve Linux kurulumlarında farklı sonuç verebilir, DRSTool bunları doğrulamamıştır. Turuncu gösterilir, asla önceden seçilmez ve tablonun üstünde uyarı çıkar
-  
+
   Yalnızca DRSTool kataloğunda bulunan değişkenler önerilir, zaten ayarlı değerler atlanır ve sonuçlar bir hafta önbellekte tutulur.
+
+  **Steam'de olmayan oyunlar** (Lutris, Heroic, Bottles, elle eklenenler): oyunun adını yazın ya da başlatıcılarınızdan seçin; *Find appid* Steam mağazasında arar ve benzerlik puanıyla eşleşmeleri listeler. *Use selected appid* aramayı çalıştırır; *Use + set as umu GAMEID* ayrıca Launch line sekmesindeki `GAMEID` alanını `umu-<appid>` ile doldurur. Steam'de satılmayan oyunun eşleşmesi çıkmaz (`umu-0` kullanın).
+- **Community tips ⚠**: en az iki ProtonDB *kullanıcı raporunda* geçen ortam ayarları; bilerek ayrı bir sekmede tutulur. **Riski size aittir**: bunlar bireysel deneyimlerdir, DRSTool doğrulamamıştır; farklı donanım, sürücü, kernel, Proton sürümü ve Linux kurulumlarında farklı davranabilir, çökmeye veya performans kaybına yol açabilir. Hiçbiri önceden seçilmez, onay kutusunu işaretlemeden Apply düğmesi pasif kalır, onay penceresi uyarıyı tekrarlar ve yalnızca DRSTool kataloğundaki, zararsız görünen değerli değişkenler listelenir
 
 ### Lutris notları
 Lutris de kendi yapılandırmasına yazar; bir oyunu iki yerde de düzenlerseniz yukarıdaki dış değişiklik şeridini ve *Seçili oyundan yükle* düğmesini kullanarak DRSTool'u yeniden eşitleyin.
