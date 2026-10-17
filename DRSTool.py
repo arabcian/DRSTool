@@ -17065,7 +17065,7 @@ def _pcgw_param(raw: str, name: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-def fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
+def _fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
     cp = _hints_cache_path(appid)
     if use_cache:
         try:
@@ -17084,12 +17084,6 @@ def fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
                                                 "score", "confidence", "total")}
     except Exception as ex:
         res["errors"].append(f"ProtonDB: {ex}")
-    try:        # community reports (unofficial mirror of ProtonDB data) -> env tinkering seen in reports
-        body, _u = _http_get(PROTONDB_REPORTS_URL.format(appid=appid), timeout=25.0, limit=24_000_000)
-        res["reports"] = parse_community_reports(json.loads(body.decode("utf-8", "replace")),
-                                                 {e.name for e in ALL_ENV_VARS})
-    except Exception as ex:
-        res["errors"].append(f"ProtonDB reports: {ex}")
     try:
         api = "https://www.pcgamingwiki.com/w/api.php"
         title = ""
@@ -17119,7 +17113,7 @@ def fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
                        "opengl": nums(_pcgw_param(txt, "opengl versions"))}
     except Exception as ex:
         res["errors"].append(f"PCGamingWiki: {ex}")
-    if res["protondb"] or res["pcgw"] or res["reports"]:
+    if res["protondb"] or res["pcgw"]:
         try:
             cp.parent.mkdir(parents=True, exist_ok=True)
             cp.write_text(json.dumps(res))
@@ -17128,10 +17122,13 @@ def fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
     return res
 
 
-_HINT_CACHE_VER = 3
-# Unofficial community mirror of ProtonDB report data (ProtonDB itself has no public reports API).
-# If it moves or changes shape the lookup just reports an error; nothing else depends on it.
-PROTONDB_REPORTS_URL = "https://protondb.max-p.me/games/{appid}/reports/"
+_HINT_CACHE_VER = 4
+
+
+def fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
+    d = _fetch_game_hints(appid, use_cache)
+    d["reports"] = reports_for_app(appid)          # from the local ProtonDB dump index (never cached with the rest)
+    return d
 _TIER_RANK = {"borked": 0, "bronze": 1, "silver": 2, "gold": 3, "platinum": 4}
 _COMMUNITY_SKIP = ("DXVK_HUD", "MANGOHUD", "PROTON_LOG", "WINEDEBUG", "DXVK_LOG", "VKD3D_DEBUG",
                    "VKD3D_LOG", "WINE_LOG")
@@ -17209,7 +17206,7 @@ _F_TS = {"timestamp", "time", "date", "created", "createdat", "reportdate", "sub
 _F_VERDICT = {"rating", "verdict", "tier", "protondbrating"}
 
 
-def parse_community_reports(j, names: set) -> dict:
+def parse_community_reports(j, names: set, cap: int = 600) -> dict:
     """Per-report records (hardware, Proton, date, env assignments). Untrusted data: only KEY=VALUE tokens with
     a plausible variable name and a harmless-looking value are kept; nothing is ever applied automatically."""
     reps = j if isinstance(j, list) else ((j.get("reports") or []) if isinstance(j, dict) else [])
@@ -17234,11 +17231,11 @@ def parse_community_reports(j, names: set) -> dict:
                     continue
                 if k not in names and not re.fullmatch(r"[A-Z_][A-Z0-9_]{2,}", k):
                     continue
-                if not re.fullmatch(r"[A-Za-z0-9_.,:+-]{1,48}", v):
+                if not re.fullmatch(r"[A-Za-z0-9_.,:;=+-]{1,64}", v):
                     continue
                 seen.add((k, v))
                 envs.append([k, v, "launch options" if "launch" in where_key.lower() else "notes"])
-        pv = _find_key(r, _F_PROTON)
+        pv = _find_key(r, {"customprotonversion"}) or _find_key(r, _F_PROTON)
         if pv and len(pv) < 40:
             protons[pv] = protons.get(pv, 0) + 1
         if not envs:
@@ -17251,15 +17248,181 @@ def parse_community_reports(j, names: set) -> dict:
         if not gpu:
             m = re.search(r"[^\n|;]{0,60}(?:nvidia|geforce|radeon)[^\n|;]{0,90}", blob, re.I)
             sysinfo = m.group(0).strip() if m else ""
-        items.append({"t": _parse_ts(_find_key(r, _F_TS)), "gpu": gpu[:80], "drv": (_find_key(r, _F_DRV) or "")[:40],
+        app = ((r.get("app") or {}).get("steam") or {}).get("appId") if isinstance(r.get("app"), dict) else None
+        items.append({"app": str(app or r.get("appId") or ""), "t": _parse_ts(_find_key(r, _F_TS)), "gpu": gpu[:80], "drv": (_find_key(r, _F_DRV) or "")[:40],
                       "os": (_find_key(r, _F_OS) or "")[:60], "kern": (_find_key(r, _F_KERN) or "")[:40],
                       "cpu": (_find_key(r, _F_CPU) or "")[:70], "ram": (_find_key(r, _F_RAM) or "")[:20],
                       "proton": (pv or "")[:40], "verdict": (_find_key(r, _F_VERDICT) or "")[:20],
                       "vendor": _vendor_of(gpu, blob), "sys": sysinfo[:120], "envs": envs[:12]})
     items.sort(key=lambda x: -(x["t"] or 0))
-    return {"n": total, "n_env": len(items), "items": items[:600], "keys": keys,
+    return {"n": total, "n_env": len(items), "items": items[:cap], "keys": keys,
             "envs": [[k, v, c, 0] for (k, v), c in sorted(agg.items(), key=lambda kv: -kv[1])[:20] if c >= 2],
             "proton": sorted(protons.items(), key=lambda kv: -kv[1])[:5]}
+
+
+# ---- ProtonDB report data: monthly public dump (github.com/bdefore/protondb-data, ODbL) -> local env index ----
+import codecs as _codecs
+
+PROTONDB_DUMP_BASE = "https://raw.githubusercontent.com/bdefore/protondb-data/master/reports/"
+_IDX_MONTHS = 12                      # reports older than this are not kept in the index
+_IDX_MEM: dict = {"mtime": None, "data": None}
+
+
+def _index_path() -> Path:
+    return _xdg("XDG_CACHE_HOME", ".cache") / "drstool" / "protondb_env_index.json"
+
+
+class _CountingReader:
+    def __init__(self, f, total: int, cb):
+        self._f, self._total, self._cb, self._n, self._last = f, total, cb, 0, 0.0
+
+    def read(self, n=-1):
+        b = self._f.read(n)
+        self._n += len(b)
+        now = time.time()
+        if self._cb and now - self._last > 0.3:
+            self._last = now
+            self._cb(self._n, self._total)
+        return b
+
+
+def _iter_json_array(f):
+    """Stream the objects of a huge top-level JSON array without loading it all into memory."""
+    dec, inc, buf = json.JSONDecoder(), _codecs.getincrementaldecoder("utf-8")("replace"), ""
+    while True:
+        chunk = f.read(1 << 22)
+        buf += inc.decode(chunk, final=not chunk)
+        i, n = 0, len(buf)
+        while True:
+            while i < n and buf[i] in " \r\n\t,[":
+                i += 1
+            if i >= n or buf[i] == "]":
+                break
+            try:
+                obj, j = dec.raw_decode(buf, i)
+            except ValueError:
+                break                                   # object continues in the next chunk
+            yield obj
+            i = j
+        buf = buf[i:]
+        if not chunk:
+            return
+
+
+def _dump_candidates(months: int = 9) -> List[str]:
+    mon = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+    y, m = datetime.now().year, datetime.now().month
+    out = []
+    for _ in range(months):
+        out.append(f"reports_{mon[m - 1]}1_{y}.tar.gz")
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+    return out
+
+
+def find_latest_dump() -> str:
+    for name in _dump_candidates():
+        try:
+            req = urllib.request.Request(PROTONDB_DUMP_BASE + name, method="HEAD",
+                                         headers={"User-Agent": "DRSTool/1.0"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                if r.status == 200:
+                    return name
+        except Exception:
+            continue
+    raise RuntimeError("no ProtonDB dump found in the last 9 months at " + PROTONDB_DUMP_BASE)
+
+
+def build_env_index(stream, dump_name: str, progress=None) -> dict:
+    """Read a ProtonDB dump (tar.gz stream) and keep, per Steam appid, the reports of the last
+    _IDX_MONTHS months that mention environment-variable assignments. Written to the cache."""
+    cutoff = time.time() - _IDX_MONTHS * 30.44 * 86400
+    names = {e.name for e in ALL_ENV_VARS}
+    by_app: Dict[str, list] = {}
+    scanned = kept = 0
+    batch: list = []
+
+    def flush():
+        nonlocal kept
+        if not batch:
+            return
+        for it in parse_community_reports(batch, names, cap=10 ** 9)["items"]:
+            if it["app"]:
+                by_app.setdefault(it["app"], []).append(it)
+                kept += 1
+        batch.clear()
+
+    with tarfile.open(fileobj=stream, mode="r|gz") as tf:
+        for m in tf:
+            if not (m.isfile() and m.name.endswith(".json")):
+                continue
+            for r in _iter_json_array(tf.extractfile(m)):
+                scanned += 1
+                if not isinstance(r, dict) or (r.get("timestamp") or 0) < cutoff:
+                    continue
+                resp = r.get("responses")
+                if isinstance(resp, dict) and "=" in json.dumps(resp, ensure_ascii=False):
+                    batch.append(r)
+                    if len(batch) >= 5000:
+                        flush()
+            break
+    flush()
+    for lst in by_app.values():
+        lst.sort(key=lambda x: -(x["t"] or 0))
+    data = {"v": 1, "dump": dump_name, "built": time.time(), "scanned": scanned, "kept": kept, "by_app": by_app}
+    p = _index_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")))
+    os.replace(tmp, p)
+    _IDX_MEM["mtime"] = None
+    return data
+
+
+def load_env_index() -> Optional[dict]:
+    p = _index_path()
+    try:
+        mt = p.stat().st_mtime
+        if _IDX_MEM["mtime"] != mt:
+            _IDX_MEM["data"], _IDX_MEM["mtime"] = json.loads(p.read_text()), mt
+        return _IDX_MEM["data"]
+    except (OSError, ValueError):
+        return None
+
+
+def reports_for_app(appid: str) -> Optional[dict]:
+    """Reports dict (same shape parse_community_reports returns) from the local index, or None."""
+    idx = load_env_index()
+    if not idx:
+        return None
+    items = idx["by_app"].get(str(appid), [])
+    pv: Dict[str, int] = {}
+    for it in items:
+        if it.get("proton"):
+            pv[it["proton"]] = pv.get(it["proton"], 0) + 1
+    return {"n": len(items), "n_env": len(items), "items": items, "keys": [], "envs": [],
+            "proton": sorted(pv.items(), key=lambda kv: -kv[1])[:5],
+            "dump": idx.get("dump", ""), "built": idx.get("built", 0)}
+
+
+class _IndexWorker(QThread):
+    progress = Signal(str)
+    done = Signal(str)                                  # "" = ok, else the error text
+
+    def run(self):
+        try:
+            name = find_latest_dump()
+            self.progress.emit(f"Downloading {name} …")
+            req = urllib.request.Request(PROTONDB_DUMP_BASE + name, headers={"User-Agent": "DRSTool/1.0"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                total = int(r.headers.get("Content-Length") or 0)
+                cr = _CountingReader(r, total, lambda n, t: self.progress.emit(
+                    f"Reading {name}: {n / 1e6:.0f}" + (f" / {t / 1e6:.0f}" if t else "") + " MB …"))
+                build_env_index(cr, name)
+            self.done.emit("")
+        except Exception as ex:
+            self.done.emit(f"{type(ex).__name__}: {ex}")
 
 
 def proton_fork_advice(pd: Optional[dict], installed: List[str]) -> List[str]:
@@ -17684,7 +17847,9 @@ class GameHintsWidget(QWidget):
                          "   OpenGL: " + (", ".join(pc["opengl"]) or "—"))
         rp = info.get("reports")
         if rp:
-            lines.append(f"ProtonDB reports scanned: {rp.get('n', 0)}")
+            lines.append(f"ProtonDB reports with settings (last {_IDX_MONTHS} months, {rp.get('dump', '')}): {rp.get('n', 0)}")
+        else:
+            lines.append("ProtonDB user-report data is not downloaded yet — see the Community tips tab.")
         w = self.window()
         cur = w.collect_launch_payload().get("env", {}) if hasattr(w, "collect_launch_payload") else {}
         rows, notes = hint_suggestions(info, SYSHUB.info, cur)
@@ -17822,7 +17987,7 @@ class CommunityTipsWidget(QWidget):
         self._nv.setChecked(bool(SYSHUB.info.has_nvidia))
         self._period = QComboBox()
         self._period.setStyleSheet(_COMBO_QSS)
-        for label, months in (("last 6 months", 6), ("last 12 months", 12), ("all time", 0)):
+        for label, months in (("last 6 months", 6), ("last 12 months", 12)):
             self._period.addItem(label, months)
         self._cat = QCheckBox("only variables DRSTool can set")
         for w_ in (self._nv, self._cat):
@@ -17834,6 +17999,17 @@ class CommunityTipsWidget(QWidget):
         frow.addWidget(self._cat)
         frow.addStretch(1)
         lay.addLayout(frow)
+        drow = QHBoxLayout()
+        self._dl = _tool_btn("Download / update ProtonDB report data")
+        self._dl.clicked.connect(self._download)
+        drow.addWidget(self._dl)
+        self._data_lbl = QLabel("")
+        self._data_lbl.setWordWrap(True)
+        self._data_lbl.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        drow.addWidget(self._data_lbl, 1)
+        lay.addLayout(drow)
+        self._worker = None
+        self._refresh_data_lbl()
         self._info_lbl = QLabel("Look up a game on the Game hints tab first.")
         self._info_lbl.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
         self._info_lbl.setWordWrap(True)
@@ -17872,6 +18048,37 @@ class CommunityTipsWidget(QWidget):
     def _sync_btn(self):
         self._apply.setEnabled(self._ack.isChecked() and self._table.rowCount() > 0)
 
+    def _refresh_data_lbl(self):
+        idx = load_env_index()
+        if idx:
+            self._data_lbl.setText(
+                f"Local data: {idx.get('dump', '?')} (downloaded {datetime.fromtimestamp(idx.get('built', 0)):%Y-%m-%d}), "
+                f"{idx.get('kept', 0)} reports with settings from the last {_IDX_MONTHS} months, "
+                f"{len(idx.get('by_app', {}))} games. ProtonDB publishes a new dump about monthly.")
+        else:
+            self._data_lbl.setText("No report data yet. ProtonDB publishes its user reports as a public monthly "
+                                   "dump (~70 MB, github.com/bdefore/protondb-data); download it once, it is then "
+                                   "searched offline for every game.")
+
+    def _download(self):
+        if self._worker and self._worker.isRunning():
+            return
+        self._dl.setEnabled(False)
+        self._worker = _IndexWorker(self)
+        self._worker.progress.connect(self._data_lbl.setText)
+        self._worker.done.connect(self._download_done)
+        self._worker.start()
+
+    def _download_done(self, err: str):
+        self._dl.setEnabled(True)
+        self._refresh_data_lbl()
+        if err:
+            self._data_lbl.setText(f"⚠ Download failed: {err}")
+            return
+        if self._appid:
+            self._info["reports"] = reports_for_app(self._appid)
+            self._rebuild()
+
     def set_data(self, info: dict):
         self._info = info
         self._appid = str(info.get("appid", ""))
@@ -17893,8 +18100,7 @@ class CommunityTipsWidget(QWidget):
         cur = w.collect_launch_payload().get("env", {}) if hasattr(w, "collect_launch_payload") else {}
         rp = info.get("reports")
         if rp is None:
-            self._info_lbl.setText(f"appid {self._appid}: no report data (the community mirror was unreachable "
-                                   "— see the error on the Game hints tab).")
+            self._info_lbl.setText(f"appid {self._appid}: no report data downloaded yet — use the button above.")
             self._sync_btn()
             return
         ents, st = community_entries(info, SYSHUB.info, cur, self._period.currentData() or 0,
@@ -17925,11 +18131,12 @@ class CommunityTipsWidget(QWidget):
                 cell.setForeground(QColor(T["warn"] if e["known"] else T["muted"]))
                 t.setItem(r, c, cell)
         self._info_lbl.setText(
-            f"appid {self._appid}: {st['total']} report(s) with settings"
-            f" ({rp.get('n', 0)} scanned); {st['window']} match the filters; {len(ents)} setting example(s) shown. "
+            f"appid {self._appid}: {st['total']} report(s) with settings in the data;"
+            f" {st['window']} match the filters; {len(ents)} setting example(s) shown. "
             "Hover a row for the reporter's CPU, RAM and full system details."
             + ("" if st["vendors_known"] else " (GPU vendor not present in the data — NVIDIA filter not applied.)")
-            + (f"  Report fields seen: {', '.join(rp.get('keys', [])[:14])}" if not st["total"] and rp.get("keys") else ""))
+            + ("" if st["total"] else "  No report for this game in the last 12 months mentions environment "
+                                      "variables (others may only describe settings in prose)."))
         self._status.setText("")
         self._sync_btn()
 
