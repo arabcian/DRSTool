@@ -44,13 +44,21 @@ Builds `gamescope` command lines from a flag catalog (upscaling, frame pacing, i
 ### Navigation and everyday helpers
 - **Ctrl+K** searches every DRS setting, environment variable, GPU architecture and tool page; **Ctrl+F** filters the current list; **Ctrl+1…5** switches the top tabs; **Ctrl+D** toggles a favorite; **Ctrl+S** saves the current profile
 - "Only set" and "Favorites" chips narrow the lists to what is configured or starred
-- The **Lint** button checks the whole configuration for combinations that contradict each other (see Linter below)
+- The **Lint** button checks the whole configuration for combinations that contradict each other (see Linter below). It also knows DRS: Multi-Frame Generation on a pre-RTX 50 card, Frame Generation before RTX 40, DLSS on a GTX, a GPU-arch spoof that is newer than / identical to the real card, DLSS-SR Scaling without Custom mode, DLSSG Dynamic-only settings, Smooth Motion stacked on Frame Generation
+- **Undo / redo** (Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y, ↶ ↷ in the top bar): every change to DRS settings, arch, env vars and gamescope is one step — profile loads, imports, recipes, lint fixes and *Reset* included. Typing in one field collapses into a single step. The arrow next to Undo lists the last 30 steps; click one to jump there
+- **Unsaved-changes marker is exact**: it compares the editor with the saved profile, so undoing back to the saved state clears it. Click the profile name in the top bar to see the diff and *Revert to saved*
+- **Import a launch line** (Ctrl+Shift+V, the Copy-all ▾ menu, or drop text on the window): paste Steam launch options, a shell snippet, `export` lines or a bare `DXVK_NVAPI_DRS_SETTINGS` value. It decodes DRS pairs (any number spelling), the GPU arch, `env -u`, gamescope flags and `mangohud`; converts `prime-run` and `strangle N` to their env equivalents; reports wrappers and game arguments it leaves out. A checkable preview shows +new / ~change / =same per item, Merge or Replace, and a **lint forecast** of the result before you apply
+- **Explain the launch line** (Copy-all ▾ menu, Ctrl+K): the current output decoded token by token with catalog descriptions; *Copy explanation* gives a Markdown list to paste into a forum post
+- **✦ Recipes** (Ctrl+R): curated bundles — DLSS newest models, force DLAA, Multi-Frame 4x, DLSS indicator, Reflex for Vulkan, Smooth Motion, HDR via Wayland or gamescope, fewer shader stutters, hybrid-laptop dGPU, NTSync, low-latency DXVK. Each shows whether this machine meets its requirement and how much of it is already applied, and opens the same preview + lint forecast. Recipe values are validated against the catalog at runtime
+- Variables and DRS IDs outside the catalog (from imports or hand-edited profiles) get their own sidebar groups — *Custom (not in catalog)* / *Custom IDs* — so they stay editable and removable
+- GPU Arch: the card in this machine is marked **◆ your GPU**, and the detail page says whether the chosen spoof is older, newer or identical
 
 ### Profiles
 - Save and load full profiles (DRS settings + environment variables)
+- Right-click a profile (or *More ▾*): Rename, Duplicate, Compare with editor, Export to file, Import from file (single-profile export or a whole `profiles.json`; name clashes get a suffix)
 - XDG-compliant storage: `$XDG_CONFIG_HOME/drstool/` (default `~/.config/drstool/`), written atomically
 - **History** (Profiles → History): every overwrite or delete of `profiles.json` keeps a snapshot (last 60) in `drstool/history/`. Browse snapshots, diff a profile against its live version, restore one profile or the whole file. A second sub-tab browses the `.bak` files written next to Lutris YAMLs (and Steam / Heroic / Bottles files) with a diff and one-click restore; a third compares any two profiles (or the current editor state)
-- **Import .nip** (Profiles → Import .nip): converts an NVIDIA Profile Inspector export into `DXVK_NVAPI_DRS_SETTINGS` pairs and applies them to the editor (DWORD values only)
+- **Import .nip** (Profiles → Import .nip): converts an NVIDIA Profile Inspector export into `DXVK_NVAPI_DRS_SETTINGS` pairs and applies them to the editor (DWORD values only); known settings are recognised by name and their values are stored in the catalog spelling so the editor buttons light up
 - **External changes**: if `profiles.json` or the selected Lutris YAML is modified outside DRSTool (another instance, a script, Lutris itself), a banner offers *Reload / Merge* (profiles) or *Refresh preview / Load into DRSTool* (Lutris). Detection is content-based, so DRSTool's own writes and a plain `touch` never raise it
 
 ### Launchers and sync

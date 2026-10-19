@@ -2452,6 +2452,13 @@ class SettingsManager(QObject):
     def get_arch(self) -> Optional[GPUArch]:
         return self._arch
 
+    def replace_state(self, settings: Dict[str, str], arch_code: Optional[str]):
+        """Swap DRS settings + arch in one go (undo/redo, imports): one signal each."""
+        self._settings = dict(settings)
+        self._arch = next((a for a in GPU_ARCHS if a.code == arch_code), None) if arch_code else None
+        self.arch_changed.emit()
+        self.settings_changed.emit()
+
     def set_arch(self, arch: Optional[GPUArch]):
         self._arch = arch
         self.arch_changed.emit()
@@ -2503,7 +2510,10 @@ class SettingsManager(QObject):
                 f'Profile "{name}" is malformed in profiles.json and cannot be loaded.'
             )
             return
-        self._settings = _as_dict(profile.get("settings"))
+        # One spelling per ID (catalog form) so the sidebar dot and the enum
+        # button highlight match even for hand-written / .nip-derived profiles.
+        self._settings = {canonical_drs_key(k): str(v)
+                          for k, v in _as_dict(profile.get("settings")).items()}
         arch_code = profile.get("arch")
         if arch_code:
             self._arch = next((a for a in GPU_ARCHS if a.code == arch_code), None)
@@ -2528,6 +2538,41 @@ class SettingsManager(QObject):
     def get_loaded_gamescope_flags(self) -> Dict[str, str]:
         """Returns gamescope flag values from the last loaded profile."""
         return self._loaded_gamescope_flags
+
+    def rename_profile(self, old: str, new: str) -> bool:
+        new = new.strip()
+        if not new or old not in self._profiles or (new in self._profiles and new != old):
+            return False
+        if new == old:
+            return True
+        # keep the visual order stable: rebuild the dict with the key swapped
+        self._profiles = {(new if k == old else k): v for k, v in self._profiles.items()}
+        if self._current_profile == old:
+            self._current_profile = new
+        ok = self._save_profiles()
+        self.profiles_changed.emit()
+        return ok
+
+    def duplicate_profile(self, name: str) -> Optional[str]:
+        if name not in self._profiles:
+            return None
+        new = unique_profile_name(f"{name} copy", self._profiles)
+        self._profiles[new] = json.loads(json.dumps(self._profiles[name]))
+        self._save_profiles()
+        self.profiles_changed.emit()
+        return new
+
+    def import_profiles(self, profiles: Dict[str, dict]) -> List[str]:
+        """Add profiles, renaming on name clashes. Returns the names used."""
+        added = []
+        for name, prof in profiles.items():
+            nm = unique_profile_name(name, self._profiles)
+            self._profiles[nm] = json.loads(json.dumps(prof))
+            added.append(nm)
+        if added:
+            self._save_profiles()
+            self.profiles_changed.emit()
+        return added
 
     def delete_profile(self, name: str):
         if name in self._profiles:
@@ -2805,6 +2850,13 @@ class OutputBarWidget(QWidget):
         act_steam.triggered.connect(lambda: self._copy_all(steam=True))
         menu.addAction(act_plain)
         menu.addAction(act_steam)
+        menu.addSeparator()
+        act_imp = QAction("Import a launch line…  (Ctrl+Shift+V)", menu)
+        act_imp.triggered.connect(lambda: self._call_win("open_import_dialog"))
+        act_exp = QAction("Explain the current launch line…", menu)
+        act_exp.triggered.connect(lambda: self._call_win("open_explain_dialog"))
+        menu.addAction(act_imp)
+        menu.addAction(act_exp)
         copy_btn.setMenu(menu)
         copy_btn.clicked.connect(lambda: self._copy_all(steam=False))
         col.addWidget(copy_btn)
@@ -2949,13 +3001,16 @@ class OutputBarWidget(QWidget):
             "Reset All Settings",
             "Do you want to reset all settings to default?\n\n"
             "This will remove all configured settings, clear GPU architecture "
-            "selection, and clear all DXVK/VKD3D-Proton env vars.",
+            "selection, and clear all DXVK/VKD3D-Proton env vars.\n\n"
+            "(Undo with Ctrl+Z.)",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            self.settings_manager.reset_everything()
             win = self.window()
+            if win is not None and hasattr(win, "_pending_label"):
+                win._pending_label = "Reset everything"
+            self.settings_manager.reset_everything()
             if win:
                 # Clear env widget
                 if hasattr(win, '_env_widget'):
@@ -2991,6 +3046,11 @@ class OutputBarWidget(QWidget):
 
     def _show_feedback(self, msg):
         self.window().statusBar().showMessage(msg, 2000)
+
+    def _call_win(self, fn: str):
+        w = self.window()
+        if hasattr(w, fn):
+            getattr(w, fn)()
 
 
 # ============================================================================
@@ -3729,15 +3789,21 @@ class ArchListWidget(QListWidget):
         self.blockSignals(True)
         self.clear()
         self.addItem(make_header_item("GPU architectures", 1 if selected_arch else 0))
+        real = detect_real_arch()
         for arch in archs:
             is_sel = bool(selected_arch and arch.code == selected_arch.code)
             if only_set and not is_sel:
                 continue
             if only_fav and not FAVS.is_fav("arch", arch.code):
                 continue
-            self.addItem(make_list_item(f"{arch.name}  ·  {arch.arch}", arch,
-                                        is_set=is_sel, value=arch.code,
-                                        fav=FAVS.is_fav("arch", arch.code)))
+            mine = arch.code == real
+            item = make_list_item(f"{arch.name}  ·  {arch.arch}" + ("   ◆ your GPU" if mine else ""), arch,
+                                  is_set=is_sel, value=arch.code,
+                                  fav=FAVS.is_fav("arch", arch.code))
+            if mine:
+                item.setToolTip("This is the generation of the NVIDIA card in this machine — "
+                                "spoofing it changes nothing.")
+            self.addItem(item)
         self.blockSignals(False)
 
     def _on_item_clicked(self, item):
@@ -3802,6 +3868,15 @@ QLabel{
         self._desc_label.setStyleSheet("color: #a7afbc; font-size: 13px;")
         layout.addWidget(self._desc_label)
 
+        # How the spoof relates to the real card (filled from the system probe)
+        self._rel_label = QLabel()
+        self._rel_label.setWordWrap(True)
+        self._rel_label.setTextFormat(Qt.RichText)
+        self._rel_label.setStyleSheet(f"font-size:13px; background:{T['surface']}; border:1px solid "
+                                      f"{T['border']}; border-radius:4px; padding:8px 10px;")
+        self._rel_label.hide()
+        layout.addWidget(self._rel_label)
+
         layout.addStretch()
 
         # Clear button (styled like the "Remove Setting" button)
@@ -3833,11 +3908,30 @@ QPushButton:pressed{
             self._arch_label.setText(f"Architecture: {arch.arch}")
             self._code_label.setText(f"Code: {arch.code}  ·  Example: {arch.example}")
             self._clear_btn.show()
+            real = detect_real_arch()
+            ra = arch_by_code(real)
+            if ra is None:
+                self._rel_label.hide()
+            else:
+                if real == arch.code:
+                    col, txt = T["muted"], (f"◆ Your card is {ra.name} ({ra.arch}) — this spoof is "
+                                            "identical to what dxvk-nvapi already reports.")
+                elif arch_rank(arch.code) > arch_rank(real):
+                    col, txt = T["warn"], (f"▲ Newer than your {ra.name} ({ra.arch}). Games may "
+                                           "switch on features this hardware lacks (frame generation, "
+                                           "newer DLSS paths) and crash or render black.")
+                else:
+                    col, txt = T["text2"], (f"▼ Older than your {ra.name} ({ra.arch}). Games may hide "
+                                            "DLSS / Frame Generation / Reflex — use it as a workaround "
+                                            "for titles that misbehave on new generations.")
+                self._rel_label.setText(f'<span style="color:{col}">{txt}</span>')
+                self._rel_label.show()
         else:
             self._name_label.setText("")
             self._arch_label.setText("")
             self._code_label.setText("")
             self._clear_btn.hide()
+            self._rel_label.hide()
 
 
 # ============================================================================
@@ -6323,6 +6417,15 @@ class EnvVarsWidget(QListWidget):
         order += [c for c in groups if c not in order]
         return [(c, groups[c]) for c in order]
 
+    def _all_categories(self) -> List[tuple]:
+        """Catalog categories + one for set variables the catalog doesn't know
+        (imported launch lines, hand-edited profiles) so they stay editable."""
+        cats = self._categories()
+        custom = sorted(n for n in self._values if n not in _ENV_BY_NAME)
+        if custom:
+            cats.append((CUSTOM_ENV_CAT, [env_def(n) for n in custom if env_def(n)]))
+        return cats
+
     def populate(self, filter_text: str = ""):
         """
         (Re)build the list. With filter_text, only vars whose name, category,
@@ -6338,7 +6441,7 @@ class EnvVarsWidget(QListWidget):
         self.clear()
         filter_lower = filter_text.lower()
 
-        for cat_label, env_list in self._categories():
+        for cat_label, env_list in self._all_categories():
             if filter_text:
                 matching = [
                     ev for ev in env_list
@@ -7169,7 +7272,9 @@ class SettingsListWidget(QListWidget):
                 filter_lower in s.name.lower() or
                 filter_lower in s.id.lower() or
                 filter_lower in s.cat.lower() or
-                filter_lower in s.desc.lower()
+                filter_lower in s.desc.lower() or
+                (s.id in current_state
+                 and filter_lower in _fmt_drs_value(s, current_state[s.id]).lower())
             ):
                 continue
             if self.only_set and s.id not in current_state:
@@ -7350,8 +7455,24 @@ class ProfileManagerWidget(QWidget):
         """)
         btn_layout.addWidget(del_btn)
 
+        more_btn = QToolButton()
+        more_btn.setText("More ▾")
+        more_btn.setPopupMode(QToolButton.InstantPopup)
+        more_btn.setStyleSheet(f"""
+            QToolButton {{ border:1px solid #1e2535; border-radius:3px; padding:3px 10px;
+                          background:#141720; color:#c8cdd8; font-size:11px; min-height:18px; }}
+            QToolButton:hover {{ border-color:#4a7300; }}
+            QToolButton::menu-indicator {{ image:none; width:0; }}""")
+        self._more_menu = QMenu(more_btn)
+        self._more_menu.aboutToShow.connect(lambda: self._fill_menu(self._more_menu, True))
+        more_btn.setMenu(self._more_menu)
+        btn_layout.addWidget(more_btn)
+
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
+
+        self._profile_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._profile_list.customContextMenuRequested.connect(self._context_menu)
 
         # profiles_changed (not settings_changed) — the profile list only
         # needs a rebuild when a profile is saved/loaded/deleted, not on
@@ -7405,6 +7526,110 @@ class ProfileManagerWidget(QWidget):
             if reply == QMessageBox.Yes:
                 self.settings_manager.delete_profile(item.text())
                 self._refresh()
+
+    # ── Rename / duplicate / compare / export / import ───────────────────
+    def _selected_name(self) -> Optional[str]:
+        item = self._profile_list.currentItem()
+        return item.text() if item and item.data(Qt.UserRole) else None
+
+    def _context_menu(self, pos):
+        item = self._profile_list.itemAt(pos)
+        if item and item.data(Qt.UserRole):
+            self._profile_list.setCurrentItem(item)
+        menu = QMenu(self)
+        self._fill_menu(menu, False)
+        menu.exec(self._profile_list.viewport().mapToGlobal(pos))
+
+    def _fill_menu(self, menu: QMenu, include_import: bool):
+        menu.clear()
+        name = self._selected_name()
+        acts = [("Load", self._load_selected), ("Rename…", self._rename_selected),
+                ("Duplicate", self._duplicate_selected), ("Compare with editor…", self._compare_selected),
+                ("Export to file…", self._export_selected), (None, None),
+                ("Delete", self._delete_selected)]
+        for label, fn in acts:
+            if label is None:
+                menu.addSeparator()
+                continue
+            a = menu.addAction(label)
+            a.setEnabled(bool(name))
+            a.triggered.connect(fn)
+        menu.addSeparator()
+        menu.addAction("Import from file…").triggered.connect(self._import_file)
+
+    def _rename_selected(self):
+        old = self._selected_name()
+        if not old:
+            return
+        from PySide6.QtWidgets import QInputDialog
+        new, ok = QInputDialog.getText(self, "Rename profile", "New name:", text=old)
+        new = (new or "").strip()
+        if not ok or not new or new == old:
+            return
+        if new in self.settings_manager.get_profiles():
+            QMessageBox.warning(self, "Rename profile", f'A profile named "{new}" already exists.')
+            return
+        self.settings_manager.rename_profile(old, new)
+        w = self.window()
+        if hasattr(w, "_update_window_title"):
+            w._update_window_title()
+
+    def _duplicate_selected(self):
+        name = self._selected_name()
+        if name:
+            new = self.settings_manager.duplicate_profile(name)
+            if new:
+                self._select_name(new)
+
+    def _compare_selected(self):
+        name = self._selected_name()
+        w = self.window()
+        if name and hasattr(w, "capture_state"):
+            prof = self.settings_manager.get_profiles().get(name)
+            dlg = ChangesDialog(prof, state_as_profile(w.capture_state()), f"“{name}”", "Editor",
+                                f"Profile “{name}” vs. the editor", "Load this profile", self)
+            if dlg.exec() == QDialog.Accepted and dlg.revert:
+                self.settings_manager.load_profile(name)
+                self.profile_loaded.emit(name)
+
+    def _export_selected(self):
+        name = self._selected_name()
+        prof = self.settings_manager.get_profiles().get(name) if name else None
+        if not isinstance(prof, dict):
+            return
+        default = Path.home() / f"{_slugify(name) or 'profile'}.drstool.json"
+        path, _f = QFileDialog.getSaveFileName(self, "Export profile", str(default),
+                                               "DRSTool profile (*.json);;All files (*)")
+        if not path:
+            return
+        try:
+            _atomic_write(Path(path), profile_export_text(name, prof))
+        except OSError as ex:
+            QMessageBox.warning(self, "Export profile", f"Could not write {path}:\n{ex}")
+
+    def _import_file(self):
+        path, _f = QFileDialog.getOpenFileName(self, "Import profile(s)", str(Path.home()),
+                                               "DRSTool profile / profiles.json (*.json);;All files (*)")
+        if not path:
+            return
+        try:
+            profs = parse_profile_import(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as ex:
+            QMessageBox.warning(self, "Import profile", f"Could not import {Path(path).name}:\n{ex}")
+            return
+        names = self.settings_manager.import_profiles(profs)
+        if names:
+            self._select_name(names[0])
+            w = self.window()
+            if w and w.statusBar():
+                w.statusBar().showMessage(f"Imported {len(names)} profile(s): " + ", ".join(names[:4]), 6000)
+
+    def _select_name(self, name: str):
+        for i in range(self._profile_list.count()):
+            it = self._profile_list.item(i)
+            if it.data(Qt.UserRole) == name:
+                self._profile_list.setCurrentItem(it)
+                break
 
     def _refresh(self):
         self._profile_list.clear()
@@ -10430,8 +10655,14 @@ class GamescopeFlagsWidget(QWidget):
         Bare toggles map to "" (present, no argument); everything else maps
         to its string value. Empty dict if the master toggle is off.
         """
-        if not self.is_enabled():
-            return {}
+        return self._collect_flags() if self.is_enabled() else {}
+
+    def get_raw_flag_values(self) -> Dict[str, str]:
+        """Like get_flag_values() but also while the wrapper is off (undo snapshots
+        must not forget the flags a user switched off temporarily)."""
+        return self._collect_flags()
+
+    def _collect_flags(self) -> Dict[str, str]:
         values: Dict[str, str] = {}
         # Pseudo-flag: not a gamescope argument, but it rides along in the same
         # dict so profile save/load and the Lutris round-trip pick it up
@@ -10484,20 +10715,22 @@ class GamescopeFlagsWidget(QWidget):
         self._preview.setText(self.build_command())
 
     def reset_all_values(self):
-        self._enable_chk.setChecked(False)
-        self._mangohud_chk.setChecked(False)
-        for gf in GAMESCOPE_FLAGS:
-            ctrl = self._controls[gf.flag]
-            if gf.kind == "toggle":
-                ctrl.setChecked(False)
-            elif gf.kind == "enum":
-                ctrl.setCurrentIndex(0)
-            else:
-                ctrl.clear()
-        self._emit_changed()
+        self.load_flag_values(False, {})
 
     def load_flag_values(self, enabled: bool, values: Dict[str, str]):
-        """Restore state, e.g. from a saved profile."""
+        """Restore state, e.g. from a saved profile.
+
+        Every control setter below used to emit `changed` on its own — ~60
+        signals per profile load, each re-running the Lutris preview, badges
+        and output bar. Batched into a single emission now."""
+        self.blockSignals(True)
+        try:
+            self._load_flag_values(enabled, values)
+        finally:
+            self.blockSignals(False)
+        self._emit_changed()
+
+    def _load_flag_values(self, enabled: bool, values: Dict[str, str]):
         self._enable_chk.setChecked(enabled)
         self._mangohud_chk.setChecked(self.MANGOHUD_KEY in values)
         for gf in GAMESCOPE_FLAGS:
@@ -10509,7 +10742,6 @@ class GamescopeFlagsWidget(QWidget):
                 ctrl.setCurrentText(v or "")
             else:
                 ctrl.setText(v or "")
-        self._emit_changed()
 
 
 # ============================================================================
@@ -11684,9 +11916,12 @@ QTabBar::tab:hover { color: #c8cdd8; }
 
         layout.addWidget(tabs)
 
+    def tab_titles(self) -> List[str]:
+        return [self._tabs.tabText(i).replace(" ⚠", "") for i in range(self._tabs.count())]
+
     def show_tab(self, title: str) -> bool:
         for i in range(self._tabs.count()):
-            if self._tabs.tabText(i) == title:
+            if self._tabs.tabText(i).replace(" ⚠", "") == title:
                 self._tabs.setCurrentIndex(i)
                 return True
         return False
@@ -12285,6 +12520,8 @@ def lint_config(env: Dict[str, str], drs: Dict[str, str], arch_code: str,
     if si.nvidia_known_absent and (nvapi_cfg or any(k.startswith(("__GL_", "PROTON_NVIDIA_")) for k in env)):
         add("info", "no-nvidia", "No NVIDIA driver was detected on this machine; NVIDIA-specific "
             "settings only matter if this configuration is for another PC.", [])
+    # 19. DRS settings vs. the real GPU generation / mode dependencies
+    out += lint_drs_rules(env, drs, arch_code, si)
     order = {"error": 0, "warn": 1, "info": 2}
     out.sort(key=lambda i: order.get(i.sev, 3))
     return out
@@ -15443,7 +15680,9 @@ class NipImportWidget(QWidget):
         for r, s in enumerate(prof["settings"]):
             t.insertRow(r)
             key = f'0x{s["id"]:08X}'
-            known = _SETTING_BY_ID.get(key)
+            known = drs_lookup(key)
+            if known is not None:
+                key = known.id
             ok = s["value"] is not None
             if not ok:
                 status = f'skipped: {s["vtype"]} value'
@@ -15497,10 +15736,14 @@ class NipImportWidget(QWidget):
                 self, "Replace settings",
                 "Clear all current DRS settings in the editor before applying?") != QMessageBox.Yes:
             return
-        if replace:
-            self.sm.clear_all()
+        new = {} if replace else self.sm.get_settings_list()
         for k, v in pairs:
-            self.sm.set_setting(k, v)
+            new[canonical_drs_key(k)] = canonical_drs_value(drs_lookup(k), v)
+        win = self.window()
+        if hasattr(win, "_pending_label"):
+            win._pending_label = f"Import .nip ({len(pairs)} setting(s))"
+        arch = self.sm.get_arch()
+        self.sm.replace_state(new, arch.code if arch else None)
         self._info.setText(f"Applied {len(pairs)} setting(s) to the editor.")
 
 
@@ -18930,6 +19173,1408 @@ class ExternalChangeWatcher(QObject):
 
 
 # ============================================================================
+# Feature pack 4 — undo timeline, launch-line import / explain, recipes,
+# DRS-aware lint rules, GPU generation detection, profile tools.
+# Self-contained like the earlier packs; MainWindow wires it in.
+# ============================================================================
+
+from PySide6.QtWidgets import QAbstractItemView
+
+# ----------------------------------------------------------------------------
+# DRS id / value canonicalisation
+# ----------------------------------------------------------------------------
+# The editor stores enum values exactly as the catalog spells them ("0xffffff")
+# and highlights the active button by string compare. Anything that arrives
+# from outside (a pasted launch line, a .nip export, a hand-written profile)
+# spells the same number differently ("0x00FFFFFF", "16777215") and would show
+# up as "set" with no button lit. Everything external goes through these.
+
+_SETTING_BY_INT: Dict[int, Setting] = {int(s.id, 16): s for s in ALL_SETTINGS}
+
+
+def _parse_int_any(raw) -> Optional[int]:
+    t = str(raw if raw is not None else "").strip()
+    if not t:
+        return None
+    try:
+        if t.lower().startswith("0x"):
+            return int(t, 16)
+        if t.isdigit():
+            return int(t, 10)
+        if re.fullmatch(r"[0-9a-fA-F]+", t):
+            return int(t, 16)
+    except ValueError:
+        pass
+    return None
+
+
+def drs_lookup(key) -> Optional[Setting]:
+    iv = _parse_int_any(key)
+    return _SETTING_BY_INT.get(iv) if iv is not None else None
+
+
+def canonical_drs_key(key) -> str:
+    s = drs_lookup(key)
+    if s:
+        return s.id
+    iv = _parse_int_any(key)
+    return f"0x{iv:08X}" if iv is not None else str(key).strip()
+
+
+def canonical_drs_value(setting: Optional[Setting], raw) -> str:
+    iv = _parse_int_any(raw)
+    if iv is None:
+        return str(raw).strip()
+    if setting is not None:
+        for v in setting.values:
+            if _parse_int_any(v.val) == iv:
+                return v.val
+        for p in setting.presets:
+            if _parse_int_any(p.val) == iv:
+                return p.val
+        if setting.type == "bitfield":
+            return f"0x{iv:08X}"
+    return f"0x{iv:X}"
+
+
+CUSTOM_DRS_CAT = "Custom IDs (not in catalog)"
+_CUSTOM_SETTINGS: Dict[str, Setting] = {}
+
+
+def custom_drs_setting(key: str) -> Setting:
+    s = _CUSTOM_SETTINGS.get(key)
+    if s is None:
+        s = Setting(key, f"Unknown {key}", CUSTOM_DRS_CAT, "hex", "0x0",
+                    "Setting ID not in DRSTool's catalog",
+                    "This ID is not part of the NvApiDriverSettings.h catalog DRSTool ships. "
+                    "It came from an imported launch line, a .nip export or a hand-edited "
+                    "profile and is passed through to DXVK_NVAPI_DRS_SETTINGS unchanged. "
+                    "Edit the raw value below, or remove it.")
+        _CUSTOM_SETTINGS[key] = s
+    return s
+
+
+# ----------------------------------------------------------------------------
+# Env definitions for names outside the catalog
+# ----------------------------------------------------------------------------
+
+_ENV_BY_NAME: Dict[str, EnvVarDef] = {ev.name: ev for ev in ALL_ENV_VARS}
+_CUSTOM_ENV: Dict[str, EnvVarDef] = {}
+CUSTOM_ENV_CAT = "Custom (not in catalog)"
+_ENV_NAME_RX = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def env_def(name: str) -> Optional[EnvVarDef]:
+    """Catalog definition, or a synthetic free-text one so imported variables
+    stay visible, editable and removable instead of becoming invisible ballast."""
+    if not name or name == EnvVarsWidget.GAMESCOPE_KEY:
+        return None
+    ev = _ENV_BY_NAME.get(name) or _CUSTOM_ENV.get(name)
+    if ev is None and _ENV_NAME_RX.fullmatch(name):
+        ev = EnvVarDef(name, CUSTOM_ENV_CAT, "string", "",
+                       "Not in DRSTool's catalog — imported from a launch line, recipe or profile. "
+                       "It is written to every output exactly like the catalog variables.")
+        _CUSTOM_ENV[name] = ev
+    return ev
+
+
+# ----------------------------------------------------------------------------
+# Real GPU generation (the hardware, not the DXVK_NVAPI_GPU_ARCH spoof)
+# ----------------------------------------------------------------------------
+
+_GEN_RULES = [
+    (r"\bRTX\s*(?:PRO\s*)?50\d\d|blackwell|\bGB20\d", "GB200"),
+    (r"\bRTX\s*40\d\d|\bada\b|\bAD10\d", "AD100"),
+    (r"\bRTX\s*30\d\d|\bampere\b|\bGA10\d|\bRTX\s*A\d{3,4}\b", "GA100"),
+    (r"\bRTX\s*20\d\d|\bGTX\s*16\d\d|\bturing\b|\bTU1\d\d|TITAN\s*RTX|Quadro\s*RTX", "TU100"),
+    (r"TITAN\s*V\b|\bvolta\b", "GV100"),
+    (r"\bGTX\s*10\d\d|\bGT\s*10\d\d|\bpascal\b|TITAN\s*Xp", "GP100"),
+    (r"\bGTX\s*75\d", "GM000"),
+    (r"\bGTX\s*9\d\d|\bmaxwell\b", "GM200"),
+    (r"\bGTX\s*[67]\d\d|\bkepler\b", "GK100"),
+]
+_ARCH_RANK = {a.code: i for i, a in enumerate(GPU_ARCHS)}
+
+
+def detect_real_arch(si: Optional["SysInfo"] = None) -> str:
+    """GPU_ARCHS code of the NVIDIA card in this machine, or '' if unknown."""
+    si = si or SYSHUB.info
+    names = list(si.nv_gpus) + [g.name for g in si.vk_gpus if g.is_nvidia]
+    for n in names:
+        for rx, code in _GEN_RULES:
+            if re.search(rx, n, re.I):
+                return code
+    return ""
+
+
+def arch_rank(code: str) -> int:
+    return _ARCH_RANK.get(code or "", -1)
+
+
+def arch_by_code(code: str) -> Optional[GPUArch]:
+    return next((a for a in GPU_ARCHS if a.code == code), None)
+
+
+# ----------------------------------------------------------------------------
+# Editor state: one plain dict for everything the launch string is made of
+# ----------------------------------------------------------------------------
+
+def empty_state() -> dict:
+    return {"settings": {}, "arch": None, "env": {}, "gs_on": False, "gs_flags": {}}
+
+
+def copy_state(st: dict) -> dict:
+    return {"settings": dict(st.get("settings") or {}), "arch": st.get("arch"),
+            "env": dict(st.get("env") or {}), "gs_on": bool(st.get("gs_on")),
+            "gs_flags": dict(st.get("gs_flags") or {})}
+
+
+def state_as_profile(st: dict, raw_gs: bool = False) -> dict:
+    """Profile-shaped dict. raw_gs keeps gamescope flags while it is off (undo needs
+    them; saved profiles don't store them)."""
+    return {"settings": dict(st["settings"]), "arch": st["arch"], "env_vars": dict(st["env"]),
+            "gamescope_enabled": st["gs_on"],
+            "gamescope_flags": dict(st["gs_flags"]) if (st["gs_on"] or raw_gs) else {}}
+
+
+def state_from_profile(p) -> dict:
+    p = p if isinstance(p, dict) else {}
+    return {"settings": {canonical_drs_key(k): str(v) for k, v in _as_dict(p.get("settings")).items()},
+            "arch": p.get("arch") or None,
+            "env": {str(k): str(v) for k, v in _as_dict(p.get("env_vars")).items()},
+            "gs_on": bool(p.get("gamescope_enabled")),
+            "gs_flags": {str(k): str(v) for k, v in _as_dict(p.get("gamescope_flags")).items()}}
+
+
+def canon_flat(p) -> Dict[tuple, str]:
+    """_flat_profile with DRS ids folded to one spelling — for equality tests."""
+    out = {}
+    for (sec, key), v in _flat_profile(p).items():
+        if sec == "DRS":
+            s = drs_lookup(key)
+            key = canonical_drs_key(key).upper()
+            v = canonical_drs_value(s, v).lower()
+        out[(sec, key)] = v
+    return out
+
+
+def state_payload(st: dict) -> dict:
+    """Same shape as MainWindow.collect_launch_payload(), computed from a state dict."""
+    env: Dict[str, str] = {}
+    if st["arch"]:
+        env["DXVK_NVAPI_GPU_ARCH"] = st["arch"]
+    if st["settings"]:
+        env["DXVK_NVAPI_DRS_SETTINGS"] = ",".join(f"{k}={v}" for k, v in st["settings"].items())
+    env.update(st["env"])
+    gs_flags = dict(st["gs_flags"]) if st["gs_on"] else {}
+    gs_cmd = ""
+    if st["gs_on"]:
+        gs_cmd = " ".join(p for p in ("gamescope", gamescope_arg_string(gs_flags), "--") if p)
+        if GamescopeFlagsWidget.MANGOHUD_KEY in gs_flags:
+            gs_cmd += " " + GamescopeFlagsWidget.MANGOHUD_PREFIX
+    return {"env": env, "drs": dict(st["settings"]), "arch": st["arch"] or "", "gs_on": st["gs_on"],
+            "gs_flags": gs_flags, "mangohud": GamescopeFlagsWidget.MANGOHUD_KEY in gs_flags,
+            "gs_cmd": gs_cmd}
+
+
+def _gs_flag_name(flag: str) -> str:
+    if flag == GamescopeFlagsWidget.MANGOHUD_KEY:
+        return "MangoHud (after --)"
+    gf = LutrisSyncWidget._flag_lookup().get(flag)
+    return f"{gf.name}  ({flag})" if gf else flag
+
+
+def _change_name(sec: str, key: str) -> str:
+    if sec == "DRS":
+        s = drs_lookup(key)
+        return s.name if s else key
+    if sec == "Arch":
+        return "GPU arch"
+    if sec == "Gamescope":
+        return "gamescope" if key == "enabled" else f"gamescope {key}"
+    return key
+
+
+def _change_value(sec: str, key: str, val) -> str:
+    if val is None:
+        return ""
+    if sec == "DRS":
+        s = drs_lookup(key)
+        return _fmt_drs_value(s, val) if s else str(val)
+    return str(val) if val != "" else "on"
+
+
+def state_diff(a: dict, b: dict) -> List[tuple]:
+    return diff_profiles(state_as_profile(a, True), state_as_profile(b, True))
+
+
+def describe_change(a: dict, b: dict) -> str:
+    rows = state_diff(a, b)
+    if not rows:
+        return "No change"
+    if len(rows) == 1:
+        sec, key, va, vb = rows[0]
+        name = _change_name(sec, key)
+        if vb is None:
+            return f"{name} cleared"
+        return f"{name} → {_change_value(sec, key, vb)}"
+    names = []
+    for sec, key, _va, _vb in rows:
+        n = _change_name(sec, key)
+        if n not in names:
+            names.append(n)
+    shown = ", ".join(names[:3]) + (f" +{len(names) - 3}" if len(names) > 3 else "")
+    return f"{len(rows)} changes: {shown}"
+
+
+class UndoTimeline:
+    """Linear undo/redo over whole-editor snapshots.
+
+    Consecutive edits of the *same single key* within COALESCE_S collapse into
+    one step, so dragging a spin box or typing a value is one undo, not twelve."""
+    LIMIT = 150
+    COALESCE_S = 1.5
+
+    def __init__(self, state: dict):
+        self._items: List[dict] = [dict(state=copy_state(state), label="Session start",
+                                        t=time.time(), key=None)]
+        self._idx = 0
+
+    def current(self) -> dict:
+        return copy_state(self._items[self._idx]["state"])
+
+    def push(self, state: dict, label: str, key=None):
+        del self._items[self._idx + 1:]
+        last = self._items[-1]
+        now = time.time()
+        if (key is not None and last["key"] == key and self._idx > 0
+                and now - last["t"] < self.COALESCE_S):
+            last.update(state=copy_state(state), label=label, t=now)
+            return
+        self._items.append(dict(state=copy_state(state), label=label, t=now, key=key))
+        if len(self._items) > self.LIMIT:
+            self._items = self._items[-self.LIMIT:]
+            self._items[0]["label"] = "(older history dropped)"
+        self._idx = len(self._items) - 1
+
+    def can_undo(self) -> bool:
+        return self._idx > 0
+
+    def can_redo(self) -> bool:
+        return self._idx < len(self._items) - 1
+
+    def undo_label(self) -> str:
+        return self._items[self._idx]["label"] if self.can_undo() else ""
+
+    def redo_label(self) -> str:
+        return self._items[self._idx + 1]["label"] if self.can_redo() else ""
+
+    def undo(self) -> Optional[dict]:
+        if not self.can_undo():
+            return None
+        self._idx -= 1
+        return self.current()
+
+    def redo(self) -> Optional[dict]:
+        if not self.can_redo():
+            return None
+        self._idx += 1
+        return self.current()
+
+    def jump(self, idx: int) -> Optional[dict]:
+        if 0 <= idx < len(self._items) and idx != self._idx:
+            self._idx = idx
+            return self.current()
+        return None
+
+    def entries(self) -> List[tuple]:
+        return [(i, it["label"], it["t"], i == self._idx) for i, it in enumerate(self._items)]
+
+
+def single_change_key(a: dict, b: dict):
+    rows = state_diff(a, b)
+    return (rows[0][0], rows[0][1]) if len(rows) == 1 else None
+
+
+# ----------------------------------------------------------------------------
+# Launch-line parser:  "A=1 B=2 gamescope -W 2560 -- mangohud %command% -dx12"
+# ----------------------------------------------------------------------------
+
+@dataclass
+class ParsedLaunch:
+    env: Dict[str, str] = field(default_factory=dict)
+    unset: List[str] = field(default_factory=list)
+    drs: Dict[str, str] = field(default_factory=dict)
+    arch: Optional[str] = None
+    gs_on: bool = False
+    gs_flags: Dict[str, str] = field(default_factory=dict)
+    mangohud: bool = False
+    notes: List[tuple] = field(default_factory=list)     # (sev, text)  sev: info|warn|conv
+
+    def empty(self) -> bool:
+        return not (self.env or self.unset or self.drs or self.arch or self.gs_on or self.mangohud)
+
+
+_ASSIGN_RX = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.S)
+_BARE_DRS_RX = re.compile(r"(?:0x[0-9a-fA-F]+|\d+)=[^,\s]+(?:[,;](?:0x[0-9a-fA-F]+|\d+)=[^,\s]+)*[,;]?")
+# prime-run is a 3-line script on every distro; expressing it as env vars keeps
+# the launch line portable to launchers that have no "prefix command" field.
+_PRIME_RUN_ENV = {"__NV_PRIME_RENDER_OFFLOAD": "1", "__VK_LAYER_NV_optimus": "NVIDIA_only",
+                  "__GLX_VENDOR_LIBRARY_NAME": "nvidia"}
+_WRAP_ARGS = {          # wrapper -> how to skip its own arguments
+    "taskset": "taskset", "nice": "nice", "chrt": "chrt", "ionice": "ionice",
+}
+_WRAP_PLAIN = ("gamemoderun", "game-performance", "obs-gamecapture", "systemd-inhibit",
+               "steam-runtime", "pressure-vessel-wrap", "zink-run", "dlss-swapper")
+_WRAP_LGT = ("taskset", "nice", "chrt", "ionice")
+_COMMAND_HINTS = ("umu-run", "proton", "wine", "wine64", "steam", "lutris", "heroic", "bottles-cli")
+
+
+def _parse_drs_string(raw: str, out: ParsedLaunch):
+    for pair in re.split(r"[,;]", raw or ""):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            out.notes.append(("warn", f"DRS pair without '=' ignored: {pair}"))
+            continue
+        k, v = (x.strip() for x in pair.split("=", 1))
+        s = drs_lookup(k)
+        key = canonical_drs_key(k)
+        val = canonical_drs_value(s, v)
+        if _parse_int_any(v) is None:
+            out.notes.append(("warn", f"{key}: value '{v}' is not a number — kept verbatim"))
+        if s is None:
+            out.notes.append(("info", f"DRS ID {key} is not in the catalog — kept as a custom ID"))
+        elif s.type == "enum" and s.values and not any(
+                _parse_int_any(x.val) == _parse_int_any(v) for x in s.values):
+            out.notes.append(("warn", f"{s.name}: {val} is not one of its documented values"))
+        out.drs[key] = val
+
+
+def _tokenize(text: str, out: ParsedLaunch) -> List[str]:
+    text = re.sub(r"\\\r?\n", " ", text)
+    toks: List[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            lt = shlex.split(line, comments=True)
+        except ValueError as ex:
+            out.notes.append(("warn", f"Shell quoting error ({ex}) — fell back to splitting on spaces"))
+            lt = line.split()
+        if lt and lt[0] == "export":
+            lt = lt[1:]
+        toks += lt
+    return toks
+
+
+def parse_launch_text(text: str) -> ParsedLaunch:
+    """Turn a pasted launch line (Steam launch options, a shell snippet, a .env
+    file, `export` lines, a bare DXVK_NVAPI_DRS_SETTINGS value) into editor data.
+    Never guesses silently: everything dropped or converted is listed in .notes."""
+    out = ParsedLaunch()
+    stripped = (text or "").strip()
+    if not stripped:
+        return out
+    if _BARE_DRS_RX.fullmatch(stripped):
+        out.notes.append(("conv", "Recognised a bare DXVK_NVAPI_DRS_SETTINGS value"))
+        _parse_drs_string(stripped, out)
+        return out
+    toks = _tokenize(stripped, out)
+    gs_table = LutrisSyncWidget._flag_lookup()
+    wrappers: List[str] = []
+    i, n = 0, len(toks)
+    while i < n:
+        tok = toks[i]
+        base = os.path.basename(tok)
+        m = _ASSIGN_RX.fullmatch(tok)
+        if m and not tok.startswith("-"):
+            out.env[m.group(1)] = m.group(2)
+            i += 1
+            continue
+        if tok in ("env", "exec", "command", ";", "&&"):
+            i += 1
+            while tok == "env" and i < n and toks[i].startswith("-"):
+                opt = toks[i]
+                if opt in ("-u", "--unset") and i + 1 < n:
+                    out.unset.append(toks[i + 1])
+                    i += 2
+                elif opt.startswith("--unset="):
+                    out.unset.append(opt.split("=", 1)[1])
+                    i += 1
+                else:
+                    out.notes.append(("info", f"env option {opt} ignored"))
+                    i += 1
+            continue
+        if tok == "%command%":
+            rest = toks[i + 1:]
+            if rest:
+                out.notes.append(("info", "Game arguments after %command% are not part of DRSTool's "
+                                          "configuration and were left out: " + " ".join(rest)))
+            break
+        if base == "gamescope":
+            out.gs_on = True
+            i += 1
+            while i < n and toks[i] != "--":
+                t = toks[i]
+                gf = gs_table.get(t)
+                if gf is None and t.startswith("--") and "=" in t:
+                    k, v = t.split("=", 1)
+                    gf = gs_table.get(k)
+                    if gf is not None:
+                        out.gs_flags[gf.flag] = "" if gf.kind == "toggle" else v
+                        i += 1
+                        continue
+                if gf is None:
+                    if i + 1 < n and toks[i + 1] != "--" and not toks[i + 1].startswith("-"):
+                        out.notes.append(("warn", f"Unknown gamescope argument dropped: {t} {toks[i + 1]}"))
+                        i += 2
+                    else:
+                        out.notes.append(("warn", f"Unknown gamescope argument dropped: {t}"))
+                        i += 1
+                    continue
+                if gf.kind == "toggle":
+                    out.gs_flags[gf.flag] = ""
+                    i += 1
+                elif i + 1 < n and toks[i + 1] != "--":
+                    out.gs_flags[gf.flag] = toks[i + 1]
+                    i += 2
+                else:
+                    out.notes.append(("warn", f"gamescope {t} has no value — dropped"))
+                    i += 1
+            i += 1                                   # skip the '--'
+            continue
+        if base == "mangohud":
+            out.mangohud = True
+            i += 1
+            if i < n and toks[i] == "--dlsym":
+                i += 1
+            continue
+        if base == "prime-run":
+            for k, v in _PRIME_RUN_ENV.items():
+                out.env.setdefault(k, v)
+            out.notes.append(("conv", "prime-run converted to its environment variables "
+                                      "(__NV_PRIME_RENDER_OFFLOAD, __VK_LAYER_NV_optimus, "
+                                      "__GLX_VENDOR_LIBRARY_NAME)"))
+            i += 1
+            continue
+        if base == "strangle":
+            i += 1
+            if i < n and toks[i].isdigit():
+                fps = toks[i]
+                out.env.setdefault("DXVK_FRAME_RATE", fps)
+                out.env.setdefault("VKD3D_FRAME_RATE", fps)
+                out.notes.append(("conv", f"strangle {fps} converted to DXVK_FRAME_RATE / VKD3D_FRAME_RATE"))
+                i += 1
+            else:
+                wrappers.append("strangle")
+            continue
+        if base in _WRAP_ARGS:
+            wrappers.append(base)
+            i += 1
+            if base == "taskset":
+                if i < n and toks[i].startswith("-"):
+                    i += 1
+                i += 1
+            elif base in ("nice", "chrt"):
+                while i < n and toks[i].startswith("-"):
+                    i += 1 if re.fullmatch(r"-\d+", toks[i]) else 2 if toks[i] in ("-n", "--adjustment") else 1
+                if base == "chrt" and i < n and toks[i].isdigit():
+                    i += 1
+            elif base == "ionice":
+                while i < n and toks[i].startswith("-"):
+                    i += 2 if toks[i] in ("-c", "-n", "-p") else 1
+            continue
+        if base in _WRAP_PLAIN:
+            wrappers.append(base)
+            i += 1
+            continue
+        if base in _COMMAND_HINTS or "/" in tok or tok.lower().endswith((".exe", ".sh", ".bat")):
+            rest = " ".join(toks[i:])
+            out.notes.append(("info", f"The actual game command was left out: {rest[:160]}"))
+            break
+        if tok == "--":
+            i += 1
+            continue
+        out.notes.append(("warn", f"Unrecognised token ignored: {tok}"))
+        i += 1
+
+    if wrappers:
+        lgt = [w for w in wrappers if w in _WRAP_LGT]
+        out.notes.append(("info", "Command wrappers can't be stored in a DRSTool profile and were left out: "
+                          + ", ".join(dict.fromkeys(wrappers))
+                          + ("  —  CPU pinning / priority belong in Extra Tools › lutris-game-tune."
+                             if lgt else "")))
+    drs_raw = out.env.pop("DXVK_NVAPI_DRS_SETTINGS", None)
+    if drs_raw is not None:
+        _parse_drs_string(drs_raw, out)
+    arch_raw = out.env.pop("DXVK_NVAPI_GPU_ARCH", None)
+    if arch_raw is not None:
+        a = arch_by_code(arch_raw.strip().upper())
+        if a:
+            out.arch = a.code
+        else:
+            out.notes.append(("warn", f"DXVK_NVAPI_GPU_ARCH={arch_raw} is not a code dxvk-nvapi accepts "
+                                      f"({', '.join(x.code for x in GPU_ARCHS)}) — dropped"))
+    if out.mangohud and not out.gs_on:
+        out.mangohud = False
+        if "MANGOHUD" not in out.env:
+            out.env["MANGOHUD"] = "1"
+            out.notes.append(("conv", "mangohud wrapper outside gamescope converted to MANGOHUD=1"))
+    if out.mangohud:
+        out.gs_flags[GamescopeFlagsWidget.MANGOHUD_KEY] = GamescopeFlagsWidget.MANGOHUD_PREFIX
+    for k, v in out.env.items():
+        ev = _ENV_BY_NAME.get(k)
+        if ev is None:
+            out.notes.append(("info", f"{k} is not in the catalog — imported as a custom variable"))
+        elif ev.vtype == "enum" and ev.options and v not in ev.options:
+            out.notes.append(("warn", f"{k}={v} is not one of its known values ({', '.join(ev.options[:8])})"))
+    return out
+
+
+def looks_like_launch_text(text: str) -> bool:
+    t = (text or "").strip()
+    if not t or len(t) > 20000:
+        return False
+    return bool(_BARE_DRS_RX.fullmatch(t) or "%command%" in t or re.search(
+        r"(?:^|\s)(?:DXVK|VKD3D|PROTON|WINE|__GL|__NV|NVPRESENT|FLM|MANGOHUD|DXVK_NVAPI)[A-Z0-9_]*=", t)
+        or re.search(r"(?:^|\s)gamescope\s", t))
+
+
+# ----------------------------------------------------------------------------
+# Plans: a list of checkable operations + how they combine with the editor
+# ----------------------------------------------------------------------------
+# op = dict(kind, key, value)   kind: arch | drs | drs_unset | env | env_unset | gs_on | gs_flag
+
+def ops_from_parsed(p: ParsedLaunch) -> List[dict]:
+    ops: List[dict] = []
+    if p.arch:
+        ops.append(dict(kind="arch", key="GPU arch", value=p.arch))
+    for k, v in p.drs.items():
+        ops.append(dict(kind="drs", key=k, value=v))
+    for k, v in p.env.items():
+        ops.append(dict(kind="env", key=k, value=v))
+    for k in p.unset:
+        ops.append(dict(kind="env_unset", key=k, value=None))
+    if p.gs_on:
+        ops.append(dict(kind="gs_on", key="enabled", value="on"))
+    for k, v in p.gs_flags.items():
+        ops.append(dict(kind="gs_flag", key=k, value=v))
+    return ops
+
+
+def apply_ops(cur: dict, ops: List[dict], replace: bool, gs_replace: bool) -> dict:
+    st = empty_state() if replace else copy_state(cur)
+    if gs_replace and any(o["kind"] in ("gs_on", "gs_flag") for o in ops):
+        st["gs_flags"] = {}
+    for o in ops:
+        k, v = o["kind"], o["value"]
+        if k == "arch":
+            st["arch"] = v
+        elif k == "drs":
+            st["settings"][o["key"]] = v
+        elif k == "drs_unset":
+            st["settings"].pop(o["key"], None)
+        elif k == "env":
+            st["env"][o["key"]] = v
+        elif k == "env_unset":
+            st["env"].pop(o["key"], None)
+        elif k == "gs_on":
+            st["gs_on"] = True
+        elif k == "gs_flag":
+            st["gs_flags"][o["key"]] = v
+    return st
+
+
+def op_label(o: dict) -> tuple:
+    """(name, shown value, description) for a plan row."""
+    k = o["kind"]
+    if k == "arch":
+        a = arch_by_code(o["value"])
+        return ("GPU arch spoof", f"{o['value']}  ({a.arch})" if a else o["value"],
+                "DXVK_NVAPI_GPU_ARCH — makes dxvk-nvapi report this generation.")
+    if k in ("drs", "drs_unset"):
+        s = drs_lookup(o["key"])
+        name = f"{s.name}  ({o['key']})" if s else f"{o['key']}  (custom ID)"
+        if k == "drs_unset":
+            return name, "remove", s.desc if s else ""
+        shown = _fmt_drs_value(s, o["value"]) if s else o["value"]
+        if shown != o["value"]:
+            shown = f"{shown}  [{o['value']}]"
+        return name, shown, (s.detailed_desc or s.desc) if s else "Passed through unchanged."
+    if k in ("env", "env_unset"):
+        ev = env_def(o["key"])
+        return (o["key"], "remove" if k == "env_unset" else o["value"],
+                ev.desc if ev else "")
+    if k == "gs_on":
+        return "Gamescope wrapper", "enabled", "Wrap the game in gamescope … --"
+    gf = LutrisSyncWidget._flag_lookup().get(o["key"])
+    return (_gs_flag_name(o["key"]), "on" if o["value"] == "" else o["value"],
+            gf.desc if gf else "")
+
+
+def op_status(o: dict, cur: dict) -> str:
+    k, key, v = o["kind"], o["key"], o["value"]
+    have = {"arch": cur["arch"], "drs": cur["settings"].get(key), "drs_unset": cur["settings"].get(key),
+            "env": cur["env"].get(key), "env_unset": cur["env"].get(key),
+            "gs_on": "on" if cur["gs_on"] else None, "gs_flag": cur["gs_flags"].get(key)}[k]
+    if k in ("drs_unset", "env_unset"):
+        return "absent" if have is None else "remove"
+    if have is None:
+        return "new"
+    if k == "drs":
+        return "same" if _parse_int_any(have) == _parse_int_any(v) and _parse_int_any(v) is not None \
+            or have == v else "change"
+    return "same" if str(have) == str(v) else "change"
+
+
+# ----------------------------------------------------------------------------
+# Recipes: curated, catalog-validated bundles
+# ----------------------------------------------------------------------------
+
+@dataclass
+class Recipe:
+    rid: str
+    title: str
+    tags: List[str]
+    summary: str
+    details: str
+    build: object                   # callable(SysInfo) -> List[op]
+    requires: object = None         # callable(SysInfo) -> str   ("" = fine)
+    gs_replace: bool = False
+
+
+def _e(name, value):
+    return dict(kind="env", key=name, value=value)
+
+
+def _u(name):
+    return dict(kind="env_unset", key=name, value=None)
+
+
+def _d(sid, value):
+    return dict(kind="drs", key=sid, value=value)
+
+
+def _g(flag, value=""):
+    return dict(kind="gs_flag", key=flag, value=value)
+
+
+def _req_gen(min_code: str, label: str):
+    def check(si):
+        real = detect_real_arch(si)
+        if not real:
+            return "" if not si.probed or not si.nvidia_known_absent else "No NVIDIA GPU detected"
+        if arch_rank(real) < arch_rank(min_code):
+            a = arch_by_code(real)
+            return f"Needs {label} — this machine has {a.name if a else real}"
+        return ""
+    return check
+
+
+def _req_ext(ext: str):
+    def check(si):
+        return f"{ext} is not exposed by this driver" if si.has_ext(ext) is False else ""
+    return check
+
+
+def _hdr_wayland_ops(si):
+    ops = [_e("PROTON_ENABLE_WAYLAND", "1"), _e("DXVK_HDR", "1"), _e("PROTON_ENABLE_HDR", "1"),
+           _u("DXVK_NO_HDR")]
+    if si.nv_major and si.nv_major < 595:
+        ops.append(_e("ENABLE_HDR_WSI", "1"))
+    return ops
+
+
+def _req_wayland(si):
+    if si.session and "wayland" not in si.session.lower():
+        return f"Needs a Wayland session (this one is {si.session})"
+    return ""
+
+
+def _req_hybrid(si):
+    if si.vk_ok and len(si.vk_gpus) < 2:
+        return "Only one GPU detected — no hybrid setup to steer"
+    return ""
+
+
+def _req_ntsync(si):
+    return "/dev/ntsync not found (kernel 6.14+ with CONFIG_NTSYNC)" if si.probed and not si.ntsync_dev else ""
+
+
+RECIPES: List[Recipe] = [
+    Recipe("dlss-latest", "DLSS: newest models", ["DLSS", "quality"],
+           "Driver picks the newest DLSS Super Resolution / Ray Reconstruction model, "
+           "and Proton swaps in the newest DLL.",
+           "Sets the SR and RR presets to <b>Latest</b> (the same thing the NVIDIA App's "
+           "\"Latest\" override does) and PROTON_DLSS_UPGRADE=1 so Proton builds that support it "
+           "download the newest nvngx_dlss DLL instead of the one the game shipped. "
+           "Has no effect in games without DLSS.",
+           lambda si: [_d("0x10E41DF3", "0xffffff"), _d("0x10E41DF7", "0xffffff"),
+                       _e("PROTON_DLSS_UPGRADE", "1")],
+           _req_gen("TU100", "an RTX (Turing or newer) GPU")),
+    Recipe("dlaa", "DLSS: force DLAA", ["DLSS", "quality", "AA"],
+           "Native-resolution DLSS anti-aliasing instead of upscaling.",
+           "Forces the DLAA override and puts DLSS-SR into DLAA mode. Costs more GPU time than "
+           "Quality mode but gives the cleanest image; pair with <i>DLSS: newest models</i>.",
+           lambda si: [_d("0x10E41DF4", "0x1"), _d("0x10AFB768", "0x4")],
+           _req_gen("TU100", "an RTX (Turing or newer) GPU")),
+    Recipe("mfg-4x", "Frame Generation: Multi-Frame 4x", ["DLSS", "FPS", "RTX 50"],
+           "Turns a game's DLSS Frame Generation into 4x multi-frame generation.",
+           "Sets DLSS-G Multi-Frame to 4x and the Frame Generation preset to Latest. The game must "
+           "already offer DLSS Frame Generation; enable it in-game. Multi-frame generation is an "
+           "RTX 50 (Blackwell) feature.",
+           lambda si: [_d("0x104D6667", "0x3"), _d("0x10E41DF1", "0xffffff")],
+           _req_gen("GB200", "an RTX 50 (Blackwell) GPU")),
+    Recipe("dlss-verify", "DLSS: show the on-screen indicator", ["DLSS", "debug"],
+           "Proves DLSS actually runs and shows which version / preset is active.",
+           "PROTON_DLSS_INDICATOR=1 draws NVIDIA's DLSS debug overlay in a corner; "
+           "DXVK_NVAPI_LOG_LEVEL=info makes dxvk-nvapi log what it reports to the game. "
+           "Remove both again once you have checked.",
+           lambda si: [_e("PROTON_DLSS_INDICATOR", "1"), _e("DXVK_NVAPI_LOG_LEVEL", "info")]),
+    Recipe("reflex-vk", "Reflex in native-Vulkan games", ["latency"],
+           "Enables dxvk-nvapi's Vulkan Reflex layer for titles like DOOM: The Dark Ages.",
+           "DXVK_NVAPI_VKREFLEX=1 (and removes DISABLE_DXVK_NVAPI_VKREFLEX). Only for games that "
+           "render in Vulkan natively; D3D11/D3D12 games get Reflex through DXVK / VKD3D-Proton.",
+           lambda si: [_e("DXVK_NVAPI_VKREFLEX", "1"), _u("DISABLE_DXVK_NVAPI_VKREFLEX")],
+           _req_ext("VK_NV_low_latency2")),
+    Recipe("smooth-motion", "NVIDIA Smooth Motion", ["FPS", "RTX 50"],
+           "Driver-side frame interpolation for Vulkan games without DLSS Frame Generation.",
+           "NVPRESENT_ENABLE_SMOOTH_MOTION=1 loads VK_LAYER_NV_present. Do not combine with in-game "
+           "frame generation.",
+           lambda si: [_e("NVPRESENT_ENABLE_SMOOTH_MOTION", "1")],
+           _req_gen("GB200", "an RTX 50 GPU (newer drivers may extend this)")),
+    Recipe("hdr-wayland", "HDR without gamescope (Wayland)", ["HDR", "Wayland"],
+           "Native Wine Wayland driver + HDR10 output, no nested compositor.",
+           "PROTON_ENABLE_WAYLAND=1 switches Wine to winewayland.drv; DXVK_HDR / PROTON_ENABLE_HDR "
+           "expose the HDR10 colour space to the game. On drivers older than 595 ENABLE_HDR_WSI=1 is "
+           "added too. The Steam overlay does not work on winewayland in several builds.",
+           _hdr_wayland_ops, _req_wayland),
+    Recipe("hdr-gamescope", "HDR through gamescope", ["HDR", "gamescope"],
+           "Runs the game in gamescope with HDR output.",
+           "Enables the gamescope wrapper with --hdr-enabled and DXVK_HDR=1. Set the output "
+           "resolution / refresh in the Gamescope builder afterwards.",
+           lambda si: [dict(kind="gs_on", key="enabled", value="on"), _g("--hdr-enabled"),
+                       _e("DXVK_HDR", "1"), _u("DXVK_NO_HDR")]),
+    Recipe("shader-cache", "Fewer shader-compile stutters", ["stutter", "cache"],
+           "Big, persistent, per-game NVIDIA shader cache that never gets evicted.",
+           "Enables the NVIDIA disk cache, raises its size to 10 GiB, disables automatic cleanup "
+           "and gives every game its own cache directory (PROTON_LOCAL_SHADER_CACHE). Shaders are "
+           "still compiled the first time — this stops them from being thrown away again.",
+           lambda si: [_e("__GL_SHADER_DISK_CACHE", "1"), _e("__GL_SHADER_DISK_CACHE_SIZE", "10737418240"),
+                       _e("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP", "1"), _e("PROTON_LOCAL_SHADER_CACHE", "1")]),
+    Recipe("hybrid-dgpu", "Hybrid laptop: render on the RTX GPU", ["laptop", "PRIME"],
+           "Same as prefixing with prime-run, expressed as environment variables.",
+           "Routes Vulkan and GLX to the NVIDIA GPU on Optimus / PRIME laptops and removes a "
+           "conflicting Mesa DRI_PRIME. Unnecessary when the iGPU is disabled in firmware "
+           "(dGPU-only / MUX mode).",
+           lambda si: [_e(k, v) for k, v in _PRIME_RUN_ENV.items()] + [_u("DRI_PRIME")],
+           _req_hybrid),
+    Recipe("ntsync", "NTSync", ["CPU", "sync"],
+           "Kernel-backed Windows synchronisation primitives for Proton builds that need opting in.",
+           "PROTON_USE_NTSYNC=1 (and removes PROTON_NO_NTSYNC). Builds where ntsync is already the "
+           "default ignore it.",
+           lambda si: [_e("PROTON_USE_NTSYNC", "1"), _u("PROTON_NO_NTSYNC")], _req_ntsync),
+    Recipe("dxvk-lowlatency", "Low-latency DXVK (Proton-CachyOS)", ["latency", "CachyOS"],
+           "Uses the dxvk-low-latency fork bundled with Proton-CachyOS.",
+           "PROTON_DXVK_LOWLATENCY=1. Mostly helps single-player D3D9-11 games; leave it off where "
+           "Reflex is available.",
+           lambda si: [_e("PROTON_DXVK_LOWLATENCY", "1")]),
+]
+
+
+def _validate_ops(ops: List[dict]) -> List[dict]:
+    """Drop recipe ops that no longer match the catalog, so a catalog edit can never
+    make a recipe write a misspelt variable."""
+    good = []
+    gs_table = LutrisSyncWidget._flag_lookup()
+    for o in ops:
+        k = o["kind"]
+        ok = True
+        if k in ("env", "env_unset"):
+            ev = _ENV_BY_NAME.get(o["key"])
+            ok = ev is not None and (k == "env_unset" or ev.vtype != "enum" or not ev.options
+                                     or o["value"] in ev.options)
+        elif k == "drs":
+            s = drs_lookup(o["key"])
+            ok = s is not None and (s.type != "enum" or any(
+                _parse_int_any(v.val) == _parse_int_any(o["value"]) for v in s.values))
+            if ok:
+                o = dict(o, key=s.id, value=canonical_drs_value(s, o["value"]))
+        elif k == "gs_flag":
+            ok = o["key"] in gs_table
+        if ok:
+            good.append(o)
+        else:
+            print(f"DRSTool: recipe op dropped (not in catalog): {o}", file=sys.stderr)
+    return good
+
+
+def recipe_ops(r: Recipe, si=None) -> List[dict]:
+    try:
+        return _validate_ops(r.build(si or SYSHUB.info))
+    except Exception as ex:                     # a recipe bug must not break the dialog
+        print(f"DRSTool: recipe {r.rid} failed: {ex}", file=sys.stderr)
+        return []
+
+
+def recipe_requirement(r: Recipe, si=None) -> str:
+    try:
+        return r.requires(si or SYSHUB.info) if r.requires else ""
+    except Exception:
+        return ""
+
+
+def recipe_coverage(r: Recipe, cur: dict) -> tuple:
+    """(positive ops already in place, positive ops, fully applied?). Removals only
+    count towards "fully applied" — an already-absent variable is not progress."""
+    ops = recipe_ops(r)
+    pos = [o for o in ops if o["kind"] not in ("env_unset", "drs_unset")]
+    done = sum(1 for o in pos if op_status(o, cur) == "same")
+    clean = all(op_status(o, cur) == "absent" for o in ops if o not in pos)
+    return done, len(pos), bool(pos) and done == len(pos) and clean
+
+
+# ----------------------------------------------------------------------------
+# DRS-aware lint rules (called from lint_config)
+# ----------------------------------------------------------------------------
+
+def lint_drs_rules(env: Dict[str, str], drs: Dict[str, str], arch_code: str,
+                   si: "SysInfo") -> List["LintIssue"]:
+    out: List[LintIssue] = []
+    norm = {canonical_drs_key(k): _parse_int_any(v) for k, v in drs.items()}
+
+    def val(sid):
+        return norm.get(sid)
+
+    def add(sev, code, msg, involved=(), fixes=(), label="Fix"):
+        out.append(LintIssue(sev, code, msg, list(involved), list(fixes), label))
+
+    real = detect_real_arch(si)
+    real_a = arch_by_code(real)
+    # GPU arch spoof vs. the real card
+    if arch_code and real:
+        sa = arch_by_code(arch_code)
+        if arch_code == real:
+            add("info", "arch-redundant",
+                f"DXVK_NVAPI_GPU_ARCH={arch_code} is the generation this card already is "
+                f"({real_a.arch}) — the spoof changes nothing.",
+                ["DXVK_NVAPI_GPU_ARCH"], [("arch_unset",)], "Clear arch")
+        elif arch_rank(arch_code) > arch_rank(real):
+            add("warn", "arch-newer",
+                f"DXVK_NVAPI_GPU_ARCH reports {sa.arch if sa else arch_code} but the card is "
+                f"{real_a.arch}: games may enable features this hardware cannot run "
+                "(frame generation, newer DLSS paths) and crash or render black.",
+                ["DXVK_NVAPI_GPU_ARCH"], [("arch_unset",)], "Clear arch")
+        else:
+            add("info", "arch-older",
+                f"DXVK_NVAPI_GPU_ARCH reports an older generation ({sa.arch if sa else arch_code}) "
+                f"than the real {real_a.arch}; games may hide DLSS / Frame Generation / Reflex. "
+                "Meant only as a compatibility workaround.", ["DXVK_NVAPI_GPU_ARCH"])
+    # Feature vs. hardware generation
+    gen = arch_rank(real) if real else -1
+    dlss_ids = {s.id for s in ALL_SETTINGS if s.cat == "DLSS / NGX"}
+    used_dlss = [k for k in norm if k in dlss_ids and norm[k]]
+    mfg = val("0x104D6667") or 0
+    fg = bool(val("0x10E41E03")) or bool(val("0x10E41DF1")) or bool(val("0x10308298")) or mfg
+    if real and used_dlss and gen < arch_rank("TU100"):
+        add("warn", "dlss-gen", f"DLSS settings are set, but DLSS needs an RTX GPU — this card is "
+            f"{real_a.name} ({real_a.arch}).", used_dlss,
+            [("drs_unset", k) for k in used_dlss], "Remove DLSS settings")
+    elif real and mfg >= 0x2 and gen < arch_rank("GB200"):
+        add("warn", "mfg-gen", "DLSS-G Multi-Frame 3x or more needs an RTX 50 (Blackwell) GPU; "
+            f"{real_a.arch} cards generate at most one frame (2x).", ["0x104D6667"],
+            [("drs_set", "0x104D6667", "0x1")], "Use 2x")
+    elif real and fg and gen < arch_rank("AD100"):
+        add("warn", "fg-gen", "DLSS Frame Generation needs an RTX 40 or newer GPU; "
+            f"this card is {real_a.arch}.", ["0x10E41E03", "0x10E41DF1", "0x104D6667"])
+    # Settings that only matter in a particular mode
+    sr_mode = val("0x10AFB768")
+    if val("0x10E41DF5") and sr_mode is not None and sr_mode != 0x6:
+        add("info", "dlss-scale-mode", "DLSS-SR Scaling is only used when DLSS-SR Mode is Custom.",
+            ["0x10E41DF5", "0x10AFB768"], [("drs_set", "0x10AFB768", "0x6")], "Set mode Custom")
+    if val("0x10E41DF4") == 0x1 and sr_mode is not None and sr_mode not in (0x3, 0x4):
+        add("info", "dlaa-vs-mode", "DLAA Override and a non-DLAA DLSS-SR Mode pull in different "
+            "directions — keep one of them.", ["0x10E41DF4", "0x10AFB768"],
+            [("drs_set", "0x10AFB768", "0x4")], "Mode → DLAA")
+    g_mode = val("0x10308298")
+    if g_mode is not None and g_mode != 0x4 and (val("0x10562D0F") or val("0x10CF4125")):
+        add("info", "dlssg-dynamic", "DLSSG Dynamic Max / Target FPS only take effect when DLSSG "
+            "Mode is Dynamic.", ["0x10308298", "0x10562D0F", "0x10CF4125"],
+            [("drs_set", "0x10308298", "0x4")], "Mode → Dynamic")
+    if _on(env, "NVPRESENT_ENABLE_SMOOTH_MOTION") and fg:
+        add("warn", "smooth-plus-fg", "NVIDIA Smooth Motion and DLSS Frame Generation are both "
+            "requested — interpolating already generated frames adds latency and artefacts.",
+            ["NVPRESENT_ENABLE_SMOOTH_MOTION"], [("env_unset", "NVPRESENT_ENABLE_SMOOTH_MOTION")],
+            "Drop Smooth Motion")
+    unknown = [k for k in drs if drs_lookup(k) is None]
+    if unknown:
+        add("info", "drs-unknown", f"{len(unknown)} DRS ID(s) are not in the catalog and are passed "
+            "through unchanged: " + ", ".join(unknown[:6]), unknown)
+    return out
+
+
+# ----------------------------------------------------------------------------
+# Plan preview dialog (paste / explain / recipe)
+# ----------------------------------------------------------------------------
+
+_STATUS_STYLE = {"new": ("+ new", "accent"), "change": ("~ change", "warn"), "same": ("= same", "muted"),
+                 "remove": ("− remove", "danger"), "absent": ("already absent", "muted")}
+_NOTE_STYLE = {"warn": ("▲", "warn"), "info": ("ℹ", "muted"), "conv": ("⇄", "accent")}
+
+_PRIMARY_BTN_SS = (f"QPushButton{{background:{T['accent']};border:1px solid {T['accent']};color:#0b0d10;"
+                   f"border-radius:4px;font-weight:700;padding:5px 16px;}}"
+                   f"QPushButton:hover{{background:{T['accent_hi']};}}"
+                   f"QPushButton:disabled{{background:{T['raised']};color:{T['muted']};"
+                   f"border-color:{T['border_hi']};}}")
+
+
+class PlanDialog(QDialog):
+    """Preview of a set of operations against the current editor state.
+
+    mode="paste": text box on top, parsed live.  mode="explain": read-only
+    breakdown of the current launch line.  mode="recipe": fixed operations."""
+
+    def __init__(self, cur_state: dict, mode: str = "paste", title: str = "", subtitle: str = "",
+                 ops: Optional[List[dict]] = None, text: str = "", gs_replace: bool = True,
+                 parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title or "Import launch line")
+        self.resize(940, 680)
+        self._cur = copy_state(cur_state)
+        self._mode = mode
+        self._ops: List[dict] = list(ops or [])
+        self._parsed: Optional[ParsedLaunch] = None
+        self.result_state: Optional[dict] = None
+        self.result_label = title
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(8)
+        lay.addWidget(_pack2_title(title or "Import a launch line", subtitle or (
+            "Paste Steam launch options, a shell snippet, export lines or a bare DXVK_NVAPI_DRS_SETTINGS "
+            "value. Nothing changes until you press Apply — and Apply is undoable (Ctrl+Z).")))
+
+        self._text = QPlainTextEdit()
+        self._text.setPlaceholderText('e.g.  PROTON_DLSS_UPGRADE=1 DXVK_NVAPI_DRS_SETTINGS=0x10E41DF3=0xffffff '
+                                      'gamescope -W 2560 -H 1440 --hdr-enabled -- mangohud %command%')
+        self._text.setStyleSheet(_MONO_BOX_QSS)
+        self._text.setFixedHeight(92)
+        self._text.setVisible(mode in ("paste", "explain"))
+        self._text.setReadOnly(mode == "explain")
+        if text:
+            self._text.setPlainText(text)
+        self._parse_timer = QTimer(self)
+        self._parse_timer.setSingleShot(True)
+        self._parse_timer.setInterval(180)
+        self._parse_timer.timeout.connect(self._reparse)
+        self._text.textChanged.connect(self._parse_timer.start)
+        lay.addWidget(self._text)
+        if mode == "paste":
+            row = QHBoxLayout()
+            b = _tool_btn("Paste from clipboard")
+            b.clicked.connect(lambda: self._text.setPlainText(QApplication.clipboard().text()))
+            row.addWidget(b)
+            row.addStretch(1)
+            lay.addLayout(row)
+
+        self._tree = QTreeWidget()
+        self._tree.setColumnCount(3)
+        self._tree.setHeaderLabels(["Item", "Value", "Effect"])
+        self._tree.setStyleSheet(_pack2_table_ss())
+        self._tree.setRootIsDecorated(True)
+        self._tree.setUniformRowHeights(True)
+        self._tree.setSelectionMode(QAbstractItemView.SingleSelection)
+        hh = self._tree.header()
+        hh.setSectionResizeMode(0, QHeaderView.Interactive)
+        hh.setSectionResizeMode(1, QHeaderView.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self._tree.setColumnWidth(0, 360)
+        self._tree.itemChanged.connect(lambda *_: self._update_summary())
+        self._tree.currentItemChanged.connect(self._show_desc)
+        lay.addWidget(self._tree, 3)
+
+        self._desc = QLabel("")
+        self._desc.setWordWrap(True)
+        self._desc.setStyleSheet(f"color:{T['text2']}; font-size:12px; padding:4px 2px;")
+        self._desc.setMinimumHeight(36)
+        lay.addWidget(self._desc)
+
+        self._notes = QLabel("")
+        self._notes.setWordWrap(True)
+        self._notes.setTextFormat(Qt.RichText)
+        self._notes.setStyleSheet(f"font-size:12px; background:{T['surface']}; border:1px solid "
+                                  f"{T['border']}; border-radius:4px; padding:6px 8px;")
+        lay.addWidget(self._notes)
+
+        self._summary = QLabel("")
+        self._summary.setWordWrap(True)
+        self._summary.setTextFormat(Qt.RichText)
+        self._summary.setStyleSheet("font-size:12px;")
+        lay.addWidget(self._summary)
+
+        bottom = QHBoxLayout()
+        self._mode_box = QComboBox()
+        self._mode_box.addItems(["Merge into the current configuration", "Replace the whole configuration"])
+        self._mode_box.setStyleSheet(_COMBO_QSS)
+        self._mode_box.currentIndexChanged.connect(lambda _i: self._update_summary())
+        self._gs_replace = QCheckBox("Replace existing gamescope flags")
+        self._gs_replace.setChecked(gs_replace)
+        self._gs_replace.setStyleSheet(f"color:{T['text2']};")
+        self._gs_replace.toggled.connect(lambda _c: self._update_summary())
+        bottom.addWidget(self._mode_box)
+        bottom.addWidget(self._gs_replace)
+        bottom.addStretch(1)
+        self._copy_btn = _tool_btn("Copy explanation")
+        self._copy_btn.clicked.connect(self._copy_explanation)
+        bottom.addWidget(self._copy_btn)
+        cancel = _tool_btn("Close" if mode == "explain" else "Cancel")
+        cancel.clicked.connect(self.reject)
+        bottom.addWidget(cancel)
+        self._apply = QPushButton("Apply")
+        self._apply.setStyleSheet(_PRIMARY_BTN_SS)
+        self._apply.setCursor(Qt.PointingHandCursor)
+        self._apply.clicked.connect(self._on_apply)
+        bottom.addWidget(self._apply)
+        if mode == "explain":
+            for w in (self._mode_box, self._gs_replace, self._apply):
+                w.hide()
+        lay.addLayout(bottom)
+
+        if mode in ("paste", "explain"):
+            self._reparse()
+        else:
+            self._fill([], self._ops)
+        if mode == "paste":
+            self._text.setFocus()
+
+    # -- data ----------------------------------------------------------------
+    def _reparse(self):
+        self._parsed = parse_launch_text(self._text.toPlainText())
+        self._fill(self._parsed.notes, ops_from_parsed(self._parsed))
+        has_gs = self._parsed.gs_on
+        self._gs_replace.setEnabled(has_gs)
+
+    def _fill(self, notes: List[tuple], ops: List[dict]):
+        self._ops = ops
+        self._tree.blockSignals(True)
+        self._tree.clear()
+        groups: Dict[str, QTreeWidgetItem] = {}
+        order = {"arch": "GPU arch", "drs": "DRS settings", "drs_unset": "DRS settings",
+                 "env": "Environment", "env_unset": "Environment", "gs_on": "Gamescope", "gs_flag": "Gamescope"}
+        for o in ops:
+            gname = order[o["kind"]]
+            if o["kind"] in ("env", "env_unset") and env_def(o["key"]) and \
+                    env_def(o["key"]).cat == CUSTOM_ENV_CAT:
+                gname = "Environment — not in catalog"
+            if o["kind"] == "drs" and drs_lookup(o["key"]) is None:
+                gname = "DRS settings — custom IDs"
+            g = groups.get(gname)
+            if g is None:
+                g = QTreeWidgetItem([gname, "", ""])
+                g.setFlags(Qt.ItemIsEnabled)
+                f = g.font(0)
+                f.setBold(True)
+                g.setFont(0, f)
+                g.setForeground(0, QColor(T["muted"]))
+                self._tree.addTopLevelItem(g)
+                groups[gname] = g
+            name, shown, desc = op_label(o)
+            st = op_status(o, self._cur)
+            stxt, scol = _STATUS_STYLE[st]
+            it = QTreeWidgetItem([name, shown, stxt])
+            it.setData(0, Qt.UserRole, o)
+            it.setData(1, Qt.UserRole, desc)
+            it.setToolTip(0, desc)
+            it.setForeground(2, QColor(T[scol]))
+            if self._mode != "explain":
+                it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                it.setCheckState(0, Qt.Checked)
+            if st in ("same", "absent"):
+                it.setForeground(0, QColor(T["muted"]))
+                it.setForeground(1, QColor(T["muted"]))
+            g.addChild(it)
+        self._tree.expandAll()
+        self._tree.blockSignals(False)
+        html = []
+        for sev, txt in notes:
+            icon, col = _NOTE_STYLE.get(sev, ("ℹ", "muted"))
+            html.append(f'<span style="color:{T[col]}">{icon}</span>&nbsp;'
+                        f'<span style="color:{T["text2"]}">{_html_esc(txt)}</span>')
+        self._notes.setText("<br>".join(html))
+        self._notes.setVisible(bool(html))
+        if not ops:
+            empty = ("Nothing recognisable yet." if self._mode != "recipe"
+                     else "This recipe has nothing to apply on this system.")
+            self._summary.setText(f'<span style="color:{T["muted"]}">{empty}</span>')
+            self._apply.setEnabled(False)
+            return
+        self._update_summary()
+
+    def _checked_ops(self) -> List[dict]:
+        out = []
+        for gi in range(self._tree.topLevelItemCount()):
+            g = self._tree.topLevelItem(gi)
+            for ci in range(g.childCount()):
+                it = g.child(ci)
+                if self._mode == "explain" or it.checkState(0) == Qt.Checked:
+                    out.append(it.data(0, Qt.UserRole))
+        return out
+
+    def _result(self) -> dict:
+        return apply_ops(self._cur, self._checked_ops(), self._mode_box.currentIndex() == 1,
+                         self._gs_replace.isChecked() and self._gs_replace.isEnabled())
+
+    def _update_summary(self):
+        if self._mode == "explain":
+            n = len(self._ops)
+            self._summary.setText(f'<span style="color:{T["muted"]}">{n} item(s) in this launch line. '
+                                  'Select a row to read what it does.</span>')
+            return
+        res = self._result()
+        rows = state_diff(self._cur, res)
+        add = sum(1 for r in rows if r[2] is None)
+        rem = sum(1 for r in rows if r[3] is None)
+        chg = len(rows) - add - rem
+        try:
+            p = state_payload(res)
+            issues = lint_config(p["env"], p["drs"], p["arch"], p["gs_on"], p["gs_flags"],
+                                 p["mangohud"], SYSHUB.info)
+            q = state_payload(self._cur)
+            before = lint_config(q["env"], q["drs"], q["arch"], q["gs_on"], q["gs_flags"],
+                                 q["mangohud"], SYSHUB.info)
+        except Exception:
+            issues, before = [], []
+        before_codes = {i.code for i in before}
+        fresh = [i for i in issues if i.code not in before_codes and i.sev in ("error", "warn")]
+        gone = [i for i in before if i.code not in {x.code for x in issues} and i.sev in ("error", "warn")]
+        parts = [f'<b style="color:{T["text"]}">Result:</b> '
+                 f'<span style="color:{T["accent"]}">+{add} added</span> · '
+                 f'<span style="color:{T["warn"]}">~{chg} changed</span> · '
+                 f'<span style="color:{T["danger"]}">−{rem} removed</span>']
+        if fresh:
+            parts.append(f'<b style="color:{T["warn"]}">Lint forecast — new findings:</b>')
+            for i in fresh[:5]:
+                icon, col = _SEV_STYLE[i.sev]
+                parts.append(f'<span style="color:{col}">{icon}</span> '
+                             f'<span style="color:{T["text2"]}">{_html_esc(i.msg)}</span>')
+        elif gone:
+            parts.append(f'<span style="color:{T["accent"]}">✔ Lint forecast: resolves '
+                         f'{len(gone)} existing finding(s), adds none.</span>')
+        else:
+            parts.append(f'<span style="color:{T["muted"]}">✔ Lint forecast: no new findings.</span>')
+        self._summary.setText("<br>".join(parts))
+        self._apply.setEnabled(bool(rows))
+        self._apply.setText("Apply" if rows else "Nothing to change")
+
+    def _show_desc(self, cur, _prev=None):
+        if cur is None or cur.data(0, Qt.UserRole) is None:
+            self._desc.setText("")
+            return
+        d = cur.data(1, Qt.UserRole) or ""
+        self._desc.setText(f"<b>{_html_esc(cur.text(0))}</b> — {_html_esc(d)}" if d else
+                           f"<b>{_html_esc(cur.text(0))}</b>")
+
+    def _copy_explanation(self):
+        lines = []
+        for gi in range(self._tree.topLevelItemCount()):
+            g = self._tree.topLevelItem(gi)
+            lines.append(f"## {g.text(0)}")
+            for ci in range(g.childCount()):
+                it = g.child(ci)
+                d = it.data(1, Qt.UserRole) or ""
+                lines.append(f"- {it.text(0)} = {it.text(1)}" + (f"\n    {d}" if d else ""))
+        QApplication.clipboard().setText("\n".join(lines))
+        self._copy_btn.setText("Copied ✔")
+        QTimer.singleShot(1500, lambda: self._copy_btn.setText("Copy explanation"))
+
+    def _on_apply(self):
+        res = self._result()
+        if self._mode_box.currentIndex() == 1:
+            rem = sum(1 for r in state_diff(self._cur, res) if r[3] is None)
+            if rem and QMessageBox.question(
+                    self, "Replace configuration",
+                    f"Replace mode removes {rem} item(s) that are not in this import.\n"
+                    "(You can undo it with Ctrl+Z.)\n\nContinue?") != QMessageBox.Yes:
+                return
+        self.result_state = res
+        self.accept()
+
+
+def _html_esc(s: str) -> str:
+    import html as _h
+    return _h.escape(str(s))
+
+
+# ----------------------------------------------------------------------------
+# Recipe gallery
+# ----------------------------------------------------------------------------
+
+class RecipeGallery(QDialog):
+    def __init__(self, cur_state: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Recipes")
+        self.resize(900, 560)
+        self._cur = copy_state(cur_state)
+        self.chosen: Optional[Recipe] = None
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(8)
+        lay.addWidget(_pack2_title(
+            "Recipes", "Curated bundles of settings for common goals. Each one opens a preview with a "
+            "lint forecast before anything changes; every value comes from DRSTool's own catalog."))
+        body = QHBoxLayout()
+        self._list = QListWidget()
+        self._list.setStyleSheet(
+            f"QListWidget{{background:{T['bg']};border:1px solid {T['border']};border-radius:5px;outline:none;}}"
+            f"QListWidget::item{{padding:7px 8px;color:{T['text2']};border-bottom:1px solid {T['border']};}}"
+            f"QListWidget::item:selected{{background:rgba(118,185,0,0.18);color:{T['text']};}}")
+        self._list.setFixedWidth(330)
+        for r in RECIPES:
+            done, total, full = recipe_coverage(r, self._cur)
+            why = recipe_requirement(r)
+            mark = "✔ " if full else "◐ " if done else "   "
+            li = QListWidgetItem(f"{mark}{r.title}\n      {' · '.join(r.tags)}"
+                                 + ("   ⚠" if why else ""))
+            li.setData(Qt.UserRole, r)
+            if why:
+                li.setForeground(QColor(T["muted"]))
+            self._list.addItem(li)
+        self._list.currentItemChanged.connect(self._show)
+        self._list.itemDoubleClicked.connect(lambda _i: self._choose())
+        body.addWidget(self._list)
+        right = QVBoxLayout()
+        self._title = QLabel()
+        self._title.setStyleSheet(f"color:{T['text']}; font-size:16px; font-weight:700;")
+        self._req = QLabel()
+        self._req.setWordWrap(True)
+        self._body = QLabel()
+        self._body.setWordWrap(True)
+        self._body.setTextFormat(Qt.RichText)
+        self._body.setStyleSheet(f"color:{T['text2']}; font-size:13px;")
+        self._items = QLabel()
+        self._items.setWordWrap(True)
+        self._items.setTextFormat(Qt.RichText)
+        self._items.setStyleSheet(f"font-family:{T['mono']}; font-size:12px; background:{T['surface']};"
+                                  f"border:1px solid {T['border']}; border-radius:4px; padding:8px;")
+        for w in (self._title, self._req, self._body, self._items):
+            right.addWidget(w)
+        right.addStretch(1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        close = _tool_btn("Close")
+        close.clicked.connect(self.reject)
+        row.addWidget(close)
+        self._go = QPushButton("Preview && apply…")
+        self._go.setStyleSheet(_PRIMARY_BTN_SS)
+        self._go.clicked.connect(self._choose)
+        row.addWidget(self._go)
+        right.addLayout(row)
+        body.addLayout(right, 1)
+        lay.addLayout(body, 1)
+        self._list.setCurrentRow(0)
+
+    def _show(self, cur, _prev=None):
+        if cur is None:
+            return
+        r: Recipe = cur.data(Qt.UserRole)
+        self._title.setText(r.title)
+        why = recipe_requirement(r)
+        if why:
+            self._req.setText(f"⚠ {why} — you can still apply it (e.g. for another PC).")
+            self._req.setStyleSheet(f"color:{T['warn']}; font-size:12px;")
+        else:
+            self._req.setText("✔ Requirements met (or not detectable here)")
+            self._req.setStyleSheet(f"color:{T['accent']}; font-size:12px;")
+        self._body.setText(f"<p>{_html_esc(r.summary)}</p><p>{r.details}</p>")
+        rows = []
+        for o in recipe_ops(r):
+            name, shown, _d = op_label(o)
+            st = op_status(o, self._cur)
+            stxt, scol = _STATUS_STYLE[st]
+            rows.append(f'<span style="color:{T["text"]}">{_html_esc(name)}</span> = '
+                        f'<span style="color:{T["accent"]}">{_html_esc(shown)}</span> '
+                        f'<span style="color:{T[scol]}">({stxt})</span>')
+        self._items.setText("<br>".join(rows) or "—")
+
+    def _choose(self):
+        it = self._list.currentItem()
+        if it:
+            self.chosen = it.data(Qt.UserRole)
+            self.accept()
+
+
+# ----------------------------------------------------------------------------
+# Changes dialog (unsaved changes / compare a profile with the editor)
+# ----------------------------------------------------------------------------
+
+class ChangesDialog(QDialog):
+    def __init__(self, a: dict, b: dict, label_a: str, label_b: str, title: str,
+                 revert_text: str = "", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(820, 480)
+        self.revert = False
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 12)
+        table = ProfileDiffTable()
+        n = table.show_diff(a, b, label_a, label_b)
+        lay.addWidget(_pack2_title(title, f"{n} difference(s)." if n else "No differences."))
+        lay.addWidget(table, 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        if revert_text and n:
+            rb = _tool_btn(revert_text, fg=T["warn"])
+            rb.clicked.connect(lambda: (setattr(self, "revert", True), self.accept()))
+            row.addWidget(rb)
+        cb = _tool_btn("Close")
+        cb.clicked.connect(self.reject)
+        row.addWidget(cb)
+        lay.addLayout(row)
+
+
+# ----------------------------------------------------------------------------
+# Profile file exchange
+# ----------------------------------------------------------------------------
+
+PROFILE_EXPORT_KEY = "drstool_profile"
+
+
+def profile_export_text(name: str, prof: dict) -> str:
+    return json.dumps({PROFILE_EXPORT_KEY: 1, "name": name, "profile": prof}, indent=2)
+
+
+def _plausible_profile(p) -> bool:
+    return isinstance(p, dict) and bool(set(p) & {"settings", "env_vars", "arch", "gamescope_flags",
+                                                   "gamescope_enabled"})
+
+
+def parse_profile_import(text: str) -> Dict[str, dict]:
+    """Single-profile export, or a whole profiles.json. Raises ValueError."""
+    data = json.loads(text)
+    if isinstance(data, dict) and data.get(PROFILE_EXPORT_KEY):
+        if not _plausible_profile(data.get("profile")):
+            raise ValueError("the file has no valid profile in it")
+        return {str(data.get("name") or "Imported"): data["profile"]}
+    if isinstance(data, dict):
+        out = {str(k): v for k, v in data.items() if _plausible_profile(v)}
+        if out:
+            return out
+    raise ValueError("not a DRSTool profile export or profiles.json")
+
+
+def unique_profile_name(base: str, taken) -> str:
+    if base not in taken:
+        return base
+    i = 2
+    while f"{base} ({i})" in taken:
+        i += 1
+    return f"{base} ({i})"
+
+
+# ============================================================================
 # Main Window
 # ============================================================================
 
@@ -18951,6 +20596,15 @@ class MainWindow(QMainWindow):
         self.settings_manager = SettingsManager()
         self.all_settings = ALL_SETTINGS
         self._dirty = False
+        # Undo timeline: every change settles for a moment, then is snapshotted.
+        self._timeline: Optional[UndoTimeline] = None
+        self._pending_label: Optional[str] = None
+        self._restoring = False
+        self._shown_custom_drs: frozenset = frozenset()
+        self._state_timer = QTimer(self)
+        self._state_timer.setSingleShot(True)
+        self._state_timer.setInterval(350)
+        self._state_timer.timeout.connect(self._on_state_settled)
         self._qsettings = QSettings(APP_ID, APP_ID)
 
         self.setWindowTitle(APP_TITLE)
@@ -19000,6 +20654,35 @@ class MainWindow(QMainWindow):
         self._settings_tab.setChecked(True)
         nav_layout.addStretch(1)
 
+        _nav_btn_ss = (f"QToolButton,QPushButton{{color:{T['text2']};background:transparent;"
+                       f"border:1px solid {T['border_hi']};border-radius:4px;padding:0 9px;font-size:12px;}}"
+                       f"QToolButton:hover,QPushButton:hover{{background:{T['surface']};"
+                       f"border-color:{T['accent_dim']};color:{T['text']};}}"
+                       f"QToolButton:disabled{{color:#3c4352;border-color:{T['border']};}}"
+                       "QToolButton::menu-button{width:14px;border-left:1px solid #2b3444;}")
+        self._undo_btn = QToolButton()
+        self._undo_btn.setText("↶ Undo")
+        self._undo_btn.setPopupMode(QToolButton.MenuButtonPopup)
+        self._undo_menu = QMenu(self._undo_btn)
+        self._undo_menu.aboutToShow.connect(self._fill_history_menu)
+        self._undo_btn.setMenu(self._undo_menu)
+        self._undo_btn.clicked.connect(self.undo)
+        self._redo_btn = QToolButton()
+        self._redo_btn.setText("↷")
+        self._redo_btn.clicked.connect(self.redo)
+        self._recipes_btn = QPushButton("✦ Recipes")
+        self._recipes_btn.setToolTip("Curated one-click bundles (DLSS, HDR, Reflex, stutter, laptop dGPU…)\n"
+                                     "Every recipe opens a preview with a lint forecast first.")
+        self._recipes_btn.clicked.connect(self.open_recipes)
+        for _b in (self._undo_btn, self._redo_btn, self._recipes_btn):
+            _b.setCursor(Qt.PointingHandCursor)
+            _b.setFixedHeight(24)
+            _b.setStyleSheet(_nav_btn_ss)
+            _b.setFocusPolicy(Qt.NoFocus)
+            nav_layout.addWidget(_b)
+            nav_layout.addSpacing(4)
+        nav_layout.addSpacing(6)
+
         self._log_btn = QPushButton()
         self._log_btn.setCursor(Qt.PointingHandCursor)
         self._log_btn.setFixedHeight(24)
@@ -19015,8 +20698,12 @@ class MainWindow(QMainWindow):
         nav_layout.addWidget(self._lint_btn)
         nav_layout.addSpacing(10)
 
-        self._profile_chip = QLabel()
-        self._profile_chip.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        self._profile_chip = QPushButton()
+        self._profile_chip.setFlat(True)
+        self._profile_chip.setCursor(Qt.PointingHandCursor)
+        self._profile_chip.setFocusPolicy(Qt.NoFocus)
+        self._profile_chip.clicked.connect(self._show_unsaved_changes)
+        self._style_chip(T["muted"], False)
         nav_layout.addWidget(self._profile_chip)
         main_layout.addWidget(nav)
         self._ext_banner = ExternalChangeBanner()
@@ -19301,6 +20988,9 @@ class MainWindow(QMainWindow):
         self._chips.setVisible(self._sidebar_stack.currentIndex() in (self.TAB_DRS, self.TAB_ARCH, self.TAB_ENV))
         QTimer.singleShot(300, SYSHUB.refresh)
         self._schedule_lint()
+        self._timeline = UndoTimeline(self.capture_state())
+        self._update_undo_ui()
+        self.setAcceptDrops(True)
 
     # ===== Feature pack: launch payload / lint / system / favorites / palette =====
     def collect_launch_payload(self) -> dict:
@@ -19328,7 +21018,7 @@ class MainWindow(QMainWindow):
         else:
             self._env_widget.clear_value(name)
         if getattr(self._env_editor, "_current_name", "") == name:
-            ev = next((e for e in ALL_ENV_VARS if e.name == name), None)
+            ev = env_def(name)
             if ev:
                 self._env_editor.set_var(ev)
 
@@ -19411,11 +21101,20 @@ class MainWindow(QMainWindow):
                 self.settings_manager.remove_setting(fx[1])
             elif kind == "gamescope_off":
                 self._gamescope._enable_chk.setChecked(False)
+            elif kind == "arch_unset":
+                self.settings_manager.set_arch(None)
+            elif kind == "drs_set":
+                s_ = drs_lookup(fx[1])
+                self.settings_manager.set_setting(canonical_drs_key(fx[1]), canonical_drs_value(s_, fx[2]))
+        self._pending_label = f"Lint fix: {issue.fix_label}"
         self.statusBar().showMessage(f"Applied fix: {issue.fix_label}", 3000)
         self._run_lint()
 
     def _on_sysinfo(self, info):
         self._refresh_availability()
+        self._populate_arch_list()
+        if self.settings_manager.get_arch():
+            self._arch_detail.set_arch(self.settings_manager.get_arch())
         self._schedule_lint()
         if info.probed:
             drv = info.nv_driver or "no NVIDIA driver"
@@ -19430,7 +21129,7 @@ class MainWindow(QMainWindow):
         if cur is not None:
             self._setting_editor.set_setting(cur)
         name = getattr(self._env_editor, "_current_name", "")
-        ev = next((e for e in ALL_ENV_VARS if e.name == name), None)
+        ev = env_def(name)
         if ev:
             self._env_editor.set_var(ev)
 
@@ -19488,11 +21187,30 @@ class MainWindow(QMainWindow):
                               fav=FAVS.is_fav("arch", a.code), fav_kind="arch", fav_key=a.code))
         items.append(dict(kind="gamescope", key="gamescope", title="Gamescope launch flags", sub="Builder",
                           desc="gamescope CLI flags", is_set=self._gamescope.is_enabled()))
-        for title in ("Linter", "System", "Prefix Doctor", "MangoHud", "vkBasalt"):
-            items.append(dict(kind="tool", key=title, title=f"{title}", sub="Extra Tools", desc=""))
-        for title in ("Launch line", "Lutris", "Steam", "Heroic", "Bottles"):
-            items.append(dict(kind="sync", key=title, title=f"{title} sync" if title != "Launch line" else title,
-                              sub="Profiles \u203a sync", desc=""))
+        # Built from the real tab bars, so new tools never go missing from Ctrl+K.
+        for title in self._extra_tools.tab_titles():
+            items.append(dict(kind="tool", key=title, title=title, sub="Extra Tools", desc=""))
+        for i in range(self._sync_tabs.count()):
+            title = self._sync_tabs.tabText(i)
+            shown = f"{title} sync" if title in ("Lutris", "Steam", "Heroic", "Bottles") else title
+            items.append(dict(kind="sync", key=title, title=shown, sub="Profiles \u203a sync", desc=""))
+        cur = self.capture_state()
+        for r in RECIPES:
+            _done, _total, full = recipe_coverage(r, cur)
+            items.append(dict(kind="recipe", key=r.rid, title=f"Recipe: {r.title}", sub="Recipe",
+                              desc=r.summary + " " + " ".join(r.tags),
+                              is_set=full,
+                              unavail=recipe_requirement(r)))
+        for key, title, desc in (
+                ("undo", "Undo", "Ctrl+Z"), ("redo", "Redo", "Ctrl+Shift+Z"),
+                ("import", "Import a launch line…", "paste Steam launch options / shell snippet  Ctrl+Shift+V"),
+                ("explain", "Explain the current launch line", "what every token does"),
+                ("recipes", "Recipes…", "curated bundles  Ctrl+R"),
+                ("changes", "Review unsaved changes", "diff editor vs saved profile"),
+                ("logging", "Toggle logging", "all log levels on/off"),
+                ("copy_steam", "Copy Steam launch options", "env … gamescope … -- %command%"),
+                ("save", "Save profile", "Ctrl+S")):
+            items.append(dict(kind="action", key=key, title=title, sub="Action", desc=desc))
         return items
 
     def _open_palette(self):
@@ -19539,6 +21257,15 @@ class MainWindow(QMainWindow):
                 if self._sync_tabs.tabText(i) == key:
                     self._sync_tabs.setCurrentIndex(i)
                     break
+        elif kind == "recipe":
+            r = next((x for x in RECIPES if x.rid == key), None)
+            if r:
+                self.apply_recipe(r)
+        elif kind == "action":
+            {"undo": self.undo, "redo": self.redo, "import": self.open_import_dialog,
+             "explain": self.open_explain_dialog, "recipes": self.open_recipes,
+             "changes": self._show_unsaved_changes, "logging": self._toggle_logging,
+             "copy_steam": self._output_bar._copy_steam_env, "save": self._shortcut_save}[key]()
 
     def _select_item(self, lw: QListWidget, key: str):
         for i in range(lw.count()):
@@ -19547,6 +21274,199 @@ class MainWindow(QMainWindow):
                 lw.setCurrentItem(item)
                 lw.scrollToItem(item, QListWidget.PositionAtCenter)
                 return
+
+    # ===== Feature pack 4: editor state, undo/redo, import, recipes =====
+    def capture_state(self) -> dict:
+        arch = self.settings_manager.get_arch()
+        return {"settings": self.settings_manager.get_settings_list(),
+                "arch": arch.code if arch else None,
+                "env": self._env_widget.get_env_dict(),
+                "gs_on": self._gamescope.is_enabled(),
+                "gs_flags": self._gamescope.get_raw_flag_values()}
+
+    def apply_state(self, st: dict, label: Optional[str] = None):
+        """Put a whole state into the editor. With a label it becomes an undo step."""
+        self._state_timer.stop()
+        self._restoring = True
+        try:
+            self._env_editor.discard_pending_edit()
+            self.settings_manager.replace_state(st["settings"], st["arch"])
+            self._env_widget.load_values(st["env"])
+            self._gamescope.load_flag_values(st["gs_on"], st["gs_flags"])
+            self._env_widget.set_gamescope_enabled(st["gs_on"])
+            tab = self._sidebar_stack.currentIndex()
+            self._populate_settings(self._search.text() if tab == self.TAB_DRS else "", quiet=True)
+            self._env_widget.populate(self._search.text() if tab == self.TAB_ENV else "")
+            self._seen_env_keys = frozenset(self._env_widget.get_env_dict())
+            self._populate_arch_list()
+            name = getattr(self._env_editor, "_current_name", "")
+            ev = env_def(name)
+            if ev:
+                self._env_editor.set_var(ev)
+            cur = self._setting_editor._current_setting
+            if cur is not None:
+                self._setting_editor.set_setting(cur)
+            self._refresh_badges()
+            self._output_bar._update()
+        finally:
+            self._restoring = False
+        self._state_timer.stop()
+        if label is not None:
+            self._pending_label = label
+        self._on_state_settled()
+
+    def _on_state_settled(self):
+        if self._timeline is None:
+            return
+        cur = self.capture_state()
+        prev = self._timeline.current()
+        if cur != prev:
+            label = self._pending_label or describe_change(prev, cur)
+            key = None if self._pending_label else single_change_key(prev, cur)
+            self._timeline.push(cur, label, key)
+        self._pending_label = None
+        self._update_undo_ui()
+        self._reeval_dirty(cur)
+
+    def _saved_state(self) -> Optional[dict]:
+        name = self.settings_manager.get_current_profile()
+        prof = self.settings_manager.get_profiles().get(name) if name else None
+        return state_from_profile(prof) if isinstance(prof, dict) else None
+
+    def _reeval_dirty(self, cur: Optional[dict] = None):
+        """Dirty = the editor differs from what is saved — so undoing back to the
+        saved state (or re-setting the same value) clears the marker again."""
+        saved = self._saved_state()
+        if saved is None:
+            return
+        cur = cur or self.capture_state()
+        dirty = canon_flat(state_as_profile(cur)) != canon_flat(state_as_profile(saved))
+        if dirty != self._dirty:
+            self._set_dirty(dirty)
+
+    def undo(self):
+        if self._state_timer.isActive():            # an edit is still settling: record it first
+            self._state_timer.stop()
+            self._on_state_settled()
+        if not self._timeline or not self._timeline.can_undo():
+            self.statusBar().showMessage("Nothing to undo", 2000)
+            return
+        what = self._timeline.undo_label()
+        self.apply_state(self._timeline.undo())
+        self.statusBar().showMessage(f"Undid: {what}", 4000)
+
+    def redo(self):
+        if not self._timeline or not self._timeline.can_redo():
+            self.statusBar().showMessage("Nothing to redo", 2000)
+            return
+        what = self._timeline.redo_label()
+        self.apply_state(self._timeline.redo())
+        self.statusBar().showMessage(f"Redid: {what}", 4000)
+
+    def _jump_history(self, idx: int):
+        if self._state_timer.isActive():
+            self._state_timer.stop()
+            self._on_state_settled()
+        st = self._timeline.jump(idx) if self._timeline else None
+        if st is not None:
+            self.apply_state(st)
+            self.statusBar().showMessage("Jumped in history", 3000)
+
+    def _update_undo_ui(self):
+        tl = self._timeline
+        can_u, can_r = bool(tl and tl.can_undo()), bool(tl and tl.can_redo())
+        self._undo_btn.setEnabled(bool(tl))
+        self._undo_btn.setText("↶ Undo" if can_u else "↶")
+        self._undo_btn.setToolTip(f"Undo: {tl.undo_label()}  (Ctrl+Z)\nArrow: history" if can_u
+                                  else "Nothing to undo — arrow: history")
+        self._redo_btn.setEnabled(can_r)
+        self._redo_btn.setToolTip(f"Redo: {tl.redo_label()}  (Ctrl+Shift+Z)" if can_r else "Nothing to redo")
+
+    def _fill_history_menu(self):
+        m = self._undo_menu
+        m.clear()
+        if not self._timeline:
+            return
+        entries = self._timeline.entries()
+        shown = entries[-30:]
+        if len(entries) > len(shown):
+            a = m.addAction(f"… {len(entries) - len(shown)} older step(s)")
+            a.setEnabled(False)
+        for idx, label, ts, is_cur in reversed(shown):
+            a = m.addAction(f"{'●' if is_cur else '   '}  {label}    ·  {datetime.fromtimestamp(ts):%H:%M:%S}")
+            if is_cur:
+                a.setEnabled(False)
+            else:
+                a.triggered.connect(lambda _c=False, i=idx: self._jump_history(i))
+
+    def _style_chip(self, color: str, bold: bool):
+        self._profile_chip.setStyleSheet(
+            f"QPushButton{{color:{color};background:transparent;border:none;font-size:12px;"
+            f"font-weight:{600 if bold else 400};padding:0 4px;}}"
+            f"QPushButton:hover{{text-decoration:underline;}}")
+
+    def _show_unsaved_changes(self):
+        name = self.settings_manager.get_current_profile()
+        saved = self._saved_state()
+        if not name or saved is None:
+            self._switch_tab(self.TAB_PROFILES)
+            return
+        dlg = ChangesDialog(state_as_profile(saved), state_as_profile(self.capture_state()),
+                            "Saved", "Editor", f"Unsaved changes — “{name}”", "Revert to saved", self)
+        if dlg.exec() == QDialog.Accepted and dlg.revert:
+            self.settings_manager.load_profile(name)
+            self._on_profile_loaded(name)
+            self._pending_label = f"Revert to saved “{name}”"
+
+    def open_import_dialog(self, text: str = ""):
+        if not text:
+            clip = QApplication.clipboard().text()
+            text = clip if looks_like_launch_text(clip) else ""
+        dlg = PlanDialog(self.capture_state(), "paste", "Import a launch line", text=text, parent=self)
+        if dlg.exec() == QDialog.Accepted and dlg.result_state is not None:
+            self.apply_state(dlg.result_state, "Import launch line")
+            self.statusBar().showMessage("Imported launch line — Ctrl+Z to undo", 5000)
+
+    def open_explain_dialog(self):
+        p = self.collect_launch_payload()
+        line = build_launch_line(p, "%command%", False) if (p["env"] or p["gs_cmd"]) else ""
+        if not line:
+            self.statusBar().showMessage("The launch line is empty — nothing to explain", 3000)
+            return
+        PlanDialog(self.capture_state(), "explain", "Explain the launch line",
+                   "Every part of the current launch string, decoded with its catalog description.",
+                   text=line, parent=self).exec()
+
+    def open_recipes(self):
+        dlg = RecipeGallery(self.capture_state(), self)
+        if dlg.exec() == QDialog.Accepted and dlg.chosen:
+            self.apply_recipe(dlg.chosen)
+
+    def apply_recipe(self, r: "Recipe"):
+        ops = recipe_ops(r)
+        why = recipe_requirement(r)
+        sub = r.summary + (f"   ⚠ {why}" if why else "")
+        dlg = PlanDialog(self.capture_state(), "recipe", f"Recipe: {r.title}", sub, ops=ops,
+                         gs_replace=r.gs_replace, parent=self)
+        if dlg.exec() == QDialog.Accepted and dlg.result_state is not None:
+            self.apply_state(dlg.result_state, f"Recipe: {r.title}")
+            self.statusBar().showMessage(f"Applied recipe “{r.title}” — Ctrl+Z to undo", 5000)
+
+    # Drop a launch line (text) anywhere on the window → import preview
+    def dragEnterEvent(self, e):          # noqa: N802
+        md = e.mimeData()
+        if md.hasText() and not md.hasUrls() and looks_like_launch_text(md.text()):
+            e.acceptProposedAction()
+        else:
+            super().dragEnterEvent(e)
+
+    def dropEvent(self, e):               # noqa: N802
+        md = e.mimeData()
+        if md.hasText() and not md.hasUrls():
+            e.acceptProposedAction()
+            QTimer.singleShot(0, lambda t=md.text(): self.open_import_dialog(t))
+        else:
+            super().dropEvent(e)
 
     # ===== Shortcuts / persisted UI state =====
     def _install_shortcuts(self):
@@ -19564,6 +21484,11 @@ class MainWindow(QMainWindow):
         sc("Ctrl+Shift+C", lambda: self._output_bar._copy_all(steam=False))
         sc("Ctrl+K", self._open_palette)
         sc("Ctrl+D", self._toggle_current_fav)
+        sc("Ctrl+Z", self.undo)
+        sc("Ctrl+Shift+Z", self.redo)
+        sc("Ctrl+Y", self.redo)
+        sc("Ctrl+Shift+V", self.open_import_dialog)
+        sc("Ctrl+R", self.open_recipes)
 
     def _focus_search(self):
         if self._search.isEnabled():
@@ -19599,6 +21524,9 @@ class MainWindow(QMainWindow):
             self.resize(1440, 900)
 
     def closeEvent(self, event):          # noqa: N802
+        if self._state_timer.isActive():
+            self._state_timer.stop()
+            self._on_state_settled()
         if self._dirty:
             name = self.settings_manager.get_current_profile() or ""
             box = QMessageBox.question(
@@ -19629,7 +21557,8 @@ class MainWindow(QMainWindow):
 
     # ===== Dirty tracking / badges =====
     def _mark_dirty(self, *_):
-        if self.settings_manager.get_current_profile() and not self._dirty:
+        self._state_timer.start()
+        if self.settings_manager.get_current_profile() and not self._dirty and not self._restoring:
             self._set_dirty(True)
 
     def _set_dirty(self, dirty: bool):
@@ -19699,7 +21628,10 @@ class MainWindow(QMainWindow):
         current_id = current_item.data(Qt.UserRole) if current_item else None
 
         state = self.settings_manager.get_settings_list()
-        self._settings_list.populate(self.all_settings, state, filter_text)
+        custom = sorted(k for k in state if drs_lookup(k) is None)
+        self._shown_custom_drs = frozenset(custom)
+        self._settings_list.populate(self.all_settings + [custom_drs_setting(k) for k in custom],
+                                     state, filter_text)
         self._seen_set_ids = frozenset(state)
 
         if current_id:
@@ -19725,7 +21657,7 @@ class MainWindow(QMainWindow):
             self._populate_settings(text)
 
     def _open_setting(self, setting_id):
-        setting = next((s for s in self.all_settings if s.id == setting_id), None)
+        setting = self._settings_list._by_id.get(setting_id) or drs_lookup(setting_id)
         if setting:
             self._setting_editor.set_setting(setting)
             # Only steal the right panel if the DRS Settings sidebar page is
@@ -19754,7 +21686,7 @@ class MainWindow(QMainWindow):
             if self._sidebar_stack.currentIndex() == 2:
                 self._right_stack.setCurrentIndex(4)
             return
-        ev = next((e for e in ALL_ENV_VARS if e.name == var_name), None)
+        ev = env_def(var_name)
         if ev:
             self._env_editor.set_var(ev)
             # Same guard as _open_setting: don't yank the right panel onto
@@ -19812,7 +21744,11 @@ class MainWindow(QMainWindow):
         env_str = f" · {env_count} env var{'s' if env_count != 1 else ''}" if env_count else ""
         self.statusBar().showMessage(f"{count} setting{'s' if count != 1 else ''} configured{arch_str}{env_str}")
         self._settings_list.refresh_colors(self.settings_manager.get_settings_list())
-        if self._settings_list.only_set and \
+        custom_now = frozenset(k for k in self.settings_manager.get_settings_list() if drs_lookup(k) is None)
+        if custom_now != self._shown_custom_drs:
+            self._populate_settings(self._search.text() if self._sidebar_stack.currentIndex() == self.TAB_DRS
+                                    else "", quiet=True)
+        elif self._settings_list.only_set and \
                 frozenset(self.settings_manager.get_settings_list()) != self._seen_set_ids:
             self._populate_settings(self._search.text() if self._sidebar_stack.currentIndex() == self.TAB_DRS else "",
                                     quiet=True)
@@ -19823,7 +21759,7 @@ class MainWindow(QMainWindow):
         self._env_widget.set_logging(self._env_widget.logging_state() == "off")
         # Re-open the visible env var so its editor shows the new value.
         name = getattr(self._env_editor, "_current_name", "")
-        ev = next((e for e in ALL_ENV_VARS if e.name == name), None)
+        ev = env_def(name)
         if ev:
             self._env_editor.set_var(ev)
 
@@ -19856,11 +21792,15 @@ class MainWindow(QMainWindow):
         # Keep output bar Copy All up to date
         self._output_bar._update()
         self._refresh_badges()
-        if self._env_widget.only_set and frozenset(self._env_widget.get_env_dict()) != self._seen_env_keys:
+        keys_now = frozenset(self._env_widget.get_env_dict())
+        custom_changed = ({k for k in keys_now if k not in _ENV_BY_NAME}
+                          != {k for k in self._seen_env_keys if k not in _ENV_BY_NAME})
+        if (self._env_widget.only_set or custom_changed) and keys_now != self._seen_env_keys:
             self._env_widget.populate(self._search.text() if self._sidebar_stack.currentIndex() == self.TAB_ENV else "")
         self._seen_env_keys = frozenset(self._env_widget.get_env_dict())
 
     def _on_profile_loaded(self, name):
+        self._pending_label = f"Load profile “{name}”"
         # 1. Reset and reload env vars from profile
         saved_env = self.settings_manager.get_loaded_env_vars()
         self._env_widget.load_values(saved_env)
@@ -19906,16 +21846,19 @@ class MainWindow(QMainWindow):
             self._dirty = False
             self.setWindowTitle(APP_TITLE)
             self._profile_chip.setText("No profile loaded")
-            self._profile_chip.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+            self._profile_chip.setToolTip("Save a profile in the Profiles tab (Ctrl+5)")
+            self._style_chip(T["muted"], False)
             return
         mark = " •" if self._dirty else ""
         self.setWindowTitle(f"{APP_TITLE} — {name}{mark}")
         if self._dirty:
             self._profile_chip.setText(f"{name} (unsaved changes)")
-            self._profile_chip.setStyleSheet(f"color:{T['warn']}; font-size:12px; font-weight:600;")
+            self._profile_chip.setToolTip("Click to review what changed since the last save")
+            self._style_chip(T["warn"], True)
         else:
             self._profile_chip.setText(name)
-            self._profile_chip.setStyleSheet(f"color:{T['text2']}; font-size:12px; font-weight:600;")
+            self._profile_chip.setToolTip("Click to compare the editor with the saved profile")
+            self._style_chip(T["text2"], True)
 
     def _on_profile_save_error(self, message: str):
         # Profile persistence failures are silent data-loss risks (the user
