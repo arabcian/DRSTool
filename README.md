@@ -87,6 +87,7 @@ The sync tabs write the current configuration to wherever the game is started fr
 - **DLSS Updater**: list every DLSS SR / RR / FG and Streamline build on NVIDIA's NGX servers (incl. staged builds) and download the selected ones as `nvngx_dlss*.dll` / `sl.*.dll` into a version-named folder, SHA-256 checked
 - **MangoHud** and **vkBasalt**: option builders for the overlay / post-processing config
 - **Prefix Doctor**: compares the DXVK, vkd3d-proton and dxvk-nvapi DLLs in a Wine prefix with the latest GitHub release and replaces outdated ones (originals are backed up)
+- **Tool Manager** (Extra Tools › Build & install): downloads Proton forks (GE-Proton, Proton-CachyOS, Proton-EM, dwproton, Proton-Tkg, Luxtorpeda, Boxtron, Roberta, Steam-Play-None, SteamTinkerLaunch), Wine builds (Lutris-Wine, Kron4ek, Wine-Tkg), DXVK (release / Async / nightly) and vkd3d (proton / lutris) into Steam's `compatibilitytools.d`, Lutris, Heroic, Bottles, the umu folder or any folder you pick — the same catalogue and folder layout as [protondl](https://davidotek.github.io/protondl/), so tools installed by either program are recognised by both. Archives are SHA-512-verified where the project publishes a checksum, unpacked into a staging folder first (a failed or cancelled install leaves nothing behind) and can be updated (optionally removing the old version), removed, or set as Steam's global default Proton. Proton-CachyOS picks the best x86-64 level your CPU supports. Set `GITHUB_TOKEN` before starting DRSTool to lift GitHub's 60 requests/hour API limit
 
 **Check and diagnose**
 - **Linter**: finds combinations that contradict each other or cannot work on this system (e.g. `PROTON_NVIDIA_LIBS` with WoW64, FSR4 on NVIDIA, double latency stacks); many findings have a one-click fix
@@ -125,7 +126,7 @@ Exit status: 0 ok, 1 lint errors / failed write, 2 bad arguments or not found.
 Lutris writes to its own config as well; if you edit a game in both places, use the external-change banner (above) and *Load from selected game* to bring DRSTool back in sync.
 
 ### Network access
-Most of DRSTool works offline. These features contact the internet only when you press their button: **Upstream drift** (GitHub raw files), **Prefix Doctor** (GitHub releases), **DLSS Updater** (NVIDIA NGX servers), **Game hints** (ProtonDB summary and PCGamingWiki), **Community tips** (the ProtonDB report dump from GitHub raw files, ~70 MB, only when you press its download button).
+Most of DRSTool works offline. These features contact the internet only when you press their button: **Upstream drift** (GitHub raw files), **Prefix Doctor** (GitHub releases), **Tool Manager** (GitHub / GitLab / Codeberg releases and the tool archives), **DLSS Updater** (NVIDIA NGX servers), **Game hints** (ProtonDB summary and PCGamingWiki), **Community tips** (the ProtonDB report dump from GitHub raw files, ~70 MB, only when you press its download button).
 
 ### Where DRSTool keeps its files
 | Path | Content |

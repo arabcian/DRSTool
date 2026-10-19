@@ -87,6 +87,7 @@ Senkronizasyon sekmeleri geçerli yapılandırmayı oyunun başlatıldığı yer
 - **DLSS Updater**: NVIDIA NGX sunucularındaki tüm DLSS SR / RR / FG ve Streamline sürümlerini (henüz yayınlanmamış staged sürümler dahil) listeler; seçilenleri `nvngx_dlss*.dll` / `sl.*.dll` adlarıyla, sürüm adlı klasöre SHA-256 doğrulamalı indirir
 - **MangoHud** ve **vkBasalt**: kaplama / son işlem yapılandırması için seçenek üreticileri
 - **Prefix Doctor**: Wine prefix'indeki DXVK, vkd3d-proton ve dxvk-nvapi DLL'lerini en son GitHub sürümüyle karşılaştırır ve eskileri değiştirir (orijinaller yedeklenir)
+- **Tool Manager** (Extra Tools › Build & install): Proton çatallarını (GE-Proton, Proton-CachyOS, Proton-EM, dwproton, Proton-Tkg, Luxtorpeda, Boxtron, Roberta, Steam-Play-None, SteamTinkerLaunch), Wine yapılarını (Lutris-Wine, Kron4ek, Wine-Tkg), DXVK'yı (sürüm / Async / nightly) ve vkd3d'yi (proton / lutris) Steam'in `compatibilitytools.d` klasörüne, Lutris'e, Heroic'e, Bottles'a, umu klasörüne ya da seçtiğiniz herhangi bir klasöre indirir — [protondl](https://davidotek.github.io/protondl/) ile aynı katalog ve klasör düzeni; iki programdan biriyle kurulan araç diğerinde de tanınır. Proje sağlama toplamı yayımlıyorsa arşivler SHA-512 ile doğrulanır, önce bir hazırlık klasörüne açılır (başarısız ya da iptal edilen kurulum geride hiçbir şey bırakmaz); araçlar güncellenebilir (istenirse eski sürüm silinerek), kaldırılabilir veya Steam'in genel varsayılan Proton'u yapılabilir. Proton-CachyOS, CPU'nuzun desteklediği en iyi x86-64 seviyesini seçer. GitHub'ın saatte 60 istek sınırını aşmak için DRSTool'u başlatmadan önce `GITHUB_TOKEN` tanımlayın
 
 **Kontrol ve teşhis**
 - **Linter**: birbiriyle çelişen ya da bu sistemde çalışamayacak kombinasyonları bulur (ör. WoW64 ile `PROTON_NVIDIA_LIBS`, NVIDIA'da FSR4, çift gecikme yığını); çoğu bulgunun tek tıkla düzeltmesi vardır
@@ -125,7 +126,7 @@ Seçenek verilmezse `drstool` GUI'yi başlatır. Aşağıdaki seçenekler başs�
 Lutris de kendi yapılandırmasına yazar; bir oyunu iki yerde de düzenlerseniz yukarıdaki dış değişiklik şeridini ve *Seçili oyundan yükle* düğmesini kullanarak DRSTool'u yeniden eşitleyin.
 
 ### Ağ erişimi
-DRSTool'un çoğu çevrimdışı çalışır. Şu özellikler yalnızca düğmelerine bastığınızda internete bağlanır: **Upstream drift** (GitHub raw dosyaları), **Prefix Doctor** (GitHub sürümleri), **DLSS Updater** (NVIDIA NGX sunucuları), **Game hints** (ProtonDB özeti ve PCGamingWiki), **Community tips** (GitHub raw üzerinden ProtonDB rapor dökümü, ~70 MB, yalnızca indirme düğmesine bastığınızda).
+DRSTool'un çoğu çevrimdışı çalışır. Şu özellikler yalnızca düğmelerine bastığınızda internete bağlanır: **Upstream drift** (GitHub raw dosyaları), **Prefix Doctor** (GitHub sürümleri), **Tool Manager** (GitHub / GitLab / Codeberg sürümleri ve araç arşivleri), **DLSS Updater** (NVIDIA NGX sunucuları), **Game hints** (ProtonDB özeti ve PCGamingWiki), **Community tips** (GitHub raw üzerinden ProtonDB rapor dökümü, ~70 MB, yalnızca indirme düğmesine bastığınızda).
 
 ### DRSTool dosyalarını nerede tutar
 | Yol | İçerik |
