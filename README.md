@@ -43,6 +43,12 @@ Builds `gamescope` command lines from a flag catalog (upscaling, frame pacing, i
 
 ### Navigation and everyday helpers
 - **Ctrl+K** searches every DRS setting, environment variable, GPU architecture and tool page; **Ctrl+F** filters the current list; **Ctrl+1…5** switches the top tabs; **Ctrl+D** toggles a favorite; **Ctrl+S** saves the current profile
+- **F1** (or Ctrl+/) opens the keyboard-shortcut sheet; **Ctrl+,** opens *Appearance*. Ctrl+K also lists the last things you picked first, so the empty palette doubles as "recent"
+- **Toasts**: every status message (saved, copied, applied, undone, errors) also pops up in the top-right corner and waits while the pointer is on it. After a write to a Lutris YAML, Steam, Heroic, Bottles or `dxvk.conf` the toast carries an **Undo** button that puts the backup taken for that write back (it refuses if the file changed again in the meantime)
+- **Background tasks**: the DLSS Updater, Upstream drift, Prefix Doctor, Cache scan, Game hints and the ProtonDB download are listed under the *⟳ N* button in the top bar (or ⚙ › Background tasks) with their last progress line; click an entry to jump to its page. Tasks that take a few seconds or fail raise a toast, and a desktop notification (`notify-send`, or `gdbus` as a fallback) when the window is not in front
+- **Session restore**: the last profile, the *Only set* / *Favorites* chips, the selected DRS setting / variable and the open tool or sync tab come back on start (switch off in Appearance)
+- **Appearance** (⚙ › Appearance, Ctrl+,): dark or light theme, accent colour (green, blue, cyan, violet, orange, red, pink), list density (compact / default / spacious) and UI scale 70–200 %. They are read at start-up; *Save & restart* relaunches after offering to save unsaved changes. The accent also colours "ok" states, which are green by default
+- **Keyboard and screen readers**: Tab / Shift+Tab reach the top bar as well, a focus ring shows the focused control, and controls get accessible names (from their text, placeholder, label or tooltip) the first time they are shown
 - "Only set" and "Favorites" chips narrow the lists to what is configured or starred
 - The **Lint** button checks the whole configuration for combinations that contradict each other (see Linter below). It also knows DRS: Multi-Frame Generation on a pre-RTX 50 card, Frame Generation before RTX 40, DLSS on a GTX, a GPU-arch spoof that is newer than / identical to the real card, DLSS-SR Scaling without Custom mode, DLSSG Dynamic-only settings, Smooth Motion stacked on Frame Generation
 - **Undo / redo** (Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y, ↶ ↷ in the top bar): every change to DRS settings, arch, env vars and gamescope is one step — profile loads, imports, recipes, lint fixes and *Reset* included. Typing in one field collapses into a single step. The arrow next to Undo lists the last 30 steps; click one to jump there
@@ -99,6 +105,21 @@ The sync tabs write the current configuration to wherever the game is started fr
 
   **Games that are not on Steam** (Lutris, Heroic, Bottles, manual): type the game's name, or pick it from your launchers, and *Find appid* searches the Steam store and lists matches with a similarity score. *Use selected appid* runs the lookup; *Use + set as umu GAMEID* also fills the Launch line tab's `GAMEID` with `umu-<appid>`. A game that is not sold on Steam simply has no match (use `umu-0`).
 - **Community tips ⚠**: the environment settings that ProtonDB *user reports* mention, kept on their own tab on purpose. Every mention is listed, even if only one report has it, together with the reporter's GPU and driver, Proton build, OS and kernel, verdict and report date (hover a row for CPU and RAM). Filters: NVIDIA reports only, last 6 / 12 months, and "only variables DRSTool can set"; a *Seen* column shows how many reports use the same setting. The data comes from ProtonDB's public monthly report dump (github.com/bdefore/protondb-data, ODbL): press *Download / update ProtonDB report data* once (~70 MB, indexed locally in a few seconds, last 12 months kept) and every game is then searched offline. Compare the reporter's setup with yours before trying anything. **Use at your own risk**: these are individual experiences that DRSTool has not verified; they can behave differently on other hardware, drivers, kernels, Proton builds and Linux setups and may cause crashes or lower performance. Nothing is preselected, the Apply button stays disabled until you tick an acknowledgement, and a confirmation dialog repeats the warning. Variables that are not in DRSTool's catalog are shown for information only
+
+### Command line
+
+Without options `drstool` starts the GUI. These options run headless (offscreen Qt, the same code as the GUI), print to stdout and exit; profile names match case-insensitively and by unique substring.
+
+| Command | What it does |
+|---|---|
+| `drstool --list-profiles` | one line per profile: DRS / env counts, GPU arch, gamescope |
+| `drstool --print-env PROFILE [--format steam\|shell\|export\|json]` | the launch line (`steam`: `env … -- %command%`, `shell`: `… "$@"`), `export` lines, or the full payload as JSON |
+| `drstool --lint PROFILE [--strict]` | the consistency linter on that machine; exit status 1 on errors (and on warnings with `--strict`) |
+| `drstool --apply PROFILE --lutris GAME [--lutris-dir DIR] [--dry-run] [-y]` | merge a profile into a Lutris game YAML exactly like the Lutris tab (backup first, hand-written keys kept). `--dry-run` prints the diff; without `-y` it asks, and without a terminal it refuses |
+| `drstool --import-nip FILE [--nip-profile NAME] [--into PROFILE \| --save-as NAME]` | convert a Profile Inspector `.nip` to `DXVK_NVAPI_DRS_SETTINGS`; optionally merge it into a saved profile or store it as a new one |
+| `drstool --profile PROFILE` | start the GUI with that profile loaded |
+
+Exit status: 0 ok, 1 lint errors / failed write, 2 bad arguments or not found.
 
 ### Lutris notes
 Lutris writes to its own config as well; if you edit a game in both places, use the external-change banner (above) and *Load from selected game* to bring DRSTool back in sync.

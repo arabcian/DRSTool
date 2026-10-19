@@ -300,6 +300,142 @@ T = {
     "radius":    "7px",
 }
 
+# ============================================================================
+# Appearance: theme / accent / density / UI scale
+# ----------------------------------------------------------------------------
+# Read once at import time, BEFORE any stylesheet is built (every QSS constant
+# below embeds T[...]), so changing it from the Appearance dialog needs a
+# restart. Colour literals that are hard-coded inside stylesheets are mapped
+# onto the chosen theme / accent by _restyle_qss(). With the defaults (dark +
+# green) nothing is patched and the look is unchanged.
+# ============================================================================
+import colorsys
+
+ACCENT_PRESETS = {
+    "green": "#76b900", "blue": "#3d8bff", "cyan": "#1fb5c9", "violet": "#9b72f0",
+    "orange": "#f08a24", "red": "#e5484d", "pink": "#e05297",
+}
+# density -> (list item height, list header height, Extra Tools navigation item height)
+DENSITY_ROWS = {"compact": (25, 30, 42), "default": (30, 34, 50), "spacious": (36, 40, 58)}
+
+
+def _load_appearance() -> dict:
+    ap = {"theme": "dark", "accent": "green", "density": "default", "scale": 100, "restore": True}
+    try:
+        qs = QSettings(APP_ID, APP_ID)
+        for k in ("theme", "accent", "density"):
+            v = qs.value(f"appearance/{k}")
+            if v:
+                ap[k] = str(v)
+        try:
+            v = qs.value("appearance/scale")
+            if v not in (None, ""):
+                ap["scale"] = int(v)
+        except (TypeError, ValueError):
+            pass
+        v = qs.value("appearance/restore_session")
+        if v not in (None, ""):
+            ap["restore"] = str(v).lower() not in ("false", "0", "no")
+    except Exception:
+        pass
+    if ap["theme"] not in ("dark", "light"):
+        ap["theme"] = "dark"
+    if ap["accent"] not in ACCENT_PRESETS:
+        ap["accent"] = "green"
+    if ap["density"] not in DENSITY_ROWS:
+        ap["density"] = "default"
+    ap["scale"] = max(70, min(200, ap["scale"]))
+    return ap
+
+
+APPEARANCE = _load_appearance()
+_LIGHT = APPEARANCE["theme"] == "light"
+_ACC = ACCENT_PRESETS[APPEARANCE["accent"]]
+_NEEDS_RESTYLE = _LIGHT or APPEARANCE["accent"] != "green"
+ACCENT_RGB = (118, 185, 0)
+
+
+def _hex_rgb(h: str):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+
+
+def _rgb_hex(r: float, g: float, b: float) -> str:
+    return "#%02x%02x%02x" % tuple(max(0, min(255, round(c * 255))) for c in (r, g, b))
+
+
+if _LIGHT:
+    T.update({
+        "sunken": "#e8ebf0", "bg": "#f3f5f8", "surface": "#ffffff", "raised": "#eef1f5",
+        "overlay": "#ffffff", "hover": "#e5e9ef", "border": "#d6dbe4", "border_hi": "#bcc4d1",
+        "text": "#141a23", "text2": "#394252", "muted": "#667085", "faint": "#98a2b3",
+        "warn": "#b4690e", "danger": "#c93a31", "info": "#2563c9",
+    })
+_ACC_H = colorsys.rgb_to_hls(*_hex_rgb(_ACC))[0]
+if _NEEDS_RESTYLE:
+    _h, _s, _v = colorsys.rgb_to_hsv(*_hex_rgb(_ACC))
+    if _LIGHT:
+        _acc_rgb = colorsys.hsv_to_rgb(_h, _s, _v * 0.84)
+        T["accent"] = _rgb_hex(*_acc_rgb)
+        T["accent_hi"] = _rgb_hex(*colorsys.hsv_to_rgb(_h, _s, _v * 0.68))
+        T["accent_dim"] = _rgb_hex(*colorsys.hsv_to_rgb(_h, _s * 0.45, min(1.0, _v * 1.1)))
+    else:
+        _acc_rgb = _hex_rgb(_ACC)
+        T["accent"] = _ACC
+        T["accent_hi"] = _rgb_hex(*colorsys.hsv_to_rgb(_h, _s * 0.9, min(1.0, _v * 1.15)))
+        T["accent_dim"] = _rgb_hex(*colorsys.hsv_to_rgb(_h, _s, _v * 0.55))
+    ACCENT_RGB = tuple(round(c * 255) for c in _acc_rgb)
+    T["accent_bg"] = "rgba(%d,%d,%d,%s)" % (*ACCENT_RGB, "0.12" if _LIGHT else "0.10")
+
+# Colours that are already themed (T values) must not be mapped a second time.
+_THEMED_HEX = {v.lower() for v in T.values() if isinstance(v, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", v)}
+_HEX6_RE = re.compile(r"#[0-9a-fA-F]{6}\b")
+_ACC_RGBA_RE = re.compile(r"rgba\(\s*118\s*,\s*185\s*,\s*0\s*,")
+_hex_cache: Dict[str, str] = {}
+
+
+def _map_hex(h: str) -> str:
+    """Map a hard-coded dark-theme / NVIDIA-green literal onto the active appearance."""
+    key = h.lower()
+    if not _NEEDS_RESTYLE or key in _THEMED_HEX:
+        return h
+    got = _hex_cache.get(key)
+    if got is not None:
+        return got
+    if key == "#76b900":
+        out = T["accent"]
+    else:
+        hh, ll, ss = colorsys.rgb_to_hls(*_hex_rgb(key))
+        if 0.16 <= hh <= 0.31 and ss >= 0.3 and APPEARANCE["accent"] != "green":
+            hh = _ACC_H                                   # green family -> chosen accent hue
+        if _LIGHT:
+            if ss >= 0.5 and 0.45 <= ll <= 0.8:
+                ll *= 0.78                                # saturated bright text/accents: darker on white
+            else:
+                ll = 1.0 - ll                             # dark surfaces <-> light surfaces
+        out = _rgb_hex(*colorsys.hls_to_rgb(hh, ll, ss))
+    _hex_cache[key] = out
+    return out
+
+
+def _restyle_qss(qss):
+    if not qss or not _NEEDS_RESTYLE or not isinstance(qss, str):
+        return qss
+    qss = _HEX6_RE.sub(lambda m: _map_hex(m.group(0)), qss)
+    return _ACC_RGBA_RE.sub("rgba(%d,%d,%d," % ACCENT_RGB, qss)
+
+
+def _tc(h: str) -> str:
+    """For QColor("#rrggbb") literals in paint code."""
+    return _map_hex(h)
+
+
+if _NEEDS_RESTYLE:
+    _qw_set_ss, _qa_set_ss = QWidget.setStyleSheet, QApplication.setStyleSheet
+    QWidget.setStyleSheet = lambda self, s: _qw_set_ss(self, _restyle_qss(s))
+    QApplication.setStyleSheet = lambda self, s: _qa_set_ss(self, _restyle_qss(s))
+
+
 APP_QSS = f"""
 * {{ outline:0; }}
 QWidget {{ color:{T['text2']}; selection-background-color:rgba(118,185,0,0.30); selection-color:{T['text']}; }}
@@ -601,7 +737,7 @@ class SidebarDelegate(QStyledItemDelegate):
             color = QColor(T["text2"])
         text_x = pad_l
         if fav:
-            p.setPen(QColor("#e8b84a"))
+            p.setPen(QColor(_tc("#e8b84a")))
             p.drawText(QRect(pad_l, card.top(), 14, card.height()), Qt.AlignLeft | Qt.AlignVCenter, "\u2605")
             text_x += 16
             name_w -= 16
@@ -827,8 +963,8 @@ class BrandMark(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         tile = QRect(0, 3, 28, 28)
         g = QLinearGradient(0, 3, 28, 31)
-        g.setColorAt(0, QColor("#9be12a"))
-        g.setColorAt(1, QColor("#4f8a00"))
+        g.setColorAt(0, QColor(_tc("#9be12a")))
+        g.setColorAt(1, QColor(_tc("#4f8a00")))
         p.setPen(Qt.NoPen)
         p.setBrush(g)
         p.drawRoundedRect(tile, 7, 7)
@@ -837,7 +973,7 @@ class BrandMark(QWidget):
         path.moveTo(*pts[0])
         for x, y in pts[1:]:
             path.lineTo(x, y)
-        pen = QPen(QColor("#0b1300"), 2.2)
+        pen = QPen(QColor(_tc("#0b1300")), 2.2)
         pen.setCapStyle(Qt.RoundCap)
         pen.setJoinStyle(Qt.RoundJoin)
         p.setPen(pen)
@@ -8790,7 +8926,7 @@ class LutrisSyncWidget(QWidget):
         except OSError:
             pass
 
-    def _apply_to_game(self):
+    def _apply_to_game(self, *_, confirm: bool = True):
         index = self._game_combo.currentIndex()
         if not (0 <= index < len(self._games)):
             return
@@ -8823,7 +8959,7 @@ class LutrisSyncWidget(QWidget):
         envdel_line = (f"\n  • {len(env_removed)} stale var(s) removed from system.env: "
                        f"{', '.join(sorted(env_removed))}") if env_removed else ""
         warn_line = ("\n\n⚠ " + "\n⚠ ".join(warnings)) if warnings else ""
-        reply = QMessageBox.question(
+        reply = QMessageBox.Yes if not confirm else QMessageBox.question(
             self, "Write Lutris config",
             f"Write {total} change(s) into:\n{entry.path}"
             f"{sys_line}{env_line}{del_line}{envdel_line}{warn_line}\n\n"
@@ -8857,6 +8993,7 @@ class LutrisSyncWidget(QWidget):
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             backup_path = target.with_name(f"{target.name}.{stamp}.bak")
             shutil.copy2(target, backup_path)
+            _PENDING_BAKS.append((target, backup_path, time.monotonic()))
             fd, tmp_name = tempfile.mkstemp(dir=str(target.parent),
                                             prefix=f".{target.name}.", suffix=".tmp")
             try:
@@ -8885,6 +9022,7 @@ class LutrisSyncWidget(QWidget):
             f"Wrote {total} change(s) to {entry.path.name}  (backup: {backup_path.name})"
         )
         self._update_preview()
+        offer_undo(f"Wrote {total} change(s) to {entry.path.name}")
 
 
 # FLM v2.x variables removed in v3.0 (mirrors k_legacy_keys in
@@ -11907,6 +12045,7 @@ QPlainTextEdit {{ background:{T['bg']}; border:1px solid {T['border']}; border-l
         self._bar_lbl.setText("listing ngx.download.nvidia.com …")
         self._bar.setRange(0, 0)              # busy indicator while listing
         w = _NgxWorker(parent=self)
+        TASKS.track(w, "DLSS Updater: list builds", _NAV("DLSS Updater"), w.progress, w.failed)
         w.discovered.connect(self._on_discovered)
         w.finished.connect(lambda: (self._bar.setRange(0, 1000), self._bar.setValue(0)))
         self._spawn(w)
@@ -11946,6 +12085,7 @@ QPlainTextEdit {{ background:{T['bg']}; border:1px solid {T['border']}; border-l
         self._set_pill("downloading…", T["warn"])
         self._append("info", f"saving to {dest}")
         w = _NgxWorker(sel, dest, parent=self)
+        TASKS.track(w, "DLSS Updater: download", _NAV("DLSS Updater"), w.progress, w.failed)
         w.downloaded.connect(self._on_downloaded)
         w.state.connect(self._on_card_state)
         self._spawn(w)
@@ -12726,6 +12866,8 @@ def gamescope_arg_string(flags: Dict[str, str]) -> str:
 def _backup_file(path: Path) -> Path:
     bak = path.with_name(f"{path.name}.drstool-{datetime.now():%Y%m%d-%H%M%S}.bak")
     shutil.copy2(path, bak)
+    _PENDING_BAKS.append((path, bak, time.monotonic()))
+    del _PENDING_BAKS[:-40]
     # keep the 20 newest backups of this file
     olds = sorted(path.parent.glob(f"{path.name}.drstool-*.bak"))
     for o in olds[:-20]:
@@ -13456,6 +13598,7 @@ class LauncherSyncWidget(QWidget):
         try:
             msg = self.backend.apply(e, self._payload(), self._opts())
             self._status.setText("✔ " + msg)
+            offer_undo(msg)
         except Exception as ex:
             self._status.setText(f"⚠ failed: {ex}")
             QMessageBox.critical(self, self.backend.name, str(ex))
@@ -14079,6 +14222,7 @@ class PrefixDoctorWidget(QWidget):
         self._say(f"Checking {p} …")
         self._set_busy(True)
         self._worker = _PDWorker("check", p, PD_COMPONENTS)
+        TASKS.track(self._worker, "Prefix Doctor: check", _NAV("Prefix Doctor"), self._worker.log)
         self._worker.checked.connect(self._on_checked)
         self._worker.log.connect(self._say)
         self._worker.start()
@@ -14158,6 +14302,7 @@ class PrefixDoctorWidget(QWidget):
         rels = {c["id"]: self._state.get(c["id"], {}).get("release") for c in comps}
         self._set_busy(True)
         self._worker = _PDWorker("update", p, comps, rels)
+        TASKS.track(self._worker, "Prefix Doctor: update", _NAV("Prefix Doctor"), self._worker.log)
         self._worker.log.connect(self._say)
         self._worker.updated.connect(self._on_updated)
         self._worker.start()
@@ -14993,8 +15138,9 @@ class SystemInfoWidget(QWidget):
 class CommandPalette(QDialog):
     """Ctrl+K: search every DRS setting / env var / GPU arch / tool page."""
 
-    def __init__(self, items: List[dict], parent=None):
+    def __init__(self, items: List[dict], parent=None, recent: Optional[List[str]] = None):
         super().__init__(parent)
+        self._recent = {k: i for i, k in enumerate(recent or [])}
         self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
         self.setModal(True)
         self.setStyleSheet(f"QDialog{{background:{T['raised']};border:1px solid {T['accent_dim']};border-radius:8px;}}")
@@ -15068,6 +15214,9 @@ class CommandPalette(QDialog):
             sc = self._score(q, it) if q else (50 if it.get("fav") else 10 if it.get("is_set") else 0)
             if sc < 0:
                 continue
+            _rr = self._recent.get(f'{it["kind"]}|{it["key"]}')
+            if _rr is not None and not q:
+                sc = 300 - _rr                   # last picks float to the top of the empty palette
             if it.get("fav"):
                 sc += 15
             if it.get("is_set"):
@@ -15076,7 +15225,8 @@ class CommandPalette(QDialog):
         scored.sort(key=lambda x: (x[0], x[1]))
         self._list.clear()
         for _s, _n, it in scored[:300]:
-            star = "★ " if it.get("fav") else "   "
+            star = ("↺ " if (not q and f'{it["kind"]}|{it["key"]}' in self._recent)
+                    else "★ " if it.get("fav") else "   ")
             dot = "● " if it.get("is_set") else "   "
             val = f'   = {it["value"]}' if it.get("value") else ""
             li = QListWidgetItem(f'{star}{dot}{it["title"]}{val}    ·  {it.get("sub", "")}')
@@ -16216,6 +16366,7 @@ class CacheManagerWidget(QWidget):
                                if shown else "No cache-related variables are set in the Env Vars tab.")
         self._total.setText("Scanning…")
         self._thread = _CacheScanThread(env, self._extra_folders())
+        TASKS.track(self._thread, "Cache: scan", _NAV("Cache"))
         self._thread.done.connect(self._on_scanned)
         self._thread.start()
 
@@ -16707,6 +16858,7 @@ class UpstreamDriftWidget(QWidget):
         self._btn_check.setEnabled(False)
         self._status.setText("Checking…")
         self._worker = _DriftWorker(srcs, _drift_catalog())
+        TASKS.track(self._worker, "Upstream drift: check", _NAV("Upstream drift"), self._worker.progress)
         self._worker.progress.connect(self._status.setText)
         self._worker.done.connect(self._on_done)
         self._worker.start()
@@ -17418,6 +17570,7 @@ class DxvkConfWidget(QWidget):
             w.set_env_var("DXVK_CONFIG", "")
             msg += "  (DXVK_CONFIG cleared)"
         self._status.setText(msg)
+        offer_undo(msg)
         self.refresh()
 
     def _remove(self):
@@ -17437,6 +17590,7 @@ class DxvkConfWidget(QWidget):
             self._status.setText(f"⚠ {ex}")
             return
         self._status.setText(f"✔ Removed the DRSTool block from {path}")
+        offer_undo(f"Removed the DRSTool block from {path.name}")
         self.refresh()
 
 
@@ -18167,6 +18321,7 @@ class GameHintsWidget(QWidget):
         self._status.setText("Searching Steam…")
         self._find_btn.setEnabled(False)
         self._aw = _AppidWorker(name, self)
+        TASKS.track(self._aw, "Game hints: find appid", _NAV("Game hints"), None, self._aw.done)
         self._aw.done.connect(self._matches_ready)
         self._aw.start()
 
@@ -18223,6 +18378,7 @@ class GameHintsWidget(QWidget):
         self._status.setText("Looking up…")
         self._go.setEnabled(False)
         self._worker = _HintWorker(aid, force, self)
+        TASKS.track(self._worker, "Game hints: lookup", _NAV("Game hints"))
         self._worker.done.connect(self._show)
         self._worker.start()
 
@@ -18461,6 +18617,8 @@ class CommunityTipsWidget(QWidget):
             return
         self._dl.setEnabled(False)
         self._worker = _IndexWorker(self)
+        TASKS.track(self._worker, "Community tips: ProtonDB data", _NAV("Community tips"),
+                    self._worker.progress, self._worker.done)
         self._worker.progress.connect(self._data_lbl.setText)
         self._worker.done.connect(self._download_done)
         self._worker.start()
@@ -20731,6 +20889,600 @@ def unique_profile_name(base: str, taken) -> str:
 # Main Window
 # ============================================================================
 
+# ============================================================================
+# Feature pack 6 — toasts (+ "Undo" for file writes), background task centre,
+# desktop notifications, keyboard-shortcut sheet, appearance dialog,
+# keyboard focus ring and accessible names.
+# ============================================================================
+
+from PySide6.QtCore import QPoint, QEventLoop, QEvent
+from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractSlider,
+                               QAbstractSpinBox, QTabBar)
+
+# Row density (Appearance dialog). The classes above are already defined here.
+SidebarDelegate.ITEM_H, SidebarDelegate.HEADER_H = DENSITY_ROWS[APPEARANCE["density"]][:2]
+ToolNavDelegate.ITEM_H = DENSITY_ROWS[APPEARANCE["density"]][2]
+
+
+# ----------------------------------------------------------------------------
+# Toasts
+# ----------------------------------------------------------------------------
+
+TOASTS: Optional["ToastHost"] = None
+
+
+def toast(text: str, kind: str = "info", timeout: int = 3500, action=None):
+    """Non-blocking message over the main window. action = (label, callable)."""
+    if TOASTS is not None:
+        try:
+            TOASTS.show_toast(text, kind, timeout, action)
+        except Exception:
+            pass
+
+
+def _guess_kind(text: str) -> str:
+    t = text.lstrip()
+    low = t.lower()
+    if "failed" in low or "error" in low or t.startswith("✖"):
+        return "error"
+    if t.startswith("⚠") or low.startswith(("nothing", "no ")):
+        return "warn"
+    if t.startswith(("✔", "✓")) or low.startswith(
+            ("saved", "copied", "wrote", "applied", "imported", "loaded", "undid", "redid",
+             "restored", "added", "removed", "★ added")):
+        return "ok"
+    return "info"
+
+
+class _Toast(QFrame):
+    dismissed = Signal(object)
+
+    def __init__(self, text: str, kind: str, action, parent, timeout: int):
+        super().__init__(parent)
+        self.text, self.action = text, action
+        self.setObjectName("toast")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        col = {"ok": T["accent"], "warn": T["warn"], "error": T["danger"]}.get(kind, T["info"])
+        glyph = {"ok": "✔", "warn": "⚠", "error": "✖"}.get(kind, "ℹ")
+        self.setStyleSheet(
+            f"#toast{{background:{T['overlay']};border:1px solid {T['border_hi']};"
+            f"border-left:3px solid {col};border-radius:8px;}}"
+            f"#toast QLabel{{background:transparent;color:{T['text']};font-size:12px;}}")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 9, 8, 9)
+        lay.setSpacing(10)
+        g = QLabel(glyph)
+        g.setStyleSheet(f"color:{col};font-size:13px;font-weight:700;background:transparent;")
+        lay.addWidget(g, 0, Qt.AlignTop)
+        self._lbl = QLabel(text)
+        self._lbl.setWordWrap(True)
+        self._lbl.setMaximumWidth(380)
+        lay.addWidget(self._lbl, 1)
+        if action:
+            b = QPushButton(action[0])
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFocusPolicy(Qt.NoFocus)
+            b.setStyleSheet(btn_ss("ghost", "sm"))
+            b.clicked.connect(self._run_action)
+            lay.addWidget(b, 0, Qt.AlignVCenter)
+        x = QToolButton()
+        x.setText("✕")
+        x.setCursor(Qt.PointingHandCursor)
+        x.setFocusPolicy(Qt.NoFocus)
+        x.setAccessibleName("Dismiss notification")
+        x.setStyleSheet(f"QToolButton{{border:none;color:{T['muted']};padding:2px 5px;background:transparent;}}"
+                        f"QToolButton:hover{{color:{T['text']};}}")
+        x.clicked.connect(self.dismiss)
+        lay.addWidget(x, 0, Qt.AlignTop)
+        self.setAccessibleName("Notification")
+        self.setAccessibleDescription(text)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.dismiss)
+        self.restart(timeout)
+
+    def restart(self, timeout: int):
+        self._timer.start(max(1500, int(timeout)))
+
+    def _run_action(self):
+        self.dismiss()
+        try:
+            self.action[1]()
+        except Exception as ex:
+            toast(f"Action failed: {ex}", "error")
+
+    def dismiss(self):
+        self._timer.stop()
+        self.dismissed.emit(self)
+
+    def enterEvent(self, e):              # noqa: N802
+        self._timer.stop()                # hold while the pointer is on it
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):              # noqa: N802
+        self.restart(1800)
+        super().leaveEvent(e)
+
+
+class ToastHost(QObject):
+    """Stacks toasts in the top-right corner of the main window, under the nav bar."""
+    MAX = 4
+
+    def __init__(self, win: QMainWindow):
+        super().__init__(win)
+        self._win = win
+        self._toasts: List[_Toast] = []
+        win.installEventFilter(self)
+
+    def show_toast(self, text: str, kind: str = "info", timeout: int = 3500, action=None):
+        text = str(text).strip()
+        if not text:
+            return
+        for t in self._toasts:                       # same message again: refresh, don't stack
+            if t.text == text and action is None and t.action is None:
+                t.restart(timeout)
+                return
+        t = _Toast(text, kind, action, self._win, timeout)
+        t.dismissed.connect(self._remove)
+        self._toasts.append(t)
+        while len(self._toasts) > self.MAX:
+            self._remove(self._toasts[0])
+        t.show()
+        self._layout()
+
+    def _remove(self, t: "_Toast"):
+        if t in self._toasts:
+            self._toasts.remove(t)
+            t.hide()
+            t.deleteLater()
+            self._layout()
+
+    def _layout(self):
+        w = self._win
+        y = 66
+        for t in self._toasts:
+            t.adjustSize()
+            t.move(max(8, w.width() - t.width() - 16), y)
+            t.raise_()
+            y += t.height() + 8
+
+    def eventFilter(self, obj, ev):           # noqa: N802
+        if obj is self._win and ev.type() == QEvent.Resize:
+            self._layout()
+        return False
+
+
+def _install_toasts(win: QMainWindow):
+    global TOASTS
+    TOASTS = ToastHost(win)
+
+
+class ToastStatusBar(QStatusBar):
+    """Every timed status message also appears as a toast (the bar text is easy to miss)."""
+
+    def showMessage(self, text, timeout=0):       # noqa: N802
+        super().showMessage(text, timeout)
+        if timeout and text:
+            toast(text, _guess_kind(text), min(max(timeout, 2500), 9000))
+
+
+# ----------------------------------------------------------------------------
+# Undo for file writes: _backup_file() records what it saved; after a write the
+# UI calls offer_undo(), which turns the backups into a one-click "Undo".
+# ----------------------------------------------------------------------------
+
+_PENDING_BAKS: List[tuple] = []        # (target, backup, time.monotonic())
+
+
+def _file_sig(p: Path) -> tuple:
+    st = p.stat()
+    return (st.st_mtime_ns, st.st_size)
+
+
+def offer_undo(label: str):
+    now = time.monotonic()
+    pend, seen = [], set()
+    for tgt, bak, t0 in reversed(_PENDING_BAKS):
+        try:
+            if now - t0 <= 15 and tgt not in seen and bak.is_file() and tgt.is_file():
+                seen.add(tgt)
+                pend.append((tgt, bak, _file_sig(tgt)))
+        except OSError:
+            continue
+    _PENDING_BAKS.clear()
+    if not pend:
+        toast(label, "ok", 5000)
+        return
+
+    def undo():
+        done, bad = 0, []
+        for tgt, bak, sig in pend:
+            try:
+                if _file_sig(tgt) != sig:
+                    bad.append(f"{tgt.name} changed since the write")
+                    continue
+                tmp = tgt.with_name(tgt.name + ".drstool-tmp")
+                shutil.copy2(bak, tmp)
+                os.replace(tmp, tgt)
+                done += 1
+            except OSError as ex:
+                bad.append(f"{tgt.name}: {ex}")
+        w = TOASTS._win if TOASTS is not None else None
+        for fn in ("_refresh_sync_previews", "_ext_mark_lutris"):
+            if w is not None and hasattr(w, fn):
+                try:
+                    getattr(w, fn)()
+                except Exception:
+                    pass
+        toast(f"Restored {done} file(s) from backup" + ((" — " + "; ".join(bad)) if bad else ""),
+              "warn" if bad else "ok", 7000)
+
+    toast(label, "ok", 12000, ("Undo", undo))
+
+
+# ----------------------------------------------------------------------------
+# Background task centre + desktop notifications
+# ----------------------------------------------------------------------------
+
+def desktop_notify(title: str, body: str = ""):
+    """freedesktop notification through notify-send, or gdbus as a fallback."""
+    try:
+        ns = shutil.which("notify-send")
+        if ns:
+            QProcess.startDetached(ns, ["-a", "DRSTool", "-t", "6000", title, body])
+            return
+        gd = shutil.which("gdbus")
+        if gd:
+            QProcess.startDetached(gd, [
+                "call", "--session", "--dest", "org.freedesktop.Notifications",
+                "--object-path", "/org/freedesktop/Notifications",
+                "--method", "org.freedesktop.Notifications.Notify",
+                "DRSTool", "0", "", title, body, "[]", "{}", "6000"])
+    except Exception:
+        pass
+
+
+def _NAV(tool_title: str) -> dict:
+    return {"kind": "tool", "key": tool_title, "title": tool_title}
+
+
+class TaskCenter(QObject):
+    """Lists the worker threads (downloads, scans, lookups) so they stay visible from any tab."""
+    changed = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self._tasks: List[dict] = []
+        self._seq = 0
+
+    def tasks(self) -> List[dict]:
+        return list(self._tasks)
+
+    def track(self, thread, title: str, nav: Optional[dict] = None, progress=None, fail=None) -> dict:
+        self._seq += 1
+        t = {"id": self._seq, "title": title, "nav": nav, "state": "running",
+             "detail": "", "t0": time.monotonic(), "t1": None}
+        self._tasks.append(t)
+        del self._tasks[:-25]
+        thread.finished.connect(lambda: self._finish(t))
+        if progress is not None:
+            progress.connect(lambda *a: self._progress(t, a))
+        if fail is not None:
+            fail.connect(lambda *a: self._fail(t, a))
+        self.changed.emit()
+        return t
+
+    @staticmethod
+    def _first_str(args) -> str:
+        return next((x for x in args if isinstance(x, str) and x.strip()), "")
+
+    def _progress(self, t: dict, args):
+        s = self._first_str(args)
+        if s and t["state"] == "running":
+            t["detail"] = s.strip().splitlines()[-1][:80]
+            self.changed.emit()
+
+    def _fail(self, t: dict, args):
+        err = self._first_str(args)
+        if err:
+            t["state"], t["detail"] = "failed", err.strip().splitlines()[0][:120]
+
+    def _finish(self, t: dict):
+        t["t1"] = time.monotonic()
+        if t["state"] == "running":
+            t["state"] = "done"
+        self.changed.emit()
+        dur = t["t1"] - t["t0"]
+        failed = t["state"] == "failed"
+        if dur < 3 and not failed:
+            return
+        win = TOASTS._win if TOASTS is not None else None
+        msg = f"{t['title']}: " + (f"failed — {t['detail']}" if failed else "finished")
+        action = ("Open", lambda n=t["nav"]: win.navigate_to(n)) if (win is not None and t["nav"]) else None
+        toast(msg, "error" if failed else "ok", 6000, action)
+        if win is not None and not win.isActiveWindow() and dur >= 4:
+            desktop_notify("DRSTool", msg)
+
+    def clear_finished(self):
+        self._tasks = [t for t in self._tasks if t["state"] == "running"]
+        self.changed.emit()
+
+
+TASKS = TaskCenter()
+
+
+# ----------------------------------------------------------------------------
+# Keyboard shortcut sheet (F1) — the single list of what the program binds
+# ----------------------------------------------------------------------------
+
+SHORTCUT_SHEET = [
+    ("Navigate", [
+        ("Ctrl+K", "Command palette — settings, variables, architectures, tools, actions"),
+        ("Ctrl+F", "Filter the current list"),
+        ("Esc", "Clear the filter"),
+        ("Ctrl+1 … 5", "Switch the top tabs"),
+        ("F1  /  Ctrl+/", "This sheet"),
+        ("Ctrl+,", "Appearance (theme, accent, density, scale)"),
+        ("Tab / Shift+Tab", "Move between controls (a focus ring shows where you are)"),
+    ]),
+    ("Edit", [
+        ("Ctrl+Z", "Undo"),
+        ("Ctrl+Shift+Z  /  Ctrl+Y", "Redo"),
+        ("Ctrl+D", "Star / unstar the selected entry"),
+        ("Ctrl+R", "Recipes"),
+        ("Ctrl+Shift+V", "Import a launch line"),
+    ]),
+    ("Profile & output", [
+        ("Ctrl+S", "Save the current profile"),
+        ("Ctrl+Shift+C", "Copy the launch string"),
+    ]),
+]
+
+
+class ShortcutsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Keyboard shortcuts")
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 18, 22, 16)
+        lay.setSpacing(6)
+        for sec, rows in SHORTCUT_SHEET:
+            h = QLabel(sec.upper())
+            h.setStyleSheet(f"color:{T['muted']};font-size:10px;font-weight:700;letter-spacing:1.2px;"
+                            "margin-top:8px;")
+            lay.addWidget(h)
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(16)
+            grid.setVerticalSpacing(5)
+            for r, (keys, what) in enumerate(rows):
+                k = QLabel(keys)
+                k.setStyleSheet(f"background:{T['sunken']};border:1px solid {T['border_hi']};border-radius:5px;"
+                                f"padding:2px 8px;font-family:{T['mono']};font-size:11px;color:{T['text']};")
+                k.setAlignment(Qt.AlignCenter)
+                d = QLabel(what)
+                d.setStyleSheet(f"color:{T['text2']};font-size:12px;")
+                grid.addWidget(k, r, 0, Qt.AlignLeft)
+                grid.addWidget(d, r, 1)
+            grid.setColumnStretch(1, 1)
+            lay.addLayout(grid)
+        close = QPushButton("Close")
+        close.setStyleSheet(btn_ss("default", "md"))
+        close.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(close)
+        lay.addSpacing(8)
+        lay.addLayout(row)
+
+
+# ----------------------------------------------------------------------------
+# Appearance dialog
+# ----------------------------------------------------------------------------
+
+class AppearanceDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Appearance")
+        self.setModal(True)
+        self.setMinimumWidth(460)
+        self.restart_requested = False
+        self.needs_restart = False
+        ap = APPEARANCE
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 18, 22, 16)
+        lay.setSpacing(12)
+        title = QLabel("Appearance")
+        title.setStyleSheet(f"color:{T['text']};font-size:16px;font-weight:700;")
+        lay.addWidget(title)
+        form = QFormLayout()
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(10)
+        self._theme = QComboBox()
+        self._theme.addItem("Dark", "dark")
+        self._theme.addItem("Light", "light")
+        self._accent = QComboBox()
+        for key, col in ACCENT_PRESETS.items():
+            pm = QPixmap(14, 14)
+            pm.fill(QColor(col))
+            self._accent.addItem(QIcon(pm), key.capitalize(), key)
+        self._density = QComboBox()
+        for k, lbl in (("compact", "Compact"), ("default", "Default"), ("spacious", "Spacious")):
+            self._density.addItem(lbl, k)
+        self._scale = QSpinBox()
+        self._scale.setRange(70, 200)
+        self._scale.setSingleStep(5)
+        self._scale.setSuffix(" %")
+        for combo, key in ((self._theme, "theme"), (self._accent, "accent"), (self._density, "density")):
+            combo.setCurrentIndex(max(0, combo.findData(ap[key])))
+        self._scale.setValue(ap["scale"])
+        form.addRow("Theme", self._theme)
+        form.addRow("Accent colour", self._accent)
+        form.addRow("List density", self._density)
+        form.addRow("UI scale", self._scale)
+        lay.addLayout(form)
+        self._restore = QCheckBox("Restore the last profile and selections on start")
+        self._restore.setChecked(ap["restore"])
+        lay.addWidget(self._restore)
+        note = QLabel("Theme, accent, density and scale are read at start-up, so they apply after a restart. "
+                      "The accent also colours “ok” states, which are green by default.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color:{T['muted']};font-size:11px;")
+        lay.addWidget(note)
+        row = QHBoxLayout()
+        reset = QPushButton("Reset")
+        reset.setStyleSheet(btn_ss("ghost", "md"))
+        reset.clicked.connect(self._reset)
+        cancel = QPushButton("Cancel")
+        cancel.setStyleSheet(btn_ss("default", "md"))
+        cancel.clicked.connect(self.reject)
+        save = QPushButton("Save")
+        save.setStyleSheet(btn_ss("default", "md"))
+        save.clicked.connect(lambda: self._save(False))
+        both = QPushButton("Save && restart")
+        both.setStyleSheet(btn_ss("primary", "md"))
+        both.clicked.connect(lambda: self._save(True))
+        row.addWidget(reset)
+        row.addStretch(1)
+        for b in (cancel, save, both):
+            row.addWidget(b)
+        lay.addLayout(row)
+
+    def _reset(self):
+        self._theme.setCurrentIndex(self._theme.findData("dark"))
+        self._accent.setCurrentIndex(self._accent.findData("green"))
+        self._density.setCurrentIndex(self._density.findData("default"))
+        self._scale.setValue(100)
+        self._restore.setChecked(True)
+
+    def _save(self, restart: bool):
+        ap = APPEARANCE
+        new = {"theme": self._theme.currentData(), "accent": self._accent.currentData(),
+               "density": self._density.currentData(), "scale": self._scale.value()}
+        self.needs_restart = any(new[k] != ap[k] for k in new)
+        try:
+            qs = QSettings(APP_ID, APP_ID)
+            for k, v in new.items():
+                qs.setValue(f"appearance/{k}", v)
+            qs.setValue("appearance/restore_session", self._restore.isChecked())
+            qs.sync()
+        except Exception:
+            pass
+        self.restart_requested = restart and self.needs_restart
+        self.accept()
+
+
+def _spawn_restart():
+    """Start a fresh copy of this program once the current one has exited."""
+    argv = list(getattr(sys, "orig_argv", None) or [sys.executable] + sys.argv)
+    QProcess.startDetached("/bin/sh", ["-c", 'sleep 0.7; exec "$@"', "sh"] + argv)
+
+
+# ----------------------------------------------------------------------------
+# Keyboard focus ring + accessible names (one application-wide event filter)
+# ----------------------------------------------------------------------------
+
+def _a11y_label(w: QWidget):
+    tip = w.toolTip() or ""
+    name = ""
+    if isinstance(w, NavTab):
+        name = w._title.text()
+    elif isinstance(w, QAbstractButton):
+        name = re.sub(r"&", "", w.text() or "").strip()
+        if name and not any(c.isalnum() for c in name):
+            name = ""                                   # glyph-only button: use the tooltip
+    elif isinstance(w, QLineEdit):
+        name = w.placeholderText()
+    elif isinstance(w, QGroupBox):
+        name = w.title()
+    if not name and w.parentWidget() is not None:
+        for lbl in w.parentWidget().findChildren(QLabel):
+            if lbl.buddy() is w and lbl.text():
+                name = re.sub(r"<[^>]+>|&", "", lbl.text()).strip()
+                break
+    if not name and tip:
+        name = re.sub(r"<[^>]+>", "", tip).split("\n", 1)[0]
+    if name:
+        w.setAccessibleName(name[:120])
+    if tip and not w.accessibleDescription():
+        w.setAccessibleDescription(re.sub(r"<[^>]+>", "", tip)[:300])
+
+
+class UXFilter(QObject):
+    """Names unlabeled controls when they are first shown and draws a focus ring after Tab."""
+    _A11Y = (QAbstractButton, QLineEdit, QComboBox, QAbstractSpinBox, QAbstractSlider,
+             QAbstractItemView, QPlainTextEdit, QTextEdit, QTabBar, QGroupBox)
+    _NO_RING = (QLineEdit, QAbstractSpinBox, QPlainTextEdit, QTextEdit)
+
+    def __init__(self, app):
+        super().__init__(app)
+        self._kbd = False
+        self._ring: Optional[QFrame] = None
+        self._target: Optional[QWidget] = None
+        app.installEventFilter(self)
+        app.focusChanged.connect(self._on_focus)
+
+    def eventFilter(self, obj, ev):           # noqa: N802
+        try:
+            t = ev.type()
+            if t == QEvent.Show:
+                if isinstance(obj, self._A11Y) and not obj.property("_a11y"):
+                    obj.setProperty("_a11y", True)
+                    if not obj.accessibleName():
+                        _a11y_label(obj)
+            elif t == QEvent.KeyPress:
+                if ev.key() in (Qt.Key_Tab, Qt.Key_Backtab):
+                    self._kbd = True
+            elif t == QEvent.MouseButtonPress:
+                if self._kbd:
+                    self._kbd = False
+                    self._hide()
+            elif t in (QEvent.Move, QEvent.Resize) and obj is self._target:
+                self._place()
+        except Exception:
+            pass
+        return False
+
+    def _hide(self):
+        if self._ring is not None:
+            self._ring.hide()
+
+    def _on_focus(self, _old, new):
+        self._target = new
+        if not self._kbd or new is None or isinstance(new, self._NO_RING) or not new.isVisible():
+            self._hide()
+            return
+        self._place()
+
+    def _place(self):
+        w = self._target
+        if w is None or not w.isVisible():
+            self._hide()
+            return
+        win = w.window()
+        if self._ring is None or self._ring.parent() is not win:
+            if self._ring is not None:
+                self._ring.deleteLater()
+            r = QFrame(win)
+            r.setAttribute(Qt.WA_TransparentForMouseEvents)
+            r.setFocusPolicy(Qt.NoFocus)
+            r.setStyleSheet(f"QFrame{{border:2px solid {T['accent']};border-radius:6px;background:transparent;}}")
+            self._ring = r
+        self._ring.setGeometry(QRect(w.mapTo(win, QPoint(0, 0)), w.size()).adjusted(-2, -2, 2, 2))
+        self._ring.show()
+        self._ring.raise_()
+
+
+_UX_FILTER: Optional[UXFilter] = None
+
+
+def _qbool(v) -> bool:
+    return str(v).lower() in ("true", "1", "yes")
+
+
+
 class MainWindow(QMainWindow):
     # Tab indices (sidebar stack pages). Nav order on screen matches.
     TAB_DRS, TAB_ARCH, TAB_ENV, TAB_TOOLS, TAB_PROFILES = range(5)
@@ -20759,6 +21511,7 @@ class MainWindow(QMainWindow):
         self._state_timer.setInterval(350)
         self._state_timer.timeout.connect(self._on_state_settled)
         self._qsettings = QSettings(APP_ID, APP_ID)
+        self._restart_pending = False
 
         self.setWindowTitle(APP_TITLE)
         if ICON_PATH.is_file():
@@ -20863,7 +21616,15 @@ class MainWindow(QMainWindow):
         self._lint_btn.clicked.connect(self._open_linter)
         self._set_lint_button(0, 0)
         nav_layout.addWidget(self._lint_btn)
-        nav_layout.addSpacing(10)
+        nav_layout.addSpacing(6)
+        self._tasks_btn = QPushButton()
+        self._tasks_btn.setCursor(Qt.PointingHandCursor)
+        self._tasks_btn.setFixedHeight(28)
+        self._tasks_btn.clicked.connect(self._tasks_menu)
+        self._tasks_btn.hide()
+        nav_layout.addWidget(self._tasks_btn)
+        TASKS.changed.connect(self._update_tasks_btn)
+        nav_layout.addSpacing(4)
 
         self._profile_chip = QPushButton()
         self._profile_chip.setFlat(True)
@@ -20872,6 +21633,20 @@ class MainWindow(QMainWindow):
         self._profile_chip.clicked.connect(self._show_unsaved_changes)
         self._style_chip(T["muted"], False)
         nav_layout.addWidget(self._profile_chip)
+        nav_layout.addSpacing(6)
+        self._menu_btn = QToolButton()
+        self._menu_btn.setText("⚙")
+        self._menu_btn.setToolTip("Appearance, keyboard shortcuts, background tasks")
+        self._menu_btn.setPopupMode(QToolButton.InstantPopup)
+        self._menu_btn.setCursor(Qt.PointingHandCursor)
+        self._menu_btn.setFixedHeight(30)
+        self._menu_btn.setStyleSheet(_nav_btn_ss + "QToolButton::menu-indicator{image:none;width:0;}")
+        _mm = QMenu(self._menu_btn)
+        _mm.addAction("Appearance…\tCtrl+,").triggered.connect(self.open_appearance)
+        _mm.addAction("Keyboard shortcuts\tF1").triggered.connect(self.open_shortcuts)
+        _mm.addAction("Background tasks").triggered.connect(self._tasks_menu)
+        self._menu_btn.setMenu(_mm)
+        nav_layout.addWidget(self._menu_btn)
         main_layout.addWidget(nav)
         self._ext_banner = ExternalChangeBanner()
         main_layout.addWidget(self._ext_banner)
@@ -21074,8 +21849,9 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self._output_bar)
 
         # Status bar
-        status_bar = QStatusBar()
+        status_bar = ToastStatusBar()
         self.setStatusBar(status_bar)
+        _install_toasts(self)
         status_bar.setStyleSheet(f"""
             QStatusBar {{
                 background: {T['sunken']}; color: {T['muted']}; font-size: 11px;
@@ -21154,12 +21930,14 @@ class MainWindow(QMainWindow):
         self._refresh_badges()
         self._update_window_title()
         self._restore_ui_state()
+        self._restore_session()
         self._chips.setVisible(self._sidebar_stack.currentIndex() in (self.TAB_DRS, self.TAB_ARCH, self.TAB_ENV))
         QTimer.singleShot(300, SYSHUB.refresh)
         self._schedule_lint()
         self._timeline = UndoTimeline(self.capture_state())
         self._update_undo_ui()
         self.setAcceptDrops(True)
+        self._install_a11y()
 
     # ===== Feature pack: launch payload / lint / system / favorites / palette =====
     def collect_launch_payload(self) -> dict:
@@ -21381,15 +22159,19 @@ class MainWindow(QMainWindow):
                 ("changes", "Review unsaved changes", "diff editor vs saved profile"),
                 ("logging", "Toggle logging", "all log levels on/off"),
                 ("copy_steam", "Copy Steam launch options", "env … gamescope … -- %command%"),
-                ("save", "Save profile", "Ctrl+S")):
+                ("save", "Save profile", "Ctrl+S"),
+                ("shortcuts", "Keyboard shortcuts", "F1"),
+                ("appearance", "Appearance…", "theme, accent, density, UI scale  Ctrl+,"),
+                ("tasks", "Background tasks", "running and finished downloads / scans")):
             items.append(dict(kind="action", key=key, title=title, sub="Action", desc=desc))
         return items
 
     def _open_palette(self):
-        dlg = CommandPalette(self._palette_items(), self)
+        dlg = CommandPalette(self._palette_items(), self, self._palette_recent())
         g = self.geometry()
         dlg.move(g.center().x() - dlg.width() // 2, g.top() + 90)
         if dlg.exec() == QDialog.Accepted and dlg.chosen:
+            self._palette_remember(dlg.chosen)
             self.navigate_to(dlg.chosen)
 
     def navigate_to(self, it: dict):
@@ -21437,7 +22219,9 @@ class MainWindow(QMainWindow):
             {"undo": self.undo, "redo": self.redo, "import": self.open_import_dialog,
              "explain": self.open_explain_dialog, "recipes": self.open_recipes,
              "changes": self._show_unsaved_changes, "logging": self._toggle_logging,
-             "copy_steam": self._output_bar._copy_steam_env, "save": self._shortcut_save}[key]()
+             "copy_steam": self._output_bar._copy_steam_env, "save": self._shortcut_save,
+             "shortcuts": self.open_shortcuts, "appearance": self.open_appearance,
+             "tasks": self._tasks_menu}[key]()
 
     def _select_item(self, lw: QListWidget, key: str):
         for i in range(lw.count()):
@@ -21665,6 +22449,156 @@ class MainWindow(QMainWindow):
         sc("Ctrl+Y", self.redo)
         sc("Ctrl+Shift+V", self.open_import_dialog)
         sc("Ctrl+R", self.open_recipes)
+        sc("F1", self.open_shortcuts)
+        sc("Ctrl+/", self.open_shortcuts)
+        sc("Ctrl+,", self.open_appearance)
+
+    # ===== Feature pack 6: help, appearance, tasks, session, accessibility =====
+    def open_shortcuts(self):
+        ShortcutsDialog(self).exec()
+
+    def open_appearance(self):
+        dlg = AppearanceDialog(self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        if dlg.restart_requested:
+            self._restart_now()
+        elif dlg.needs_restart:
+            toast("Appearance saved \u2014 it applies after a restart", "ok", 9000,
+                  ("Restart now", self._restart_now))
+        else:
+            toast("Settings saved", "ok")
+
+    def _restart_now(self):
+        self._restart_pending = True
+        self.close()                     # asks about unsaved changes first; closeEvent starts the new copy
+
+    def _update_tasks_btn(self):
+        ts = TASKS.tasks()
+        if not ts:
+            self._tasks_btn.hide()
+            return
+        run = [t for t in ts if t["state"] == "running"]
+        if run:
+            txt, col = f"\u27f3 {len(run)}", T["accent"]
+            tip = "Running: " + ", ".join(t["title"] for t in run)
+        else:
+            bad = ts[-1]["state"] == "failed"
+            txt, col = ("\u2716" if bad else "\u2714"), (T["danger"] if bad else T["muted"])
+            tip = "Last task: " + ts[-1]["title"]
+        self._tasks_btn.setText(txt)
+        self._tasks_btn.setToolTip(tip + "\nClick for the task list")
+        self._tasks_btn.setAccessibleName("Background tasks")
+        self._tasks_btn.setStyleSheet(
+            f"QPushButton{{background:transparent;border:1px solid {T['border_hi']};border-radius:8px;"
+            f"color:{col};padding:2px 10px;font-weight:700;}}QPushButton:hover{{border-color:{col};}}")
+        self._tasks_btn.show()
+
+    def _tasks_menu(self):
+        m = QMenu(self)
+        ts = TASKS.tasks()
+        if not ts:
+            m.addAction("No background tasks yet").setEnabled(False)
+        now = time.monotonic()
+        for t in reversed(ts):
+            glyph = {"running": "\u27f3", "done": "\u2714", "failed": "\u2716"}.get(t["state"], "\u2022")
+            tail = t["detail"] or {"running": "running\u2026", "done": "done", "failed": "failed"}[t["state"]]
+            a = m.addAction(f"{glyph}  {t['title']}  \u2014  {tail}  ({(t['t1'] or now) - t['t0']:.0f}s)")
+            if t["nav"]:
+                a.triggered.connect(lambda _c=False, n=t["nav"]: self.navigate_to(n))
+        m.addSeparator()
+        m.addAction("Clear finished").triggered.connect(TASKS.clear_finished)
+        anchor = self._tasks_btn if self._tasks_btn.isVisible() else self._menu_btn
+        m.exec(anchor.mapToGlobal(QPoint(0, anchor.height())))
+
+    def load_profile_by_name(self, name: str) -> bool:
+        if name not in self.settings_manager.get_profiles():
+            return False
+        self.settings_manager.load_profile(name)
+        if self.settings_manager.get_current_profile() != name:
+            return False
+        self._on_profile_loaded(name)
+        self._profiles_widget._refresh()
+        return True
+
+    def _palette_recent(self) -> List[str]:
+        v = self._qsettings.value("palette/recent", [])
+        if isinstance(v, str):
+            v = [v] if v else []
+        return [str(x) for x in (v or [])]
+
+    def _palette_remember(self, it: dict):
+        rid = f'{it["kind"]}|{it["key"]}'
+        self._qsettings.setValue("palette/recent", ([rid] + [x for x in self._palette_recent() if x != rid])[:12])
+
+    def _save_session(self):
+        qs = self._qsettings
+        qs.setValue("session/profile", self.settings_manager.get_current_profile() or "")
+        qs.setValue("session/chip_set", self._chip_set.isChecked())
+        qs.setValue("session/chip_fav", self._chip_fav.isChecked())
+        tab = self._sidebar_stack.currentIndex()
+        key = ""
+        if tab == self.TAB_DRS and self._settings_list.currentItem():
+            key = str(self._settings_list.currentItem().data(Qt.UserRole) or "")
+        elif tab == self.TAB_ENV and self._env_widget.currentItem():
+            key = str(self._env_widget.currentItem().data(Qt.UserRole) or "")
+        qs.setValue("session/key", key)
+        qs.setValue("session/key_tab", tab)
+        tabs = self._extra_tools._tabs
+        qs.setValue("session/tool", tabs.tabText(tabs.currentIndex()).replace(" \u26a0", ""))
+        qs.setValue("session/sync", self._sync_tabs.tabText(self._sync_tabs.currentIndex()))
+
+    def _restore_session(self):
+        if _CLI_MODE or not APPEARANCE["restore"]:
+            return
+        qs = self._qsettings
+        try:
+            name = str(qs.value("session/profile", "") or "")
+            if name:
+                self.load_profile_by_name(name)
+            if _qbool(qs.value("session/chip_set", False)):
+                self._chip_set.setChecked(True)
+            if _qbool(qs.value("session/chip_fav", False)):
+                self._chip_fav.setChecked(True)
+            tab = self._sidebar_stack.currentIndex()
+            key = str(qs.value("session/key", "") or "")
+            if key and int(qs.value("session/key_tab", -1)) == tab:
+                if tab == self.TAB_DRS:
+                    self._select_item(self._settings_list, key)
+                elif tab == self.TAB_ENV:
+                    self._select_item(self._env_widget, key)
+            if tab == self.TAB_TOOLS:
+                tool = str(qs.value("session/tool", "") or "")
+                if tool:
+                    self._extra_tools.show_tab(tool)
+            elif tab == self.TAB_PROFILES:
+                sync = str(qs.value("session/sync", "") or "")
+                for i in range(self._sync_tabs.count()):
+                    if self._sync_tabs.tabText(i) == sync:
+                        self._sync_tabs.setCurrentIndex(i)
+                        break
+        except Exception:
+            pass
+
+    def _install_a11y(self):
+        self.setAccessibleName(APP_TITLE)
+        for btn in self._nav_tabs:
+            btn.setFocusPolicy(Qt.TabFocus)            # reachable with Tab, never steals focus on click
+        for w, nm in ((self._undo_btn, "Undo"), (self._redo_btn, "Redo")):
+            w.setAccessibleName(nm)
+        for w in (self._undo_btn, self._redo_btn, self._recipes_btn, self._profile_chip):
+            w.setFocusPolicy(Qt.TabFocus)
+        self._menu_btn.setFocusPolicy(Qt.TabFocus)
+        self._menu_btn.setAccessibleName("Menu: appearance, shortcuts, tasks")
+        self._search.setAccessibleName("Filter the current list")
+        for lw, nm in ((self._settings_list, "DRS settings list"), (self._env_widget, "Environment variables list"),
+                       (self._arch_list, "GPU architecture list"), (self._flm_sidebar, "Extra tools list")):
+            lw.setAccessibleName(nm)
+        chain = [*self._nav_tabs, self._undo_btn, self._redo_btn, self._recipes_btn, self._log_btn,
+                 self._lint_btn, self._tasks_btn, self._profile_chip, self._menu_btn, self._search,
+                 self._chip_set, self._chip_fav]
+        for a, b in zip(chain, chain[1:]):
+            QWidget.setTabOrder(a, b)
 
     def _focus_search(self):
         if self._search.isEnabled():
@@ -21705,6 +22639,7 @@ class MainWindow(QMainWindow):
             self._brand.set_compact(self.width() < 1420)
 
     def closeEvent(self, event):          # noqa: N802
+        restart, self._restart_pending = self._restart_pending, False
         if self._state_timer.isActive():
             self._state_timer.stop()
             self._on_state_settled()
@@ -21727,6 +22662,7 @@ class MainWindow(QMainWindow):
             self._qsettings.setValue("window/geometry", self.saveGeometry())
             self._qsettings.setValue("window/splitter", self._splitter.saveState())
             self._qsettings.setValue("window/tab", self._sidebar_stack.currentIndex())
+            self._save_session()
         except Exception:
             pass
         try:
@@ -21736,6 +22672,8 @@ class MainWindow(QMainWindow):
                 pd._worker and pd._worker.wait(3000)
         except Exception:
             pass
+        if restart:
+            _spawn_restart()
         super().closeEvent(event)
 
     # ===== Dirty tracking / badges =====
@@ -22050,12 +22988,262 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Profile Save Failed", message)
 
 
+# ============================================================================
+# Command-line mode: `drstool --list-profiles`, `--print-env`, `--lint`,
+# `--apply … --lutris …`, `--import-nip …`. Runs headless (offscreen Qt) with
+# the very same code paths as the GUI, prints to stdout and exits.
+# ============================================================================
+
+_CLI_MODE = False
+
+
+def _cli_parse(argv):
+    import argparse
+    ap = argparse.ArgumentParser(
+        prog="drstool", allow_abbrev=False,
+        description="DRSTool. Without options the GUI starts; the options below run headless and exit.",
+        epilog="Exit status: 0 ok · 1 lint errors (or warnings with --strict) or a failed write · "
+               "2 bad arguments / not found.")
+    g = ap.add_argument_group("headless commands")
+    g.add_argument("--list-profiles", action="store_true", help="list the saved profiles")
+    g.add_argument("--print-env", metavar="PROFILE", help="print a profile's launch line / environment")
+    g.add_argument("--format", choices=("steam", "shell", "export", "json"), default="steam",
+                   help="--print-env format: steam = env … -- %%command%% (default), "
+                        "shell = env … \"$@\", export = export K=V lines, json = the full payload")
+    g.add_argument("--lint", metavar="PROFILE", help="run the consistency linter on a profile")
+    g.add_argument("--strict", action="store_true", help="--lint: warnings also give exit status 1")
+    g.add_argument("--apply", metavar="PROFILE", help="write a profile into a Lutris game config (needs --lutris)")
+    g.add_argument("--lutris", metavar="GAME", help="--apply: game slug or name")
+    g.add_argument("--lutris-dir", metavar="DIR", help="--apply: Lutris games folder (default ~/.config/lutris/games)")
+    g.add_argument("--dry-run", action="store_true", help="--apply: show the diff, write nothing")
+    g.add_argument("-y", "--yes", action="store_true", help="--apply: write without asking")
+    g.add_argument("--import-nip", metavar="FILE", help="convert an NVIDIA Profile Inspector .nip into "
+                                                         "DXVK_NVAPI_DRS_SETTINGS pairs")
+    g.add_argument("--nip-profile", metavar="NAME", help="--import-nip: profile inside the file (default: first)")
+    g.add_argument("--into", metavar="PROFILE", help="--import-nip: merge the settings into this saved profile")
+    g.add_argument("--save-as", metavar="NAME", help="--import-nip: store the settings as a new profile")
+    ap.add_argument("--profile", metavar="PROFILE", help="GUI: start with this profile loaded")
+    return ap.parse_known_args(argv)
+
+
+def _cli_wants(a) -> bool:
+    return bool(a.list_profiles or a.print_env or a.lint or a.apply or a.import_nip)
+
+
+def _cli_dispatch(a) -> int:
+    def err(msg):
+        print(f"drstool: {msg}", file=sys.stderr)
+
+    def dlg(kind):
+        def f(*args, **_kw):
+            err(f"{args[1] if len(args) > 1 else kind}: {args[2] if len(args) > 2 else ''}")
+            return QMessageBox.No if kind == "question" else QMessageBox.Ok
+        return staticmethod(f)
+    for k in ("question", "critical", "warning", "information"):
+        setattr(QMessageBox, k, dlg(k))          # a headless run must never block on a dialog
+
+    sm = SettingsManager()
+    profiles = sm.get_profiles()
+
+    def resolve(name):
+        if name in profiles:
+            return name
+        low = [n for n in profiles if n.casefold() == name.casefold()]
+        sub = low or [n for n in profiles if name.casefold() in n.casefold()]
+        if len(sub) == 1:
+            return sub[0]
+        err(f'"{name}" is ambiguous: ' + ", ".join(sub) if sub else f'no such profile "{name}" (see --list-profiles)')
+        return None
+
+    win_box: list = []
+
+    def window(name):
+        if not win_box:
+            win_box.append(MainWindow())
+        w = win_box[0]
+        w.settings_manager.load_profile(name)
+        if w.settings_manager.get_current_profile() != name:
+            return None
+        w._on_profile_loaded(name)
+        return w
+
+    if a.list_profiles:
+        for n, p in profiles.items():
+            f = _flat_profile(p)
+            print(f"{n}\tDRS={sum(1 for k in f if k[0] == 'DRS')}\tENV={sum(1 for k in f if k[0] == 'Env')}"
+                  f"\tARCH={f.get(('Arch', 'GPU arch'), '-')}"
+                  f"\tGAMESCOPE={'on' if ('Gamescope', 'enabled') in f else 'off'}")
+        return 0
+
+    if a.print_env:
+        name = resolve(a.print_env)
+        w = name and window(name)
+        if not w:
+            return 2
+        p = w.collect_launch_payload()
+        if a.format == "json":
+            print(json.dumps(p, indent=2, ensure_ascii=False))
+        elif a.format == "export":
+            for k, v in p["env"].items():
+                print(f"export {k}={shlex.quote(str(v))}")
+            if p["gs_cmd"]:
+                print(f"# gamescope: {p['gs_cmd']}")
+        else:
+            print(build_launch_line(p, "%command%" if a.format == "steam" else '"$@"', True))
+        return 0
+
+    if a.lint:
+        name = resolve(a.lint)
+        w = name and window(name)
+        if not w:
+            return 2
+        loop = QEventLoop()                       # let the system probe finish so the lint sees this machine
+        SYSHUB.info_changed.connect(lambda *_: loop.quit())
+        QTimer.singleShot(8000, loop.quit)
+        SYSHUB.refresh()
+        loop.exec()
+        p = w.collect_launch_payload()
+        issues = lint_config(p["env"], p["drs"], p["arch"], p["gs_on"], p["gs_flags"], p["mangohud"], SYSHUB.info)
+        for i in issues:
+            print(f"{i.sev.upper():5} {i.code}: {i.msg}")
+        n_err = sum(1 for i in issues if i.sev == "error")
+        n_warn = sum(1 for i in issues if i.sev == "warn")
+        err(f"{n_err} error(s), {n_warn} warning(s)")
+        return 1 if (n_err or (a.strict and n_warn)) else 0
+
+    if a.apply:
+        if not a.lutris:
+            err("--apply needs --lutris GAME")
+            return 2
+        name = resolve(a.apply)
+        w = name and window(name)
+        if not w:
+            return 2
+        ls = w._lutris_sync_widget
+        if a.lutris_dir:
+            ls._games_dir = Path(a.lutris_dir).expanduser()
+            ls._scan_games()
+        if not ls._games:
+            err(f"no Lutris game configs found in {ls._games_dir}")
+            return 2
+        want = a.lutris.casefold()
+        hit = [i for i, g in enumerate(ls._games) if want in (g.slug.casefold(), g.game_name.casefold())]
+        hit = hit or [i for i, g in enumerate(ls._games) if want in g.slug.casefold() or want in g.game_name.casefold()]
+        if len(hit) != 1:
+            err(f'"{a.lutris}" ' + ("matches several games: " + ", ".join(ls._games[i].slug for i in hit)
+                                    if hit else "matches no game"))
+            return 2
+        ls._game_combo.blockSignals(True)
+        ls._game_combo.setCurrentIndex(hit[0])
+        ls._game_combo.blockSignals(False)
+        ls._on_game_selected(hit[0])
+        entry = ls._games[hit[0]]
+        system_keys, env_vars, warnings = ls._split_gamescope(ls._collect_all_env())
+        original = entry.path.read_text(encoding="utf-8")
+        new_text = ls._merge_yaml(original, system_keys, env_vars)[0]
+        for wmsg in warnings:
+            err(f"warning: {wmsg}")
+        if new_text == original:
+            print(f"{entry.path.name}: already up to date")
+            return 0
+        diff = "".join(difflib.unified_diff(original.splitlines(True), new_text.splitlines(True),
+                                            str(entry.path), str(entry.path) + " (new)"))
+        if a.dry_run:
+            sys.stdout.write(diff)
+            return 0
+        if not a.yes:
+            if not sys.stdin.isatty():
+                err("refusing to write without --yes (use --dry-run to preview)")
+                return 2
+            sys.stdout.write(diff)
+            if input("Write these changes? [y/N] ").strip().lower() not in ("y", "yes"):
+                return 1
+        ls._apply_to_game(confirm=False)
+        msg = ls._status_label.text()
+        print(msg)
+        return 0 if msg.startswith(("Wrote", "Nothing")) else 1
+
+    if a.import_nip:
+        try:
+            profs = parse_nip(decode_nip_bytes(Path(a.import_nip).expanduser().read_bytes()))
+        except Exception as ex:
+            err(f"cannot read {a.import_nip}: {ex}")
+            return 2
+        if not profs:
+            err("no profiles in that file")
+            return 2
+        sel = next((p for p in profs if a.nip_profile and p["name"].casefold() == a.nip_profile.casefold()),
+                   None if a.nip_profile else profs[0])
+        if sel is None:
+            err(f'no profile "{a.nip_profile}" in the file; it has: ' + ", ".join(p["name"] for p in profs))
+            return 2
+        pairs, skipped = [], 0
+        for s in sel["settings"]:
+            if s["value"] is None:
+                skipped += 1
+                continue
+            key = f'0x{s["id"]:08X}'
+            known = drs_lookup(key)
+            pairs.append((known.id if known else key, NipImportWidget._fmt_value(s["value"])))
+        print("DXVK_NVAPI_DRS_SETTINGS=" + ",".join(f"{k}={v}" for k, v in pairs))
+        if skipped:
+            err(f"{skipped} non-DWORD setting(s) skipped")
+        if not (a.into or a.save_as):
+            return 0
+        saved: list = []
+        sm.profile_saved.connect(saved.append)
+        sm.profile_save_error.connect(err)
+        if a.into:
+            name = resolve(a.into)
+            if not name:
+                return 2
+            sm.load_profile(name)
+            cur = sm.get_settings_list()
+            arch = sm.get_arch()
+            env_vars = dict(sm.get_loaded_env_vars())
+            gs_on, gs_flags = sm.get_loaded_gamescope_enabled(), dict(sm.get_loaded_gamescope_flags())
+        else:
+            name, cur, arch, env_vars, gs_on, gs_flags = a.save_as, {}, None, {}, False, {}
+            if name in profiles:
+                err(f'profile "{name}" already exists — use --into to merge')
+                return 2
+        for k, v in pairs:
+            cur[canonical_drs_key(k)] = canonical_drs_value(drs_lookup(k), v)
+        sm.replace_state(cur, arch.code if arch else None)
+        sm.save_profile(name, env_vars, gs_on, gs_flags)
+        if not saved:
+            return 1
+        err(f'saved profile "{name}" ({len(pairs)} setting(s) merged)')
+        return 0
+    return 0
+
+
+def cli_run(a) -> int:
+    global _CLI_MODE
+    _CLI_MODE = True
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication(sys.argv[:1])              # noqa: F841 - must stay alive
+    app.setApplicationName(APP_TITLE)
+    try:
+        rc = _cli_dispatch(a)
+    except Exception as ex:
+        print(f"drstool: {type(ex).__name__}: {ex}", file=sys.stderr)
+        rc = 1
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(rc)                                   # skip Qt teardown / probe threads
+
+
 def main():
     # Gerçek process adını (argv[0]) 'drstool' yapar — python-exec2c/python3
     # olarak görünmesini önler. QApplication oluşturulmadan önce, mümkün
     # olduğunca erken çağrılmalı ki Wayland platform eklentisi app_id'yi
     # okurken zaten doğru argv[0]'ı görsün.
     apply_wayland_app_id(APP_ID)
+    cli_args, cli_rest = _cli_parse(sys.argv[1:])
+    if _cli_wants(cli_args):
+        cli_run(cli_args)                     # headless; exits
+    sys.argv = sys.argv[:1] + cli_rest        # whatever is left belongs to Qt
 
     # PySide6 prints an unhandled exception raised inside a slot to stderr and
     # then carries on, which can leave the UI half-rebuilt and silently broken
@@ -22091,7 +23279,12 @@ def main():
     # QApplication oluşturulmadan önce app adı ayarlanır.
     QApplication.setDesktopFileName(APP_ID)
 
+    scale_env = APPEARANCE["scale"] != 100 and "QT_SCALE_FACTOR" not in os.environ
+    if scale_env:                              # Appearance > UI scale (read by Qt while the app is created)
+        os.environ["QT_SCALE_FACTOR"] = f"{APPEARANCE['scale'] / 100:g}"
     app = QApplication(sys.argv)
+    if scale_env:
+        os.environ.pop("QT_SCALE_FACTOR", None)   # do not leak into the games / tools we start
     app.setStyle("Fusion")
     app.setApplicationName(APP_TITLE)
     app.setApplicationDisplayName(APP_TITLE)
@@ -22109,8 +23302,12 @@ def main():
     # StartupWMClass eşleşmesini bozduğu için uygulama bunu kendisi yapmaz.
 
     apply_theme(app)
+    global _UX_FILTER
+    _UX_FILTER = UXFilter(app)
 
     window = MainWindow()
+    if cli_args.profile and not window.load_profile_by_name(cli_args.profile):
+        window.statusBar().showMessage(f'No such profile: {cli_args.profile}', 8000)
     window.show()
     sys.exit(app.exec())
 

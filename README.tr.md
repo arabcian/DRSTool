@@ -43,6 +43,12 @@ Bayrak kataloğundan (ölçekleme, kare sıralaması, girdi, oturum seçenekleri
 
 ### Gezinme ve günlük yardımcılar
 - **Ctrl+K** tüm DRS ayarlarında, ortam değişkenlerinde, GPU mimarilerinde ve araç sayfalarında arar; **Ctrl+F** geçerli listeyi filtreler; **Ctrl+1…5** üst sekmeleri değiştirir; **Ctrl+D** favori ekler/çıkarır; **Ctrl+S** geçerli profili kaydeder
+- **F1** (veya Ctrl+/) klavye kısayolu sayfasını, **Ctrl+,** *Appearance* penceresini açar. Ctrl+K boşken en son seçtiklerini en üstte gösterir ("son kullanılanlar")
+- **Toast bildirimleri**: her durum mesajı (kaydedildi, kopyalandı, uygulandı, geri alındı, hatalar) sağ üstte de belirir; imleç üstündeyken kaybolmaz. Lutris YAML, Steam, Heroic, Bottles veya `dxvk.conf` yazımından sonra toast'ta o yazım için alınan yedeği geri koyan bir **Undo** düğmesi olur (dosya bu arada tekrar değiştiyse reddeder)
+- **Arka plan görevleri**: DLSS Updater, Upstream drift, Prefix Doctor, Cache taraması, Game hints ve ProtonDB indirmesi üst çubuktaki *⟳ N* düğmesinde (veya ⚙ › Background tasks) son ilerleme satırıyla listelenir; bir satıra tıklayınca ilgili sayfaya gidilir. Birkaç saniyeden uzun süren veya başarısız olan görevler toast, pencere önde değilse masaüstü bildirimi (`notify-send`, yoksa `gdbus`) üretir
+- **Oturumu hatırlama**: son profil, *Only set* / *Favorites* çipleri, seçili DRS ayarı / değişken ve açık araç veya sync sekmesi açılışta geri gelir (Appearance'tan kapatılabilir)
+- **Appearance** (⚙ › Appearance, Ctrl+,): koyu veya açık tema, vurgu rengi (yeşil, mavi, camgöbeği, mor, turuncu, kırmızı, pembe), liste yoğunluğu (compact / default / spacious) ve %70–200 arası arayüz ölçeği. Değerler açılışta okunur; *Save & restart* kaydedilmemiş değişiklikler için sorduktan sonra yeniden başlatır. Vurgu rengi varsayılanda yeşil olan "ok" durumlarını da boyar
+- **Klavye ve ekran okuyucu**: Tab / Shift+Tab üst çubuğa da ulaşır, odaktaki kontrolü bir odak halkası gösterir; kontroller ilk gösterildiklerinde metinlerinden, placeholder'ından, etiketinden veya tooltip'inden erişilebilir ad alır
 - "Only set" ve "Favorites" çipleri listeleri ayarlanmış ya da yıldızlanmış olanlarla sınırlar
 - **Lint** düğmesi tüm yapılandırmayı birbiriyle çelişen kombinasyonlara karşı kontrol eder (aşağıda Linter). Artık DRS'i de biliyor: RTX 50 öncesi kartta Multi-Frame Generation, RTX 40 öncesinde Frame Generation, GTX'te DLSS, gerçek karttan yeni / onunla aynı GPU arch taklidi, Custom modu olmadan DLSS-SR Scaling, yalnızca Dynamic modda çalışan DLSSG ayarları, Frame Generation üstüne Smooth Motion
 - **Geri al / yinele** (Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y, üst çubuktaki ↶ ↷): DRS ayarları, arch, ortam değişkenleri ve gamescope'taki her değişiklik bir adımdır — profil yükleme, içe aktarma, tarifler, lint düzeltmeleri ve *Reset* dahil. Tek alana yazmak tek adımda birleşir. Undo'nun yanındaki ok son 30 adımı listeler; birine tıklayınca oraya atlar
@@ -99,6 +105,21 @@ Senkronizasyon sekmeleri geçerli yapılandırmayı oyunun başlatıldığı yer
 
   **Steam'de olmayan oyunlar** (Lutris, Heroic, Bottles, elle eklenenler): oyunun adını yazın ya da başlatıcılarınızdan seçin; *Find appid* Steam mağazasında arar ve benzerlik puanıyla eşleşmeleri listeler. *Use selected appid* aramayı çalıştırır; *Use + set as umu GAMEID* ayrıca Launch line sekmesindeki `GAMEID` alanını `umu-<appid>` ile doldurur. Steam'de satılmayan oyunun eşleşmesi çıkmaz (`umu-0` kullanın).
 - **Community tips ⚠**: ProtonDB *kullanıcı raporlarında* geçen ortam ayarları; bilerek ayrı bir sekmede tutulur. Yalnızca bir raporda geçse bile her bahis listelenir ve yanında raporlayanın GPU'su ve sürücüsü, Proton sürümü, işletim sistemi ve kernel'i, değerlendirmesi ve rapor tarihi gösterilir (CPU ve RAM için satırın üzerine gelin). Filtreler: yalnızca NVIDIA raporları, son 6 / 12 ay ve "yalnızca DRSTool'un ayarlayabildiği değişkenler"; *Seen* sütunu aynı ayarın kaç raporda geçtiğini gösterir. Veri, ProtonDB'nin herkese açık aylık rapor dökümünden gelir (github.com/bdefore/protondb-data, ODbL): *Download / update ProtonDB report data* düğmesine bir kez basın (~70 MB, birkaç saniyede yerel olarak indekslenir, son 12 ay tutulur); sonrasında her oyun çevrimdışı aranır. Denemeden önce raporlayanın kurulumunu kendinizinkiyle karşılaştırın. **Riski size aittir**: bunlar bireysel deneyimlerdir, DRSTool doğrulamamıştır; farklı donanım, sürücü, kernel, Proton sürümü ve Linux kurulumlarında farklı davranabilir, çökmeye veya performans kaybına yol açabilir. Hiçbiri önceden seçilmez, onay kutusunu işaretlemeden Apply düğmesi pasif kalır ve onay penceresi uyarıyı tekrarlar. DRSTool kataloğunda olmayan değişkenler yalnızca bilgi amaçlı gösterilir
+
+### Komut satırı
+
+Seçenek verilmezse `drstool` GUI'yi başlatır. Aşağıdaki seçenekler başsız (offscreen Qt, GUI ile aynı kod) çalışır, stdout'a yazar ve çıkar; profil adları büyük/küçük harfe bakmadan ve benzersiz alt dizgiyle eşleşir.
+
+| Komut | Ne yapar |
+|---|---|
+| `drstool --list-profiles` | profil başına bir satır: DRS / env sayısı, GPU arch, gamescope |
+| `drstool --print-env PROFIL [--format steam\|shell\|export\|json]` | launch line (`steam`: `env … -- %command%`, `shell`: `… "$@"`), `export` satırları veya tüm payload JSON olarak |
+| `drstool --lint PROFIL [--strict]` | bu makinede tutarlılık linter'ı; hata varsa çıkış kodu 1 (`--strict` ile uyarıda da) |
+| `drstool --apply PROFIL --lutris OYUN [--lutris-dir DIZIN] [--dry-run] [-y]` | profili Lutris sekmesiyle aynı şekilde bir Lutris oyun YAML'ına işler (önce yedek, elle yazılan anahtarlar korunur). `--dry-run` farkı yazdırır; `-y` yoksa sorar, terminal yoksa reddeder |
+| `drstool --import-nip DOSYA [--nip-profile AD] [--into PROFIL \| --save-as AD]` | Profile Inspector `.nip` dosyasını `DXVK_NVAPI_DRS_SETTINGS`'e çevirir; isteğe bağlı olarak kayıtlı bir profile birleştirir veya yeni profil olarak saklar |
+| `drstool --profile PROFIL` | GUI'yi o profil yüklü açar |
+
+Çıkış kodu: 0 tamam, 1 lint hatası / yazma başarısız, 2 hatalı argüman veya bulunamadı.
 
 ### Lutris notları
 Lutris de kendi yapılandırmasına yazar; bir oyunu iki yerde de düzenlerseniz yukarıdaki dış değişiklik şeridini ve *Seçili oyundan yükle* düğmesini kullanarak DRSTool'u yeniden eşitleyin.
