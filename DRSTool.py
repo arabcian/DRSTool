@@ -365,8 +365,8 @@ ROLE_UNAVAIL = Qt.UserRole + 15  # str: why the system can't run it ("" = fine)
 
 
 class SidebarDelegate(QStyledItemDelegate):
-    HEADER_H = 30
-    ITEM_H = 26
+    HEADER_H = 32
+    ITEM_H = 28
 
     def sizeHint(self, option, index):
         kind = index.data(ROLE_KIND)
@@ -414,10 +414,15 @@ class SidebarDelegate(QStyledItemDelegate):
         is_set = bool(index.data(ROLE_SET))
 
         if selected:
-            p.fillRect(r, QColor(118, 185, 0, 26))
-            p.fillRect(QRect(r.left(), r.top(), 2, r.height()), QColor(T["accent"]))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(118, 185, 0, 28))
+            p.drawRoundedRect(r.adjusted(2, 1, -2, -1), 5, 5)
+            p.setBrush(QColor(T["accent"]))
+            p.drawRoundedRect(QRect(r.left() + 2, r.top() + 6, 3, r.height() - 12), 1.5, 1.5)
         elif hovered:
-            p.fillRect(r, QColor(T["surface"]))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(T["surface"]))
+            p.drawRoundedRect(r.adjusted(2, 1, -2, -1), 5, 5)
 
         if is_set:
             p.setPen(Qt.NoPen)
@@ -2756,19 +2761,19 @@ class OutputBarWidget(QWidget):
         self.setStyleSheet(f"#outputBar {{ background:{T['surface']}; border-bottom:1px solid {T['border']}; }}")
 
         root = QHBoxLayout(self)
-        root.setContentsMargins(12, 8, 12, 8)
-        root.setSpacing(12)
+        root.setContentsMargins(14, 10, 14, 10)
+        root.setSpacing(14)
 
         lbl_ss = (f"font-family:{T['mono']}; font-size:11px; color:{T['accent']};"
                   " font-weight:600; background:transparent;")
         box_ss = (f"QLabel{{ background:{T['bg']}; border:1px solid {T['border_hi']};"
-                  f" border-radius:4px; padding:3px 8px; color:{T['text']};"
-                  f" font-family:{T['mono']}; font-size:12px; }}"
+                  f" border-radius:5px; padding:4px 9px; color:{T['text']};"
+                  f" font-family:{T['mono']}; font-size:12px; min-height:18px; }}"
                   f"QLabel:hover{{ border-color:{T['accent_dim']}; }}")
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(5)
+        grid.setVerticalSpacing(6)
         grid.setContentsMargins(0, 0, 0, 0)
 
         def key(text):
@@ -2796,23 +2801,27 @@ class OutputBarWidget(QWidget):
         arch_row.addWidget(self._settings_value, 1)
         grid.addLayout(arch_row, 0, 1)
 
+        # Row 1: env vars + gamescope share a row (was two nearly-empty rows)
         grid.addWidget(key("ENV VARS="), 1, 0)
+        env_row = QHBoxLayout()
+        env_row.setSpacing(8)
         self._env_value = val("none")
-        grid.addWidget(self._env_value, 1, 1)
-
-        grid.addWidget(key("GAMESCOPE="), 2, 0)
+        env_row.addWidget(self._env_value, 3)
+        env_row.addWidget(key("GAMESCOPE="))
         self._gamescope_value = val("disabled")
-        grid.addWidget(self._gamescope_value, 2, 1)
+        env_row.addWidget(self._gamescope_value, 2)
+        grid.addLayout(env_row, 1, 1)
         grid.setColumnStretch(1, 1)
         root.addLayout(grid, 1)
 
         # ── Action column ────────────────────────────────────────────────
-        col = QVBoxLayout()
-        col.setSpacing(5)
+        col = QGridLayout()
+        col.setHorizontalSpacing(6)
+        col.setVerticalSpacing(6)
         col.setContentsMargins(0, 0, 0, 0)
 
-        btn_base = ("border-radius:4px; font-weight:600; font-size:12px;"
-                    " min-height:24px; padding:0 10px;")
+        btn_base = ("border-radius:5px; font-weight:600; font-size:12px;"
+                    " min-height:26px; padding:0 10px;")
         self._btn_ss_primary = (
             f"QToolButton,QPushButton{{background:{T['accent']};border:1px solid {T['accent']};"
             f"color:#0b0d10;{btn_base}}}"
@@ -2859,30 +2868,32 @@ class OutputBarWidget(QWidget):
         menu.addAction(act_exp)
         copy_btn.setMenu(menu)
         copy_btn.clicked.connect(lambda: self._copy_all(steam=False))
-        col.addWidget(copy_btn)
+        col.addWidget(copy_btn, 0, 0)
 
         steam_btn = QPushButton("Steam line")
         steam_btn.setStyleSheet(self._btn_ss_quiet)
         steam_btn.setToolTip("Copy  env … gamescope … -- %command%  for Steam's launch options")
         steam_btn.clicked.connect(self._copy_steam_env)
-        col.addWidget(steam_btn)
+        col.addWidget(steam_btn, 0, 1)
 
         self._save_profile_btn = QPushButton("Save")
         self._save_profile_btn.setStyleSheet(self._btn_ss_quiet)
         self._save_profile_btn.setEnabled(False)
         self._save_profile_btn.clicked.connect(self._save_to_profile)
-        col.addWidget(self._save_profile_btn)
+        col.addWidget(self._save_profile_btn, 1, 0)
 
         reset_btn = QPushButton("Reset")
         reset_btn.setStyleSheet(btn_ss_danger)
         reset_btn.setToolTip("Clear every DRS setting, the GPU arch, env vars and gamescope flags")
         reset_btn.clicked.connect(self._reset_all)
-        col.addWidget(reset_btn)
+        col.addWidget(reset_btn, 1, 1)
+        for _b in (copy_btn, steam_btn, self._save_profile_btn, reset_btn):
+            _b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         holder = QWidget()
         holder.setLayout(col)
-        holder.setFixedWidth(128)
-        root.addWidget(holder, 0, Qt.AlignTop)
+        holder.setFixedWidth(232)
+        root.addWidget(holder, 0, Qt.AlignVCenter)
 
         self.settings_manager.settings_changed.connect(self._update)
         self.settings_manager.arch_changed.connect(self._update)
@@ -3057,6 +3068,21 @@ class OutputBarWidget(QWidget):
 # Setting Editor - Modern Card View
 # ============================================================================
 
+def editor_card(inner: QWidget) -> QWidget:
+    """Put an editor page on a rounded surface card so it reads as one
+    panel instead of loose text floating on the window background."""
+    card = QFrame()
+    card.setObjectName("editorCard")
+    card.setAttribute(Qt.WA_StyledBackground, True)
+    card.setStyleSheet(f"#editorCard {{ background:#11141b; border:1px solid {T['border']};"
+                       " border-radius:10px; }")
+    lay = QVBoxLayout(card)
+    lay.setContentsMargins(22, 18, 22, 16)
+    lay.setSpacing(0)
+    lay.addWidget(inner)
+    return card
+
+
 def _make_scrollable_control_area():
     """
     Build the (control_widget, control_layout, scroll_area) trio shared by
@@ -3072,8 +3098,8 @@ def _make_scrollable_control_area():
     """
     control_widget = QWidget()
     control_layout = QVBoxLayout(control_widget)
-    control_layout.setContentsMargins(0, 6, 0, 0)
-    control_layout.setSpacing(6)
+    control_layout.setContentsMargins(0, 12, 0, 0)
+    control_layout.setSpacing(8)
 
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
@@ -3288,7 +3314,7 @@ QPushButton:pressed{
             cols = 5
 
         grid = QGridLayout()
-        grid.setSpacing(4)
+        grid.setSpacing(6)
 
         # Enum settings accept exactly one value. Group the buttons so Qt
         # enforces single-selection (checking one unchecks the others) instead
@@ -3313,8 +3339,8 @@ QPushButton{
     border:1px solid #323c4b;
     border-radius:6px;
     color:#d8d8d8;
-    padding:5px;
-    font-size:11px;
+    padding:8px 10px;
+    font-size:12px;
     font-weight:600;
 }
 QPushButton:hover{
@@ -3348,7 +3374,7 @@ QPushButton:checked{
 
     def _build_preset_control(self, s: Setting, cur: Optional[str]):
         grid = QGridLayout()
-        grid.setSpacing(4)
+        grid.setSpacing(6)
 
         row, col = 0, 0
         for preset in s.presets:
@@ -3378,8 +3404,8 @@ QPushButton{
     border:1px solid #323c4b;
     border-radius:6px;
     color:#d8d8d8;
-    padding:5px;
-    font-size:11px;
+    padding:8px 10px;
+    font-size:12px;
     font-weight:600;
 }
 QPushButton:hover{
@@ -6824,7 +6850,7 @@ QPushButton:pressed{ background:#a73434; }
         """Enum: same button-grid style as _build_enum_control."""
         cols = min(len(ev.options), 5)
         grid = QGridLayout()
-        grid.setSpacing(4)
+        grid.setSpacing(6)
 
         # Enum env vars (e.g. on/off __GL_* switches) accept exactly one
         # value. Without a QButtonGroup, each button toggled independently
@@ -6839,15 +6865,15 @@ QPushButton:pressed{ background:#a73434; }
             btn.setCheckable(True)
             if opt == cur:
                 btn.setChecked(True)
-            btn.setFixedHeight(30)
+            btn.setFixedHeight(34)
             btn.setStyleSheet("""
 QPushButton{
     background:#1a1f28;
     border:1px solid #323c4b;
     border-radius:6px;
     color:#d8d8d8;
-    padding:5px;
-    font-size:11px;
+    padding:8px 10px;
+    font-size:12px;
     font-weight:600;
 }
 QPushButton:hover{
@@ -7121,7 +7147,7 @@ QPushButton:checked{
         self._flag_btns: Dict[str, QPushButton] = {}
         cols = min(len(plain_options), 5) or 1
         grid = QGridLayout()
-        grid.setSpacing(4)
+        grid.setSpacing(6)
         row, col = 0, 0
         for opt in plain_options:
             btn = QPushButton(opt)
@@ -11846,14 +11872,23 @@ class ExtraToolsWidget(QWidget):
     """
     # Shared QTabWidget stylesheet (same look as the Profiles subtabs)
     _TAB_SS = """
-QTabWidget::pane { border: 1px solid #1e2535; top: -1px; }
-QTabBar::tab {
-    background: #141720; color: #a8adb8;
-    border: 1px solid #1e2535; border-bottom: none;
-    padding: 4px 14px; font-size:13px; font-weight: 600;
+QTabWidget::pane {
+    border: 1px solid #1e2535; border-radius: 8px; top: -1px;
+    background: #11141b; padding: 10px 12px;
 }
-QTabBar::tab:selected { background: #1a1f2e; color: #e8eaf0; border-color: #4a7300; }
-QTabBar::tab:hover { color: #c8cdd8; }
+QTabWidget::tab-bar { left: 4px; }
+QTabBar { qproperty-drawBase: 0; }
+QTabBar::tab {
+    background: transparent; color: #8a92a5;
+    border: none; border-bottom: 2px solid transparent;
+    padding: 6px 11px 7px 11px; margin-right: 1px;
+    font-size: 12px; font-weight: 600;
+}
+QTabBar::tab:selected { color: #e8eaf0; border-bottom: 2px solid #76b900; }
+QTabBar::tab:hover:!selected { color: #c8cdd8; background: #141720;
+    border-top-left-radius: 5px; border-top-right-radius: 5px; }
+QTabBar QToolButton { background: #141720; border: 1px solid #2b3444; border-radius: 4px; }
+QTabBar QToolButton:hover { border-color: #4a7300; }
 """
 
     def __init__(self, parent=None):
@@ -20613,7 +20648,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(980, 640)
         self.setStyleSheet(f"""
             QMainWindow {{ background: {T['bg']}; }}
-            QSplitter::handle:horizontal {{ background: {T['border']}; width: 4px; }}
+            QSplitter::handle:horizontal {{ background: transparent; width: 5px; }}
             QSplitter::handle:horizontal:hover {{ background: {T['accent_dim']}; }}
         """)
 
@@ -20655,7 +20690,7 @@ class MainWindow(QMainWindow):
         nav_layout.addStretch(1)
 
         _nav_btn_ss = (f"QToolButton,QPushButton{{color:{T['text2']};background:transparent;"
-                       f"border:1px solid {T['border_hi']};border-radius:4px;padding:0 9px;font-size:12px;}}"
+                       f"border:1px solid {T['border_hi']};border-radius:5px;padding:0 10px;font-size:12px;}}"
                        f"QToolButton:hover,QPushButton:hover{{background:{T['surface']};"
                        f"border-color:{T['accent_dim']};color:{T['text']};}}"
                        f"QToolButton:disabled{{color:#3c4352;border-color:{T['border']};}}"
@@ -20676,7 +20711,7 @@ class MainWindow(QMainWindow):
         self._recipes_btn.clicked.connect(self.open_recipes)
         for _b in (self._undo_btn, self._redo_btn, self._recipes_btn):
             _b.setCursor(Qt.PointingHandCursor)
-            _b.setFixedHeight(24)
+            _b.setFixedHeight(26)
             _b.setStyleSheet(_nav_btn_ss)
             _b.setFocusPolicy(Qt.NoFocus)
             nav_layout.addWidget(_b)
@@ -20685,13 +20720,13 @@ class MainWindow(QMainWindow):
 
         self._log_btn = QPushButton()
         self._log_btn.setCursor(Qt.PointingHandCursor)
-        self._log_btn.setFixedHeight(24)
+        self._log_btn.setFixedHeight(26)
         self._log_btn.clicked.connect(self._toggle_logging)
         nav_layout.addWidget(self._log_btn)
         nav_layout.addSpacing(6)
         self._lint_btn = QPushButton("Lint \u2714")
         self._lint_btn.setCursor(Qt.PointingHandCursor)
-        self._lint_btn.setFixedHeight(24)
+        self._lint_btn.setFixedHeight(26)
         self._lint_btn.setToolTip("Configuration consistency check — click to see the findings")
         self._lint_btn.clicked.connect(self._open_linter)
         self._set_lint_button(0, 0)
@@ -20715,7 +20750,7 @@ class MainWindow(QMainWindow):
         # could collapse it to 0 every tab's left pane would vanish at once
         # with no visible handle to drag it back.
         splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(4)
+        splitter.setHandleWidth(5)
 
         # ===== Sidebar =====
         sidebar = QWidget()
@@ -20725,8 +20760,8 @@ class MainWindow(QMainWindow):
         sidebar.setMinimumWidth(260)
         sidebar.setMaximumWidth(900)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(8, 8, 4, 6)
-        sidebar_layout.setSpacing(6)
+        sidebar_layout.setContentsMargins(10, 12, 6, 8)
+        sidebar_layout.setSpacing(8)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("Filter  (Ctrl+F)   ·   search everything: Ctrl+K")
@@ -20734,8 +20769,8 @@ class MainWindow(QMainWindow):
         self._search.setStyleSheet(f"""
             QLineEdit {{
                 background: {T['surface']}; border: 1px solid {T['border']};
-                color: {T['text']}; font-size: 12px; padding: 3px 8px;
-                border-radius: 4px; min-height: 28px;
+                color: {T['text']}; font-size: 12px; padding: 3px 10px;
+                border-radius: 6px; min-height: 30px;
             }}
             QLineEdit:focus {{ border-color: {T['accent_dim']}; }}
             QLineEdit:disabled {{ color: {T['muted']}; background: {T['bg']}; }}
@@ -20853,7 +20888,7 @@ class MainWindow(QMainWindow):
         editor.setAttribute(Qt.WA_StyledBackground, True)
         editor.setStyleSheet(f"#editorPane {{ background:{T['bg']}; border-left:1px solid {T['border']}; }}")
         editor_layout = QVBoxLayout(editor)
-        editor_layout.setContentsMargins(20, 16, 20, 16)
+        editor_layout.setContentsMargins(14, 12, 14, 12)
         editor_layout.setSpacing(0)
 
         self._right_stack = QStackedWidget()
@@ -20869,17 +20904,17 @@ class MainWindow(QMainWindow):
         # Page 1: Setting editor
         self._setting_editor = SettingEditorWidget(self.settings_manager)
         self._setting_editor.cleared.connect(self._on_setting_cleared)
-        self._right_stack.addWidget(self._setting_editor)
+        self._right_stack.addWidget(editor_card(self._setting_editor))
 
         # Page 2: Architecture detail
         self._arch_detail = ArchDetailWidget()
         self._arch_detail.clear_requested.connect(self._clear_architecture)
-        self._right_stack.addWidget(self._arch_detail)
+        self._right_stack.addWidget(editor_card(self._arch_detail))
 
         # Page 3: Env var editor
         self._env_editor = EnvVarEditorWidget()
         self._env_editor.set_list_widget(self._env_widget)
-        self._right_stack.addWidget(self._env_editor)
+        self._right_stack.addWidget(editor_card(self._env_editor))
 
         # Page 4: Gamescope CLI-flag builder (real argv flags, not env vars)
         self._gamescope = GamescopeFlagsWidget()
@@ -20914,9 +20949,10 @@ class MainWindow(QMainWindow):
         self.setStatusBar(status_bar)
         status_bar.setStyleSheet(f"""
             QStatusBar {{
-                background: {T['bg']}; color: {T['muted']}; font-size: 11px;
-                border-top: 1px solid {T['border']}; min-height: 24px;
+                background: {T['surface']}; color: {T['muted']}; font-size: 11px;
+                border-top: 1px solid {T['border']}; min-height: 24px; padding-left: 8px;
             }}
+            QStatusBar::item {{ border: none; }}
         """)
         status_bar.showMessage("Ready")
 
