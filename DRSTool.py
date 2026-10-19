@@ -11997,60 +11997,77 @@ QTabBar::tab:hover:!selected {{ color:{T['text2']}; border-bottom:2px solid {T['
         tabs = QTabWidget()
         tabs.setStyleSheet(self._TAB_SS)
 
-        # ── vk_flip_meter sub-tab ────────────────────────────────────────────
-        self._flm_install = FlmInstallWidget()
-        flm_scroll = QScrollArea()
-        flm_scroll.setWidgetResizable(True)
-        flm_scroll.setWidget(self._flm_install)
-        flm_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
-        tabs.addTab(flm_scroll, "vk_flip_meter")
-
-        # ── lutris-game-tune sub-tab ─────────────────────────────────────────
-        self._lgtune = LgtuneWidget()
-        tabs.addTab(self._lgtune, "lutris-game-tune")
-
-        # ── DLSS Updater sub-tab (NGX OTA DLSS / Streamline downloads) ────────
-        self._ngx = NgxUpdaterWidget()
-        ngx_scroll = QScrollArea()
-        ngx_scroll.setWidgetResizable(True)
-        ngx_scroll.setWidget(self._ngx)
-        ngx_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
-        tabs.addTab(ngx_scroll, "DLSS Updater")
-
-        # ── feature pack: linter / system / prefix doctor / overlays ──────────
+        # Tabs are built on first visit (lazy): constructing all 15 tool pages at
+        # startup cost ~1.7 s of Qt style polishing for pages nobody had opened.
         self._tabs = tabs
+        self._lazy: Dict[str, tuple] = {}      # title -> (page, attr, factory)
+        self._lazy_attr: Dict[str, str] = {}   # attr  -> title
+
+        def scrolled(w):
+            sc = QScrollArea()
+            sc.setWidgetResizable(True)
+            sc.setWidget(w)
+            sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+            return sc
+
+        def lazy(title, attr, factory, wrap=None):
+            page = QWidget()
+            lay = QVBoxLayout(page)
+            lay.setContentsMargins(0, 0, 0, 0)
+            self._lazy[title] = (page, attr, factory, wrap)
+            self._lazy_attr[attr] = title
+            tabs.addTab(page, title)
+
+        lazy("vk_flip_meter", "_flm_install", FlmInstallWidget, scrolled)
+        lazy("lutris-game-tune", "_lgtune", LgtuneWidget)
+        lazy("DLSS Updater", "_ngx", NgxUpdaterWidget, scrolled)
+        # Linter and Cache are wired to the main window at startup -> eager.
         self.linter = LinterWidget()
         tabs.addTab(self.linter, "Linter")
-        self.sysinfo = SystemInfoWidget()
-        tabs.addTab(self.sysinfo, "System")
-        self.prefix_doctor = PrefixDoctorWidget()
-        tabs.addTab(self.prefix_doctor, "Prefix Doctor")
-        self.mangohud = MangoHudBuilder()
-        tabs.addTab(self.mangohud, "MangoHud")
-        self.vkbasalt = VkBasaltBuilder()
-        tabs.addTab(self.vkbasalt, "vkBasalt")
+        lazy("System", "sysinfo", SystemInfoWidget)
+        lazy("Prefix Doctor", "prefix_doctor", PrefixDoctorWidget)
+        lazy("MangoHud", "mangohud", MangoHudBuilder)
+        lazy("vkBasalt", "vkbasalt", VkBasaltBuilder)
         self.cache = CacheManagerWidget()
         tabs.addTab(self.cache, "Cache")
         self.cache.stale_changed.connect(
             lambda stale: tabs.setTabText(tabs.indexOf(self.cache), "Cache ⚠" if stale else "Cache"))
-        self.drift = UpstreamDriftWidget()
-        tabs.addTab(self.drift, "Upstream drift")
-        self.hints = GameHintsWidget()
-        tabs.addTab(self.hints, "Game hints")
-        self.community = CommunityTipsWidget()
-        tabs.addTab(self.community, "Community tips")
-        self.frametime = FrametimeWidget()
-        tabs.addTab(self.frametime, "Frametime")
-        self.live = LiveProcessWidget()
-        tabs.addTab(self.live, "Live process")
-        self.logview = LogViewerWidget()
-        tabs.addTab(self.logview, "Logs")
+        lazy("Upstream drift", "drift", UpstreamDriftWidget)
+        lazy("Game hints", "hints", GameHintsWidget)
+        lazy("Community tips", "community", CommunityTipsWidget)
+        lazy("Frametime", "frametime", FrametimeWidget)
+        lazy("Live process", "live", LiveProcessWidget)
+        lazy("Logs", "logview", LogViewerWidget)
+        tabs.currentChanged.connect(lambda i: self._build_lazy(tabs.tabText(i)))
+        self._build_lazy(tabs.tabText(tabs.currentIndex()))
 
         # Navigation lives in the left sidebar (ExtraToolsSidebarWidget); the
         # tab strip itself would overflow with this many tools.
         tabs.tabBar().hide()
         tabs.setStyleSheet("QTabWidget::pane { border:none; }")
         layout.addWidget(tabs)
+
+    def _build_lazy(self, title: str):
+        ent = self._lazy.pop(title, None)
+        if ent is None:
+            return None
+        page, attr, factory, wrap = ent
+        w = factory()
+        object.__setattr__(self, attr, w)
+        page.layout().addWidget(wrap(w) if wrap else w)
+        return w
+
+    def __getattr__(self, name):
+        # Only reached for attributes not set yet: build the lazy page on demand.
+        lz = self.__dict__.get("_lazy_attr")
+        if lz and name in lz:
+            w = self._build_lazy(lz[name])
+            if w is not None:
+                return w
+        raise AttributeError(name)
+
+    def is_built(self, attr: str) -> bool:
+        return attr in self.__dict__
 
     def tab_titles(self) -> List[str]:
         return [self._tabs.tabText(i).replace(" ⚠", "") for i in range(self._tabs.count())]
@@ -21714,7 +21731,9 @@ class MainWindow(QMainWindow):
             pass
         try:
             SYSHUB.shutdown()
-            self._extra_tools.prefix_doctor._worker and self._extra_tools.prefix_doctor._worker.wait(3000)
+            if self._extra_tools.is_built("prefix_doctor"):
+                pd = self._extra_tools.prefix_doctor
+                pd._worker and pd._worker.wait(3000)
         except Exception:
             pass
         super().closeEvent(event)
