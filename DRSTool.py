@@ -245,11 +245,11 @@ SCROLLABLE_CONTROL_QSS = """
 QScrollArea{ border:none; background:transparent; }
 QScrollArea > QWidget > QWidget{ background:transparent; }
 QScrollBar:vertical{
-    background:#0d0f12;
+    background:#0c0e12;
     width:5px;
 }
 QScrollBar::handle:vertical{
-    background:#1e2535;
+    background:#1d222c;
     border-radius:3px;
 }
 QScrollBar::handle:vertical:hover{
@@ -276,72 +276,195 @@ QScrollBar::sub-page:vertical{
 # ============================================================================
 
 T = {
-    "bg":        "#0d0f12",
-    "surface":   "#141720",
-    "raised":    "#1a1f2e",
-    "border":    "#1e2535",
-    "border_hi": "#2b3444",
-    "text":      "#e8eaf0",
-    "text2":     "#b9bfcc",
-    "muted":     "#7d8597",
+    # Layered graphite: sunken < bg < surface < raised < overlay
+    "sunken":    "#08090c",
+    "bg":        "#0c0e12",
+    "surface":   "#12151b",
+    "raised":    "#181c24",
+    "overlay":   "#1f2430",
+    "hover":     "#1c212b",
+    "border":    "#1d222c",
+    "border_hi": "#2a313d",
+    "text":      "#eceff4",
+    "text2":     "#b3bac7",
+    "muted":     "#717a8b",
+    "faint":     "#4a5262",
     "accent":    "#76b900",
-    "accent_hi": "#8fd400",
-    "accent_dim":"#4a7300",
-    "warn":      "#d2a03c",
-    "danger":    "#d05050",
-    "mono":      "monospace",
+    "accent_hi": "#93d81e",
+    "accent_dim":"#3f6200",
+    "accent_bg": "rgba(118,185,0,0.10)",
+    "warn":      "#e3a73f",
+    "danger":    "#ea5a50",
+    "info":      "#5aa7ff",
+    "mono":      "'JetBrains Mono','Fira Code','DejaVu Sans Mono',monospace",
+    "radius":    "7px",
 }
 
 APP_QSS = f"""
+* {{ outline:0; }}
+QWidget {{ color:{T['text2']}; selection-background-color:rgba(118,185,0,0.30); selection-color:{T['text']}; }}
 QToolTip {{
-    background:{T['raised']}; color:{T['text']};
-    border:1px solid {T['border_hi']}; padding:6px 8px; border-radius:4px;
+    background:{T['overlay']}; color:{T['text']};
+    border:1px solid {T['border_hi']}; padding:7px 9px; border-radius:6px;
 }}
-QScrollBar:vertical {{ background:transparent; width:8px; margin:0; }}
-QScrollBar::handle:vertical {{ background:{T['border']}; border-radius:4px; min-height:28px; }}
-QScrollBar::handle:vertical:hover {{ background:#3a4458; }}
-QScrollBar:horizontal {{ background:transparent; height:8px; margin:0; }}
-QScrollBar::handle:horizontal {{ background:{T['border']}; border-radius:4px; min-width:28px; }}
-QScrollBar::handle:horizontal:hover {{ background:#3a4458; }}
+QScrollBar:vertical {{ background:transparent; width:10px; margin:2px; }}
+QScrollBar::handle:vertical {{ background:{T['border_hi']}; border-radius:3px; min-height:32px; margin:0 2px; }}
+QScrollBar::handle:vertical:hover {{ background:#3c4555; margin:0 1px; }}
+QScrollBar:horizontal {{ background:transparent; height:10px; margin:2px; }}
+QScrollBar::handle:horizontal {{ background:{T['border_hi']}; border-radius:3px; min-width:32px; margin:2px 0; }}
+QScrollBar::handle:horizontal:hover {{ background:#3c4555; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width:0; height:0; border:none; background:none; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background:none; }}
 QMenu {{
-    background:{T['surface']}; color:{T['text']};
-    border:1px solid {T['border_hi']}; padding:4px;
+    background:{T['overlay']}; color:{T['text']};
+    border:1px solid {T['border_hi']}; padding:5px; border-radius:8px;
 }}
-QMenu::item {{ padding:6px 18px; border-radius:3px; }}
+QMenu::item {{ padding:7px 22px 7px 14px; border-radius:5px; }}
 QMenu::item:selected {{ background:rgba(118,185,0,0.16); color:{T['text']}; }}
-QMenu::separator {{ height:1px; background:{T['border']}; margin:4px 6px; }}
+QMenu::item:disabled {{ color:{T['faint']}; }}
+QMenu::separator {{ height:1px; background:{T['border_hi']}; margin:5px 8px; }}
 QMessageBox, QDialog {{ background:{T['surface']}; }}
 QMessageBox QLabel {{ color:{T['text']}; }}
-QMessageBox QPushButton, QDialogButtonBox QPushButton {{
-    background:{T['raised']}; border:1px solid {T['border_hi']}; border-radius:4px;
-    color:{T['text']}; padding:5px 14px; min-width:72px;
+QPushButton {{
+    background:{T['raised']}; border:1px solid {T['border_hi']}; border-radius:6px;
+    color:{T['text']}; padding:5px 14px; min-height:20px;
 }}
-QMessageBox QPushButton:hover, QDialogButtonBox QPushButton:hover {{ border-color:{T['accent']}; }}
-QMessageBox QPushButton:default, QDialogButtonBox QPushButton:default {{ border-color:{T['accent_dim']}; }}
+QPushButton:hover {{ background:{T['overlay']}; border-color:{T['accent_dim']}; }}
+QPushButton:pressed {{ background:{T['hover']}; }}
+QPushButton:checked {{ background:{T['accent_bg']}; border-color:{T['accent']}; color:{T['accent_hi']}; }}
+QPushButton:disabled {{ color:{T['faint']}; border-color:{T['border']}; background:{T['surface']}; }}
+QPushButton:default {{ border-color:{T['accent_dim']}; }}
+QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox {{
+    background:{T['sunken']}; border:1px solid {T['border_hi']}; border-radius:6px;
+    color:{T['text']}; padding:4px 8px;
+}}
+QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
+    border-color:{T['accent']};
+}}
+QLineEdit:disabled, QSpinBox:disabled {{ color:{T['faint']}; }}
+QComboBox {{
+    background:{T['raised']}; border:1px solid {T['border_hi']}; border-radius:6px;
+    color:{T['text']}; padding:4px 10px; min-height:22px;
+}}
+QComboBox:hover {{ border-color:{T['accent_dim']}; }}
+QComboBox:on {{ border-color:{T['accent']}; }}
 QComboBox QAbstractItemView {{
-    background:{T['surface']}; color:{T['text']}; border:1px solid {T['border_hi']};
-    selection-background-color:rgba(118,185,0,0.18); selection-color:{T['text']};
+    background:{T['overlay']}; color:{T['text']}; border:1px solid {T['border_hi']};
+    selection-background-color:rgba(118,185,0,0.18); selection-color:{T['text']}; padding:4px;
 }}
+QCheckBox, QRadioButton {{ color:{T['text2']}; spacing:8px; }}
+QCheckBox::indicator {{
+    width:15px; height:15px; border:1px solid {T['border_hi']}; border-radius:4px; background:{T['sunken']};
+}}
+QCheckBox::indicator:hover {{ border-color:{T['accent']}; }}
+QCheckBox::indicator:checked {{ background:{T['accent']}; border-color:{T['accent']}; }}
+QCheckBox::indicator:disabled {{ background:{T['surface']}; border-color:{T['border']}; }}
+QGroupBox {{
+    background:{T['surface']}; border:1px solid {T['border']}; border-radius:10px;
+    margin-top:14px; padding:14px 10px 10px 10px; color:{T['text2']}; font-weight:600;
+}}
+QGroupBox::title {{
+    subcontrol-origin:margin; left:12px; padding:0 6px;
+    color:{T['muted']}; font-size:11px; letter-spacing:1px; text-transform:uppercase;
+}}
+QTabWidget::pane {{ border:none; border-top:1px solid {T['border']}; top:-1px; }}
+QTabBar {{ qproperty-drawBase:0; }}
+QTabBar::tab {{
+    background:transparent; color:{T['muted']}; border:none;
+    border-bottom:2px solid transparent; padding:7px 14px; font-weight:600;
+}}
+QTabBar::tab:hover {{ color:{T['text']}; }}
+QTabBar::tab:selected {{ color:{T['text']}; border-bottom:2px solid {T['accent']}; }}
+QTableWidget, QTreeWidget, QTableView, QTreeView {{
+    background:{T['surface']}; alternate-background-color:{T['raised']};
+    border:1px solid {T['border']}; border-radius:8px; gridline-color:{T['border']}; color:{T['text2']};
+}}
+QHeaderView::section {{
+    background:{T['raised']}; color:{T['muted']}; border:none; border-bottom:1px solid {T['border']};
+    padding:6px 8px; font-weight:600;
+}}
+QProgressBar {{ background:{T['sunken']}; border:none; border-radius:3px; }}
+QProgressBar::chunk {{ background:{T['accent']}; border-radius:3px; }}
+QStatusBar QLabel {{ color:{T['muted']}; }}
 """
 
 
+# Reusable button looks. Local stylesheets beat APP_QSS, so widgets that need
+# a specific role (primary / ghost / danger) set one of these explicitly.
+def btn_ss(kind: str = "default", size: str = "md") -> str:
+    pad = {"sm": "3px 10px", "md": "5px 14px", "lg": "7px 20px"}[size]
+    base = (f"border-radius:6px; padding:{pad}; font-weight:600; font-size:12px;")
+    if kind == "primary":
+        return (f"QPushButton,QToolButton{{background:{T['accent']};border:1px solid {T['accent']};"
+                f"color:#0a0f02;{base}}}"
+                f"QPushButton:hover,QToolButton:hover{{background:{T['accent_hi']};border-color:{T['accent_hi']};}}"
+                f"QPushButton:pressed,QToolButton:pressed{{background:#68a300;}}"
+                f"QPushButton:disabled,QToolButton:disabled{{background:{T['raised']};color:{T['faint']};"
+                f"border-color:{T['border']};}}"
+                "QToolButton::menu-button{border-left:1px solid rgba(0,0,0,0.22);width:18px;}")
+    if kind == "danger":
+        return (f"QPushButton,QToolButton{{background:transparent;border:1px solid {T['border_hi']};"
+                f"color:{T['danger']};{base}}}"
+                f"QPushButton:hover,QToolButton:hover{{background:rgba(234,90,80,0.10);border-color:{T['danger']};}}"
+                f"QPushButton:disabled{{color:{T['faint']};border-color:{T['border']};}}")
+    if kind == "ghost":
+        return (f"QPushButton,QToolButton{{background:transparent;border:1px solid transparent;"
+                f"color:{T['text2']};{base}}}"
+                f"QPushButton:hover,QToolButton:hover{{background:{T['hover']};color:{T['text']};}}"
+                f"QPushButton:checked,QToolButton:checked{{background:{T['accent_bg']};color:{T['accent_hi']};}}"
+                f"QPushButton:disabled,QToolButton:disabled{{color:{T['faint']};}}"
+                "QToolButton::menu-button{width:14px;}")
+    return (f"QPushButton,QToolButton{{background:{T['raised']};border:1px solid {T['border_hi']};"
+            f"color:{T['text']};{base}}}"
+            f"QPushButton:hover,QToolButton:hover{{background:{T['overlay']};border-color:{T['accent_dim']};}}"
+            f"QPushButton:checked,QToolButton:checked{{background:{T['accent_bg']};border-color:{T['accent']};"
+            f"color:{T['accent_hi']};}}"
+            f"QPushButton:disabled,QToolButton:disabled{{color:{T['faint']};border-color:{T['border']};"
+            f"background:{T['surface']};}}"
+            "QToolButton::menu-button{width:16px;border-left:1px solid #2a313d;}")
+
+
+def caption(text: str, color: str = "") -> QLabel:
+    """Small uppercase section caption ("VALUE", "LAUNCH STRING" ...)."""
+    lbl = QLabel(text.upper())
+    lbl.setStyleSheet(f"color:{color or T['muted']}; font-size:10px; font-weight:700;"
+                      " letter-spacing:1.4px; background:transparent;")
+    return lbl
+
+
+def pill_ss(col: str) -> str:
+    """Rounded, tinted status pill (logging / lint state)."""
+    c = QColor(col)
+    rgb = f"{c.red()},{c.green()},{c.blue()}"
+    return (f"QPushButton {{ color:{col}; background:rgba({rgb},0.10); border:1px solid rgba({rgb},0.45);"
+            " border-radius:14px; padding:0 12px; font-size:11px; font-weight:700; }"
+            f"QPushButton:hover {{ background:rgba({rgb},0.20); border-color:{col}; }}")
+
+
 def apply_theme(app: "QApplication") -> None:
-    """Palette + app-wide QSS. Called once from main()."""
+    """Palette + app-wide QSS + UI font. Called once from main()."""
+    from PySide6.QtGui import QFontDatabase
+    fams = set(QFontDatabase.families())
+    for fam in ("Inter", "Inter Variable", "IBM Plex Sans", "Noto Sans", "Cantarell"):
+        if fam in fams:
+            f = QFont(fam)
+            f.setPointSizeF(10)
+            f.setHintingPreference(QFont.PreferNoHinting)
+            app.setFont(f)
+            break
     pal = QPalette()
     pal.setColor(QPalette.Window, QColor(T["bg"]))
     pal.setColor(QPalette.WindowText, QColor(T["text2"]))
     pal.setColor(QPalette.Base, QColor(T["surface"]))
     pal.setColor(QPalette.AlternateBase, QColor(T["raised"]))
     pal.setColor(QPalette.Text, QColor(T["text"]))
-    pal.setColor(QPalette.Button, QColor(T["surface"]))
+    pal.setColor(QPalette.Button, QColor(T["raised"]))
     pal.setColor(QPalette.ButtonText, QColor(T["text2"]))
     pal.setColor(QPalette.Highlight, QColor(T["accent"]))
     pal.setColor(QPalette.HighlightedText, QColor(0, 0, 0))
-    pal.setColor(QPalette.ToolTipBase, QColor(T["raised"]))
+    pal.setColor(QPalette.ToolTipBase, QColor(T["overlay"]))
     pal.setColor(QPalette.ToolTipText, QColor(T["text"]))
-    pal.setColor(QPalette.PlaceholderText, QColor(T["muted"]))
+    pal.setColor(QPalette.PlaceholderText, QColor(T["faint"]))
     pal.setColor(QPalette.Link, QColor(T["accent"]))
     app.setPalette(pal)
     app.setStyleSheet(APP_QSS)
@@ -365,8 +488,8 @@ ROLE_UNAVAIL = Qt.UserRole + 15  # str: why the system can't run it ("" = fine)
 
 
 class SidebarDelegate(QStyledItemDelegate):
-    HEADER_H = 32
-    ITEM_H = 28
+    HEADER_H = 34
+    ITEM_H = 30
 
     def sizeHint(self, option, index):
         kind = index.data(ROLE_KIND)
@@ -383,23 +506,25 @@ class SidebarDelegate(QStyledItemDelegate):
         if kind == "header":
             f = QFont(base_font)
             f.setBold(True)
-            f.setPointSizeF(max(7.5, base_font.pointSizeF() - 0.5))
+            f.setPointSizeF(max(7.0, base_font.pointSizeF() - 1.5))
+            f.setLetterSpacing(QFont.AbsoluteSpacing, 1.2)
+            f.setCapitalization(QFont.AllUppercase)
             p.setFont(f)
             fm = QFontMetrics(f)
-            text_rect = QRect(r.left() + 12, r.top() + 8, r.width() - 24, r.height() - 8)
+            text_rect = QRect(r.left() + 14, r.top() + 10, r.width() - 28, r.height() - 10)
             p.setPen(QColor(T["muted"]))
             p.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, name)
-            x0 = text_rect.left() + fm.horizontalAdvance(name) + 10
-            x1 = r.right() - 12
+            x0 = text_rect.left() + fm.horizontalAdvance(name.upper()) + 12
+            x1 = r.right() - 14
             cnt = index.data(ROLE_COUNT) or 0
             if cnt:
-                badge = f"{cnt} set"
-                bw = fm.horizontalAdvance(badge) + 12
+                badge = str(cnt)
+                bw = max(18, fm.horizontalAdvance(badge) + 12)
                 br = QRect(x1 - bw, text_rect.center().y() - 8, bw, 16)
                 p.setPen(Qt.NoPen)
-                p.setBrush(QColor(118, 185, 0, 36))
+                p.setBrush(QColor(118, 185, 0, 40))
                 p.drawRoundedRect(br, 8, 8)
-                p.setPen(QColor(T["accent"]))
+                p.setPen(QColor(T["accent_hi"]))
                 p.drawText(br, Qt.AlignCenter, badge)
                 x1 = br.left() - 8
             if x1 > x0:
@@ -412,67 +537,76 @@ class SidebarDelegate(QStyledItemDelegate):
         selected = bool(option.state & QStyle.State_Selected)
         hovered = bool(option.state & QStyle.State_MouseOver)
         is_set = bool(index.data(ROLE_SET))
+        card = r.adjusted(6, 1, -6, -1)
 
         if selected:
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(118, 185, 0, 28))
-            p.drawRoundedRect(r.adjusted(2, 1, -2, -1), 5, 5)
+            p.setBrush(QColor(118, 185, 0, 30))
+            p.drawRoundedRect(card, 6, 6)
             p.setBrush(QColor(T["accent"]))
-            p.drawRoundedRect(QRect(r.left() + 2, r.top() + 6, 3, r.height() - 12), 1.5, 1.5)
+            p.drawRoundedRect(QRect(card.left(), card.top() + 6, 3, card.height() - 12), 1.5, 1.5)
         elif hovered:
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(T["surface"]))
-            p.drawRoundedRect(r.adjusted(2, 1, -2, -1), 5, 5)
+            p.setBrush(QColor(T["hover"]))
+            p.drawRoundedRect(card, 6, 6)
 
         if is_set:
+            c = card.center().y()
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(T["accent"]))
-            p.drawEllipse(QRect(r.left() + 11, r.center().y() - 3, 6, 6))
+            p.setBrush(QColor(118, 185, 0, 55))
+            p.drawEllipse(QRect(card.left() + 9, c - 5, 10, 10))
+            p.setBrush(QColor(T["accent_hi"]))
+            p.drawEllipse(QRect(card.left() + 11, c - 3, 6, 6))
 
         value = index.data(ROLE_VALUE) or ""
-        pad_l = r.left() + 24
-        avail = r.right() - 10 - pad_l
+        pad_l = card.left() + 26
+        avail = card.right() - 8 - pad_l
         val_w = 0
         if value:
-            vf = QFont(T["mono"])
+            vf = QFont()
+            vf.setFamilies(["JetBrains Mono", "Fira Code", "DejaVu Sans Mono", "monospace"])
             vf.setStyleHint(QFont.Monospace)
-            vf.setPointSizeF(max(7.5, base_font.pointSizeF() - 0.5))
+            vf.setPointSizeF(max(7.0, base_font.pointSizeF() - 1.5))
             vfm = QFontMetrics(vf)
             max_val = int(avail * 0.45)
-            shown = vfm.elidedText(value, Qt.ElideRight, max_val)
-            val_w = vfm.horizontalAdvance(shown)
+            shown = vfm.elidedText(value, Qt.ElideRight, max_val - 12)
+            tw = vfm.horizontalAdvance(shown)
+            val_w = tw + 12
+            chip = QRect(card.right() - 6 - val_w, card.center().y() - 9, val_w, 18)
+            p.setPen(Qt.NoPen)
+            if is_set:
+                p.setBrush(QColor(118, 185, 0, 28))
+                p.drawRoundedRect(chip, 5, 5)
             p.setFont(vf)
-            p.setPen(QColor(T["accent"]) if is_set else QColor(T["muted"]))
-            p.drawText(QRect(r.right() - 10 - val_w, r.top(), val_w, r.height()),
-                       Qt.AlignRight | Qt.AlignVCenter, shown)
+            p.setPen(QColor(T["accent_hi"]) if is_set else QColor(T["faint"]))
+            p.drawText(chip, Qt.AlignCenter, shown)
 
         fav = bool(index.data(ROLE_FAV))
         unavail = bool(index.data(ROLE_UNAVAIL))
         nf = QFont(base_font)
-        if is_set:
+        if is_set or selected:
             nf.setWeight(QFont.DemiBold)
         if unavail:
             nf.setItalic(True)
         p.setFont(nf)
         nfm = QFontMetrics(nf)
-        name_w = avail - (val_w + 12 if val_w else 0)
+        name_w = avail - (val_w + 10 if val_w else 0)
         if kind == "special":
             color = QColor(T["warn"])
         elif unavail and not is_set:
-            color = QColor(T["muted"])
-            color.setAlpha(150)
+            color = QColor(T["faint"])
         elif is_set or selected:
             color = QColor(T["text"])
         else:
             color = QColor(T["text2"])
         text_x = pad_l
         if fav:
-            p.setPen(QColor("#e0b341"))
-            p.drawText(QRect(pad_l, r.top(), 14, r.height()), Qt.AlignLeft | Qt.AlignVCenter, "\u2605")
-            text_x += 15
-            name_w -= 15
+            p.setPen(QColor("#e8b84a"))
+            p.drawText(QRect(pad_l, card.top(), 14, card.height()), Qt.AlignLeft | Qt.AlignVCenter, "\u2605")
+            text_x += 16
+            name_w -= 16
         p.setPen(color)
-        p.drawText(QRect(text_x, r.top(), max(0, name_w), r.height()),
+        p.drawText(QRect(text_x, card.top(), max(0, name_w), card.height()),
                    Qt.AlignLeft | Qt.AlignVCenter,
                    nfm.elidedText(name, Qt.ElideRight, max(0, name_w)))
         p.restore()
@@ -598,53 +732,190 @@ class ElidedLabel(QLabel):
 
 
 class NavTab(QPushButton):
-    """Top navigation tab: title + a small live badge (counts / arch code)."""
+    """Segmented top navigation: glyph + title + a small live badge."""
 
-    def __init__(self, title: str, parent=None):
+    def __init__(self, title: str, glyph: str = "", parent=None):
         super().__init__(parent)
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.NoFocus)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 0, 14, 0)
+        lay.setContentsMargins(12, 0, 12, 0)
         lay.setSpacing(7)
+        self._glyph = QLabel(glyph)
         self._title = QLabel(title)
         self._badge = QLabel()
-        for w in (self._title, self._badge):
+        for w in (self._glyph, self._title, self._badge):
             w.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._glyph.setVisible(bool(glyph))
         self._badge.setFixedHeight(17)
+        lay.addWidget(self._glyph, 0, Qt.AlignVCenter)
         lay.addWidget(self._title, 0, Qt.AlignVCenter)
         lay.addWidget(self._badge, 0, Qt.AlignVCenter)
+        lay.addStretch(1)
         self._badge.hide()
-        self.setFixedHeight(38)
+        self.setFixedHeight(32)
         self.setStyleSheet(f"""
-QPushButton {{ background:transparent; border:none; border-bottom:2px solid transparent; }}
-QPushButton:hover {{ background:{T['surface']}; }}
-QPushButton:checked {{ border-bottom:2px solid {T['accent']}; }}
+QPushButton {{ background:transparent; border:1px solid transparent; border-radius:8px; }}
+QPushButton:hover {{ background:{T['hover']}; }}
+QPushButton:checked {{ background:{T['overlay']}; border:1px solid {T['border_hi']}; }}
 """)
         self.toggled.connect(self._restyle)
         self._restyle(False)
+        self._fit()
 
     def set_badge(self, text: str):
         self._badge.setText(text)
         self._badge.setVisible(bool(text))
+        self._fit()
+
+    def _fit(self):
+        """Labels get their final (bold) font from a stylesheet only once
+        polished, so the layout's hint can be too small; size from metrics."""
+        f = QFont(self.font())
+        f.setPixelSize(12)
+        f.setWeight(QFont.DemiBold)
+        w = 28 + QFontMetrics(f).horizontalAdvance(self._title.text()) + 6
+        if self._glyph.isVisibleTo(self) or self._glyph.text():
+            w += 24
+        if self._badge.text():
+            fb = QFont(f)
+            fb.setPixelSize(10)
+            fb.setFamilies(["JetBrains Mono", "Fira Code", "DejaVu Sans Mono"])
+            fb.setWeight(QFont.ExtraBold)
+            w += 9 + QFontMetrics(fb).horizontalAdvance(self._badge.text()) + 22
+        self.setMinimumWidth(w)
         self.updateGeometry()
 
     def sizeHint(self):                   # noqa: N802
-        return self.layout().sizeHint().expandedTo(QSize(0, 38))
+        return self.layout().sizeHint().expandedTo(QSize(self.minimumWidth(), 32))
 
     def minimumSizeHint(self):            # noqa: N802
         return self.sizeHint()
 
     def _restyle(self, checked: bool):
+        self._glyph.setStyleSheet(
+            f"color:{T['accent_hi'] if checked else T['faint']}; font-size:13px; background:transparent;")
         self._title.setStyleSheet(
             f"color:{T['text'] if checked else T['muted']}; font-size:12px; font-weight:600;"
             " background:transparent;")
         self._badge.setStyleSheet(
-            f"color:{T['accent'] if checked else T['text2']};"
-            f" background:{'rgba(118,185,0,0.14)' if checked else T['raised']};"
-            " border-radius:8px; padding:0 7px; font-size:10px; font-weight:700;"
+            f"color:{'#0a0f02' if checked else T['text2']};"
+            f" background:{T['accent'] if checked else T['raised']};"
+            " border-radius:8px; padding:0 6px; font-size:10px; font-weight:800;"
             f" font-family:{T['mono']};")
+
+
+class BrandMark(QWidget):
+    """App logo: a green tile with a stylised frametime trace + wordmark."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._compact = False
+        self.setFixedSize(150, 34)
+        self.setToolTip(APP_TITLE)
+
+    def set_compact(self, on: bool):
+        if on != self._compact:
+            self._compact = on
+            self.setFixedSize(30 if on else 150, 34)
+            self.update()
+
+    def paintEvent(self, _e):             # noqa: N802
+        from PySide6.QtGui import QLinearGradient, QPainterPath
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        tile = QRect(0, 3, 28, 28)
+        g = QLinearGradient(0, 3, 28, 31)
+        g.setColorAt(0, QColor("#9be12a"))
+        g.setColorAt(1, QColor("#4f8a00"))
+        p.setPen(Qt.NoPen)
+        p.setBrush(g)
+        p.drawRoundedRect(tile, 7, 7)
+        path = QPainterPath()
+        pts = [(5, 22), (9, 22), (11, 13), (14, 25), (17, 9), (20, 20), (23, 20)]
+        path.moveTo(*pts[0])
+        for x, y in pts[1:]:
+            path.lineTo(x, y)
+        pen = QPen(QColor("#0b1300"), 2.2)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(path)
+        if self._compact:
+            p.end()
+            return
+        f = QFont(self.font())
+        f.setPointSizeF(12)
+        f.setWeight(QFont.Bold)
+        p.setFont(f)
+        p.setPen(QColor(T["text"]))
+        p.drawText(QRect(38, 2, 120, 18), Qt.AlignLeft | Qt.AlignVCenter, "DRSTool")
+        f2 = QFont(self.font())
+        f2.setPointSizeF(7.5)
+        f2.setLetterSpacing(QFont.AbsoluteSpacing, 0.8)
+        p.setFont(f2)
+        p.setPen(QColor(T["muted"]))
+        p.drawText(QRect(38, 19, 120, 14), Qt.AlignLeft | Qt.AlignVCenter, "DXVK-NVAPI · DRS")
+        p.end()
+
+
+class EmptyState(QWidget):
+    """Centered placeholder: big glyph, title, hint and keycap shortcuts."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        outer = QVBoxLayout(self)
+        outer.addStretch(1)
+        self._glyph = QLabel()
+        self._glyph.setAlignment(Qt.AlignCenter)
+        self._glyph.setFixedSize(64, 64)
+        self._glyph.setStyleSheet(
+            f"background:{T['surface']}; border:1px solid {T['border_hi']}; border-radius:16px;"
+            f" color:{T['accent']}; font-size:26px;")
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self._glyph)
+        row.addStretch(1)
+        outer.addLayout(row)
+        outer.addSpacing(14)
+        self._title = QLabel()
+        self._title.setAlignment(Qt.AlignCenter)
+        self._title.setStyleSheet(f"color:{T['text']}; font-size:15px; font-weight:700;")
+        outer.addWidget(self._title)
+        self._hint = QLabel()
+        self._hint.setAlignment(Qt.AlignCenter)
+        self._hint.setWordWrap(True)
+        self._hint.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        outer.addWidget(self._hint)
+        outer.addSpacing(16)
+        self._keys = QLabel()
+        self._keys.setAlignment(Qt.AlignCenter)
+        self._keys.setTextFormat(Qt.RichText)
+        outer.addWidget(self._keys)
+        outer.addStretch(2)
+        self.set_content("◆", "", "")
+
+    @staticmethod
+    def _kbd(k: str) -> str:
+        return (f'<span style="background:{T["raised"]}; color:{T["text"]}; font-family:monospace;'
+                f' font-size:11px;">&nbsp;{k}&nbsp;</span>')
+
+    def set_content(self, glyph: str, title: str, hint: str,
+                    keys=(("Ctrl+K", "search everything"), ("Ctrl+F", "filter"),
+                          ("Ctrl+Shift+V", "import a launch line"), ("Ctrl+R", "recipes"))):
+        self._glyph.setText(glyph)
+        self._title.setText(title)
+        self._title.setVisible(bool(title))
+        self._hint.setText(hint)
+        parts = [f'{self._kbd(k)}&nbsp;<span style="color:{T["muted"]}">{d}</span>' for k, d in keys]
+        self._keys.setText("&nbsp;&nbsp;&nbsp;&nbsp;".join(parts))
+
+    # Old code called setText()/text() on the QLabel placeholder.
+    def setText(self, text: str):         # noqa: N802
+        lines = (text or "").split("\n", 1)
+        self.set_content(self._glyph.text(), lines[0], lines[1] if len(lines) > 1 else "")
 
 
 # ============================================================================
@@ -2758,92 +3029,47 @@ class OutputBarWidget(QWidget):
 
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setObjectName("outputBar")
-        self.setStyleSheet(f"#outputBar {{ background:{T['surface']}; border-bottom:1px solid {T['border']}; }}")
+        self.setStyleSheet(f"#outputBar {{ background:{T['surface']}; border-top:1px solid {T['border']}; }}")
 
-        root = QHBoxLayout(self)
-        root.setContentsMargins(14, 10, 14, 10)
-        root.setSpacing(14)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 10, 16, 12)
+        root.setSpacing(8)
 
-        lbl_ss = (f"font-family:{T['mono']}; font-size:11px; color:{T['accent']};"
-                  " font-weight:600; background:transparent;")
-        box_ss = (f"QLabel{{ background:{T['bg']}; border:1px solid {T['border_hi']};"
-                  f" border-radius:5px; padding:4px 9px; color:{T['text']};"
-                  f" font-family:{T['mono']}; font-size:12px; min-height:18px; }}"
-                  f"QLabel:hover{{ border-color:{T['accent_dim']}; }}")
+        # ── Header: caption + live summary + actions ─────────────────────
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        dot = QLabel("\u25cf")
+        dot.setStyleSheet(f"color:{T['accent']}; font-size:9px; background:transparent;")
+        head.addWidget(dot)
+        head.addWidget(caption("Launch string", T["text2"]))
+        self._summary = QLabel("")
+        self._summary.setStyleSheet(f"color:{T['muted']}; font-size:11px; background:transparent;")
+        head.addSpacing(6)
+        head.addWidget(self._summary)
+        head.addStretch(1)
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(6)
-        grid.setContentsMargins(0, 0, 0, 0)
-
-        def key(text):
-            k = QLabel(text)
-            k.setStyleSheet(lbl_ss)
-            k.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            return k
-
-        def val(text):
-            v = ElidedLabel(text)
-            v.setStyleSheet(box_ss)
-            v.copied.connect(lambda _t: self._show_feedback("Copied"))
-            return v
-
-        # Row 0: GPU arch + DRS settings share a row
-        grid.addWidget(key("DXVK_NVAPI_GPU_ARCH="), 0, 0)
-        arch_row = QHBoxLayout()
-        arch_row.setSpacing(8)
-        self._arch_value = val("not set")
-        self._arch_value.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self._arch_value.setFixedWidth(84)
-        arch_row.addWidget(self._arch_value)
-        arch_row.addWidget(key("DXVK_NVAPI_DRS_SETTINGS="))
-        self._settings_value = val("none")
-        arch_row.addWidget(self._settings_value, 1)
-        grid.addLayout(arch_row, 0, 1)
-
-        # Row 1: env vars + gamescope share a row (was two nearly-empty rows)
-        grid.addWidget(key("ENV VARS="), 1, 0)
-        env_row = QHBoxLayout()
-        env_row.setSpacing(8)
-        self._env_value = val("none")
-        env_row.addWidget(self._env_value, 3)
-        env_row.addWidget(key("GAMESCOPE="))
-        self._gamescope_value = val("disabled")
-        env_row.addWidget(self._gamescope_value, 2)
-        grid.addLayout(env_row, 1, 1)
-        grid.setColumnStretch(1, 1)
-        root.addLayout(grid, 1)
-
-        # ── Action column ────────────────────────────────────────────────
-        col = QGridLayout()
-        col.setHorizontalSpacing(6)
-        col.setVerticalSpacing(6)
-        col.setContentsMargins(0, 0, 0, 0)
-
-        btn_base = ("border-radius:5px; font-weight:600; font-size:12px;"
-                    " min-height:26px; padding:0 10px;")
-        self._btn_ss_primary = (
-            f"QToolButton,QPushButton{{background:{T['accent']};border:1px solid {T['accent']};"
-            f"color:#0b0d10;{btn_base}}}"
-            f"QToolButton:hover,QPushButton:hover{{background:{T['accent_hi']};}}"
-            "QToolButton::menu-button{border-left:1px solid rgba(0,0,0,0.25);width:18px;}"
-        )
-        self._btn_ss_quiet = (
-            f"QPushButton{{background:{T['raised']};border:1px solid {T['border_hi']};"
-            f"color:{T['text2']};{btn_base}}}"
-            f"QPushButton:hover{{border-color:{T['accent_dim']};color:{T['text']};}}"
-            f"QPushButton:disabled{{color:#4b5264;border-color:{T['border']};}}"
-        )
+        self._btn_ss_primary = btn_ss("primary")
+        self._btn_ss_quiet = btn_ss("default")
         self._btn_ss_dirty = (
-            f"QPushButton{{background:rgba(210,160,60,0.14);border:1px solid {T['warn']};"
-            f"color:{T['warn']};{btn_base}}}"
-            f"QPushButton:hover{{background:rgba(210,160,60,0.24);}}"
+            f"QPushButton{{background:rgba(227,167,63,0.14);border:1px solid {T['warn']};"
+            f"color:{T['warn']};border-radius:6px;padding:5px 14px;font-weight:700;font-size:12px;}}"
+            f"QPushButton:hover{{background:rgba(227,167,63,0.24);}}"
         )
-        btn_ss_danger = (
-            f"QPushButton{{background:transparent;border:1px solid {T['border_hi']};"
-            f"color:{T['danger']};{btn_base}}}"
-            f"QPushButton:hover{{border-color:{T['danger']};background:rgba(208,80,80,0.10);}}"
-        )
+
+        reset_btn = QPushButton("Reset")
+        reset_btn.setStyleSheet(btn_ss("danger"))
+        reset_btn.setToolTip("Clear every DRS setting, the GPU arch, env vars and gamescope flags")
+        reset_btn.clicked.connect(self._reset_all)
+
+        self._save_profile_btn = QPushButton("Save")
+        self._save_profile_btn.setStyleSheet(self._btn_ss_quiet)
+        self._save_profile_btn.setEnabled(False)
+        self._save_profile_btn.clicked.connect(self._save_to_profile)
+
+        steam_btn = QPushButton("Steam line")
+        steam_btn.setStyleSheet(self._btn_ss_quiet)
+        steam_btn.setToolTip("Copy  env … gamescope … -- %command%  for Steam's launch options")
+        steam_btn.clicked.connect(self._copy_steam_env)
 
         copy_btn = QToolButton()
         copy_btn.setText("Copy all")
@@ -2851,7 +3077,6 @@ class OutputBarWidget(QWidget):
         copy_btn.setPopupMode(QToolButton.MenuButtonPopup)
         copy_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
         copy_btn.setStyleSheet(self._btn_ss_primary)
-        copy_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         menu = QMenu(copy_btn)
         act_plain = QAction("Copy as shell environment", menu)
         act_plain.triggered.connect(lambda: self._copy_all(steam=False))
@@ -2868,32 +3093,63 @@ class OutputBarWidget(QWidget):
         menu.addAction(act_exp)
         copy_btn.setMenu(menu)
         copy_btn.clicked.connect(lambda: self._copy_all(steam=False))
-        col.addWidget(copy_btn, 0, 0)
 
-        steam_btn = QPushButton("Steam line")
-        steam_btn.setStyleSheet(self._btn_ss_quiet)
-        steam_btn.setToolTip("Copy  env … gamescope … -- %command%  for Steam's launch options")
-        steam_btn.clicked.connect(self._copy_steam_env)
-        col.addWidget(steam_btn, 0, 1)
+        copy_btn.setMinimumWidth(116)
+        for b in (reset_btn, self._save_profile_btn, steam_btn, copy_btn):
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedHeight(30)
+            head.addWidget(b)
+        root.addLayout(head)
 
-        self._save_profile_btn = QPushButton("Save")
-        self._save_profile_btn.setStyleSheet(self._btn_ss_quiet)
-        self._save_profile_btn.setEnabled(False)
-        self._save_profile_btn.clicked.connect(self._save_to_profile)
-        col.addWidget(self._save_profile_btn, 1, 0)
+        # ── Console: one tagged row per output ───────────────────────────
+        console = QFrame()
+        console.setObjectName("launchConsole")
+        console.setStyleSheet(f"#launchConsole {{ background:{T['sunken']}; border:1px solid {T['border']};"
+                              " border-radius:9px; }")
+        grid = QGridLayout(console)
+        grid.setContentsMargins(10, 8, 10, 8)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(4)
 
-        reset_btn = QPushButton("Reset")
-        reset_btn.setStyleSheet(btn_ss_danger)
-        reset_btn.setToolTip("Clear every DRS setting, the GPU arch, env vars and gamescope flags")
-        reset_btn.clicked.connect(self._reset_all)
-        col.addWidget(reset_btn, 1, 1)
-        for _b in (copy_btn, steam_btn, self._save_profile_btn, reset_btn):
-            _b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        def tag(text, color, tip):
+            k = QLabel(text)
+            k.setToolTip(tip)
+            k.setAlignment(Qt.AlignCenter)
+            k.setFixedWidth(78)
+            c = QColor(color)
+            k.setStyleSheet(f"color:{color}; background:rgba({c.red()},{c.green()},{c.blue()},0.12);"
+                            " border-radius:4px; padding:2px 0; font-size:10px; font-weight:800;"
+                            " letter-spacing:1px;")
+            return k
 
-        holder = QWidget()
-        holder.setLayout(col)
-        holder.setFixedWidth(232)
-        root.addWidget(holder, 0, Qt.AlignVCenter)
+        def val(text):
+            v = ElidedLabel(text)
+            v.copied.connect(lambda _t: self._show_feedback("Copied"))
+            return v
+
+        self._val_labels = []
+        grid.addWidget(tag("ARCH", T["info"], "DXVK_NVAPI_GPU_ARCH"), 0, 0)
+        arch_row = QHBoxLayout()
+        arch_row.setSpacing(10)
+        self._arch_value = val("not set")
+        self._arch_value.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self._arch_value.setFixedWidth(96)
+        arch_row.addWidget(self._arch_value)
+        arch_row.addWidget(tag("DRS", T["accent"], "DXVK_NVAPI_DRS_SETTINGS"))
+        self._settings_value = val("none")
+        arch_row.addWidget(self._settings_value, 1)
+        grid.addLayout(arch_row, 0, 1)
+
+        grid.addWidget(tag("ENV", "#c792ea", "Environment variables"), 1, 0)
+        self._env_value = val("none")
+        grid.addWidget(self._env_value, 1, 1)
+
+        grid.addWidget(tag("GAMESCOPE", T["warn"], "gamescope … --"), 2, 0)
+        self._gamescope_value = val("disabled")
+        grid.addWidget(self._gamescope_value, 2, 1)
+        grid.setColumnStretch(1, 1)
+        self._val_labels = [self._arch_value, self._settings_value, self._env_value, self._gamescope_value]
+        root.addWidget(console)
 
         self.settings_manager.settings_changed.connect(self._update)
         self.settings_manager.arch_changed.connect(self._update)
@@ -2904,6 +3160,22 @@ class OutputBarWidget(QWidget):
     def set_dirty(self, dirty: bool):
         self._dirty = dirty
         self._update()
+
+    _EMPTY_VALUES = ("none", "not set", "disabled")
+
+    def _style_values(self):
+        for lab in getattr(self, "_val_labels", []):
+            empty = lab.text() in self._EMPTY_VALUES
+            lab.setStyleSheet(
+                f"QLabel{{ background:transparent; border:none; padding:3px 4px;"
+                f" color:{T['faint'] if empty else T['text']}; font-family:{T['mono']}; font-size:12px;"
+                f" font-style:{'italic' if empty else 'normal'}; border-radius:4px; }}"
+                f"QLabel:hover{{ background:{T['hover']}; }}")
+        n_drs = len(self.settings_manager.get_settings_list())
+        n_env = len(self._env_widget.get_env_dict()) if self._env_widget is not None else 0
+        gs = self._gamescope_widget is not None and self._gamescope_widget.is_enabled()
+        self._summary.setText(f"{n_drs} DRS  ·  {n_env} env  ·  gamescope {'on' if gs else 'off'}"
+                              "   —  click a value to copy it")
 
     def _update(self):
         arch = self.settings_manager.get_arch()
@@ -2952,6 +3224,7 @@ class OutputBarWidget(QWidget):
         else:
             self._save_profile_btn.setToolTip(
                 "Load or create a profile in the Profiles tab first")
+        self._style_values()
 
     def _on_profile_loaded(self, name):
         self._update()
@@ -3068,20 +3341,32 @@ class OutputBarWidget(QWidget):
 # Setting Editor - Modern Card View
 # ============================================================================
 
-def editor_card(inner: QWidget) -> QWidget:
-    """Put an editor page on a rounded surface card so it reads as one
-    panel instead of loose text floating on the window background."""
-    card = QFrame()
-    card.setObjectName("editorCard")
-    card.setAttribute(Qt.WA_StyledBackground, True)
-    card.setStyleSheet(f"#editorCard {{ background:#11141b; border:1px solid {T['border']};"
-                       " border-radius:10px; }")
-    lay = QVBoxLayout(card)
-    lay.setContentsMargins(22, 18, 22, 16)
-    lay.setSpacing(0)
-    lay.addWidget(inner)
-    return card
 
+OPTION_BTN_SS = f"""
+QPushButton{{
+    background:{T['surface']}; border:1px solid {T['border_hi']}; border-radius:7px;
+    color:{T['text2']}; padding:7px 10px; font-size:12px; font-weight:600; min-height:18px;
+}}
+QPushButton:hover{{ background:{T['hover']}; border-color:{T['accent_dim']}; color:{T['text']}; }}
+QPushButton:checked{{
+    background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(118,185,0,0.22), stop:1 rgba(118,185,0,0.08));
+    border:1px solid {T['accent']}; color:{T['accent_hi']};
+}}
+QPushButton:disabled{{ color:{T['faint']}; border-color:{T['border']}; }}
+"""
+FLAG_BTN_SS = OPTION_BTN_SS + "QPushButton{ text-align:left; padding:6px 12px; }"
+
+EDITOR_TITLE_SS = f"QLabel{{ color:{T['text']}; font-size:21px; font-weight:700; background:transparent; }}"
+EDITOR_CRUMB_SS = (f"QLabel{{ color:{T['muted']}; font-size:10px; font-weight:700; letter-spacing:1.4px;"
+                   " background:transparent; }")
+EDITOR_ID_SS = (f"QLabel{{ background:{T['sunken']}; border:1px solid {T['border_hi']}; border-radius:6px;"
+                f" padding:4px 10px; color:{T['muted']}; font-family:{T['mono']}; font-size:11px; }}")
+EDITOR_VALUE_SS = (f"QLabel{{ background:rgba(118,185,0,0.12); border:1px solid {T['accent_dim']};"
+                   f" border-radius:6px; padding:4px 10px; color:{T['accent_hi']}; font-family:{T['mono']};"
+                   " font-size:11px; font-weight:700; }")
+EDITOR_DESC_SS = (f"QLabel{{ color:{T['text2']}; font-size:13px; background:{T['surface']};"
+                  f" border:1px solid {T['border']}; border-left:3px solid {T['accent_dim']};"
+                  " border-radius:8px; padding:12px 14px; }")
 
 def _make_scrollable_control_area():
     """
@@ -3098,8 +3383,8 @@ def _make_scrollable_control_area():
     """
     control_widget = QWidget()
     control_layout = QVBoxLayout(control_widget)
-    control_layout.setContentsMargins(0, 12, 0, 0)
-    control_layout.setSpacing(8)
+    control_layout.setContentsMargins(0, 6, 0, 0)
+    control_layout.setSpacing(6)
 
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
@@ -3129,105 +3414,56 @@ class SettingEditorWidget(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
+
+        self._crumb = QLabel()
+        self._crumb.setStyleSheet(EDITOR_CRUMB_SS)
+        layout.addWidget(self._crumb)
 
         header = QHBoxLayout()
-        header.setSpacing(10)
-
+        header.setSpacing(8)
         self._name_label = QLabel()
-        self._name_label.setStyleSheet("""
-QLabel{
-    color:#f2f2f2;
-    font-size:18px;
-    font-weight:700;
-}
-""")
+        self._name_label.setStyleSheet(EDITOR_TITLE_SS)
         self._name_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         header.addWidget(self._name_label, 1)
 
         self._id_label = QLabel()
-        self._id_label.setStyleSheet("""
-QLabel{
-    background:#10141c;
-    border:1px solid #313a48;
-    border-radius:6px;
-    padding:4px 10px;
-    color:#8ea0ba;
-    font-family:monospace;
-    font-size:11px;
-}
-""")
+        self._id_label.setStyleSheet(EDITOR_ID_SS)
         self._id_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        header.addWidget(self._id_label)
+        self._id_label.setToolTip("DRS setting ID")
+        header.addWidget(self._id_label, 0, Qt.AlignVCenter)
 
         self._value_label = QLabel()
-        self._value_label.setStyleSheet("""
-QLabel{
-    background:#152013;
-    border:1px solid #76b900;
-    border-radius:6px;
-    padding:4px 10px;
-    color:#9be238;
-    font-family:monospace;
-    font-size:11px;
-    font-weight:600;
-}
-""")
+        self._value_label.setStyleSheet(EDITOR_VALUE_SS)
         self._value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        header.addWidget(self._value_label)
+        self._value_label.setToolTip("Value written to DXVK_NVAPI_DRS_SETTINGS")
+        header.addWidget(self._value_label, 0, Qt.AlignVCenter)
         self._value_label.hide()
 
+        self._remove_btn = QPushButton("Remove")
+        self._remove_btn.setToolTip("Remove this setting from the launch string")
+        self._remove_btn.setCursor(Qt.PointingHandCursor)
+        self._remove_btn.clicked.connect(self._remove_setting)
+        self._remove_btn.setStyleSheet(btn_ss("danger", "sm"))
+        header.addWidget(self._remove_btn, 0, Qt.AlignVCenter)
+        self._remove_btn.hide()
         layout.addLayout(header)
 
         self._desc_label = QLabel()
-        self._desc_label.setStyleSheet("""
-QLabel{
-    color:#a7afbc;
-    font-size:13px;
-    line-height:140%;
-}
-""")
+        self._desc_label.setStyleSheet(EDITOR_DESC_SS)
         self._desc_label.setWordWrap(True)
         self._desc_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        # Word-wrapped QLabels don't reliably report a correct heightForWidth
-        # to the surrounding QVBoxLayout on first layout pass (Qt has to know
-        # the label's actual width before it can compute how many lines a
-        # long detailed_desc wraps to). Left at the default Preferred/Preferred
-        # policy, long descriptions could end up laid out with too little
-        # vertical space reserved, so the control area below it (added right
-        # after) would visually overlap the last line or two of text.
-        # Minimum vertical policy + explicit resize-event driven rewrap fixes
-        # that: see _resize_desc_label below.
+        # Minimum vertical policy so long word-wrapped descriptions reserve
+        # their full height before the control area below is laid out.
         self._desc_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         layout.addWidget(self._desc_label)
 
-        self._control_widget, self._control_layout, control_scroll = _make_scrollable_control_area()
-        layout.addWidget(control_scroll, 1)  # stretch=1: absorb all extra space, keep header/desc/button fixed
+        layout.addSpacing(4)
+        self._value_caption = caption("Value")
+        layout.addWidget(self._value_caption)
 
-        remove_layout = QHBoxLayout()
-        remove_layout.addStretch()
-        self._remove_btn = QPushButton("Remove Setting")
-        self._remove_btn.clicked.connect(self._remove_setting)
-        self._remove_btn.setStyleSheet("""
-QPushButton{
-    background:#b93b3b;
-    border:1px solid #e45d5d;
-    border-radius:5px;
-    color:white;
-    padding:4px 16px;
-    font-weight:600;
-    font-size:12px;
-}
-QPushButton:hover{
-    background:#ca4545;
-}
-QPushButton:pressed{
-    background:#a73434;
-}
-""")
-        remove_layout.addWidget(self._remove_btn)
-        layout.addLayout(remove_layout)
-        self._remove_btn.hide()
+        self._control_widget, self._control_layout, control_scroll = _make_scrollable_control_area()
+        layout.addWidget(control_scroll, 1)  # stretch=1: absorb all extra space
 
         self.settings_manager.settings_changed.connect(self._update_display)
 
@@ -3244,6 +3480,9 @@ QPushButton:pressed{
         cur = self._current_value
 
         self._name_label.setText(s.name)
+        self._crumb.setText(f"DRS SETTINGS  \u203a  {s.cat.upper()}")
+        self._value_caption.setText({"enum": "CHOOSE ONE", "hex-preset": "PRESETS",
+                                     "bitfield": "FLAGS", "numeric": "VALUE"}.get(s.type, "VALUE"))
         self._id_label.setText(s.id)
         if cur is not None:
             self._value_label.setText(f"= {cur}")
@@ -3314,7 +3553,7 @@ QPushButton:pressed{
             cols = 5
 
         grid = QGridLayout()
-        grid.setSpacing(6)
+        grid.setSpacing(4)
 
         # Enum settings accept exactly one value. Group the buttons so Qt
         # enforces single-selection (checking one unchecks the others) instead
@@ -3333,26 +3572,7 @@ QPushButton:pressed{
             if val.val == s.default:
                 btn.setText(f"* {val.name}")
 
-            btn.setStyleSheet("""
-QPushButton{
-    background:#1a1f28;
-    border:1px solid #323c4b;
-    border-radius:6px;
-    color:#d8d8d8;
-    padding:8px 10px;
-    font-size:12px;
-    font-weight:600;
-}
-QPushButton:hover{
-    background:#252c37;
-    border:1px solid #76b900;
-}
-QPushButton:checked{
-    background:rgba(118, 185, 0, 0.12);
-    border:1px solid #76b900;
-    color:#76b900;
-}
-""")
+            btn.setStyleSheet(OPTION_BTN_SS)
 
             group.addButton(btn)
             # `checked` reflects the button's state *after* the click. When the
@@ -3374,7 +3594,7 @@ QPushButton:checked{
 
     def _build_preset_control(self, s: Setting, cur: Optional[str]):
         grid = QGridLayout()
-        grid.setSpacing(6)
+        grid.setSpacing(4)
 
         row, col = 0, 0
         for preset in s.presets:
@@ -3393,23 +3613,23 @@ QPushButton{
     font-weight:600;
 }
 QPushButton:hover{
-    background:#252c37;
+    background:#1f2430;
     border:1px solid #76b900;
 }
 """)
             else:
                 btn.setStyleSheet("""
 QPushButton{
-    background:#1a1f28;
-    border:1px solid #323c4b;
+    background:#181c24;
+    border:1px solid #2a313d;
     border-radius:6px;
-    color:#d8d8d8;
-    padding:8px 10px;
-    font-size:12px;
+    color:#dfe3ea;
+    padding:5px;
+    font-size:11px;
     font-weight:600;
 }
 QPushButton:hover{
-    background:#252c37;
+    background:#1f2430;
     border:1px solid #76b900;
 }
 """)
@@ -3435,10 +3655,10 @@ QPushButton:hover{
         spin.setFixedHeight(30)
         spin.setStyleSheet("""
 QSpinBox{
-    background:#1a1f28;
-    border:1px solid #323c4b;
+    background:#181c24;
+    border:1px solid #2a313d;
     border-radius:6px;
-    color:#d8d8d8;
+    color:#dfe3ea;
     padding:3px 8px;
     font-size:12px;
 }
@@ -3446,14 +3666,14 @@ QSpinBox:focus{
     border:1px solid #76b900;
 }
 QSpinBox:hover{
-    background:#252c37;
+    background:#1f2430;
 }
 """)
         spin.valueChanged.connect(lambda v: self._set_numeric(s.id, v))
         hbox.addWidget(spin)
 
         range_label = QLabel(f"Range: {s.min}–{s.max}")
-        range_label.setStyleSheet("font-family: monospace; font-size: 11px; color: #8a92a5;")
+        range_label.setStyleSheet("font-family: monospace; font-size: 11px; color: #7b8496;")
         hbox.addWidget(range_label)
 
         hbox.addStretch()
@@ -3489,7 +3709,7 @@ QPushButton:checked{{background:rgba(118,185,0,0.12);border-color:{T['accent']};
         grid.setSpacing(6)
 
         dec_label = QLabel("Decimal:")
-        dec_label.setStyleSheet("font-size: 11px; color: #8a92a5;")
+        dec_label.setStyleSheet("font-size: 11px; color: #7b8496;")
         grid.addWidget(dec_label, 0, 0)
 
         dec_spin = QSpinBox()
@@ -3504,10 +3724,10 @@ QPushButton:checked{{background:rgba(118,185,0,0.12);border-color:{T['accent']};
         dec_spin.setFixedHeight(30)
         dec_spin.setStyleSheet("""
 QSpinBox{
-    background:#1a1f28;
-    border:1px solid #323c4b;
+    background:#181c24;
+    border:1px solid #2a313d;
     border-radius:6px;
-    color:#d8d8d8;
+    color:#dfe3ea;
     padding:3px 8px;
     font-size:12px;
 }
@@ -3515,14 +3735,14 @@ QSpinBox:focus{
     border:1px solid #76b900;
 }
 QSpinBox:hover{
-    background:#252c37;
+    background:#1f2430;
 }
 """)
         dec_spin.valueChanged.connect(lambda v: self._set_dec_hex(s.id, v))
         grid.addWidget(dec_spin, 0, 1)
 
         hex_label = QLabel("Hex: 0x")
-        hex_label.setStyleSheet("font-size: 11px; color: #8a92a5;")
+        hex_label.setStyleSheet("font-size: 11px; color: #7b8496;")
         grid.addWidget(hex_label, 0, 2)
 
         hex_edit = QLineEdit()
@@ -3533,8 +3753,8 @@ QSpinBox:hover{
         hex_edit.setFixedHeight(30)
         hex_edit.setStyleSheet("""
 QLineEdit{
-    background:#1a1f28;
-    border:1px solid #323c4b;
+    background:#181c24;
+    border:1px solid #2a313d;
     border-radius:6px;
     color:#9be238;
     font-family:monospace;
@@ -3545,7 +3765,7 @@ QLineEdit:focus{
     border:1px solid #76b900;
 }
 QLineEdit:hover{
-    background:#252c37;
+    background:#1f2430;
 }
 """)
         hex_edit.textChanged.connect(lambda t: self._set_hex_from_edit(s.id, t))
@@ -3595,24 +3815,24 @@ QPushButton{
     min-height:30px;
 }
 QPushButton:hover{
-    background:#252c37;
+    background:#1f2430;
     border:1px solid #76b900;
 }
 """)
             else:
                 btn.setStyleSheet("""
 QPushButton{
-    background:#1a1f28;
-    border:1px solid #323c4b;
+    background:#181c24;
+    border:1px solid #2a313d;
     border-radius:6px;
-    color:#d8d8d8;
+    color:#dfe3ea;
     padding:3px 5px;
     font-size:10px;
     font-family:monospace;
     min-height:30px;
 }
 QPushButton:hover{
-    background:#252c37;
+    background:#1f2430;
     border:1px solid #76b900;
 }
 """)
@@ -3630,7 +3850,7 @@ QPushButton:hover{
         val_layout.setSpacing(8)
 
         calc_label = QLabel("Combined Value:")
-        calc_label.setStyleSheet("font-size: 11px; color: #8a92a5; font-family: monospace;")
+        calc_label.setStyleSheet("font-size: 11px; color: #7b8496; font-family: monospace;")
         val_layout.addWidget(calc_label)
 
         calc_value = QLabel(f"0x{cur_val:08X}" if cur_val else "0x0")
@@ -3646,7 +3866,7 @@ QPushButton:hover{
         hbox.setSpacing(8)
 
         hex_label = QLabel("0x")
-        hex_label.setStyleSheet("font-size: 11px; color: #8a92a5;")
+        hex_label.setStyleSheet("font-size: 11px; color: #7b8496;")
         hbox.addWidget(hex_label)
 
         hex_edit = QLineEdit()
@@ -3657,8 +3877,8 @@ QPushButton:hover{
         hex_edit.setFixedHeight(30)
         hex_edit.setStyleSheet("""
 QLineEdit{
-    background:#1a1f28;
-    border:1px solid #323c4b;
+    background:#181c24;
+    border:1px solid #2a313d;
     border-radius:6px;
     color:#9be238;
     font-family:monospace;
@@ -3669,7 +3889,7 @@ QLineEdit:focus{
     border:1px solid #76b900;
 }
 QLineEdit:hover{
-    background:#252c37;
+    background:#1f2430;
 }
 """)
         hex_edit.textChanged.connect(lambda t: self._set_hex_from_edit(s.id, t))
@@ -3859,31 +4079,40 @@ class ArchDetailWidget(QWidget):
         layout.setSpacing(10)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Name (large, bold)
+        crumb = QLabel("GPU ARCH  \u203a  DXVK_NVAPI_GPU_ARCH")
+        crumb.setStyleSheet(EDITOR_CRUMB_SS)
+        layout.addWidget(crumb)
+
+        head = QHBoxLayout()
         self._name_label = QLabel()
-        self._name_label.setStyleSheet("""
-QLabel{
-    color:#f2f2f2;
-    font-size:18px;
-    font-weight:700;
-}
-""")
+        self._name_label.setStyleSheet(EDITOR_TITLE_SS)
         self._name_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout.addWidget(self._name_label)
+        head.addWidget(self._name_label, 1)
+        self._clear_btn = QPushButton("Clear")
+        self._clear_btn.setToolTip("Stop spoofing — report the real GPU")
+        self._clear_btn.setCursor(Qt.PointingHandCursor)
+        self._clear_btn.clicked.connect(self.clear_requested)
+        self._clear_btn.setStyleSheet(btn_ss("danger", "sm"))
+        head.addWidget(self._clear_btn, 0, Qt.AlignVCenter)
+        layout.addLayout(head)
 
-        # Architecture field
+        spec = QFrame()
+        spec.setObjectName("archSpec")
+        spec.setStyleSheet(f"#archSpec {{ background:{T['surface']}; border:1px solid {T['border']};"
+                           " border-radius:10px; }")
+        sl = QVBoxLayout(spec)
+        sl.setContentsMargins(16, 12, 16, 12)
+        sl.setSpacing(6)
         self._arch_label = QLabel()
-        self._arch_label.setStyleSheet("color: #a7afbc; font-size: 13px;")
+        self._arch_label.setStyleSheet(f"color:{T['text']}; font-size:14px; font-weight:600;")
         self._arch_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout.addWidget(self._arch_label)
-
-        # Code and example
+        sl.addWidget(self._arch_label)
         self._code_label = QLabel()
-        self._code_label.setStyleSheet("font-family: monospace; font-size: 12px; color: #8ea0ba;")
+        self._code_label.setStyleSheet(f"font-family:{T['mono']}; font-size:12px; color:{T['accent_hi']};")
         self._code_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout.addWidget(self._code_label)
+        sl.addWidget(self._code_label)
+        layout.addWidget(spec)
 
-        # Short description
         self._desc_label = QLabel(
             "Makes DXVK-NVAPI report this architecture instead of your real "
             "GPU's (DXVK_NVAPI_GPU_ARCH). It is a spoof meant for "
@@ -3891,41 +4120,18 @@ QLabel{
             "generation — leave it unset to report the real card."
         )
         self._desc_label.setWordWrap(True)
-        self._desc_label.setStyleSheet("color: #a7afbc; font-size: 13px;")
+        self._desc_label.setStyleSheet(EDITOR_DESC_SS)
         layout.addWidget(self._desc_label)
 
-        # How the spoof relates to the real card (filled from the system probe)
         self._rel_label = QLabel()
         self._rel_label.setWordWrap(True)
         self._rel_label.setTextFormat(Qt.RichText)
-        self._rel_label.setStyleSheet(f"font-size:13px; background:{T['surface']}; border:1px solid "
-                                      f"{T['border']}; border-radius:4px; padding:8px 10px;")
+        self._rel_label.setStyleSheet(f"font-size:13px; background:{T['raised']}; border:1px solid "
+                                      f"{T['border_hi']}; border-radius:8px; padding:10px 12px;")
         self._rel_label.hide()
         layout.addWidget(self._rel_label)
 
         layout.addStretch()
-
-        # Clear button (styled like the "Remove Setting" button)
-        self._clear_btn = QPushButton("Clear Architecture")
-        self._clear_btn.clicked.connect(self.clear_requested)
-        self._clear_btn.setStyleSheet("""
-QPushButton{
-    background:#b93b3b;
-    border:1px solid #e45d5d;
-    border-radius:5px;
-    color:white;
-    padding:4px 16px;
-    font-weight:600;
-    font-size:12px;
-}
-QPushButton:hover{
-    background:#ca4545;
-}
-QPushButton:pressed{
-    background:#a73434;
-}
-""")
-        layout.addWidget(self._clear_btn)
 
     def set_arch(self, arch: Optional[GPUArch]):
         """Update the detail view with the given architecture (or clear it)."""
@@ -6651,16 +6857,16 @@ class EnvVarEditorWidget(QWidget):
 
     _EDIT_SS = """
 QLineEdit{
-    background:#1a1f28;
-    border:1px solid #323c4b;
+    background:#181c24;
+    border:1px solid #2a313d;
     border-radius:6px;
-    color:#d8d8d8;
+    color:#dfe3ea;
     font-family:monospace;
     font-size:12px;
     padding:5px 10px;
 }
 QLineEdit:focus{ border:1px solid #76b900; }
-QLineEdit:hover{ background:#252c37; }
+QLineEdit:hover{ background:#1f2430; }
 """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -6683,96 +6889,52 @@ QLineEdit:hover{ background:#252c37; }
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
-        # ── Header ────────────────────────────────────────────────────────────
+        self._crumb = QLabel()
+        self._crumb.setStyleSheet(EDITOR_CRUMB_SS)
+        layout.addWidget(self._crumb)
+
         header = QHBoxLayout()
-        header.setSpacing(10)
-
+        header.setSpacing(8)
         self._name_label = QLabel()
-        self._name_label.setStyleSheet("""
-QLabel{
-    color:#f2f2f2;
-    font-size:18px;
-    font-weight:700;
-}
-""")
+        self._name_label.setStyleSheet(EDITOR_TITLE_SS + f"QLabel{{ font-family:{T['mono']}; font-size:19px; }}")
         self._name_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         header.addWidget(self._name_label, 1)
 
         self._cat_label = QLabel()
-        self._cat_label.setStyleSheet("""
-QLabel{
-    background:#10141c;
-    border:1px solid #313a48;
-    border-radius:6px;
-    padding:4px 10px;
-    color:#8ea0ba;
-    font-family:monospace;
-    font-size:11px;
-}
-""")
+        self._cat_label.setStyleSheet(EDITOR_ID_SS)
         self._cat_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        header.addWidget(self._cat_label)
+        header.addWidget(self._cat_label, 0, Qt.AlignVCenter)
 
         self._value_label = QLabel()
-        self._value_label.setStyleSheet("""
-QLabel{
-    background:#152013;
-    border:1px solid #76b900;
-    border-radius:6px;
-    padding:4px 10px;
-    color:#9be238;
-    font-family:monospace;
-    font-size:11px;
-    font-weight:600;
-}
-""")
+        self._value_label.setStyleSheet(EDITOR_VALUE_SS)
         self._value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        header.addWidget(self._value_label)
+        header.addWidget(self._value_label, 0, Qt.AlignVCenter)
         self._value_label.hide()
 
+        self._clear_btn = QPushButton("Clear")
+        self._clear_btn.setToolTip("Remove this variable from the launch string")
+        self._clear_btn.setCursor(Qt.PointingHandCursor)
+        self._clear_btn.clicked.connect(self._on_clear)
+        self._clear_btn.setStyleSheet(btn_ss("danger", "sm"))
+        header.addWidget(self._clear_btn, 0, Qt.AlignVCenter)
+        self._clear_btn.hide()
         layout.addLayout(header)
 
-        # ── Description ───────────────────────────────────────────────────────
         self._desc_label = QLabel()
-        self._desc_label.setStyleSheet("""
-QLabel{
-    color:#a7afbc;
-    font-size:13px;
-    line-height:140%;
-}
-""")
+        self._desc_label.setStyleSheet(EDITOR_DESC_SS)
         self._desc_label.setWordWrap(True)
         self._desc_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._desc_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         layout.addWidget(self._desc_label)
 
-        # ── Control area ──────────────────────────────────────────────────────
-        self._control_widget, self._control_layout, control_scroll = _make_scrollable_control_area()
-        layout.addWidget(control_scroll, 1)  # stretch=1: absorb all extra space, keep header/desc/button fixed
+        layout.addSpacing(4)
+        self._value_caption = caption("Value")
+        layout.addWidget(self._value_caption)
 
-        # ── Clear button (mirrors "Remove Setting") ───────────────────────────
-        remove_layout = QHBoxLayout()
-        remove_layout.addStretch()
-        self._clear_btn = QPushButton("Clear Variable")
-        self._clear_btn.clicked.connect(self._on_clear)
-        self._clear_btn.setStyleSheet("""
-QPushButton{
-    background:#b93b3b;
-    border:1px solid #e45d5d;
-    border-radius:5px;
-    color:white;
-    padding:4px 16px;
-    font-weight:600;
-    font-size:12px;
-}
-QPushButton:hover{ background:#ca4545; }
-QPushButton:pressed{ background:#a73434; }
-""")
-        remove_layout.addWidget(self._clear_btn)
-        layout.addLayout(remove_layout)
-        self._clear_btn.hide()
+        self._control_widget, self._control_layout, control_scroll = _make_scrollable_control_area()
+        layout.addWidget(control_scroll, 1)
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -6801,6 +6963,10 @@ QPushButton:pressed{ background:#a73434; }
 
         self._name_label.setText(ev.name)
         self._cat_label.setText(ev.cat)
+        self._crumb.setText(f"ENVIRONMENT  \u203a  {ev.cat.upper()}")
+        self._value_caption.setText({"enum": "CHOOSE ONE", "flags": "TOGGLE FLAGS",
+                                     "vkd3d_config": "TOGGLE FLAGS", "dxvk_config": "DXVK.CONF KEYS"}
+                                    .get(ev.vtype, "VALUE"))
 
         if cur:
             self._value_label.setText(f"= {cur}")
@@ -6850,7 +7016,7 @@ QPushButton:pressed{ background:#a73434; }
         """Enum: same button-grid style as _build_enum_control."""
         cols = min(len(ev.options), 5)
         grid = QGridLayout()
-        grid.setSpacing(6)
+        grid.setSpacing(4)
 
         # Enum env vars (e.g. on/off __GL_* switches) accept exactly one
         # value. Without a QButtonGroup, each button toggled independently
@@ -6865,27 +7031,8 @@ QPushButton:pressed{ background:#a73434; }
             btn.setCheckable(True)
             if opt == cur:
                 btn.setChecked(True)
-            btn.setFixedHeight(34)
-            btn.setStyleSheet("""
-QPushButton{
-    background:#1a1f28;
-    border:1px solid #323c4b;
-    border-radius:6px;
-    color:#d8d8d8;
-    padding:8px 10px;
-    font-size:12px;
-    font-weight:600;
-}
-QPushButton:hover{
-    background:#252c37;
-    border:1px solid #76b900;
-}
-QPushButton:checked{
-    background:rgba(118, 185, 0, 0.12);
-    border:1px solid #76b900;
-    color:#76b900;
-}
-""")
+            btn.setFixedHeight(30)
+            btn.setStyleSheet(OPTION_BTN_SS)
             group.addButton(btn)
             # Same reasoning as SettingEditorWidget._build_enum_control's
             # _toggle_enum_value: with an exclusive QButtonGroup, clicking
@@ -6938,16 +7085,16 @@ QPushButton:checked{
 
         # Column headers
         hdr_flag = QLabel("Flag")
-        hdr_flag.setStyleSheet("color:#8a92a5; font-size:10px; font-weight:600;")
+        hdr_flag.setStyleSheet("color:#7b8496; font-size:10px; font-weight:600;")
         hdr_desc = QLabel("Description")
-        hdr_desc.setStyleSheet("color:#8a92a5; font-size:10px; font-weight:600;")
+        hdr_desc.setStyleSheet("color:#7b8496; font-size:10px; font-weight:600;")
         grid.addWidget(hdr_flag, 0, 0)
         grid.addWidget(hdr_desc, 0, 1)
 
         # Separator line
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("border: none; border-top: 1px solid #1e2535;")
+        sep.setStyleSheet("border: none; border-top: 1px solid #1d222c;")
         sep.setFixedHeight(1)
         grid.addWidget(sep, 1, 0, 1, 2)
 
@@ -6967,7 +7114,7 @@ QPushButton:checked{
             desc_text = VKD3D_CONFIG_DESCS.get(flag, "")
             desc_lbl = QLabel(desc_text)
             desc_lbl.setWordWrap(True)
-            desc_lbl.setStyleSheet("color:#a7afbc; font-size:11px;")
+            desc_lbl.setStyleSheet("color:#b3bac7; font-size:11px;")
 
             grid.addWidget(btn,      r_idx + 2, 0)
             grid.addWidget(desc_lbl, r_idx + 2, 1)
@@ -7015,15 +7162,15 @@ QPushButton:checked{
         grid.setColumnStretch(2, 1)
         for c, t in enumerate(("Key", "Value", "Description")):
             h = QLabel(t)
-            h.setStyleSheet("color:#8a92a5; font-size:10px; font-weight:600;")
+            h.setStyleSheet("color:#7b8496; font-size:10px; font-weight:600;")
             grid.addWidget(h, 0, c)
 
-        combo_ss = ("QComboBox{background:#1a1f28;border:1px solid #323c4b;border-radius:6px;"
-                    "color:#d8d8d8;padding:3px 8px;font-size:11px;}"
+        combo_ss = ("QComboBox{background:#181c24;border:1px solid #2a313d;border-radius:6px;"
+                    "color:#dfe3ea;padding:3px 8px;font-size:11px;}"
                     "QComboBox:hover{border:1px solid #76b900;}")
         for r, (key, kind, opt, desc) in enumerate(DXVK_CONFIG_KEYS, start=1):
             lbl = QLabel(key)
-            lbl.setStyleSheet("color:#d8d8d8; font-family:monospace; font-size:11px;")
+            lbl.setStyleSheet("color:#dfe3ea; font-family:monospace; font-size:11px;")
             val = known.get(key, "")
             if kind == "enum":
                 w = QComboBox()
@@ -7057,14 +7204,14 @@ QPushButton:checked{
                 w.setToolTip("Not supported here: " + _kw)
             d = QLabel(desc)
             d.setWordWrap(True)
-            d.setStyleSheet("color:#a7afbc; font-size:11px;")
+            d.setStyleSheet("color:#b3bac7; font-size:11px;")
             grid.addWidget(lbl, r, 0)
             grid.addWidget(w, r, 1)
             grid.addWidget(d, r, 2)
         self._control_layout.addLayout(grid)
 
         hint = QLabel("Other entries (any other dxvk.conf key, ; separated):")
-        hint.setStyleSheet("color:#8a92a5; font-size:10px; font-weight:600;")
+        hint.setStyleSheet("color:#7b8496; font-size:10px; font-weight:600;")
         self._control_layout.addWidget(hint)
         self._dxvkcfg_extra = QLineEdit("; ".join(extras))
         self._dxvkcfg_extra.setStyleSheet(self._EDIT_SS)
@@ -7092,27 +7239,7 @@ QPushButton:checked{
         self._debounce_timer.start(200)
 
     def _apply_flag_btn_style(self, btn: QPushButton):
-        btn.setStyleSheet("""
-QPushButton{
-    background:#1a1f28;
-    border:1px solid #323c4b;
-    border-radius:6px;
-    color:#d8d8d8;
-    padding:4px 10px;
-    font-size:11px;
-    font-weight:600;
-    text-align:left;
-}
-QPushButton:hover{
-    background:#252c37;
-    border:1px solid #76b900;
-}
-QPushButton:checked{
-    background:rgba(118, 185, 0, 0.12);
-    border:1px solid #76b900;
-    color:#76b900;
-}
-""")
+        btn.setStyleSheet(FLAG_BTN_SS)
 
     def _on_vkd3d_flag_toggled(self):
         """Rebuild VKD3D_CONFIG value from current checkbox states."""
@@ -7147,7 +7274,7 @@ QPushButton:checked{
         self._flag_btns: Dict[str, QPushButton] = {}
         cols = min(len(plain_options), 5) or 1
         grid = QGridLayout()
-        grid.setSpacing(6)
+        grid.setSpacing(4)
         row, col = 0, 0
         for opt in plain_options:
             btn = QPushButton(opt)
@@ -7379,8 +7506,8 @@ class ProfileManagerWidget(QWidget):
         self._profile_name.setPlaceholderText("Profile name")
         self._profile_name.setStyleSheet("""
             QLineEdit {
-                background: #141720;
-                border: 1px solid #1e2535;
+                background: #12151b;
+                border: 1px solid #1d222c;
                 color: #e8eaf0;
                 font-size: 12px;
                 padding: 3px 8px;
@@ -7421,22 +7548,22 @@ class ProfileManagerWidget(QWidget):
         self._profile_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._profile_list.setStyleSheet("""
             QListWidget {
-                background: #141720;
-                border: 1px solid #1e2535;
+                background: #12151b;
+                border: 1px solid #1d222c;
                 border-radius: 3px;
                 color: #c8cdd8;
                 font-size: 12px;
             }
             QListWidget::item {
                 padding: 5px 10px;
-                border-bottom: 1px solid #1e2535;
+                border-bottom: 1px solid #1d222c;
             }
             QListWidget::item:selected {
                 background: rgba(118, 185, 0, 0.08);
                 border-color: #76b900;
             }
             QListWidget::item:hover {
-                background: #0d0f12;
+                background: #0c0e12;
             }
         """)
         self._profile_list.itemDoubleClicked.connect(self._load_selected)
@@ -7449,10 +7576,10 @@ class ProfileManagerWidget(QWidget):
         load_btn.clicked.connect(self._load_selected)
         load_btn.setStyleSheet("""
             QPushButton {
-                border: 1px solid #1e2535;
+                border: 1px solid #1d222c;
                 border-radius: 3px;
                 padding: 3px 10px;
-                background: #141720;
+                background: #12151b;
                 color: #c8cdd8;
                 font-size: 11px;
                 min-height: 24px;
@@ -7467,10 +7594,10 @@ class ProfileManagerWidget(QWidget):
         del_btn.clicked.connect(self._delete_selected)
         del_btn.setStyleSheet("""
             QPushButton {
-                border: 1px solid #1e2535;
+                border: 1px solid #1d222c;
                 border-radius: 3px;
                 padding: 3px 10px;
-                background: #141720;
+                background: #12151b;
                 color: #e84545;
                 font-size: 11px;
                 min-height: 24px;
@@ -7485,8 +7612,8 @@ class ProfileManagerWidget(QWidget):
         more_btn.setText("More ▾")
         more_btn.setPopupMode(QToolButton.InstantPopup)
         more_btn.setStyleSheet(f"""
-            QToolButton {{ border:1px solid #1e2535; border-radius:3px; padding:3px 10px;
-                          background:#141720; color:#c8cdd8; font-size:11px; min-height:18px; }}
+            QToolButton {{ border:1px solid #1d222c; border-radius:3px; padding:3px 10px;
+                          background:#12151b; color:#c8cdd8; font-size:11px; min-height:18px; }}
             QToolButton:hover {{ border-color:#4a7300; }}
             QToolButton::menu-indicator {{ image:none; width:0; }}""")
         self._more_menu = QMenu(more_btn)
@@ -7663,7 +7790,8 @@ class ProfileManagerWidget(QWidget):
         current = self.settings_manager.get_current_profile()
 
         if not profiles:
-            hint = make_header_item("No profiles yet — name one above and save")
+            hint = make_list_item("No profiles yet — name one above and save", None)
+            hint.setFlags(Qt.NoItemFlags)
             self._profile_list.addItem(hint)
             return
         for name in sorted(profiles, key=str.lower):
@@ -7894,7 +8022,7 @@ class LutrisSyncWidget(QWidget):
         self._path_label.setReadOnly(True)
         self._path_label.setStyleSheet("""
             QLineEdit {
-                background: #141720; border: 1px solid #1e2535;
+                background: #12151b; border: 1px solid #1d222c;
                 color: #a8adb8; font-size: 11px; font-family: monospace;
                 padding: 3px 8px; border-radius: 3px; min-height: 26px;
             }
@@ -7902,8 +8030,8 @@ class LutrisSyncWidget(QWidget):
         scan_row.addWidget(self._path_label, stretch=1)
         _btn_ss = """
             QPushButton {
-                border: 1px solid #1e2535; border-radius: 3px; padding: 3px 8px;
-                background: #141720; color: #c8cdd8; font-size: 11px; min-height: 26px;
+                border: 1px solid #1d222c; border-radius: 3px; padding: 3px 8px;
+                background: #12151b; color: #c8cdd8; font-size: 11px; min-height: 26px;
             }
             QPushButton:hover { border-color: #4a7300; }
         """
@@ -7925,7 +8053,7 @@ class LutrisSyncWidget(QWidget):
         self._game_combo = QComboBox()
         self._game_combo.setStyleSheet("""
             QComboBox {
-                background: #141720; border: 1px solid #1e2535; color: #e8eaf0;
+                background: #12151b; border: 1px solid #1d222c; color: #e8eaf0;
                 font-size: 12px; padding: 3px 8px; border-radius: 3px; min-height: 28px;
             }
             QComboBox:hover { border-color: #4a7300; }
@@ -7941,7 +8069,7 @@ class LutrisSyncWidget(QWidget):
         _grp_ss = """
             QGroupBox {
                 color: #a8adb8; font-size: 11px; font-weight: 700;
-                border: 1px solid #1e2535; border-radius: 3px;
+                border: 1px solid #1d222c; border-radius: 3px;
                 margin-top: 8px; padding-top: 14px;
             }
             QGroupBox::title { subcontrol-origin: margin; left: 6px; padding: 0 4px; }
@@ -7953,7 +8081,7 @@ class LutrisSyncWidget(QWidget):
             QCheckBox { color:#c8cdd8; font-size:13px; }
             QCheckBox::indicator {
                 width:15px; height:15px; border:1px solid #5a6478;
-                border-radius:3px; background:#1a1f28;
+                border-radius:3px; background:#181c24;
             }
             QCheckBox::indicator:hover { border-color:#76b900; }
             QCheckBox::indicator:checked { background:#76b900; border:1px solid #76b900; }
@@ -7980,7 +8108,7 @@ class LutrisSyncWidget(QWidget):
         self._lgtune_nice.setValue(-10)
         self._lgtune_nice.setStyleSheet("""
             QSpinBox {
-                background: #141720; border: 1px solid #1e2535; color: #e8eaf0;
+                background: #12151b; border: 1px solid #1d222c; color: #e8eaf0;
                 font-size: 13px; font-family: monospace; padding: 2px 4px;
                 border-radius: 3px; min-height: 24px;
             }
@@ -8001,7 +8129,7 @@ class LutrisSyncWidget(QWidget):
         )
         lgtune_note.setWordWrap(True)
         lgtune_note.setStyleSheet(
-            "color:#8a92a5; font-size:13px; font-family:monospace;"
+            "color:#7b8496; font-size:13px; font-family:monospace;"
         )
         lgtune_layout.addWidget(lgtune_note)
 
@@ -8012,7 +8140,7 @@ class LutrisSyncWidget(QWidget):
         self._preview.setReadOnly(True)
         self._preview.setStyleSheet("""
             QPlainTextEdit {
-                background: #0d0f12; border: 1px solid #1e2535;
+                background: #0c0e12; border: 1px solid #1d222c;
                 color: #9fd63a; font-family: monospace; font-size: 11px; border-radius: 3px;
             }
         """)
@@ -8031,7 +8159,7 @@ class LutrisSyncWidget(QWidget):
                 font-weight: 700; min-height: 28px;
             }
             QPushButton:hover { background: #8fd400; }
-            QPushButton:disabled { background: #2a2f38; color: #8a92a5; border-color: #1e2535; }
+            QPushButton:disabled { background: #2a2f38; color: #7b8496; border-color: #1d222c; }
         """)
         btn_row.addWidget(self._apply_btn)
 
@@ -8049,7 +8177,7 @@ class LutrisSyncWidget(QWidget):
         self._import_btn.clicked.connect(self._import_from_yaml)
         self._import_btn.setStyleSheet("""
             QPushButton {
-                background: #1a1f28; color: #d8d8d8; border: 1px solid #323c4b;
+                background: #181c24; color: #dfe3ea; border: 1px solid #2a313d;
                 border-radius: 3px; padding: 4px 12px; font-size: 12px;
                 font-weight: 600; min-height: 28px;
             }
@@ -8795,198 +8923,177 @@ LGTUNE_CONF    = Path("/etc/lutris-game-tune.conf")
 LGTUNE_LOG     = Path("/var/log/lutris-game-tune.log")
 LGTUNE_LIB_DIR = Path("/usr/local/lib/lutris-game-tune")
 
-FLM_FIELD_SS = """
-QLineEdit{
-    background:#1a1f28;
-    border:1px solid #323c4b;
-    border-radius:6px;
-    color:#d8d8d8;
-    font-family:monospace;
-    font-size:12px;
-    padding:5px 10px;
-}
-QLineEdit:focus{ border:1px solid #76b900; }
-QLineEdit:hover{ background:#252c37; }
-"""
-
-# Shared stylesheet for group boxes inside the Extra Tools panels
-_TOOL_GROUP_SS = """
-QGroupBox{
-    color:#8ea0ba; font-size:12px; font-weight:700;
-    border:1px solid #1e2535; border-radius:6px;
-    margin-top:8px; padding-top:14px;
-}
-QGroupBox::title{ subcontrol-origin:margin; left:8px; padding:0 4px; }
-"""
-
-# Shared button factory (used by both FlmInstallWidget and LgtuneWidget)
-def _tool_btn(label: str, bg="#1a1f28", border="#323c4b", fg="#d8d8d8",
-               bold=False) -> QPushButton:
-    weight = 700 if bold else 600
-    btn = QPushButton(label)
-    btn.setStyleSheet(f"""
-QPushButton{{
-    background:{bg}; border:1px solid {border}; border-radius:5px;
-    color:{fg}; padding:5px 14px; font-weight:{weight}; font-size:12px;
+FLM_FIELD_SS = f"""
+QLineEdit{{
+    background:{T['sunken']}; border:1px solid {T['border_hi']}; border-radius:6px;
+    color:{T['text']}; font-family:{T['mono']}; font-size:12px; padding:5px 10px;
 }}
-QPushButton:hover{{ border:1px solid #76b900; }}
-QPushButton:disabled{{ color:#3a4250; border:1px solid #232a36; background:#12151b; }}
-""")
+QLineEdit:focus{{ border:1px solid {T['accent']}; }}
+QLineEdit:hover{{ border-color:#38414f; }}
+"""
+
+# Shared stylesheet for group boxes inside the Extra Tools panels: a card
+_TOOL_GROUP_SS = f"""
+QGroupBox{{
+    color:{T['text2']}; font-size:12px; font-weight:700;
+    background:{T['surface']}; border:1px solid {T['border']}; border-radius:10px;
+    margin-top:16px; padding:16px 12px 12px 12px;
+}}
+QGroupBox::title{{ subcontrol-origin:margin; left:14px; padding:0 6px; color:{T['muted']}; }}
+"""
+
+
+# Shared button factory. The colour arguments are kept for the many existing
+# call sites; they are mapped onto the design system's roles.
+def _tool_btn(label: str, bg="", border="", fg="", bold=False) -> QPushButton:
+    btn = QPushButton(label)
+    btn.setCursor(Qt.PointingHandCursor)
+    blob = f"{bg}{border}{fg}".lower()
+    if any(k in blob for k in ("#26330f", "#76b900", "#4a7300", "#1d2a10")):
+        btn.setStyleSheet(btn_ss("primary"))
+    elif any(k in blob for k in ("#3a1010", "#7a2020", "#e07070", T["danger"])):
+        btn.setStyleSheet(btn_ss("danger"))
+    elif any(k in blob for k in ("#33270f", T["warn"].lower())):
+        btn.setStyleSheet(
+            f"QPushButton{{background:rgba(227,167,63,0.12);border:1px solid {T['warn']};color:{T['warn']};"
+            "border-radius:6px;padding:5px 14px;font-weight:700;font-size:12px;}"
+            "QPushButton:hover{background:rgba(227,167,63,0.22);}"
+            f"QPushButton:disabled{{color:{T['faint']};border-color:{T['border']};background:transparent;}}")
+    else:
+        btn.setStyleSheet(btn_ss("default"))
     return btn
 
 
-class ExtraToolsSidebarWidget(QWidget):
-    """
-    Left-sidebar page for the Extra Tools tab.  Not a selectable list —
-    just orientation text for all ten sub-tabs.
-    """
+# Extra Tools navigation: (section, tab title, glyph, one-line subtitle)
+TOOL_NAV = [
+    ("Build & install", "vk_flip_meter", "\u23f1", "Frame-pacing Vulkan layer · build + live tuning"),
+    ("Build & install", "lutris-game-tune", "\u2699", "System tuner: governor, ASPM, C-states, CCD"),
+    ("Build & install", "DLSS Updater", "\u21e9", "DLSS SR/RR/FG + Streamline from NGX"),
+    ("Build & install", "Prefix Doctor", "\u271a", "Update DXVK / vkd3d / nvapi in a prefix"),
+    ("Diagnose", "Linter", "\u2713", "Contradictions in the current config"),
+    ("Diagnose", "System", "\u25a3", "Driver, session, Vulkan extensions"),
+    ("Diagnose", "Live process", "\u25c9", "Did the env / DLLs reach the game?"),
+    ("Diagnose", "Logs", "\u2261", "Proton / DXVK logs, known failures"),
+    ("Diagnose", "Frametime", "\u223f", "MangoHud / FLM CSV, A/B compare"),
+    ("Diagnose", "Cache", "\u25a4", "Shader & pipeline caches"),
+    ("Overlays", "MangoHud", "\u25a6", "HUD config builder"),
+    ("Overlays", "vkBasalt", "\u25d0", "Post-processing effect chain"),
+    ("Knowledge", "Game hints", "\u2605", "ProtonDB + PCGamingWiki per game"),
+    ("Knowledge", "Community tips", "\u2691", "User-reported settings (at own risk)"),
+    ("Knowledge", "Upstream drift", "\u21c4", "Catalog vs. upstream sources"),
+]
+ROLE_SUB = Qt.UserRole + 30
+ROLE_GLYPH = Qt.UserRole + 31
+ROLE_ALERT = Qt.UserRole + 32
+
+
+class ToolNavDelegate(SidebarDelegate):
+    ITEM_H = 50
+
+    def paint(self, p: QPainter, option, index):
+        if (index.data(ROLE_KIND) or "item") == "header":
+            return super().paint(p, option, index)
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing)
+        r = option.rect.adjusted(6, 2, -6, -2)
+        selected = bool(option.state & QStyle.State_Selected)
+        hovered = bool(option.state & QStyle.State_MouseOver)
+        if selected:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(118, 185, 0, 30))
+            p.drawRoundedRect(r, 8, 8)
+            p.setBrush(QColor(T["accent"]))
+            p.drawRoundedRect(QRect(r.left(), r.top() + 10, 3, r.height() - 20), 1.5, 1.5)
+        elif hovered:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(T["hover"]))
+            p.drawRoundedRect(r, 8, 8)
+        icon = QRect(r.left() + 10, r.center().y() - 15, 30, 30)
+        p.setPen(QPen(QColor(T["accent_dim"] if selected else T["border_hi"]), 1))
+        p.setBrush(QColor(T["raised"] if not selected else "#1b2412"))
+        p.drawRoundedRect(icon, 8, 8)
+        gf = QFont(option.font)
+        gf.setPointSizeF(option.font.pointSizeF() + 2)
+        p.setFont(gf)
+        p.setPen(QColor(T["accent_hi"] if selected else T["text2"]))
+        p.drawText(icon, Qt.AlignCenter, index.data(ROLE_GLYPH) or "")
+        tx = icon.right() + 12
+        tw = r.right() - tx - 22
+        tf = QFont(option.font)
+        tf.setWeight(QFont.DemiBold)
+        p.setFont(tf)
+        p.setPen(QColor(T["text"] if selected or hovered else T["text2"]))
+        p.drawText(QRect(tx, r.top() + 6, tw, 18), Qt.AlignLeft | Qt.AlignVCenter,
+                   QFontMetrics(tf).elidedText(index.data(Qt.DisplayRole) or "", Qt.ElideRight, tw))
+        sf = QFont(option.font)
+        sf.setPointSizeF(max(7.0, option.font.pointSizeF() - 1.5))
+        p.setFont(sf)
+        p.setPen(QColor(T["muted"]))
+        p.drawText(QRect(tx, r.top() + 24, tw, 16), Qt.AlignLeft | Qt.AlignVCenter,
+                   QFontMetrics(sf).elidedText(index.data(ROLE_SUB) or "", Qt.ElideRight, tw))
+        if index.data(ROLE_ALERT):
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(T["warn"]))
+            p.drawEllipse(QRect(r.right() - 16, r.center().y() - 4, 8, 8))
+        p.restore()
+
+
+class ExtraToolsSidebarWidget(QListWidget):
+    """Left-sidebar navigation for the Extra Tools tab (replaces the old
+    13-tab strip and the static text column next to it)."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(12)
+        setup_sidebar_list(self)
+        self.setItemDelegate(ToolNavDelegate(self))
+        self._tools: Optional["ExtraToolsWidget"] = None
+        self._by_title: Dict[str, QListWidgetItem] = {}
+        section = None
+        for sec, title, glyph, sub in TOOL_NAV:
+            if sec != section:
+                section = sec
+                self.addItem(make_header_item(sec))
+            it = make_list_item(title, title)
+            it.setData(ROLE_SUB, sub)
+            it.setData(ROLE_GLYPH, glyph)
+            it.setToolTip(sub)
+            self.addItem(it)
+            self._by_title[title] = it
+        self.currentItemChanged.connect(self._go)
 
-        title = QLabel("Extra Tools")
-        title.setStyleSheet("color:#e8eaf0; font-size:15px; font-weight:700;")
-        layout.addWidget(title)
+    def bind(self, tools: "ExtraToolsWidget"):
+        self._tools = tools
+        # Any tool tab not listed above still gets an entry, so nothing is unreachable.
+        extra = [t for t in tools.tab_titles() if t not in self._by_title]
+        if extra:
+            self.addItem(make_header_item("More"))
+            for t in extra:
+                it = make_list_item(t, t)
+                it.setData(ROLE_GLYPH, "\u25c7")
+                self.addItem(it)
+                self._by_title[t] = it
+        tools._tabs.currentChanged.connect(self._sync)
+        tools.cache.stale_changed.connect(lambda st: self.set_alert("Cache", st))
+        self._sync(tools._tabs.currentIndex())
 
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.HLine)
-        sep1.setStyleSheet("color:#1e2535;")
-        layout.addWidget(sep1)
+    def set_alert(self, title: str, on: bool):
+        it = self._by_title.get(title)
+        if it is not None:
+            it.setData(ROLE_ALERT, on)
 
-        # ── vk_flip_meter blurb ──────────────────────────────────────────────
-        vkfm_title = QLabel("vk_flip_meter")
-        vkfm_title.setStyleSheet("color:#c8cdd8; font-size:13px; font-weight:700;")
-        layout.addWidget(vkfm_title)
+    def _go(self, cur, _prev=None):
+        if cur is not None and self._tools is not None and cur.data(Qt.UserRole):
+            self._tools.show_tab(cur.data(Qt.UserRole))
 
-        vkfm_sub = QLabel("Frame Pacing / Cadence Modulation Vulkan Layer")
-        vkfm_sub.setWordWrap(True)
-        vkfm_sub.setStyleSheet("color:#8a92a5; font-size:13px;")
-        layout.addWidget(vkfm_sub)
-
-        vkfm_info = QLabel(
-            "Build & install the layer on the right (cmake, pkexec for the "
-            "install step).  Runtime env vars (FLM_MODE, FLM_TARGET_FPS, …) "
-            "live on the \"DXVK / VKD3D / NV / FLM\" tab — they're added to "
-            "Copy All automatically.  The Live Tuning section lets you "
-            "hot-reload knobs into a running game via FLM_CONFIG + SIGUSR1."
-        )
-        vkfm_info.setWordWrap(True)
-        vkfm_info.setStyleSheet("color:#a7afbc; font-size:12px; line-height:145%;")
-        layout.addWidget(vkfm_info)
-
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.HLine)
-        sep2.setStyleSheet("color:#1e2535;")
-        layout.addWidget(sep2)
-
-        # ── lutris-game-tune blurb ───────────────────────────────────────────
-        lgt_title = QLabel("lutris-game-tune")
-        lgt_title.setStyleSheet("color:#c8cdd8; font-size:13px; font-weight:700;")
-        layout.addWidget(lgt_title)
-
-        lgt_sub = QLabel("System-wide Lutris / Wine performance tuner")
-        lgt_sub.setWordWrap(True)
-        lgt_sub.setStyleSheet("color:#8a92a5; font-size:13px;")
-        layout.addWidget(lgt_sub)
-
-        lgt_info = QLabel(
-            "Manages CPU governor, PCIe ASPM, deep C-states, VM swappiness, "
-            "Transparent HugePages, and CCD/CCX core isolation at game launch "
-            "via a setuid root wrapper.  Settings are stored system-wide in "
-            "/etc/lutris-game-tune.conf (root-owned, written via pkexec).  "
-            "Not part of DRSTool profiles — applies to all games globally."
-        )
-        lgt_info.setWordWrap(True)
-        lgt_info.setStyleSheet("color:#a7afbc; font-size:12px; line-height:145%;")
-        layout.addWidget(lgt_info)
-
-        sep3 = QFrame()
-        sep3.setFrameShape(QFrame.HLine)
-        sep3.setStyleSheet("color:#1e2535;")
-        layout.addWidget(sep3)
-
-        # ── DLSS Updater blurb ───────────────────────────────────────────────
-        ngx_title_lbl = QLabel("DLSS Updater")
-        ngx_title_lbl.setStyleSheet("color:#c8cdd8; font-size:13px; font-weight:700;")
-        layout.addWidget(ngx_title_lbl)
-
-        ngx_sub = QLabel("DLSS SR / RR / FG + Streamline from NVIDIA's NGX servers")
-        ngx_sub.setWordWrap(True)
-        ngx_sub.setStyleSheet("color:#8a92a5; font-size:13px;")
-        layout.addWidget(ngx_sub)
-
-        ngx_info = QLabel(
-            "Lists every build NVIDIA hosts for the driver's NGX updater — including "
-            "staged ones found via server-config pins and version probes — and saves "
-            "the selected ones as nvngx_dlss*.dll / sl.*.dll into a version-named "
-            "folder, SHA-256 checked.  Read-only: talks only to "
-            "ngx.download.nvidia.com, never touches game folders."
-        )
-        ngx_info.setWordWrap(True)
-        ngx_info.setStyleSheet("color:#a7afbc; font-size:12px; line-height:145%;")
-        layout.addWidget(ngx_info)
-
-        # ── remaining sub-tabs (Linter … Upstream drift) ─────────────────────
-        _more = (
-            ("Linter", "Configuration consistency check",
-             "Scans the current configuration for combinations that contradict "
-             "each other or cannot work on this system (e.g. PROTON_NVIDIA_LIBS + "
-             "WoW64, FSR4 on NVIDIA, ENABLE_HDR_WSI on drivers \u2265 595, double "
-             "latency stacks).  Re-runs automatically on every change; each "
-             "finding can be jumped to."),
-            ("System", "Detected hardware / driver / Vulkan info",
-             "Shows the NVIDIA driver, session type (X11/Wayland) and each Vulkan "
-             "GPU with the device extensions DRSTool cares about (Reflex low-"
-             "latency, descriptor heap/buffer, HDR, present wait/id, optical "
-             "flow, mesh shaders…).  Optionally greys out options this system "
-             "can't run \u2014 you can still force them with \u201cEdit anyway\u201d."),
-            ("Prefix Doctor", "Wine prefix DLL checker / updater",
-             "Compares the DXVK, vkd3d-proton and dxvk-nvapi DLLs inside a Wine "
-             "prefix with the latest GitHub releases and replaces outdated ones "
-             "(originals are backed up).  For Wine / Lutris / Bottles / Heroic "
-             "prefixes \u2014 Proton re-syncs its own prefixes on launch."),
-            ("MangoHud", "MangoHud overlay config builder",
-             "Pick overlay options (with filter and presets) and either set the "
-             "result as the MANGOHUD_CONFIG env var or save a config file and "
-             "point MANGOHUD_CONFIGFILE at it."),
-            ("vkBasalt", "vkBasalt post-processing builder",
-             "Choose and drag-reorder vkBasalt effects (checked ones run top to "
-             "bottom), tweak their parameters, set a LUT file and add extra "
-             "ReShade effects (name = /path/to/effect.fx) to generate a "
-             "vkBasalt config."),
-            ("Cache", "Shader / pipeline cache manager",
-             "Shows sizes of the NVIDIA, Mesa, DXVK and vkd3d-proton caches: "
-             "driver caches, Steam shadercache/<appid> folders (all libraries), "
-             "Lutris per-game folders and paths from the Env Vars tab.  Lets you "
-             "clear them; \u201cAdd folder\u2026\u201d includes .dxvk-cache files "
-             "next to game executables.  The tab shows \u26a0 when caches are stale."),
-            ("Upstream drift", "Catalog vs. upstream comparison",
-             "Downloads current DXVK, vkd3d-proton, dxvk-nvapi and gamescope "
-             "sources plus NVIDIA's NvApiDriverSettings.h and compares them with "
-             "DRSTool's catalog (env vars, dxvk.conf keys, VKD3D_CONFIG flags, "
-             "gamescope flags, DRS IDs).  \u201cNew\u201d = upstream only, "
-             "\u201cGone\u201d = catalog only; reviewed rows can be hidden."),
-        )
-        for _t, _s, _i in _more:
-            _sep = QFrame()
-            _sep.setFrameShape(QFrame.HLine)
-            _sep.setStyleSheet("color:#1e2535;")
-            layout.addWidget(_sep)
-            _tl = QLabel(_t)
-            _tl.setStyleSheet("color:#c8cdd8; font-size:13px; font-weight:700;")
-            layout.addWidget(_tl)
-            _sl = QLabel(_s)
-            _sl.setWordWrap(True)
-            _sl.setStyleSheet("color:#8a92a5; font-size:13px;")
-            layout.addWidget(_sl)
-            _il = QLabel(_i)
-            _il.setWordWrap(True)
-            _il.setStyleSheet("color:#a7afbc; font-size:12px; line-height:145%;")
-            layout.addWidget(_il)
-
-        layout.addStretch()
+    def _sync(self, idx: int):
+        if self._tools is None:
+            return
+        title = self._tools._tabs.tabText(idx).replace(" \u26a0", "")
+        it = self._by_title.get(title)
+        if it is not None and it is not self.currentItem():
+            self.blockSignals(True)
+            self.setCurrentItem(it)
+            self.blockSignals(False)
 
 
 class FlmInstallWidget(QWidget):
@@ -9016,7 +9123,7 @@ class FlmInstallWidget(QWidget):
         layout.setSpacing(10)
 
         header = QLabel("vk_flip_meter — Build & Install")
-        header.setStyleSheet("color:#f2f2f2; font-size:18px; font-weight:700;")
+        header.setStyleSheet("color:#eceff4; font-size:18px; font-weight:700;")
         layout.addWidget(header)
 
         desc = QLabel(
@@ -9027,7 +9134,7 @@ class FlmInstallWidget(QWidget):
         )
         desc.setWordWrap(True)
         desc.setTextFormat(Qt.RichText)
-        desc.setStyleSheet("color:#a7afbc; font-size:13px; line-height:140%;")
+        desc.setStyleSheet("color:#b3bac7; font-size:13px; line-height:140%;")
         layout.addWidget(desc)
 
         # Source path banner (read-only, bundled)
@@ -9035,7 +9142,7 @@ class FlmInstallWidget(QWidget):
         src_row.setSpacing(6)
         src_icon = QLabel("📁")
         src_lbl = QLabel("Source:")
-        src_lbl.setStyleSheet("color:#8ea0ba; font-size:12px; font-weight:600;")
+        src_lbl.setStyleSheet("color:#8f9bb0; font-size:12px; font-weight:600;")
         self._src_path_lbl = QLabel(str(self._BUNDLED_SRC))
         self._src_path_lbl.setStyleSheet(
             "color:#76b900; font-size:12px; font-family:monospace;"
@@ -9055,7 +9162,7 @@ class FlmInstallWidget(QWidget):
         form.setSpacing(8)
 
         prefix_lbl = QLabel("Install prefix:")
-        prefix_lbl.setStyleSheet("color:#8ea0ba; font-size:12px; font-weight:600;")
+        prefix_lbl.setStyleSheet("color:#8f9bb0; font-size:12px; font-weight:600;")
         self._prefix_edit = QLineEdit("/usr/local")
         self._prefix_edit.setStyleSheet(FLM_FIELD_SS)
         form.addWidget(prefix_lbl, 0, 0)
@@ -9067,8 +9174,8 @@ class FlmInstallWidget(QWidget):
             "FLM_NATIVE_BUILD  (-O3 -march=native -mtune=native -flto — specific to this machine, not portable)"
         )
         self._native_chk.setStyleSheet("""
-QCheckBox{ color:#d8d8d8; font-size:12px; spacing:8px; }
-QCheckBox::indicator{ width:14px; height:14px; border:1px solid #323c4b; border-radius:3px; background:#1a1f28; }
+QCheckBox{ color:#dfe3ea; font-size:12px; spacing:8px; }
+QCheckBox::indicator{ width:14px; height:14px; border:1px solid #2a313d; border-radius:3px; background:#181c24; }
 QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
 """)
         layout.addWidget(self._native_chk)
@@ -9076,11 +9183,11 @@ QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
         native_warn = QLabel(
             "If enabled: the .so built for the 7845HX may not run on a different CPU (a different machine)."
         )
-        native_warn.setStyleSheet("color:#8a92a5; font-size:13px; font-style:italic;")
+        native_warn.setStyleSheet("color:#7b8496; font-size:13px; font-style:italic;")
         layout.addWidget(native_warn)
 
         btn_row = QHBoxLayout()
-        self._build_btn = _tool_btn("Build & Install (pkexec)", "#76b900", "#76b900", "#0d0f12", bold=True)
+        self._build_btn = _tool_btn("Build & Install (pkexec)", "#76b900", "#76b900", "#0c0e12", bold=True)
         self._build_btn.clicked.connect(self._on_build_clicked)
 
         self._verify_btn = _tool_btn("Verify Installation")
@@ -9096,7 +9203,7 @@ QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
         layout.addLayout(btn_row)
 
         self._status_lbl = QLabel("Ready.")
-        self._status_lbl.setStyleSheet("color:#8a92a5; font-size:13px;")
+        self._status_lbl.setStyleSheet("color:#7b8496; font-size:13px;")
         layout.addWidget(self._status_lbl)
 
         # ── Live tuning: FLM_CONFIG file + SIGUSR1 ───────────────────────────
@@ -9107,8 +9214,8 @@ QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
         # vars (from the Env Vars tab) into the .conf, then signal the game.
         live_group = QGroupBox("Live Tuning  (FLM_CONFIG + SIGUSR1)")
         live_group.setStyleSheet("""
-QGroupBox{ color:#8ea0ba; font-size:12px; font-weight:700;
-    border:1px solid #1e2535; border-radius:6px;
+QGroupBox{ color:#8f9bb0; font-size:12px; font-weight:700;
+    border:1px solid #1d222c; border-radius:6px;
     margin-top:8px; padding-top:12px; }
 QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
 """)
@@ -9116,7 +9223,7 @@ QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
         live_layout.setSpacing(6)
 
         conf_lbl = QLabel("Config file:")
-        conf_lbl.setStyleSheet("color:#8ea0ba; font-size:13px; font-weight:600;")
+        conf_lbl.setStyleSheet("color:#8f9bb0; font-size:13px; font-weight:600;")
         self._conf_edit = QLineEdit(str(default_flm_conf_path()))
         self._conf_edit.setStyleSheet(FLM_FIELD_SS)
         self._write_conf_btn = _tool_btn("Write .conf")
@@ -9126,7 +9233,7 @@ QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
         live_layout.addWidget(self._write_conf_btn, 0, 2)
 
         proc_lbl = QLabel("Process match:")
-        proc_lbl.setStyleSheet("color:#8ea0ba; font-size:13px; font-weight:600;")
+        proc_lbl.setStyleSheet("color:#8f9bb0; font-size:13px; font-weight:600;")
         self._proc_edit = QLineEdit()
         self._proc_edit.setStyleSheet(FLM_FIELD_SS)
         self._proc_edit.setPlaceholderText("optional regex on the command line, e.g. GameName.exe")
@@ -9142,7 +9249,7 @@ QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
             "written as comments — the layer can't change them at runtime."
         )
         live_hint.setWordWrap(True)
-        live_hint.setStyleSheet("color:#8a92a5; font-size:13px; font-style:italic;")
+        live_hint.setStyleSheet("color:#7b8496; font-size:13px; font-style:italic;")
         live_layout.addWidget(live_hint, 2, 0, 1, 3)
 
         layout.addWidget(live_group)
@@ -9151,8 +9258,8 @@ QGroupBox::title{ subcontrol-origin: margin; left:8px; padding:0 4px; }
         self._console.setReadOnly(True)
         self._console.setStyleSheet("""
 QPlainTextEdit{
-    background:#0a0c0f;
-    border:1px solid #1e2535;
+    background:#08090c;
+    border:1px solid #1d222c;
     border-radius:6px;
     color:#9be238;
     font-family:monospace;
@@ -9853,7 +9960,7 @@ class LgtuneWidget(QWidget):
         root.addWidget(scroll, 1)
 
         header = QLabel("lutris-game-tune — System-wide Game Tuner")
-        header.setStyleSheet("color:#f2f2f2; font-size:18px; font-weight:700;")
+        header.setStyleSheet("color:#eceff4; font-size:18px; font-weight:700;")
         layout.addWidget(header)
 
         # ── How it works / usage ─────────────────────────────────────────────
@@ -9909,7 +10016,7 @@ class LgtuneWidget(QWidget):
         usage_text.setWordWrap(True)
         usage_text.setTextFormat(Qt.RichText)
         usage_text.setStyleSheet(
-            "color:#a7afbc; font-size:12px; line-height:155%; "
+            "color:#b3bac7; font-size:12px; line-height:155%; "
             "background:transparent;"
         )
         usage_layout.addWidget(usage_text)
@@ -9930,7 +10037,7 @@ class LgtuneWidget(QWidget):
         src_row = QHBoxLayout()
         src_row.setSpacing(6)
         src_lbl = QLabel("📁 Source:")
-        src_lbl.setStyleSheet("color:#8ea0ba; font-size:12px; font-weight:600;")
+        src_lbl.setStyleSheet("color:#8f9bb0; font-size:12px; font-weight:600;")
         self._lgt_src_lbl = QLabel(str(self._BUNDLED_SRC))
         self._lgt_src_lbl.setStyleSheet(
             "color:#76b900; font-size:12px; font-family:monospace;"
@@ -9950,7 +10057,7 @@ class LgtuneWidget(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(6)
         self._install_btn = _tool_btn(
-            "Install (pkexec)", "#76b900", "#76b900", "#0d0f12", bold=True
+            "Install (pkexec)", "#76b900", "#76b900", "#0c0e12", bold=True
         )
         self._install_btn.clicked.connect(self._on_install)
         self._uninstall_btn = _tool_btn("Uninstall (pkexec)", "#3a1010", "#7a2020", "#e07070")
@@ -9969,7 +10076,7 @@ class LgtuneWidget(QWidget):
         )
         install_note.setWordWrap(True)
         install_note.setTextFormat(Qt.RichText)
-        install_note.setStyleSheet("color:#8a92a5; font-size:13px; font-style:italic;")
+        install_note.setStyleSheet("color:#7b8496; font-size:13px; font-style:italic;")
         install_layout.addWidget(install_note)
 
         layout.addWidget(install_group)
@@ -10003,9 +10110,9 @@ class LgtuneWidget(QWidget):
                 ctrl = QCheckBox(label)
                 ctrl.setChecked(default == "1")
                 ctrl.setStyleSheet(
-                    "QCheckBox{ color:#d8d8d8; font-size:13px; spacing:6px; }"
+                    "QCheckBox{ color:#dfe3ea; font-size:13px; spacing:6px; }"
                     "QCheckBox::indicator{ width:14px; height:14px; "
-                    "border:1px solid #323c4b; border-radius:3px; background:#1a1f28; }"
+                    "border:1px solid #2a313d; border-radius:3px; background:#181c24; }"
                     "QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }"
                 )
 
@@ -10015,10 +10122,10 @@ class LgtuneWidget(QWidget):
                 idx_default = opts_or_range.index(default) if opts_or_range and default in opts_or_range else 0
                 ctrl.setCurrentIndex(idx_default)
                 ctrl.setStyleSheet("""
-QComboBox{ background:#1a1f28; border:1px solid #323c4b; border-radius:4px;
-           color:#d8d8d8; font-size:13px; padding:3px 8px; min-height:26px; }
+QComboBox{ background:#181c24; border:1px solid #2a313d; border-radius:4px;
+           color:#dfe3ea; font-size:13px; padding:3px 8px; min-height:26px; }
 QComboBox:hover{ border:1px solid #76b900; }
-QComboBox QAbstractItemView{ background:#141720; color:#d8d8d8; selection-background-color:#1e2535; }
+QComboBox QAbstractItemView{ background:#12151b; color:#dfe3ea; selection-background-color:#1d222c; }
 """)
                 ctrl.installEventFilter(_NO_SCROLL_FILTER)
 
@@ -10028,8 +10135,8 @@ QComboBox QAbstractItemView{ background:#141720; color:#d8d8d8; selection-backgr
                 ctrl.setRange(lo, hi)
                 ctrl.setValue(int(default))
                 ctrl.setStyleSheet("""
-QSpinBox{ background:#1a1f28; border:1px solid #323c4b; border-radius:4px;
-          color:#d8d8d8; font-size:13px; padding:3px 6px; }
+QSpinBox{ background:#181c24; border:1px solid #2a313d; border-radius:4px;
+          color:#dfe3ea; font-size:13px; padding:3px 6px; }
 QSpinBox:hover{ border:1px solid #76b900; }
 QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
 """)
@@ -10105,7 +10212,7 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
         action_row = QHBoxLayout()
         action_row.setSpacing(6)
         self._save_btn = _tool_btn(
-            "💾  Save to /etc/ (pkexec)", "#76b900", "#76b900", "#0d0f12", bold=True
+            "💾  Save to /etc/ (pkexec)", "#76b900", "#76b900", "#0c0e12", bold=True
         )
         self._save_btn.clicked.connect(self._on_save)
         self._status_btn = _tool_btn("▶  Run STATUS")
@@ -10124,7 +10231,7 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
         )
         save_note.setWordWrap(True)
         save_note.setTextFormat(Qt.RichText)
-        save_note.setStyleSheet("color:#8a92a5; font-size:13px; font-style:italic;")
+        save_note.setStyleSheet("color:#7b8496; font-size:13px; font-style:italic;")
         settings_layout.addWidget(save_note)
 
         layout.addWidget(self._settings_group)
@@ -10132,7 +10239,7 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
         # ── Console ───────────────────────────────────────────────────────────
         console_hdr = QHBoxLayout()
         console_lbl = QLabel("Output")
-        console_lbl.setStyleSheet("color:#8ea0ba; font-size:12px; font-weight:700;")
+        console_lbl.setStyleSheet("color:#8f9bb0; font-size:12px; font-weight:700;")
         clear_btn = _tool_btn("Clear")
         clear_btn.clicked.connect(lambda: self._console.clear())
         console_hdr.addWidget(console_lbl)
@@ -10145,7 +10252,7 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
         self._console.setFixedHeight(160)
         self._console.setStyleSheet("""
 QPlainTextEdit{
-    background:#0a0c0f; border:1px solid #1e2535; border-radius:6px;
+    background:#08090c; border:1px solid #1d222c; border-radius:6px;
     color:#9be238; font-family:monospace; font-size:13px; padding:6px;
 }
 """)
@@ -10514,7 +10621,7 @@ class GamescopeFlagsWidget(QWidget):
         self._enable_chk.setStyleSheet(
             "QCheckBox{color:#e8eaf0; font-size:13px; font-weight:600;} "
             "QCheckBox::indicator{width:16px; height:16px; border:1px solid #4a5468; "
-            "border-radius:3px; background:#1a1f28;} "
+            "border-radius:3px; background:#181c24;} "
             "QCheckBox::indicator:hover{border-color:#76b900;} "
             "QCheckBox::indicator:checked{background:#76b900; border:1px solid #76b900;}"
         )
@@ -10531,7 +10638,7 @@ class GamescopeFlagsWidget(QWidget):
         self._mangohud_chk.setStyleSheet(
             "QCheckBox{color:#e8eaf0; font-size:13px; font-weight:600;} "
             "QCheckBox::indicator{width:16px; height:16px; border:1px solid #4a5468; "
-            "border-radius:3px; background:#1a1f28;} "
+            "border-radius:3px; background:#181c24;} "
             "QCheckBox::indicator:hover{border-color:#76b900;} "
             "QCheckBox::indicator:checked{background:#76b900; border:1px solid #76b900;} "
             "QCheckBox:disabled{color:#5a606c;}"
@@ -10578,7 +10685,7 @@ class GamescopeFlagsWidget(QWidget):
                     ctrl = QCheckBox()
                     ctrl.setStyleSheet(
                         "QCheckBox::indicator{width:15px; height:15px; border:1px solid #4a5468; "
-                        "border-radius:3px; background:#1a1f28;} "
+                        "border-radius:3px; background:#181c24;} "
                         "QCheckBox::indicator:hover{border-color:#76b900;} "
                         "QCheckBox::indicator:checked{background:#76b900; border:1px solid #76b900;} "
                         "QCheckBox::indicator:disabled{background:#14171d; border:1px solid #2a3040;}"
@@ -10631,7 +10738,7 @@ class GamescopeFlagsWidget(QWidget):
         self._preview = QLineEdit()
         self._preview.setReadOnly(True)
         self._preview.setStyleSheet(
-            "QLineEdit{background:#0d0f12; border:1px solid #1e2535; color:#76b900; "
+            "QLineEdit{background:#0c0e12; border:1px solid #1d222c; color:#76b900; "
             "font-family:monospace; font-size:12px; padding:4px 6px;}"
         )
         outer.addWidget(self._preview)
@@ -10640,7 +10747,7 @@ class GamescopeFlagsWidget(QWidget):
         copy_row.addStretch()
         copy_btn = QPushButton("Copy Command")
         copy_btn.setStyleSheet(
-            "QPushButton{background:#141720; border:1px solid #1e2535; color:#e8eaf0; "
+            "QPushButton{background:#12151b; border:1px solid #1d222c; color:#e8eaf0; "
             "font-size:12px; padding:4px 10px; border-radius:3px;} "
             "QPushButton:hover{border-color:#4a7300;}"
         )
@@ -11237,7 +11344,7 @@ _NGX_COMBO_SS = f"""
 QComboBox {{ background:{T['bg']}; border:1px solid {T['border_hi']}; border-radius:6px;
             color:{T['text']}; font-family:monospace; font-size:12px; padding:5px 10px; }}
 QComboBox:hover {{ border-color:{T['accent_dim']}; }}
-QComboBox:disabled {{ color:#3a4250; border-color:#232a36; }}
+QComboBox:disabled {{ color:#4a5262; border-color:#1d222c; }}
 QComboBox::drop-down {{ border:none; width:24px; }}
 QComboBox::down-arrow {{ image:none; width:0; height:0; }}
 QComboBox QAbstractItemView {{ background:{T['surface']}; color:{T['text']};
@@ -11274,7 +11381,7 @@ class _NgxVersionCombo(QComboBox):
         super().paintEvent(e)
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(QColor(T["text2"] if self.isEnabled() else "#3a4250"), 1.6)
+        pen = QPen(QColor(T["text2"] if self.isEnabled() else "#4a5262"), 1.6)
         pen.setCapStyle(Qt.RoundCap)
         pen.setJoinStyle(Qt.RoundJoin)
         p.setPen(pen)
@@ -11491,7 +11598,7 @@ QFrame#ngxHero {{ border:1px solid {T['border']}; border-radius:10px;
         link_ss = (f"QPushButton{{background:transparent; border:none; color:{T['text2']}; "
                    f"font-size:12px; padding:2px 6px; text-decoration:underline;}}"
                    f"QPushButton:hover{{color:{T['accent_hi']};}}"
-                   f"QPushButton:disabled{{color:#3a4250;}}")
+                   f"QPushButton:disabled{{color:#4a5262;}}")
         self._latest_btn = QPushButton("newest of each")
         self._clear_btn = QPushButton("none")
         for b, fn in ((self._latest_btn, lambda: self._select(latest=True)),
@@ -11871,24 +11978,14 @@ class ExtraToolsWidget(QWidget):
     Extra Tools top-level tab.
     """
     # Shared QTabWidget stylesheet (same look as the Profiles subtabs)
-    _TAB_SS = """
-QTabWidget::pane {
-    border: 1px solid #1e2535; border-radius: 8px; top: -1px;
-    background: #11141b; padding: 10px 12px;
-}
-QTabWidget::tab-bar { left: 4px; }
-QTabBar { qproperty-drawBase: 0; }
-QTabBar::tab {
-    background: transparent; color: #8a92a5;
-    border: none; border-bottom: 2px solid transparent;
-    padding: 6px 11px 7px 11px; margin-right: 1px;
-    font-size: 12px; font-weight: 600;
-}
-QTabBar::tab:selected { color: #e8eaf0; border-bottom: 2px solid #76b900; }
-QTabBar::tab:hover:!selected { color: #c8cdd8; background: #141720;
-    border-top-left-radius: 5px; border-top-right-radius: 5px; }
-QTabBar QToolButton { background: #141720; border: 1px solid #2b3444; border-radius: 4px; }
-QTabBar QToolButton:hover { border-color: #4a7300; }
+    _TAB_SS = f"""
+QTabWidget::pane {{ border:none; border-top:1px solid {T['border']}; top:-1px; padding-top:10px; }}
+QTabBar::tab {{
+    background:transparent; color:{T['muted']}; border:none; border-bottom:2px solid transparent;
+    padding:7px 14px; font-size:12px; font-weight:600;
+}}
+QTabBar::tab:selected {{ color:{T['text']}; border-bottom:2px solid {T['accent']}; }}
+QTabBar::tab:hover:!selected {{ color:{T['text2']}; border-bottom:2px solid {T['border_hi']}; }}
 """
 
     def __init__(self, parent=None):
@@ -11949,6 +12046,10 @@ QTabBar QToolButton:hover { border-color: #4a7300; }
         self.logview = LogViewerWidget()
         tabs.addTab(self.logview, "Logs")
 
+        # Navigation lives in the left sidebar (ExtraToolsSidebarWidget); the
+        # tab strip itself would overflow with this many tools.
+        tabs.tabBar().hide()
+        tabs.setStyleSheet("QTabWidget::pane { border:none; }")
         layout.addWidget(tabs)
 
     def tab_titles(self) -> List[str]:
@@ -20620,9 +20721,9 @@ class MainWindow(QMainWindow):
     PAGE_EMPTY, PAGE_SETTING, PAGE_ARCH, PAGE_ENV, PAGE_GAMESCOPE, PAGE_TOOLS, PAGE_LUTRIS = range(7)
 
     EMPTY_HINTS = {
-        0: "Pick a DRS setting on the left.\nGreen dots mark settings already in the launch string.",
-        1: "Pick your GPU generation on the left.\nIt sets DXVK_NVAPI_GPU_ARCH.",
-        2: "Pick a variable on the left.\nGreen dots mark variables that are set; their value is shown on the right.",
+        0: "Pick a DRS setting\nGreen dots mark settings already in the launch string; their value shows on the right.",
+        1: "Pick a GPU generation to spoof\nSets DXVK_NVAPI_GPU_ARCH — leave it unset to report the real card.",
+        2: "Pick an environment variable\nDXVK, VKD3D-Proton, Proton, Wine, NVIDIA, Gamescope and more — set ones carry a green dot.",
         4: "",
     }
 
@@ -20648,7 +20749,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(980, 640)
         self.setStyleSheet(f"""
             QMainWindow {{ background: {T['bg']}; }}
-            QSplitter::handle:horizontal {{ background: transparent; width: 5px; }}
+            QSplitter::handle:horizontal {{ background: {T['bg']}; width: 4px; }}
             QSplitter::handle:horizontal:hover {{ background: {T['accent_dim']}; }}
         """)
 
@@ -20659,7 +20760,6 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         self._output_bar = OutputBarWidget(self.settings_manager, self)
-        main_layout.addWidget(self._output_bar)
 
         # ===== Top navigation =====
         # Used to be five buttons squeezed into the 320px sidebar, where the
@@ -20668,35 +20768,45 @@ class MainWindow(QMainWindow):
         nav = QWidget()
         nav.setObjectName("navBar")
         nav.setAttribute(Qt.WA_StyledBackground, True)
-        nav.setStyleSheet(f"#navBar {{ background:{T['bg']}; border-bottom:1px solid {T['border']}; }}")
+        nav.setStyleSheet(f"#navBar {{ background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+                          f" stop:0 #11141a, stop:1 {T['bg']}); border-bottom:1px solid {T['border']}; }}")
+        nav.setFixedHeight(56)
         nav_layout = QHBoxLayout(nav)
-        nav_layout.setContentsMargins(6, 0, 12, 0)
+        nav_layout.setContentsMargins(16, 0, 14, 0)
         nav_layout.setSpacing(0)
+        self._brand = BrandMark()
+        nav_layout.addWidget(self._brand)
+        nav_layout.addSpacing(18)
 
-        self._settings_tab = NavTab("DRS Settings")
-        self._arch_tab = NavTab("GPU Arch")
-        self._env_tab = NavTab("Environment")
+        seg = QFrame()
+        seg.setObjectName("navSeg")
+        seg.setStyleSheet(f"#navSeg {{ background:{T['sunken']}; border:1px solid {T['border']};"
+                          " border-radius:10px; }")
+        seg_l = QHBoxLayout(seg)
+        seg_l.setContentsMargins(3, 3, 3, 3)
+        seg_l.setSpacing(2)
+
+        self._settings_tab = NavTab("DRS Settings", "\u25c8")
+        self._arch_tab = NavTab("GPU Arch", "\u25a3")
+        self._env_tab = NavTab("Environment", "\u2630")
         self._env_tab.setToolTip("DXVK, VKD3D-Proton, forks, DXVK-NVAPI, NVIDIA, Proton, "
                                  "Wine, vk_flip_meter and Gamescope")
-        self._flm_tab = NavTab("Extra Tools")
-        self._profiles_tab = NavTab("Profiles")
+        self._flm_tab = NavTab("Extra Tools", "\u2692")
+        self._profiles_tab = NavTab("Profiles", "\u25a4")
         self._nav_tabs = [self._settings_tab, self._arch_tab, self._env_tab,
                           self._flm_tab, self._profiles_tab]
         for idx, btn in enumerate(self._nav_tabs):
             btn.clicked.connect(lambda _c=False, i=idx: self._switch_tab(i))
             btn.setToolTip((btn.toolTip() + "\n" if btn.toolTip() else "") + f"Ctrl+{idx + 1}")
-            nav_layout.addWidget(btn)
+            seg_l.addWidget(btn)
         self._settings_tab.setChecked(True)
+        seg.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        nav_layout.addWidget(seg, 0, Qt.AlignVCenter)
         nav_layout.addStretch(1)
 
-        _nav_btn_ss = (f"QToolButton,QPushButton{{color:{T['text2']};background:transparent;"
-                       f"border:1px solid {T['border_hi']};border-radius:5px;padding:0 10px;font-size:12px;}}"
-                       f"QToolButton:hover,QPushButton:hover{{background:{T['surface']};"
-                       f"border-color:{T['accent_dim']};color:{T['text']};}}"
-                       f"QToolButton:disabled{{color:#3c4352;border-color:{T['border']};}}"
-                       "QToolButton::menu-button{width:14px;border-left:1px solid #2b3444;}")
+        _nav_btn_ss = btn_ss("ghost", "sm")
         self._undo_btn = QToolButton()
-        self._undo_btn.setText("↶ Undo")
+        self._undo_btn.setText("↶")
         self._undo_btn.setPopupMode(QToolButton.MenuButtonPopup)
         self._undo_menu = QMenu(self._undo_btn)
         self._undo_menu.aboutToShow.connect(self._fill_history_menu)
@@ -20711,22 +20821,27 @@ class MainWindow(QMainWindow):
         self._recipes_btn.clicked.connect(self.open_recipes)
         for _b in (self._undo_btn, self._redo_btn, self._recipes_btn):
             _b.setCursor(Qt.PointingHandCursor)
-            _b.setFixedHeight(26)
+            _b.setFixedHeight(30)
             _b.setStyleSheet(_nav_btn_ss)
             _b.setFocusPolicy(Qt.NoFocus)
             nav_layout.addWidget(_b)
-            nav_layout.addSpacing(4)
-        nav_layout.addSpacing(6)
+            nav_layout.addSpacing(2)
+        _sep = QFrame()
+        _sep.setFixedSize(1, 22)
+        _sep.setStyleSheet(f"background:{T['border_hi']};")
+        nav_layout.addSpacing(8)
+        nav_layout.addWidget(_sep)
+        nav_layout.addSpacing(10)
 
         self._log_btn = QPushButton()
         self._log_btn.setCursor(Qt.PointingHandCursor)
-        self._log_btn.setFixedHeight(26)
+        self._log_btn.setFixedHeight(28)
         self._log_btn.clicked.connect(self._toggle_logging)
         nav_layout.addWidget(self._log_btn)
         nav_layout.addSpacing(6)
         self._lint_btn = QPushButton("Lint \u2714")
         self._lint_btn.setCursor(Qt.PointingHandCursor)
-        self._lint_btn.setFixedHeight(26)
+        self._lint_btn.setFixedHeight(28)
         self._lint_btn.setToolTip("Configuration consistency check — click to see the findings")
         self._lint_btn.clicked.connect(self._open_linter)
         self._set_lint_button(0, 0)
@@ -20750,7 +20865,7 @@ class MainWindow(QMainWindow):
         # could collapse it to 0 every tab's left pane would vanish at once
         # with no visible handle to drag it back.
         splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(5)
+        splitter.setHandleWidth(4)
 
         # ===== Sidebar =====
         sidebar = QWidget()
@@ -20764,15 +20879,16 @@ class MainWindow(QMainWindow):
         sidebar_layout.setSpacing(8)
 
         self._search = QLineEdit()
-        self._search.setPlaceholderText("Filter  (Ctrl+F)   ·   search everything: Ctrl+K")
+        self._search.setPlaceholderText("\u2315  Filter…   Ctrl+F   ·   everything: Ctrl+K")
         self._search.setClearButtonEnabled(True)
         self._search.setStyleSheet(f"""
             QLineEdit {{
-                background: {T['surface']}; border: 1px solid {T['border']};
-                color: {T['text']}; font-size: 12px; padding: 3px 10px;
-                border-radius: 6px; min-height: 30px;
+                background: {T['sunken']}; border: 1px solid {T['border']};
+                color: {T['text']}; font-size: 12px; padding: 4px 10px;
+                border-radius: 8px; min-height: 30px;
             }}
-            QLineEdit:focus {{ border-color: {T['accent_dim']}; }}
+            QLineEdit:hover {{ border-color: {T['border_hi']}; }}
+            QLineEdit:focus {{ border-color: {T['accent']}; background:{T['surface']}; }}
             QLineEdit:disabled {{ color: {T['muted']}; background: {T['bg']}; }}
         """)
         # Debounced: every keystroke used to rebuild a ~250-item list.
@@ -20789,7 +20905,7 @@ class MainWindow(QMainWindow):
         _cl.setContentsMargins(0, 0, 0, 0)
         _cl.setSpacing(6)
         _chip_ss = (f"QToolButton{{background:transparent;border:1px solid {T['border_hi']};"
-                    f"border-radius:10px;color:{T['text2']};padding:2px 10px;font-size:11px;}}"
+                    f"border-radius:11px;color:{T['muted']};padding:3px 11px;font-size:11px;font-weight:600;}}"
                     f"QToolButton:hover{{border-color:{T['accent_dim']};}}"
                     f"QToolButton:checked{{background:rgba(118,185,0,0.18);border-color:{T['accent']};"
                     f"color:{T['text']};}}")
@@ -20830,11 +20946,7 @@ class MainWindow(QMainWindow):
 
         # Page 3: Extra Tools sidebar (orientation text for both sub-tools)
         self._flm_sidebar = ExtraToolsSidebarWidget()
-        _flm_sb_scroll = QScrollArea()
-        _flm_sb_scroll.setWidgetResizable(True)
-        _flm_sb_scroll.setWidget(self._flm_sidebar)
-        _flm_sb_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
-        self._sidebar_stack.addWidget(_flm_sb_scroll)
+        self._sidebar_stack.addWidget(self._flm_sidebar)
 
         # Page 4: Saved profiles (sidebar) — Lutris Sync lives on the right
         # now; it used to be a sub-tab squeezed into this narrow column while
@@ -20886,35 +20998,33 @@ class MainWindow(QMainWindow):
         editor = QWidget()
         editor.setObjectName("editorPane")
         editor.setAttribute(Qt.WA_StyledBackground, True)
-        editor.setStyleSheet(f"#editorPane {{ background:{T['bg']}; border-left:1px solid {T['border']}; }}")
+        editor.setStyleSheet(f"#editorPane {{ background:#0e1015; border-left:1px solid {T['border']}; }}")
         editor_layout = QVBoxLayout(editor)
-        editor_layout.setContentsMargins(14, 12, 14, 12)
+        editor_layout.setContentsMargins(28, 20, 28, 16)
         editor_layout.setSpacing(0)
 
         self._right_stack = QStackedWidget()
         editor_layout.addWidget(self._right_stack)
 
         # Page 0: Empty state (text depends on the active tab)
-        self._placeholder = QLabel(self.EMPTY_HINTS[0])
-        self._placeholder.setAlignment(Qt.AlignCenter)
-        self._placeholder.setWordWrap(True)
-        self._placeholder.setStyleSheet(f"color: {T['muted']}; font-size: 13px; line-height: 150%;")
+        self._placeholder = EmptyState()
+        self._placeholder.set_content("\u25c8", *self.EMPTY_HINTS[0].split("\n", 1))
         self._right_stack.addWidget(self._placeholder)
 
         # Page 1: Setting editor
         self._setting_editor = SettingEditorWidget(self.settings_manager)
         self._setting_editor.cleared.connect(self._on_setting_cleared)
-        self._right_stack.addWidget(editor_card(self._setting_editor))
+        self._right_stack.addWidget(self._setting_editor)
 
         # Page 2: Architecture detail
         self._arch_detail = ArchDetailWidget()
         self._arch_detail.clear_requested.connect(self._clear_architecture)
-        self._right_stack.addWidget(editor_card(self._arch_detail))
+        self._right_stack.addWidget(self._arch_detail)
 
         # Page 3: Env var editor
         self._env_editor = EnvVarEditorWidget()
         self._env_editor.set_list_widget(self._env_widget)
-        self._right_stack.addWidget(editor_card(self._env_editor))
+        self._right_stack.addWidget(self._env_editor)
 
         # Page 4: Gamescope CLI-flag builder (real argv flags, not env vars)
         self._gamescope = GamescopeFlagsWidget()
@@ -20927,6 +21037,7 @@ class MainWindow(QMainWindow):
         # Page 5: Extra Tools panel (vk_flip_meter + lutris-game-tune sub-tabs)
         self._extra_tools = ExtraToolsWidget()
         self._right_stack.addWidget(self._extra_tools)
+        self._flm_sidebar.bind(self._extra_tools)
 
         # Page 6: Lutris Sync (Profiles tab)
         self._right_stack.addWidget(self._sync_tabs)
@@ -20943,18 +21054,23 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([340, 900])
         main_layout.addWidget(splitter, 1)
+        main_layout.addWidget(self._output_bar)
 
         # Status bar
         status_bar = QStatusBar()
         self.setStatusBar(status_bar)
         status_bar.setStyleSheet(f"""
             QStatusBar {{
-                background: {T['surface']}; color: {T['muted']}; font-size: 11px;
-                border-top: 1px solid {T['border']}; min-height: 24px; padding-left: 8px;
+                background: {T['sunken']}; color: {T['muted']}; font-size: 11px;
+                border-top: 1px solid {T['border']}; min-height: 24px; padding-left:8px;
             }}
-            QStatusBar::item {{ border: none; }}
+            QStatusBar::item {{ border:none; }}
         """)
         status_bar.showMessage("Ready")
+        self._sys_lbl = QLabel("probing system…")
+        self._sys_lbl.setStyleSheet(f"color:{T['faint']}; font-size:11px; padding:0 10px;"
+                                    f" font-family:{T['mono']};")
+        status_bar.addPermanentWidget(self._sys_lbl)
 
         # Signals
         self.settings_manager.settings_changed.connect(self._on_setting_changed)
@@ -21072,16 +21188,14 @@ class MainWindow(QMainWindow):
 
     def _set_lint_button(self, n_err: int, n_warn: int):
         if n_err:
-            txt, col = f"Lint: {n_err} \u25cf", T["danger"]
+            txt, col = f"\u25cf {n_err} error{'s' if n_err != 1 else ''}", T["danger"]
         elif n_warn:
-            txt, col = f"Lint: {n_warn} \u25b2", T["warn"]
+            txt, col = f"\u25b2 {n_warn} warn", T["warn"]
         else:
-            txt, col = "Lint \u2714", T["muted"]
+            txt, col = "\u2713 Lint", T["muted"]
         self._lint_btn.setText(txt)
         self._lint_btn.setStyleSheet(
-            f"QPushButton {{ color:{col}; background:transparent; border:1px solid {col};"
-            f" border-radius:4px; padding:0 10px; font-size:12px; }}"
-            f"QPushButton:hover {{ background:{T['surface']}; }}")
+            pill_ss(col))
 
     # -- external change notices (item: profiles.json / selected Lutris YAML) --
     def _ext_track_lutris(self, path):
@@ -21147,6 +21261,11 @@ class MainWindow(QMainWindow):
         self._run_lint()
 
     def _on_sysinfo(self, info):
+        if info.probed:
+            gpu = (info.nv_gpus[0] if info.nv_gpus else
+                   next((g.name for g in info.vk_gpus if g.is_nvidia), "")) or "no NVIDIA GPU"
+            parts = [gpu, f"driver {info.nv_driver}" if info.nv_driver else "", info.session or ""]
+            self._sys_lbl.setText("  \u00b7  ".join(p for p in parts if p))
         self._refresh_availability()
         self._populate_arch_list()
         if self.settings_manager.get_arch():
@@ -21412,7 +21531,7 @@ class MainWindow(QMainWindow):
         tl = self._timeline
         can_u, can_r = bool(tl and tl.can_undo()), bool(tl and tl.can_redo())
         self._undo_btn.setEnabled(bool(tl))
-        self._undo_btn.setText("↶ Undo" if can_u else "↶")
+        self._undo_btn.setText("↶")
         self._undo_btn.setToolTip(f"Undo: {tl.undo_label()}  (Ctrl+Z)\nArrow: history" if can_u
                                   else "Nothing to undo — arrow: history")
         self._redo_btn.setEnabled(can_r)
@@ -21435,11 +21554,15 @@ class MainWindow(QMainWindow):
             else:
                 a.triggered.connect(lambda _c=False, i=idx: self._jump_history(i))
 
+    def _chip_text(self, glyph: str, text: str, tail: str = "") -> str:
+        fm = self._profile_chip.fontMetrics()
+        return f"{glyph}  " + fm.elidedText(text, Qt.ElideMiddle, 150) + tail
+
     def _style_chip(self, color: str, bold: bool):
         self._profile_chip.setStyleSheet(
-            f"QPushButton{{color:{color};background:transparent;border:none;font-size:12px;"
-            f"font-weight:{600 if bold else 400};padding:0 4px;}}"
-            f"QPushButton:hover{{text-decoration:underline;}}")
+            f"QPushButton{{color:{color};background:{T['surface']};border:1px solid {T['border_hi']};"
+            f"border-radius:14px;font-size:12px;font-weight:{600 if bold else 500};padding:5px 14px;}}"
+            f"QPushButton:hover{{border-color:{color};background:{T['raised']};}}")
 
     def _show_unsaved_changes(self):
         name = self.settings_manager.get_current_profile()
@@ -21559,6 +21682,11 @@ class MainWindow(QMainWindow):
         except Exception:
             self.resize(1440, 900)
 
+    def resizeEvent(self, e):             # noqa: N802
+        super().resizeEvent(e)
+        if hasattr(self, "_brand"):
+            self._brand.set_compact(self.width() < 1420)
+
     def closeEvent(self, event):          # noqa: N802
         if self._state_timer.isActive():
             self._state_timer.stop()
@@ -21639,7 +21767,9 @@ class MainWindow(QMainWindow):
         elif idx == self.TAB_ARCH:
             self._populate_arch_list()
 
-        self._placeholder.setText(self.EMPTY_HINTS.get(idx, ""))
+        _hint = self.EMPTY_HINTS.get(idx, "")
+        self._placeholder.set_content({0: "\u25c8", 1: "\u25a3", 2: "\u2630"}.get(idx, "\u25c7"),
+                                      *(_hint.split("\n", 1) + [""])[:2])
 
         if idx == self.TAB_PROFILES:
             self._right_stack.setCurrentIndex(self.PAGE_LUTRIS)
@@ -21801,9 +21931,9 @@ class MainWindow(QMainWindow):
 
     def _update_log_btn(self):
         st = self._env_widget.logging_state()
-        txt, col = {"on": ("Logging: ON (error)", "#76b900"),
-                    "off": ("Logging: OFF", T['muted']),
-                    "mixed": ("Logging: custom", "#d9a441")}[st]
+        txt, col = {"on": ("\u25cf Log on", T['accent']),
+                    "off": ("\u25cb Log off", T['muted']),
+                    "mixed": ("\u25d0 Log custom", T['warn'])}[st]
         self._log_btn.setText(txt)
         self._log_btn.setToolTip(
             "One-click logging control for all env vars.\n"
@@ -21811,9 +21941,7 @@ class MainWindow(QMainWindow):
             "On   -> every log level = error (not debug)\n"
             "Click: Off -> On, On/custom -> Off.")
         self._log_btn.setStyleSheet(
-            f"QPushButton {{ color:{col}; background:transparent; border:1px solid {col};"
-            f" border-radius:4px; padding:0 10px; font-size:12px; }}"
-            f"QPushButton:hover {{ background:{T['surface']}; }}")
+            pill_ss(col))
 
     def _on_env_changed(self):
         self._update_log_btn()
@@ -21881,18 +22009,18 @@ class MainWindow(QMainWindow):
         if not name:
             self._dirty = False
             self.setWindowTitle(APP_TITLE)
-            self._profile_chip.setText("No profile loaded")
+            self._profile_chip.setText("\u25cb  No profile")
             self._profile_chip.setToolTip("Save a profile in the Profiles tab (Ctrl+5)")
             self._style_chip(T["muted"], False)
             return
         mark = " •" if self._dirty else ""
         self.setWindowTitle(f"{APP_TITLE} — {name}{mark}")
         if self._dirty:
-            self._profile_chip.setText(f"{name} (unsaved changes)")
+            self._profile_chip.setText(self._chip_text("\u25cf", name, "  \u2022 unsaved"))
             self._profile_chip.setToolTip("Click to review what changed since the last save")
             self._style_chip(T["warn"], True)
         else:
-            self._profile_chip.setText(name)
+            self._profile_chip.setText(self._chip_text("\u25c9", name))
             self._profile_chip.setToolTip("Click to compare the editor with the saved profile")
             self._style_chip(T["text2"], True)
 
