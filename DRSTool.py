@@ -2942,8 +2942,13 @@ class SettingsManager(QObject):
             return
         # One spelling per ID (catalog form) so the sidebar dot and the enum
         # button highlight match even for hand-written / .nip-derived profiles.
-        self._settings = {canonical_drs_key(k): str(v)
-                          for k, v in _as_dict(profile.get("settings")).items()}
+        # Values too: a .nip/hand-written "0x00000001" must match the catalog's
+        # "0x1" or the enum/preset button never lights up and a click on it
+        # sets instead of toggling off. JSON null entries are dropped (they
+        # used to become the literal string "None" in the launch line).
+        self._settings = {canonical_drs_key(k): canonical_drs_value(drs_lookup(k), v)
+                          for k, v in _as_dict(profile.get("settings")).items()
+                          if v is not None and str(v).strip()}
         arch_code = profile.get("arch")
         if arch_code:
             self._arch = next((a for a in GPU_ARCHS if a.code == arch_code), None)
@@ -3802,10 +3807,12 @@ QPushButton:hover{
 
         spin = QSpinBox()
         spin.setRange(s.min, s.max)
-        if cur is not None:
-            spin.setValue(int(cur, 16) if cur.startswith("0x") else int(cur))
-        else:
-            spin.setValue(int(s.default, 16) if s.default.startswith("0x") else int(s.default))
+        # A malformed stored value (hand-edited profile, imported line) used to
+        # raise ValueError inside the slot and leave a half-built editor.
+        iv = _parse_int_any(cur) if cur is not None else None
+        if iv is None:
+            iv = _parse_int_any(s.default)
+        spin.setValue(iv if iv is not None else s.min)
         spin.setFixedHeight(30)
         spin.setStyleSheet("""
 QSpinBox{
@@ -3928,7 +3935,7 @@ QLineEdit:hover{
         self._control_layout.addLayout(grid)
 
     def _build_bitfield_control(self, s: Setting, cur: Optional[str]):
-        cur_val = int(cur, 16) if cur else 0
+        cur_val = (_parse_int_any(cur) or 0) if cur else 0
 
         grid = QGridLayout()
         grid.setSpacing(3)
@@ -4086,14 +4093,22 @@ QLineEdit:hover{
         self.settings_manager.set_setting(setting_id, hex_val)
 
     def _set_hex_from_edit(self, setting_id: str, value: str):
+        # Strip an optional pasted "0x" first: removing only non-hex chars
+        # turned "0x1F" into "01F" -> fine, but "0X1F" kept the leading 0 and
+        # values longer than a DWORD were accepted. DRS values are 32-bit.
+        value = value.strip()
+        if value[:2].lower() == "0x":
+            value = value[2:]
         clean = re.sub(r'[^0-9a-fA-F]', '', value)
+        if len(clean) > 8:
+            return
         if clean:
             hex_val = f"0x{clean.upper()}"
             self.settings_manager.set_setting(setting_id, hex_val)
 
     def _toggle_bitfield(self, setting_id: str, bit_val: int, mask: int = 0):
         cur = self.settings_manager.get_setting(setting_id)
-        cur_val = int(cur, 16) if cur else 0
+        cur_val = (_parse_int_any(cur) or 0) if cur else 0
 
         if mask:
             # Multi-bit sub-field (e.g. 2 bits shared by 3 mutually-exclusive
@@ -6927,6 +6942,8 @@ class EnvVarsWidget(QListWidget):
     # ── Value store (read/written by EnvVarEditorWidget via MainWindow) ───────
 
     def set_value(self, name: str, value: str):
+        if value and not _ENV_NAME_RX.fullmatch(name or ""):
+            return          # never let a non-identifier name reach a shell line
         if value:
             self._values[name] = value
         else:
@@ -6950,7 +6967,8 @@ class EnvVarsWidget(QListWidget):
         # (contains spaces, globs, etc), so plain hex/enum values are left
         # untouched. Without this, a value like DXVK_LOG_PATH=/home/cihan/my
         # logs silently split into two separate shell tokens when pasted.
-        return " ".join(f"{k}={shlex.quote(v)}" for k, v in self._values.items())
+        return " ".join(f"{k}={shlex.quote(v)}" for k, v in self._values.items()
+                        if _ENV_NAME_RX.fullmatch(k))
 
     def reset_all_values(self):
         """Clear all env var values and refresh list colors."""
@@ -6988,7 +7006,12 @@ class EnvVarsWidget(QListWidget):
 
     def load_values(self, values: Dict[str, str]):
         """Replace all values with the given dict and refresh."""
-        self._values = values.copy()
+        # Profiles can be imported from other people's files. A key like
+        # "X=1; curl …|sh #" was emitted verbatim as `KEY=value` in every
+        # copied / synced launch line (only the value was shlex-quoted), i.e.
+        # shell injection. Keep only real identifiers with string values.
+        self._values = {str(k): str(v) for k, v in (values or {}).items()
+                        if _ENV_NAME_RX.fullmatch(str(k)) and v is not None and str(v) != ""}
         self.refresh_colors()
         self.env_changed.emit()
 
@@ -7987,9 +8010,9 @@ class ProfileManagerWidget(QWidget):
     def _summarize(prof) -> tuple:
         if not isinstance(prof, dict):
             return "malformed", "This entry in profiles.json is not a valid profile."
-        n_drs = len(prof.get("settings") or {})
-        n_env = len(prof.get("env_vars") or {})
-        arch = prof.get("arch") or ""
+        n_drs = len(_as_dict(prof.get("settings")))
+        n_env = len(_as_dict(prof.get("env_vars")))
+        arch = str(prof.get("arch") or "")      # hand-edited non-string arch crashed the list
         gs = bool(prof.get("gamescope_enabled"))
         short = " ".join(p for p in (
             f"{n_drs} drs" if n_drs else "",
@@ -8417,8 +8440,12 @@ class LutrisSyncWidget(QWidget):
                     data = yaml.safe_load(f) or {}
             except Exception:
                 continue
-            game_section = data.get("game") or {}
-            exe = game_section.get("exe", "")
+            if not isinstance(data, dict):
+                continue            # a list/scalar YAML used to crash the whole scan
+            game_section = data.get("game")
+            if not isinstance(game_section, dict):
+                game_section = {}
+            exe = str(game_section.get("exe") or "")
             slug = path.stem
             display_name = Path(exe).stem if exe else slug
             runner = data.get("system", {}).get("runner", "") \
@@ -9036,7 +9063,9 @@ class LutrisSyncWidget(QWidget):
             # Resolve symlinks first: os.replace() on the link itself would
             # swap the symlink for a regular file.
             target = Path(os.path.realpath(entry.path))
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            # Microseconds: two writes in the same second used to reuse one
+            # name, so the second copy2 overwrote the backup of the original.
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
             backup_path = target.with_name(f"{target.name}.{stamp}.bak")
             shutil.copy2(target, backup_path)
             _PENDING_BAKS.append((target, backup_path, time.monotonic()))
@@ -9497,6 +9526,9 @@ QPlainTextEdit{
             self._log("Nothing to write — no FLM_* vars are set on the Env Vars tab.")
             return
 
+        # One KEY=VALUE per line: a value carrying a newline (imported profile)
+        # would otherwise smuggle extra keys into the layer's reload file.
+        values = {k: " ".join(str(v).splitlines()) for k, v in values.items()}
         reloadable = {k: v for k, v in values.items() if k in FLM_RELOADABLE_KEYS}
         init_only  = {k: v for k, v in values.items()
                       if k not in FLM_RELOADABLE_KEYS and k != "FLM_CONFIG"}
@@ -9544,7 +9576,7 @@ QPlainTextEdit{
         if not cfg:
             self._log("NOTE: FLM_CONFIG isn't set on the Env Vars tab — the game must be "
                       f"launched with FLM_CONFIG={path_str} for SIGUSR1 to pick this up.")
-        elif cfg != path_str:
+        elif Path(os.path.expanduser(cfg)) != path:   # "~/x" vs "/home/u/x" is the same file
             self._log(f"WARNING: Env Vars tab has FLM_CONFIG={cfg}, but this file was "
                       f"written to {path_str} — the running game will reload the former.")
 
@@ -10548,7 +10580,9 @@ QPlainTextEdit{
             elif isinstance(ctrl, QSpinBox):
                 return str(ctrl.value())
             elif isinstance(ctrl, QLineEdit):
-                return ctrl.text().strip()
+                # Root-read KEY=VALUE file: a pasted CR/LF or '"' would start a
+                # new key / break out of the quoted value.
+                return re.sub(r'[\r\n"\\]', " ", ctrl.text()).strip()
             return ""
 
         lines += [
@@ -11057,6 +11091,12 @@ class GamescopeFlagsWidget(QWidget):
             if gf.kind == "toggle":
                 ctrl.setChecked(gf.flag in values)
             elif gf.kind == "enum":
+                # setCurrentText() on a non-editable combo silently does nothing
+                # for a value it doesn't list, so the PREVIOUS profile's choice
+                # stayed selected (and was written out again). Keep unknown
+                # values selectable instead.
+                if v and ctrl.findText(v) < 0:
+                    ctrl.addItem(v)
                 ctrl.setCurrentText(v or "")
             else:
                 ctrl.setText(v or "")
@@ -12912,12 +12952,12 @@ def gamescope_arg_string(flags: Dict[str, str]) -> str:
 
 
 def _backup_file(path: Path) -> Path:
-    bak = path.with_name(f"{path.name}.drstool-{datetime.now():%Y%m%d-%H%M%S}.bak")
+    bak = path.with_name(f"{path.name}.drstool-{datetime.now():%Y%m%d-%H%M%S-%f}.bak")
     shutil.copy2(path, bak)
     _PENDING_BAKS.append((path, bak, time.monotonic()))
     del _PENDING_BAKS[:-40]
     # keep the 20 newest backups of this file
-    olds = sorted(path.parent.glob(f"{path.name}.drstool-*.bak"))
+    olds = sorted(path.parent.glob(f"{glob.escape(path.name)}.drstool-*.bak"))
     for o in olds[:-20]:
         try:
             o.unlink()
@@ -12927,9 +12967,34 @@ def _backup_file(path: Path) -> Path:
 
 
 def _atomic_write(path: Path, text: str):
-    tmp = path.with_name(path.name + ".drstool-tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    """Write via an unpredictable temp file + fsync + rename. Follows a symlinked
+    target (os.replace on the link would turn it into a plain file) and keeps the
+    original file's permission bits — write_text() used to recreate e.g. a 0600
+    config with the umask default (usually 0644)."""
+    target = Path(os.path.realpath(path))
+    fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".drstool-tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        if target.exists():
+            shutil.copymode(target, tmp)
+        else:
+            os.chmod(tmp, 0o644 & ~_umask())
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _umask() -> int:
+    m = os.umask(0)
+    os.umask(m)
+    return m
 
 
 def _proc_running(*names: str) -> bool:
@@ -12949,7 +13014,10 @@ def _vdf_unesc(s: str) -> str:
 
 
 def _vdf_esc(s: str) -> str:
-    return s.replace("\\", "\\\\").replace('"', '\\"')
+    # Newlines/tabs too: _vdf_unesc() decodes \n and \t, so a raw newline in a
+    # value broke the read-back self-check (and the file's line structure).
+    return (s.replace("\\", "\\\\").replace('"', '\\"')
+             .replace("\n", "\\n").replace("\t", "\\t"))
 
 
 def _vdf_parse(text: str):
@@ -13990,13 +14058,34 @@ def _pick_asset(rel: dict, comp: dict) -> Optional[dict]:
     return assets[0]
 
 
+def _inside(base: Path, tgt: Path) -> bool:
+    """Path containment that a plain startswith() gets wrong ("/c/pd-ab" vs "/c/pd-abX/…")."""
+    try:
+        return os.path.commonpath([str(base), str(tgt)]) == str(base)
+    except ValueError:
+        return False
+
+
 def _safe_extract(tf: tarfile.TarFile, dest: Path):
     base = dest.resolve()
     for m in tf.getmembers():
         tgt = (dest / m.name).resolve()
-        if not str(tgt).startswith(str(base)) or m.issym() or m.islnk() or m.isdev():
+        if not _inside(base, tgt) or m.issym() or m.islnk() or m.isdev():
             raise RuntimeError(f"unsafe path in archive: {m.name}")
-    tf.extractall(dest)
+    try:
+        tf.extractall(dest, filter="data")          # Python >= 3.12 (and backports)
+    except TypeError:
+        tf.extractall(dest)
+
+
+def _reject_links(root: Path):
+    """External `tar` extraction gets no member vetting; refuse any link it produced
+    (shutil.copy2 follows symlinks, so a planted x64/d3d11.dll -> ~/secret would
+    otherwise be copied into the prefix)."""
+    for dp, dns, fns in os.walk(root):
+        for n in dns + fns:
+            if os.path.islink(os.path.join(dp, n)):
+                raise RuntimeError(f"unsafe link in archive: {os.path.relpath(os.path.join(dp, n), root)}")
 
 
 def _extract_archive(path: Path, dest: Path):
@@ -14014,7 +14103,10 @@ def _extract_archive(path: Path, dest: Path):
                     ["tar", "--use-compress-program=unzstd", "-xf", str(path), "-C", str(dest)]):
             try:
                 if subprocess.run(cmd, capture_output=True, timeout=300).returncode == 0:
+                    _reject_links(dest)
                     return
+            except RuntimeError:
+                raise
             except Exception:
                 continue
         raise RuntimeError("cannot unpack .tar.zst — install zstd (app-arch/zstd) or use Python ≥ 3.14")
@@ -14032,7 +14124,9 @@ def apply_component_update(prefix: Path, comp: dict, rel: dict, backup_root: Pat
     asset = _pick_asset(rel, comp)
     if asset is None:
         raise RuntimeError(f"no matching release asset for {comp['name']}")
-    cache = _cache_dir() / rel.get("tag_name", "latest")
+    # tag_name comes from the network: never let it climb out of the cache dir.
+    tag = re.sub(r"[^A-Za-z0-9._+-]", "_", str(rel.get("tag_name") or "latest")).lstrip(".") or "latest"
+    cache = _cache_dir() / tag
     cache.mkdir(parents=True, exist_ok=True)
     arch = cache / asset["name"]
     if not arch.is_file() or arch.stat().st_size != asset.get("size", -1):
@@ -14794,11 +14888,14 @@ def tm_discover() -> List[TMLauncher]:
 def _tm_get(url: str, accept: str = "application/json", timeout: int = 25) -> bytes:
     host = urllib.parse.urlsplit(url).hostname or ""
     hdr = {"User-Agent": _TM_UA, "Accept": accept}
+    req = urllib.request.Request(url, headers=hdr)
     tok = {"api.github.com": ("GITHUB_TOKEN", "token "), "gitlab.com": ("GITLAB_TOKEN", "Bearer ")}.get(host)
     if tok and os.environ.get(tok[0]):          # API calls only — never sent to download mirrors
-        hdr["Authorization"] = tok[1] + os.environ[tok[0]]
+        # Unredirected: urllib copies normal headers onto a redirect to ANY host,
+        # which would hand the token to whatever the API redirects to.
+        req.add_unredirected_header("Authorization", tok[1] + os.environ[tok[0]])
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=hdr), timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.read()
     except urllib.error.HTTPError as e:
         if e.code == 429 or (e.code == 403 and e.headers.get("X-RateLimit-Remaining") == "0"):
@@ -15199,6 +15296,11 @@ def tm_install(tool: TMTool, ver: TMVer, launcher: TMLauncher, force: bool, canc
                 if not force:
                     raise RuntimeError(f"{tgt} already exists — tick “Reinstall” to replace it")
                 bak = dest / f".{p.name}.old-{os.getpid()}"
+                if bak.exists() or bak.is_symlink():    # leftover of a crashed run → ENOTEMPTY
+                    if bak.is_symlink() or not bak.is_dir():
+                        bak.unlink()
+                    else:
+                        shutil.rmtree(bak)
                 os.replace(tgt, bak)
             try:
                 os.replace(p, tgt)
@@ -16593,7 +16695,9 @@ def _flat_profile(p) -> Dict[tuple, str]:
     if not isinstance(p, dict):
         return out
     for k, v in _as_dict(p.get("settings")).items():
-        out[("DRS", str(k).upper())] = str(v)
+        # Canonical forms: "0x1" vs "0x00000001" (or a decimal ID) is the same
+        # setting/value and must not show up as a difference.
+        out[("DRS", canonical_drs_key(k).upper())] = canonical_drs_value(drs_lookup(k), v)
     if p.get("arch"):
         out[("Arch", "GPU arch")] = str(p["arch"])
     for k, v in _as_dict(p.get("env_vars")).items():
@@ -17012,7 +17116,7 @@ class HistoryWidget(QWidget):
         try:
             target = Path(os.path.realpath(f))
             if target.exists():
-                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")   # same-second restores must not overwrite
                 shutil.copy2(target, target.with_name(f"{target.name}.{stamp}.pre-restore.bak"))
             fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp")
             try:
@@ -17420,7 +17524,7 @@ def discover_cache_nodes(user_env: Dict[str, str], extra: List[str]) -> List[dic
     nodes: List[dict] = []
     seen = set()
 
-    def add(group: str, label: str, path, driver: bool = False, note: str = ""):
+    def add(group: str, label: str, path, driver: bool = False, note: str = "", user: bool = False):
         p = str(path)
         try:
             rp = os.path.realpath(p)
@@ -17429,12 +17533,14 @@ def discover_cache_nodes(user_env: Dict[str, str], extra: List[str]) -> List[dic
         if rp in seen or not os.path.exists(p):
             return
         seen.add(rp)
-        nodes.append({"group": group, "label": label, "path": p, "driver": driver, "note": note})
+        nodes.append({"group": group, "label": label, "path": p, "driver": driver, "note": note,
+                      "user_path": user})
 
     # NVIDIA driver caches (keyed by driver version → stale after an update)
     for var in ("__GL_SHADER_DISK_CACHE_PATH",):
         if env(var):
-            add("NVIDIA GL / compute", f"{var} (your setting)", env(var), True)
+            add("NVIDIA GL / compute", f"{var} (your setting)", os.path.expanduser(env(var)), True,
+                user=True)
     add("NVIDIA GL / compute", "OpenGL/Vulkan shader cache (~/.nv/GLCache)", home / ".nv/GLCache", True)
     add("NVIDIA GL / compute", "OpenGL/Vulkan shader cache (~/.cache/nvidia/GLCache)",
         xdg_cache / "nvidia/GLCache", True)
@@ -17452,7 +17558,7 @@ def discover_cache_nodes(user_env: Dict[str, str], extra: List[str]) -> List[dic
                           ("VKD3D_SHADER_CACHE_PATH", "vkd3d-proton", True)):
         v = env(var)
         if v and v != "0":
-            add(grp, f"{var} (your setting)", v, drv)
+            add(grp, f"{var} (your setting)", os.path.expanduser(v), drv, user=True)
     # Lutris keeps per-game shader caches here
     lut = xdg_cache / "lutris" / "shaders"
     if lut.is_dir():
@@ -17505,6 +17611,10 @@ def _safe_cache_path(p: str, extra: List[str]) -> bool:
     if p in extra:
         return True
     return home in rp.parents or "shadercache" in rp.parts
+
+
+# Names DXVK / vkd3d-proton / NVIDIA / Mesa / Fossilize give their cache files and folders.
+_CACHE_NAME_RX = re.compile(r"(?i)(cache|\.dxvk|dxvk-|vkd3d|\.foz|fozdb|fossilize|GLCache|ComputeCache)")
 
 
 class _CacheScanThread(QThread):
@@ -17776,13 +17886,19 @@ class CacheManagerWidget(QWidget):
                 + "\n\nGames rebuild their caches on the next run (one-time stutter).") != QMessageBox.Yes:
             return
         QApplication.setOverrideCursor(Qt.WaitCursor)
-        errors = 0
+        errors = kept = 0
         try:
             for n in ok:
                 p = Path(n["path"])
                 try:
                     if p.is_dir() and not p.is_symlink():
                         for child in p.iterdir():
+                            # A *_CACHE_PATH env var may point at a shared folder (the
+                            # game dir, ~/Games …). Wiping its whole content deleted
+                            # unrelated files — there, only cache-named entries go.
+                            if n.get("user_path") and not _CACHE_NAME_RX.search(child.name):
+                                kept += 1
+                                continue
                             if child.is_dir() and not child.is_symlink():
                                 shutil.rmtree(child, ignore_errors=True)
                             else:
@@ -17795,6 +17911,8 @@ class CacheManagerWidget(QWidget):
             QApplication.restoreOverrideCursor()
         if errors:
             QMessageBox.warning(self, "Clear caches", f"{errors} location(s) could not be fully cleared.")
+        if kept:
+            self._total.setText(f"{kept} non-cache item(s) inside your *_CACHE_PATH folder(s) were left alone.")
         self.rescan()
 
 
@@ -18632,9 +18750,12 @@ class ShortcutWidget(QWidget):
                 self, "Overwrite launcher", f"{dp.name} already exists. Overwrite it?",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return
-        icon = self._icon.text().strip()
-        qn = name.replace("\n", " ")
-        exec_path = str(sp).replace("\\", "\\\\").replace('"', '\\"')
+        # .desktop values are line-based: a CR/LF in the name or icon would start a new
+        # key (e.g. a second Exec=). Inside a quoted Exec argument the spec also requires
+        # escaping \ " ` $ and doubling % (field codes).
+        icon = " ".join(self._icon.text().split())
+        qn = " ".join(name.split())
+        exec_path = re.sub(r'([\\"`$])', r"\\\1", str(sp)).replace("%", "%%")
         desktop = ("[Desktop Entry]\nType=Application\n"
                    f"Name={qn}\nExec=\"{exec_path}\"\n"
                    + (f"Icon={icon}\n" if icon else "") +
@@ -18695,7 +18816,11 @@ def merge_dxvk_conf(existing: str, pairs: List[tuple]) -> str:
         out.append(ln)
     while out and not out[-1].strip():
         out.pop()
-    block = [_DXVK_MARK_B] + [f"{k} = {v}" for k, v in pairs] + [_DXVK_MARK_E]
+    # One key per line: a CR/LF inside a value (e.g. from an imported profile) would
+    # otherwise write extra, unreviewed dxvk.conf keys outside what the picker shows.
+    block = ([_DXVK_MARK_B]
+             + [f"{k} = {re.sub(r'[\r\n]+', ' ', str(v))}" for k, v in pairs if re.fullmatch(r"[A-Za-z0-9_.]+", k)]
+             + [_DXVK_MARK_E])
     return ("\n".join(out) + "\n\n" if out else "") + "\n".join(block) + "\n"
 
 
@@ -18883,6 +19008,9 @@ def _pcgw_param(raw: str, name: str) -> str:
 
 
 def _fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
+    appid = str(appid).strip()
+    if not re.fullmatch(r"\d{1,10}", appid):      # also used as a cache file name and in URLs
+        raise ValueError(f"not a Steam appid: {appid!r}")
     cp = _hints_cache_path(appid)
     if use_cache:
         try:
@@ -19176,7 +19304,9 @@ def build_env_index(stream, dump_name: str, progress=None) -> dict:
                 continue
             for r in _iter_json_array(tf.extractfile(m)):
                 scanned += 1
-                if not isinstance(r, dict) or (r.get("timestamp") or 0) < cutoff:
+                # timestamp may be a number or an ISO string depending on the dump —
+                # comparing a str with a float raised TypeError and aborted the build.
+                if not isinstance(r, dict) or (_parse_ts(str(r.get("timestamp") or "")) or 0) < cutoff:
                     continue
                 resp = r.get("responses")
                 if isinstance(resp, dict) and "=" in json.dumps(resp, ensure_ascii=False):
@@ -19450,7 +19580,13 @@ class _HintWorker(QThread):
         self._appid, self._force = appid, force
 
     def run(self):
-        self.done.emit(fetch_game_hints(self._appid, not self._force))
+        # An exception here used to end the thread without `done`, leaving the tab busy forever.
+        try:
+            res = fetch_game_hints(self._appid, not self._force)
+        except Exception as ex:                       # noqa: BLE001
+            res = {"v": _HINT_CACHE_VER, "appid": str(self._appid), "ts": time.time(), "protondb": None,
+                   "pcgw": None, "reports": None, "errors": [str(ex)]}
+        self.done.emit(res)
 
 
 class GameHintsWidget(QWidget):
@@ -20571,7 +20707,9 @@ class LogViewerWidget(QWidget):
                     f.seek(size - self.MAX_READ)
                     f.readline()
                 data = f.read()
-            self._pos = size
+                # where we actually stopped: the file may have grown since stat(),
+                # and taking `size` made the next _tail() append those lines twice
+                self._pos = f.tell()
         except OSError as ex:
             self._status.setText(f"⚠ {ex}")
             return
@@ -20917,7 +21055,8 @@ def state_as_profile(st: dict, raw_gs: bool = False) -> dict:
 
 def state_from_profile(p) -> dict:
     p = p if isinstance(p, dict) else {}
-    return {"settings": {canonical_drs_key(k): str(v) for k, v in _as_dict(p.get("settings")).items()},
+    return {"settings": {canonical_drs_key(k): canonical_drs_value(drs_lookup(k), v)
+                         for k, v in _as_dict(p.get("settings")).items() if v is not None and str(v).strip()},
             "arch": p.get("arch") or None,
             "env": {str(k): str(v) for k, v in _as_dict(p.get("env_vars")).items()},
             "gs_on": bool(p.get("gamescope_enabled")),
@@ -22369,9 +22508,22 @@ def offer_undo(label: str):
                 if _file_sig(tgt) != sig:
                     bad.append(f"{tgt.name} changed since the write")
                     continue
-                tmp = tgt.with_name(tgt.name + ".drstool-tmp")
-                shutil.copy2(bak, tmp)
-                os.replace(tmp, tgt)
+                # follows a symlinked target and keeps its mode (the old fixed
+                # ".drstool-tmp" + os.replace replaced the link itself)
+                real = Path(os.path.realpath(tgt))
+                fd, tmp = tempfile.mkstemp(dir=str(real.parent), prefix=f".{real.name}.",
+                                           suffix=".drstool-tmp")
+                try:
+                    with os.fdopen(fd, "wb") as out, open(bak, "rb") as src:
+                        shutil.copyfileobj(src, out)
+                    shutil.copymode(real, tmp)
+                    os.replace(tmp, real)
+                except BaseException:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+                    raise
                 done += 1
             except OSError as ex:
                 bad.append(f"{tgt.name}: {ex}")
@@ -24203,8 +24355,10 @@ class MainWindow(QMainWindow):
         self._env_editor.discard_pending_edit()
         # 3. Clear per-tab right-panel memory so tabs start fresh
         self._tab_right_memory = {}
-        # 4. Repopulate lists
-        self._populate_settings(self._search.text())
+        # 4. Repopulate lists (the search box only filters the DRS list while
+        #    the DRS tab is showing — an env filter must not hide DRS rows)
+        self._populate_settings(self._search.text()
+                                if self._sidebar_stack.currentIndex() == self.TAB_DRS else "")
         self._populate_arch_list()
         # 5. Set right panel appropriately for active tab
         active_tab = self._sidebar_stack.currentIndex()
@@ -24281,7 +24435,8 @@ def _cli_parse(argv):
     g.add_argument("--strict", action="store_true", help="--lint: warnings also give exit status 1")
     g.add_argument("--apply", metavar="PROFILE", help="write a profile into a Lutris game config (needs --lutris)")
     g.add_argument("--lutris", metavar="GAME", help="--apply: game slug or name")
-    g.add_argument("--lutris-dir", metavar="DIR", help="--apply: Lutris games folder (default ~/.config/lutris/games)")
+    g.add_argument("--lutris-dir", metavar="DIR", help="--apply: Lutris games folder (default $XDG_DATA_HOME/lutris/games, "
+                        "i.e. ~/.local/share/lutris/games)")
     g.add_argument("--dry-run", action="store_true", help="--apply: show the diff, write nothing")
     g.add_argument("-y", "--yes", action="store_true", help="--apply: write without asking")
     g.add_argument("--import-nip", metavar="FILE", help="convert an NVIDIA Profile Inspector .nip into "
