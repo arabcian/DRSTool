@@ -867,6 +867,24 @@ class ElidedLabel(QLabel):
         super().mousePressEvent(e)
 
 
+class BadgeElidedLabel(ElidedLabel):
+    """ElidedLabel for header value badges: asks for its full text width but
+    may shrink (eliding) when space runs out, instead of forcing the whole
+    panel to be as wide as e.g. a 12-flag VKD3D_CONFIG string."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
+    def setText(self, text: str):          # noqa: N802
+        super().setText(text)
+        self.updateGeometry()
+
+    def sizeHint(self):                   # noqa: N802
+        return QSize(self.fontMetrics().horizontalAdvance(self._full) + 26,
+                     QLabel.sizeHint(self).height())
+
+
 class NavTab(QPushButton):
     """Segmented top navigation: glyph + title + a small live badge."""
 
@@ -3519,7 +3537,7 @@ def _make_scrollable_control_area():
     """
     control_widget = QWidget()
     control_layout = QVBoxLayout(control_widget)
-    control_layout.setContentsMargins(0, 6, 0, 0)
+    control_layout.setContentsMargins(0, 6, 10, 0)   # keep text off the scrollbar
     control_layout.setSpacing(6)
 
     scroll = QScrollArea()
@@ -6725,6 +6743,13 @@ LOG_ENV_UNSET_OFF = ("VK_LOADER_DEBUG", "FLM_STATS", "FLM_CSV",
 LOG_VKD3D_CONFIG_FLAGS = ("breadcrumbs", "breadcrumbs_sync", "breadcrumbs_trace",
                           "log_memory_budget", "fault", "pipeline_library_log")
 
+
+def vkd3d_config_tokens(value: str) -> List[str]:
+    """Split a VKD3D_CONFIG value the same way the flag grid does (',' or ';',
+    whitespace stripped). Plain split(",") elsewhere missed 'a; breadcrumbs'
+    and ' fault' style values."""
+    return [t.strip() for t in (value or "").replace(";", ",").split(",") if t.strip()]
+
 # Sidebar display order for the Environment tab. Forks sit right under the
 # upstream project they patch.
 ENV_CATEGORY_ORDER = [
@@ -6940,7 +6965,7 @@ class EnvVarsWidget(QListWidget):
             return "on"
         if (all(v.get(k) == x for k, x in LOG_ENV_OFF.items())
                 and not any(k in v for k in LOG_ENV_UNSET_OFF)
-                and not (set(v.get("VKD3D_CONFIG", "").split(",")) & set(LOG_VKD3D_CONFIG_FLAGS))):
+                and not (set(vkd3d_config_tokens(v.get("VKD3D_CONFIG", ""))) & set(LOG_VKD3D_CONFIG_FLAGS))):
             return "off"
         return "mixed"
 
@@ -6952,8 +6977,8 @@ class EnvVarsWidget(QListWidget):
             self._values.update(LOG_ENV_OFF)
             for k in LOG_ENV_UNSET_OFF:
                 self._values.pop(k, None)
-            cfg = [f for f in self._values.get("VKD3D_CONFIG", "").split(",")
-                   if f and f not in LOG_VKD3D_CONFIG_FLAGS]
+            cfg = [f for f in vkd3d_config_tokens(self._values.get("VKD3D_CONFIG", ""))
+                   if f not in LOG_VKD3D_CONFIG_FLAGS]
             if cfg:
                 self._values["VKD3D_CONFIG"] = ",".join(cfg)
             else:
@@ -7043,9 +7068,12 @@ QLineEdit:hover{ background:#1f2430; }
         self._cat_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         header.addWidget(self._cat_label, 0, Qt.AlignVCenter)
 
-        self._value_label = QLabel()
+        # Elided badge: a long VKD3D_CONFIG / DXVK_HUD value used to set the
+        # editor's minimum width (~1500px for a dozen flags), so narrowing the
+        # window/splitter clipped the whole panel. Full value is in the
+        # tooltip and copied on click.
+        self._value_label = BadgeElidedLabel()
         self._value_label.setStyleSheet(EDITOR_VALUE_SS)
-        self._value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         header.addWidget(self._value_label, 0, Qt.AlignVCenter)
         self._value_label.hide()
 
@@ -7204,7 +7232,7 @@ QLineEdit:hover{ background:#1f2430; }
         Active flags are parsed from the comma/semicolon-separated cur value.
         Toggling any button rebuilds the value string and emits it.
         """
-        tokens = [f.strip() for f in cur.replace(";", ",").split(",") if f.strip()] if cur else []
+        tokens = vkd3d_config_tokens(cur)
         active = set(tokens)
         # Tokens the grid doesn't know (flags removed/renamed upstream, fork
         # flags, typos) used to be dropped on the next toggle. Keep them
@@ -7215,9 +7243,14 @@ QLineEdit:hover{ background:#1f2430; }
         self._vkd3d_btns: Dict[str, QPushButton] = {}
 
         grid = QGridLayout()
-        grid.setSpacing(6)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 2)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        # Flag column sized to its longest button, description takes the rest.
+        # The old 1:2 stretch split made buttons ~500px wide on a wide panel
+        # and squeezed the word-wrapped descriptions into tall narrow columns
+        # on a narrow one.
+        grid.setColumnStretch(0, 0)
+        grid.setColumnStretch(1, 1)
 
         # Column headers
         hdr_flag = QLabel("Flag")
@@ -7251,9 +7284,22 @@ QLineEdit:hover{ background:#1f2430; }
             desc_lbl = QLabel(desc_text)
             desc_lbl.setWordWrap(True)
             desc_lbl.setStyleSheet("color:#b3bac7; font-size:11px;")
+            desc_lbl.setMinimumWidth(120)
+            desc_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
 
-            grid.addWidget(btn,      r_idx + 2, 0)
-            grid.addWidget(desc_lbl, r_idx + 2, 1)
+            # Top-aligned so a 3-line description doesn't leave the button
+            # floating in the middle of a tall row.
+            grid.addWidget(btn,      r_idx + 2, 0, Qt.AlignTop)
+            grid.addWidget(desc_lbl, r_idx + 2, 1, Qt.AlignVCenter)
+
+        # Uniform button width = widest flag name, so the column lines up and
+        # never grows past what the text needs.
+        if self._vkd3d_btns:
+            for b in self._vkd3d_btns.values():
+                b.ensurePolished()      # stylesheet padding must count
+            bw = max(b.sizeHint().width() for b in self._vkd3d_btns.values())
+            for b in self._vkd3d_btns.values():
+                b.setFixedWidth(bw)
 
         self._control_layout.addLayout(grid)
         if self._vkd3d_extra:
@@ -12805,7 +12851,7 @@ def lint_config(env: Dict[str, str], drs: Dict[str, str], arch_code: str,
         if _on(env, "DXVK_NVAPI_VKREFLEX") and si.has_ext("VK_NV_low_latency2") is False:
             add("warn", "no-ll2", "DXVK_NVAPI_VKREFLEX needs VK_NV_low_latency2, which this driver "
                 "does not expose.", ["DXVK_NVAPI_VKREFLEX"], unset("DXVK_NVAPI_VKREFLEX"), "Unset")
-        flags = [f.strip() for f in env.get("VKD3D_CONFIG", "").split(",") if f.strip()]
+        flags = vkd3d_config_tokens(env.get("VKD3D_CONFIG", ""))
         if "descriptor_heap" in flags and si.has_ext("VK_EXT_descriptor_heap") is False:
             add("warn", "no-descheap", "VKD3D_CONFIG=descriptor_heap needs VK_EXT_descriptor_heap, "
                 "which this driver does not expose.", ["VKD3D_CONFIG"],
