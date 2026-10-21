@@ -477,6 +477,9 @@ load_config_file() {
         if [[ "${line}" =~ ^CCD_EXTRA_GOOD_PROCS=(.*)$ ]]; then
             key="CCD_EXTRA_GOOD_PROCS"
             val="${BASH_REMATCH[1]}"
+            # The shipped conf (and DRSTool) write it quoted; without this the
+            # quotes stuck to the first/last process name and those never matched.
+            val="${val#\"}"; val="${val%\"}"
         elif [[ "${line}" =~ ^(IRQ_AFFINITY_CPUS|IRQ_AFFINITY_CLASSES)=(.*)$ ]]; then
             key="${BASH_REMATCH[1]}"
             val="${BASH_REMATCH[2]}"
