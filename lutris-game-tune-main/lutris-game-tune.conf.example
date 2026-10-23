@@ -1,0 +1,210 @@
+# /etc/lutris-game-tune.conf — lutris-game-tune configuration
+#
+# Install:
+#   sudo install -o root -g root -m 644 lutris-game-tune.conf.example /etc/lutris-game-tune.conf
+#
+# SECURITY: This file must be owned by root and must not be group/other
+# writable; otherwise the script ignores it completely. The format is
+# strict: KEY=VALUE, no spaces, values may only contain [a-zA-Z0-9_.-]
+# characters (except CCD_EXTRA_GOOD_PROCS, CCD_PROTECTED_CGROUPS, and
+# CCD_PROTECTED_PROCS — those may contain spaces, for multiple names).
+#
+# Changes take effect on the next PRE run — no need to rebuild/reinstall.
+
+# --- CPU Governor / EPP -------------------------------------------------------
+CPU_GOVERNOR=performance
+SET_CPU_GOVERNOR=1
+
+# amd-pstate per-core EPP boost (kernel module parameter). Only present on
+# kernels built with the (not-yet-upstream) epp_boost patch series; if the
+# sysfs knob doesn't exist on your running kernel this is silently skipped,
+# so it's safe to leave at 1 whether or not you're on a patched kernel.
+SET_EPP_BOOST=1
+
+# --- AMD 3D V-Cache core preference (amd_x3d_vcache driver) ---------------------
+# AMD 3D V-Cache CPUs only (dual-CCD X3D parts). Exposes a core preference to
+# the scheduler via the driver's amd_x3d_mode sysfs file:
+#   frequency = prefer the higher-clocking CCD
+#   cache     = prefer cores on the CCD with the larger L3
+# Silently skipped if the driver isn't bound (non-X3D CPU or unsupported
+# kernel), so it's safe to leave at 1 on any system.
+SET_X3D_VCACHE_MODE=1
+X3D_VCACHE_MODE=frequency
+
+# --- Intel CPUs -----------------------------------------------------------------
+# Applied only on GenuineIntel CPUs (the two AMD sections above are skipped
+# there). Each knob is skipped when its kernel interface is missing.
+# NOTE: values must be alone on their line — the parser rejects trailing comments.
+#
+# intel_pstate/no_turbo=0 while gaming
+SET_INTEL_TURBO=1
+# intel_pstate/hwp_dynamic_boost=1 (active mode + HWP only)
+SET_INTEL_HWP_BOOST=1
+# intel_pstate max/min_perf_pct in percent; 0 = leave unchanged
+INTEL_MAX_PERF_PCT=100
+INTEL_MIN_PERF_PCT=0
+# cpuN/power/energy_perf_bias=0 (max performance)
+SET_INTEL_EPB=1
+# kernel.sched_itmt_enabled=1 (favored-core scheduling)
+SET_INTEL_ITMT=1
+# Hybrid (P+E core) CPUs: P-cores -> game, E-cores (+LP-E) -> rest of the system,
+# using the same cgroup/cpuset machinery as CCD isolation. Opt-in.
+HYBRID_CORE_ISOLATION=0
+# Skipped when the P-cores expose fewer logical CPUs than this.
+HYBRID_MIN_P_THREADS=8
+
+# --- Proton / Wine friendliness --------------------------------------------------
+# vm.max_map_count is only ever RAISED to this value (0 = leave alone).
+VM_MAX_MAP_COUNT=2147483642
+# Smaller dirty-page windows smooth shader-cache / save-file write bursts.
+SET_VM_DIRTY=1
+VM_DIRTY_BACKGROUND_BYTES=67108864
+VM_DIRTY_BYTES=268435456
+# kernel.numa_balancing=0 while gaming
+SET_NUMA_BALANCING=1
+
+# --- IRQ affinity (opt-in) -------------------------------------------------------
+# Moves the IRQs of the listed PCI classes (gpu nvme net usb audio) onto the
+# system CPUs: IRQ_AFFINITY_CPUS if set (cpulist, e.g. 8-15,24-31), otherwise
+# the second CCD/CCX group. Managed IRQs (NVMe queues) cannot be moved and are
+# skipped. Stop irqbalance, or it will undo this.
+SET_IRQ_AFFINITY=0
+IRQ_AFFINITY_CLASSES="gpu nvme net usb"
+IRQ_AFFINITY_CPUS=
+
+# --- GPU ---------------------------------------------------------------------------
+# NVIDIA persistence mode (only touches GPUs where it is currently disabled).
+SET_NVIDIA_PERSISTENCE=0
+# amdgpu power_dpm_force_performance_level (higher power draw).
+SET_AMDGPU_PERF_LEVEL=0
+AMDGPU_PERF_LEVEL=high
+
+# --- Network / storage -------------------------------------------------------------
+# Wi-Fi power save off while gaming (needs the iw tool).
+SET_WIFI_POWERSAVE=1
+# NVMe I/O scheduler: none | mq-deadline | kyber | bfq
+SET_NVME_SCHED=1
+NVME_IO_SCHEDULER=none
+
+# --- PCIe ASPM -----------------------------------------------------------------
+# PCIe ASPM policy during gameplay: performance | default | powersave
+ASPM_POLICY=performance
+SET_ASPM=1
+
+# --- Deep C-state disabling (optional) ------------------------------------------
+# Reduces DPC/frame-time jitter but noticeably increases heat/power draw.
+# Worth trying on a laptop while plugged in.
+DISABLE_DEEP_CSTATES=0
+# Deepest state index to keep enabled (0=POLL, 1=C1)
+CSTATE_KEEP_MAX=1
+
+# --- VM --------------------------------------------------------------------------
+# vm.swappiness value while in game mode
+VM_SWAPPINESS=10
+
+# --- VM: fragmentation defences ------------------------------------------------
+# IMPORTANT: do not disable both of these at once. compaction_proactiveness=0
+# stops background defragmentation and watermark_boost_factor=0/1 stops the
+# kernel from reacting to fragmentation events. With both off, free memory
+# fragments monotonically during a session and the first higher-order
+# allocation that fails ends up in synchronous direct compaction — which is
+# what turns a smooth first few minutes into stutter later on.
+VM_COMPACTION_PROACTIVENESS=5
+VM_WATERMARK_BOOST_FACTOR=15000
+
+# vmstat refresh interval (seconds). Higher = fewer per-cpu timer wakeups, but
+# the zone statistics used by watermark checks go stale for that long.
+VM_STAT_INTERVAL=10
+
+# --- MGLRU ---------------------------------------------------------------------
+# Bitmask: 0x1 core, 0x2 batched leaf-PTE aging (page-table walks), 0x4 non-leaf.
+# 7 = kernel default. Clearing 0x2 forces rmap-based aging, whose cost scales
+# with the game's mapped address space and therefore grows over a session.
+LRU_GEN_ENABLED=7
+
+# --- Scheduler (debugfs) -------------------------------------------------------
+# Smaller base slice = lower latency, slightly lower throughput.
+SCHED_MIN_BASE_SLICE_NS=1000000
+SCHED_MIGRATION_COST_NS=500000
+# Kernel default is 32. Lower values slow down load-balance correction as the
+# runnable thread count grows.
+SCHED_NR_MIGRATE=32
+
+# --- CCD/CCX core isolation ------------------------------------------------------
+# Note: THP settings (enabled/shmem_enabled/defrag) are INTENTIONALLY absent
+# here — all three are always hardcoded to "always" in the script and are
+# not configurable (the old THP_MODE key is no longer read by the script).
+
+# Enable (1) or fully disable (0) CCD isolation. When disabled, the script
+# never does topology detection and never touches any cgroups.
+CCD_ISOLATION_ENABLED=1
+
+# --- CCD isolation architecture (read this before touching the two keys below) --
+#
+# The script does NOT move existing processes out of their cgroups. Every
+# cgroup that already exists (login sessions, elogind, dbus, other service
+# cgroups, ...) is left exactly where it is and is instead constrained IN
+# PLACE by writing its own cpuset.cpus to the system CCD — every process
+# inside it (and any of its descendants) is confined to those CPUs without
+# ever changing cgroup membership.
+#
+# This matters because moving a process OUT of its cgroup — even briefly,
+# even straight back into the exact same one — can break things that watch
+# cgroup membership for identity or lifecycle tracking. The concrete
+# incident that drove this design: a login-session process got swept during
+# an earlier, move-based version of this script; that silently broke
+# D-Bus/PolicyKit's notion of "this process belongs to an active local
+# session", so polkit-gated tools (e.g. power-manager GUIs calling pkexec)
+# started failing with "Not authorized" — sometimes cascading into a wedged
+# TTY/session that needed a reboot to clear. The two keys below exist only
+# as a defense for the ONE thing this script still does move: stray
+# processes that were never inside a cgroup of their own to begin with
+# (found sitting directly in the cgroup-v2 root at scan time).
+
+# LEGACY / not used by the current architecture. Nothing needs to be
+# listed here to be protected — every process that already has its own
+# cgroup is left untouched by construction (see above). Kept only so
+# existing config files with this key don't produce a warning.
+CCD_PROTECTED_CGROUPS=
+
+# Safety net: process NAMES (matched with pgrep -x) that must never be
+# swept into theUgly even if found sitting directly in the root cgroup.
+# Covers common OpenRC- and systemd-side daemon/session-manager names so
+# the same list is safe to use unchanged across init systems — a name
+# that doesn't exist on your system simply never matches anything.
+CCD_PROTECTED_PROCS=elogind elogind-daemon systemd-logind dbus-daemon dbus-broker polkitd openrc-user login gdm gdm3 sddm lightdm
+
+# Launcher process name to search for with pgrep -x. "steam" for Steam,
+# "heroic" for Heroic, "bottles" for Bottles, etc.
+CCD_LAUNCHER=lutris
+
+# Extra process names to add to the theGood (performance) group, space-separated.
+# Example: CCD_EXTRA_GOOD_PROCS=gamescope picom
+CCD_EXTRA_GOOD_PROCS=
+
+# How many seconds to keep scanning for newly spawned child processes
+# (shader compilation, DXVK/VKD3D workers) after the launcher is moved.
+# 0 = one-shot move only.
+CCD_MONITOR_SECONDS=30
+
+# "timed"   = stop scanning after CCD_MONITOR_SECONDS (old behaviour)
+# "session" = keep a detached, nice-19 watcher (running inside theUgly) alive
+#             until POST. Launcher overlays, anti-cheat, Wine services and
+#             shader workers spawn minutes into a session; without this they
+#             land in the root cgroup unconstrained and get scheduled onto the
+#             game's CCD.
+CCD_MONITOR_MODE=session
+# Sweep interval of the session watcher, in seconds.
+CCD_MONITOR_INTERVAL=5
+
+# cpuset.cpus.partition type: "member", "root" or "isolated".
+# theGood must be a partition root ("root" or "isolated") for the isolation to
+# be real: only a valid partition root takes EXCLUSIVE ownership of its CPUs,
+# which is what stops root-cgroup strays from being scheduled on the game's CCD.
+# theUgly should normally stay "member". If BOTH groups claim their CPUs
+# exclusively, the root cgroup can be left with no CPUs at all and the kernel
+# silently marks the partition "root invalid" — the cgroups still exist and
+# still look configured, but nothing is actually isolated. Check with:
+#   lutris-game-tune-wrapper STATUS   (look for "partition: root", not "invalid")
+CCD_GOOD_PARTITION_TYPE=root
+CCD_UGLY_PARTITION_TYPE=member

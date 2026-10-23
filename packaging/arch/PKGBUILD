@@ -1,0 +1,73 @@
+# Maintainer: arabcian
+#
+# DRSTool for Arch Linux and derivatives (CachyOS, EndeavourOS, Manjaro …),
+# built from the git main branch.
+#
+#   cd packaging/arch && makepkg -si
+#
+# Installed by the package:
+#   /usr/bin/drstool + the DRSTool / drstool_core Python modules
+#   the vk_flip_meter Vulkan layer (/usr/lib + implicit_layer.d manifest)
+#   desktop entry and icon
+#   /usr/share/drstool/{lutris-game-tune-main,vk-flip-meter-main} sources
+#
+# lutris-game-tune is NOT installed by this package: it lives under /usr/local
+# (hard-coded paths in the wrapper, the scripts and existing Lutris configs),
+# which Arch packages must not touch. Install it from DRSTool itself
+# (Extra Tools › lutris-game-tune › Install), which also offers the polkit mode
+# without a setuid binary.
+
+pkgname=drstool-git
+_name=DRSTool
+pkgver=r0
+pkgrel=1
+pkgdesc="dxvk-nvapi / NVIDIA DRS profile editor with Proton, DXVK, VKD3D, gamescope and DLL tooling"
+arch=('x86_64')
+url="https://github.com/arabcian/DRSTool"
+license=('MIT')
+depends=('python' 'pyside6' 'python-yaml' 'vulkan-icd-loader')
+makedepends=('git' 'python-build' 'python-installer' 'python-setuptools' 'python-wheel'
+             'cmake' 'vulkan-headers')
+checkdepends=()
+optdepends=('python-setproctitle: correct taskbar icon on KDE Plasma Wayland'
+            'polkit: install lutris-game-tune / vk_flip_meter from the GUI (pkexec)'
+            'libcap: setcap for the lutris-game-tune polkit install mode'
+            'gamescope: gamescope launch lines'
+            'mangohud: MangoHud overlay and frametime logs'
+            'zstd: unpack .tar.zst releases (DXVK / vkd3d-proton / Proton builds)'
+            'lutris' 'steam' 'heroic-games-launcher-bin' 'bottles')
+provides=('drstool')
+conflicts=('drstool')
+source=("git+https://github.com/arabcian/DRSTool.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "${_name}"
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+    cd "${_name}"
+    python -m build --wheel --no-isolation
+    cmake -B build-flm -S vk-flip-meter-main \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+        -DFLM_NATIVE_BUILD=OFF \
+        -DFLM_LIB_PATH=/usr/lib/libvk_flip_meter.so
+    cmake --build build-flm
+}
+
+check() {
+    cd "${_name}"
+    # Qt-free unit tests (share codes, shortcuts.vdf, game scan, DLL swapping)
+    python -m unittest discover -s tests -p 'test_core.py'
+}
+
+package() {
+    cd "${_name}"
+    python -m installer --destdir="${pkgdir}" dist/*.whl
+    DESTDIR="${pkgdir}" cmake --install build-flm
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+    install -Dm644 DISCLAIMER.md "${pkgdir}/usr/share/doc/${pkgname}/DISCLAIMER.md"
+}

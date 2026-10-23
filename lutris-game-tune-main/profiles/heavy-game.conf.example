@@ -1,0 +1,15 @@
+# Example per-game profile.
+#
+# Install:   sudo install -o root -g root -m 644 heavy-game.conf.example \
+#                 /etc/lutris-game-tune.d/heavy-game.conf
+# Use:       Lutris pre-game script = /usr/local/bin/lutris-game-tune-wrapper PRE heavy-game
+# Preview:   /usr/local/bin/lutris-game-tune-wrapper DRYRUN heavy-game
+#
+# Same keys as /etc/lutris-game-tune.conf (one KEY=VALUE per line, no trailing
+# comments). Only list what should differ from the global config.
+# The profile of the FIRST game that starts is the one in effect until all
+# games have exited.
+DISABLE_DEEP_CSTATES=1
+THP_ENABLED=always
+SET_IRQ_AFFINITY=1
+IRQ_AFFINITY_CLASSES="gpu nvme net usb"
