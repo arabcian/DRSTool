@@ -152,6 +152,15 @@ Most of DRSTool works offline. These features contact the internet only when you
 - PySide6
 - Optional, for specific features: Lutris, Gamescope, Proton/Wine, a Vulkan SDK + CMake (to build FLM)
 
+## Quick install (any distribution)
+
+```bash
+./install.sh      # interactive; run as your normal user
+./uninstall.sh    # removes it again (your profiles and DLL backups are kept unless you say otherwise)
+```
+
+The installer asks where to install (just you in `~/.local`, or all users in `/usr/local`), how to get PySide6 / PyYAML if they are missing (your distribution's packages, or a private Python environment via pip), and whether to build vk_flip_meter and install lutris-game-tune (setuid or polkit). It shows a summary before changing anything, uses `sudo` only for the parts that need root, installs missing build tools with apt / dnf / pacman / zypper when you agree, and can be re-run to update. `./install.sh --help` lists the options for a non-interactive install (`--yes --user --no-flm …`). Messages are in Turkish when your locale is Turkish.
+
 ## Running from source
 
 ```bash
@@ -216,6 +225,7 @@ Note: lutris-game-tune needs a privileged wrapper — setuid root by default, or
 
 ```
 DRSTool.py                 main GUI
+install.sh / uninstall.sh  interactive installer for any distribution
 drstool_core/              Qt-free helpers (share codes, Steam shortcuts, game / DLL scan, DLL swap)
 tests/                     unit tests (core) and offscreen GUI tests
 assets/drstool.png         application icon

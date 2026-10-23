@@ -152,6 +152,15 @@ DRSTool'un çoğu çevrimdışı çalışır. Şu özellikler yalnızca düğmel
 - PySide6
 - İsteğe bağlı, belirli özellikler için: Lutris, Gamescope, Proton/Wine, FLM'yi derlemek için Vulkan SDK + CMake
 
+## Hızlı kurulum (her dağıtım)
+
+```bash
+./install.sh      # etkileşimli; normal kullanıcınızla çalıştırın
+./uninstall.sh    # geri kaldırır (profilleriniz ve DLL yedekleriniz siz istemedikçe kalır)
+```
+
+Kurulum betiği nereye kurulacağını (yalnızca siz için `~/.local` ya da tüm kullanıcılar için `/usr/local`), PySide6 / PyYAML eksikse nasıl kurulacağını (dağıtım paketleri ya da pip ile özel bir Python ortamı), vk_flip_meter'in derlenip lutris-game-tune'un (setuid ya da polkit) kurulup kurulmayacağını sorar. Bir şey değiştirmeden önce özet gösterir, `sudo`'yu yalnızca root gereken adımlarda kullanır, onay verirseniz eksik derleme araçlarını apt / dnf / pacman / zypper ile kurar ve güncellemek için yeniden çalıştırılabilir. Soru sormadan kurulum için seçenekler: `./install.sh --help` (`--yes --user --no-flm …`). Sistem diliniz Türkçeyse mesajlar Türkçedir.
+
 ## Kaynak koddan çalıştırma
 
 ```bash
@@ -216,6 +225,7 @@ Not: lutris-game-tune yetkili bir sarmalayıcı gerektirir — varsayılan olara
 
 ```
 DRSTool.py                 ana arayüz
+install.sh / uninstall.sh  her dağıtım için etkileşimli kurulum
 drstool_core/              Qt'siz yardımcılar (paylaşım kodu, Steam kısayolları, oyun / DLL tarama, DLL değiştirme)
 tests/                     birim testleri (core) ve ekransız arayüz testleri
 assets/drstool.png         uygulama simgesi
