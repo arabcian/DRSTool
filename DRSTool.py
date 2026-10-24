@@ -13431,8 +13431,10 @@ def scan_dll_version(path: Path, comp: dict) -> Optional[str]:
     anchor = min(pos)
     vpre = rb"v" if comp["ver_prefix_required"] else rb"v?"
     pat = re.compile(rb"(?<![\w.])(" + vpre + rb"\d+\.\d+(?:\.\d+)?(?:-\d+-g[0-9a-f]{6,})?[+\w\-]{0,12})\x00")
+    # Only hits < 4096 bytes from the marker are accepted below, so scan just that window
+    # (+256 slack for the match length) instead of the whole multi-MB DLL.
     cands = [(abs(m.start() - anchor), m.group(1).decode("ascii", "replace"))
-             for m in pat.finditer(data)]
+             for m in pat.finditer(data, max(0, anchor - 4096), anchor + 4096 + 256)]
     if cands:
         cands.sort()
         if cands[0][0] < 4096:                         # must sit close to the marker
