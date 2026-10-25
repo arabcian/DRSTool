@@ -33,6 +33,9 @@ from . import pe_version
 DLSS_FILES = {"dlss": "nvngx_dlss.dll", "dlssd": "nvngx_dlssd.dll", "dlssg": "nvngx_dlssg.dll"}
 SL_FEATURE = "sl_sdk_0"
 SL_ANCHOR = "sl.interposer.dll"
+# NGX's Streamline package ships the plugins but no interposer, so the group's version is read
+# from a plugin every install has — an older interposer would otherwise stay "outdated" for good.
+SL_VERSION_DLL = "sl.common.dll"
 KIND_TITLES = {"dlss": "DLSS SR", "dlssd": "DLSS RR", "dlssg": "DLSS FG", SL_FEATURE: "Streamline"}
 KINDS = ("dlss", "dlssd", "dlssg", SL_FEATURE)
 
@@ -502,7 +505,9 @@ def find_dlls(game: GameEntry, max_entries: int = MAX_ENTRIES) -> GameDlls:
                     group = sorted(Path(dp) / f for f in fns
                                    if f.lower().startswith("sl.") and f.lower().endswith(".dll")
                                    and not os.path.islink(os.path.join(dp, f)))
-                    res.dlls.append(FoundDll(SL_FEATURE, p, pe_version.read_version(p) or (), group))
+                    common = low.get(SL_VERSION_DLL)
+                    ver = pe_version.read_version(Path(dp) / common) if common else None
+                    res.dlls.append(FoundDll(SL_FEATURE, p, ver or pe_version.read_version(p) or (), group))
         if res.truncated:
             break
     res.dlls.sort(key=lambda d: (KINDS.index(d.kind), str(d.path)))

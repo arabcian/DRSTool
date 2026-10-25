@@ -269,6 +269,21 @@ class GameScanTests(unittest.TestCase):
         found = game_scan.find_dlls(game_scan.GameEntry("Custom", "k", "g", [game]))
         self.assertEqual(found.dlls, [])
 
+    def test_streamline_version_is_that_of_the_files_ngx_can_update(self):
+        # NGX's Streamline package holds the plugins but no sl.interposer.dll, so an older
+        # interposer must not keep the group "outdated" once its plugins are on the target.
+        game = self.h / "game"
+        fake_dll(game / "sl.interposer.dll", (2, 14, 1, 0))
+        fake_dll(game / "sl.common.dll", (2, 14, 16, 0))
+        fake_dll(game / "sl.dlss.dll", (2, 14, 16, 0))
+        found = game_scan.find_dlls(game_scan.GameEntry("Custom", "k", "g", [game]))
+        self.assertEqual(found.of(game_scan.SL_FEATURE)[0].version, (2, 14, 16, 0))
+        # without sl.common.dll the interposer is all there is to go by
+        solo = self.h / "solo"
+        fake_dll(solo / "sl.interposer.dll", (2, 9, 0, 0))
+        found = game_scan.find_dlls(game_scan.GameEntry("Custom", "k2", "g2", [solo]))
+        self.assertEqual(found.of(game_scan.SL_FEATURE)[0].version, (2, 9, 0, 0))
+
 
 class DllOpsTests(unittest.TestCase):
     def test_replace_and_restore(self):

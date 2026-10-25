@@ -334,6 +334,29 @@ class GuiTests(unittest.TestCase):
         dlg = m.DllRestoreDialog(w._states[cool.game.key])
         self.assertEqual(dlg._list.topLevelItemCount(), 1)
 
+    def test_dll_manager_streamline_plugins_on_target(self):
+        # NGX's Streamline package has no interposer: plugins already on the target version
+        # mean "up to date", whatever interposer the game ships.
+        m = self.m
+        game = HOME / "Games/SL Game"
+        fake_dll(game / "sl.interposer.dll", (2, 14, 1, 0))
+        fake_dll(game / "sl.common.dll", (2, 14, 16, 0))
+        fake_dll(game / "sl.dlss.dll", (2, 14, 16, 0))
+        entry = m.game_scan.GameEntry("Custom", "custom:sl", "SL Game", [game])
+        st = m.DllGameState(entry, m.game_scan.find_dlls(entry))
+        targets = {"sl_sdk_0": m.NgxBuild("sl_sdk_0", m.ngx_ver_pack("2.14.16"),
+                                          m.ngx_universal_payload("sl_sdk_0"), 100)}
+        self.assertEqual(m.dllm_plan(st, targets)["files"], [])
+        self.assertEqual(m.dllm_cell(st, "sl_sdk_0", targets), ("2.14.16", "ok"))
+        # plugins that really are older are still offered
+        stale = HOME / "Games/Stale SL Game"
+        fake_dll(stale / "sl.interposer.dll", (2, 8, 0, 0))
+        fake_dll(stale / "sl.common.dll", (2, 8, 0, 0))
+        entry = m.game_scan.GameEntry("Custom", "custom:stale", "Stale SL Game", [stale])
+        st = m.DllGameState(entry, m.game_scan.find_dlls(entry))
+        self.assertEqual(len(m.dllm_plan(st, targets)["files"]), 1)
+        self.assertEqual(m.dllm_cell(st, "sl_sdk_0", targets), ("2.8.0", "old"))
+
 
 if __name__ == "__main__":
     unittest.main()
