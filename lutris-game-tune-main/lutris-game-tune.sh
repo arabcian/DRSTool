@@ -376,26 +376,27 @@ CCD_UGLY_PARTITION_TYPE="member"
 # --- Logging -------------------------------------------------------------------
 LOG_LEVEL="INFO"   # DEBUG, INFO, WARN, ERROR
 
+# Sets _LVL (no command substitution: this runs for every log line, also the suppressed ones).
 _log_level_num() {
     case "$1" in
-        DEBUG) echo 0 ;; INFO) echo 1 ;; WARN) echo 2 ;; ERROR) echo 3 ;;
-        *)     echo 1 ;;
+        DEBUG) _LVL=0 ;; INFO) _LVL=1 ;; WARN) _LVL=2 ;; ERROR) _LVL=3 ;;
+        *)     _LVL=1 ;;
     esac
 }
 
 _log_write() {
     local level="$1"; shift
-    local msg
-    msg="[$(date '+%Y-%m-%d %H:%M:%S')] [${level}] $*"
+    local _LVL msg_lvl
 
-    # Only write if message level >= configured LOG_LEVEL
-    local msg_lvl cfg_lvl
-    msg_lvl=$(_log_level_num "${level}")
-    cfg_lvl=$(_log_level_num "${LOG_LEVEL}")
-    if (( msg_lvl < cfg_lvl )); then
+    # Only write if message level >= configured LOG_LEVEL (checked before any formatting work)
+    _log_level_num "${level}"; msg_lvl=${_LVL}
+    _log_level_num "${LOG_LEVEL}"
+    if (( msg_lvl < _LVL )); then
         return
     fi
 
+    local msg
+    printf -v msg '[%(%Y-%m-%d %H:%M:%S)T] [%s] %s' -1 "${level}" "$*"
     echo "${msg}"
     # Append to the log file — skip if it's a symlink (log-path attack prevention)
     if [[ ! -L "${LOG_FILE}" ]]; then
@@ -728,7 +729,11 @@ ensure_debugfs() {
 
 # Path -> state file name (unique, collision-free)
 _save_name() {
-    echo "${STATE_DIR}/$(echo "$1" | tr '/' '_')"
+    echo "${STATE_DIR}/${1//\//_}"
+}
+# Same name without a subshell: sets SAVE_NAME (used per parameter on the hot path).
+_save_name_v() {
+    SAVE_NAME="${STATE_DIR}/${1//\//_}"
 }
 
 # Write a state file SAFELY: reject symlinks
@@ -758,11 +763,18 @@ dry() { printf '[dry-run] %s\n' "$*"; }
 
 # Numeric value of a decimal or 0x-hex token (prints nothing otherwise)
 _to_num() {
+    _to_num_v "$1"
+    [[ -z "${_NUM}" ]] || echo "${_NUM}"
+    return 0
+}
+# Same, without a subshell: result in _NUM (empty when the token is not a number).
+_to_num_v() {
     local v="$1"
+    _NUM=""
     if [[ "${v}" =~ ^0[xX][0-9a-fA-F]+$ ]]; then
-        echo "$(( v ))"
+        _NUM=$(( v ))
     elif [[ "${v}" =~ ^[0-9]+$ ]]; then
-        echo "$(( 10#${v} ))"
+        _NUM=$(( 10#${v} ))
     fi
     return 0
 }
@@ -772,11 +784,13 @@ _to_num() {
 # numerically (lru_gen reads back 0x0007 after writing 7).
 _verify_applied() {
     local path="$1" want="$2" desc="$3" raw got wn gn
-    raw="$(cat "${path}" 2>/dev/null || true)"
+    raw=""
+    { IFS= read -r -d '' raw < "${path}"; } 2>/dev/null || true     # whole file, no cat fork
+    raw="${raw%"${raw##*[!$'\n']}"}"                                 # trailing newlines, like $(cat)
     if [[ "${raw}" =~ \[([^]]+)\] ]]; then got="${BASH_REMATCH[1]}"; else got="${raw}"; fi
     got="${got//[[:space:]]/}"
-    wn="$(_to_num "${want}")"
-    gn="$(_to_num "${got}")"
+    _to_num_v "${want}"; wn="${_NUM}"
+    _to_num_v "${got}"; gn="${_NUM}"
     if [[ "${got}" == "${want}" ]] || [[ -n "${wn}" && "${wn}" == "${gn}" ]]; then
         log "Set         [${desc}]: ${want}"
         _stat_applied
@@ -805,7 +819,7 @@ _print_summary() {
 # tune_param <path> <new_value> <description>
 tune_param() {
     local path="$1" new_val="$2" desc="$3"
-    local save_file; save_file="$(_save_name "${path}")"
+    local save_file; _save_name_v "${path}"; save_file="${SAVE_NAME}"
 
     if [[ ! -e "${path}" ]]; then
         warn "Does not exist, skipped: ${desc}"
@@ -846,7 +860,7 @@ tune_param() {
 # tune_choice_param <path> <new_value> <description>
 tune_choice_param() {
     local path="$1" new_val="$2" desc="$3"
-    local save_file; save_file="$(_save_name "${path}")"
+    local save_file; _save_name_v "${path}"; save_file="${SAVE_NAME}"
 
     if [[ ! -e "${path}" ]]; then
         warn "Does not exist, skipped: ${desc}"
@@ -888,7 +902,7 @@ tune_choice_param() {
 # restore_param <path> <description>
 restore_param() {
     local path="$1" desc="$2"
-    local save_file; save_file="$(_save_name "${path}")"
+    local save_file; _save_name_v "${path}"; save_file="${SAVE_NAME}"
 
     if [[ ! -f "${save_file}" ]]; then
         return 0   # nothing saved, skip quietly (already skipped in PRE)
@@ -935,7 +949,7 @@ tune_pci_latency() {
     if [[ ! -f "${PCI_SAVE_FILE}" ]]; then
         : > "${PCI_SAVE_FILE}"
         for dev in /sys/bus/pci/devices/*; do
-            bdf="$(basename "${dev}")"
+            bdf="${dev##*/}"
             cur="$(setpci -s "${bdf}" latency_timer 2>/dev/null)" || continue
             echo "${bdf} ${cur}" >> "${PCI_SAVE_FILE}"
         done
@@ -945,8 +959,10 @@ tune_pci_latency() {
     fi
 
     for dev in /sys/bus/pci/devices/*; do
-        bdf="$(basename "${dev}")"
-        class="$(cat "${dev}/class" 2>/dev/null)" || continue
+        bdf="${dev##*/}"
+        [[ -r "${dev}/class" ]] || continue
+        class=""
+        IFS= read -r class < "${dev}/class" || true
         case "${class}" in
             0x0600*)  target="00" ;;  # host bridge
             0x0604*)  target="80" ;;  # PCI-PCI bridge
@@ -985,10 +1001,10 @@ tune_cpu_governor() {
         # automatically pulls EPP to performance on amd-pstate
         if [[ -f "${pol}/energy_performance_preference" ]]; then
             tune_param "${pol}/energy_performance_preference" "performance" \
-                "epp.$(basename "${pol}")"
+                "epp.${pol##*/}"
         fi
         tune_param "${pol}/scaling_governor" "${CPU_GOVERNOR}" \
-            "governor.$(basename "${pol}")"
+            "governor.${pol##*/}"
     done
 }
 
@@ -997,9 +1013,9 @@ restore_cpu_governor() {
     for pol in /sys/devices/system/cpu/cpufreq/policy*; do
         [[ -d "${pol}" ]] || continue
         # Governor first, then EPP (writing the governor overwrites EPP)
-        restore_param "${pol}/scaling_governor" "governor.$(basename "${pol}")"
+        restore_param "${pol}/scaling_governor" "governor.${pol##*/}"
         if [[ -f "${pol}/energy_performance_preference" ]]; then
-            restore_param "${pol}/energy_performance_preference" "epp.$(basename "${pol}")"
+            restore_param "${pol}/energy_performance_preference" "epp.${pol##*/}"
         fi
     done
 }
@@ -1165,7 +1181,7 @@ tune_x3d_vcache() {
     # its own. Guard both the read and the write with `timeout` so a
     # firmware stall degrades to a skipped/warned tunable instead of a
     # frozen game-tune run.
-    local save_file; save_file="$(_save_name "${path}")"
+    local save_file; _save_name_v "${path}"; save_file="${SAVE_NAME}"
     if [[ ! -f "${save_file}" ]]; then
         local current_val
         if ! current_val="$(timeout 3 cat "${path}" 2>/dev/null)"; then
@@ -1194,7 +1210,7 @@ restore_x3d_vcache() {
     path="$(find_x3d_vcache_path)"
     [[ -n "${path}" ]] || return 0
 
-    local save_file; save_file="$(_save_name "${path}")"
+    local save_file; _save_name_v "${path}"; save_file="${SAVE_NAME}"
     [[ -f "${save_file}" ]] || return 0
     if [[ -L "${save_file}" ]]; then
         err "SECURITY: state file is a symlink, not read: ${save_file}"
@@ -1681,10 +1697,16 @@ setup_cpuset_group() {
 
 # Read a PID's cgroup-v2 path (e.g. "/theGood"). Empty on failure.
 _pid_cgroup_path() {
+    _pid_cgroup_path_v "$1" || return 1
+    printf '%s' "${_CGPATH}"
+}
+# Same, without a subshell: result in _CGPATH (called for every PID of every sweep).
+_pid_cgroup_path_v() {
     local pid="$1" line
+    _CGPATH=""
     while IFS= read -r line; do
         if [[ "${line}" == 0::* ]]; then
-            printf '%s' "${line#0::}"
+            _CGPATH="${line#0::}"
             return 0
         fi
     done < "/proc/${pid}/cgroup" 2>/dev/null
@@ -1841,8 +1863,8 @@ is_pid_protected_by_name() {
     local pid="$1"
     [[ -n "${CCD_PROTECTED_SESSION_PIDS[$pid]:-}" ]] && return 0
     [[ -z "${CCD_PROTECTED_PROCS:-}" ]] && return 1
-    local comm
-    comm="$(cat "/proc/${pid}/comm" 2>/dev/null)" || return 1
+    local comm=""
+    { IFS= read -r comm < "/proc/${pid}/comm"; } 2>/dev/null || [[ -n "${comm}" ]] || return 1
     local name
     for name in ${CCD_PROTECTED_PROCS}; do
         [[ "${comm}" == "${name}" ]] && return 0
@@ -1908,6 +1930,21 @@ lookup_pid_origin() {
     awk -F'\t' -v p="${pid}" '$1 == p { print $2; exit }' "${origin_file}"
 }
 
+# The same lookup from memory: the file is read ONCE (first entry per pid wins, like awk's
+# `exit`), instead of one awk fork per PID — and up to 25 retries — over a growing file.
+declare -gA ORIGIN_CACHE=()
+ORIGIN_CACHE_LOADED=0
+load_origin_cache() {
+    local origin_file="${STATE_DIR}/.ccd_pid_origin" pid origin
+    ORIGIN_CACHE=()
+    ORIGIN_CACHE_LOADED=1
+    [[ -r "${origin_file}" ]] || return 0
+    while IFS=$'\t' read -r pid origin || [[ -n "${pid}" ]]; do
+        [[ "${pid}" =~ ^[0-9]+$ && -z "${ORIGIN_CACHE[$pid]+x}" ]] && ORIGIN_CACHE[$pid]="${origin%%$'\t'*}"
+    done < "${origin_file}"
+    return 0
+}
+
 # Move every process found ANYWHERE under root_dir (recursively, across all
 # sub-cgroups) into dst_procs. This is the general-purpose mover: it does
 # not assume processes sit directly in root_dir's own cgroup.procs.
@@ -1960,7 +1997,8 @@ move_pid_list_to_group() {
         if is_pid_protected_by_name "${pid}"; then
             continue
         fi
-        cur="$(_pid_cgroup_path "${pid}" || true)"
+        _pid_cgroup_path_v "${pid}" || true
+        cur="${_CGPATH}"
         if [[ "${cur}" == "${rel}" ]]; then
             skipped=$((skipped + 1))
             continue
@@ -2339,6 +2377,8 @@ restore_ccd_isolation() {
     # independent of how long the theGood/theUgly teardown below takes.
     restore_constrained_cgroups
 
+    load_origin_cache
+
     local max_attempts=25
     local attempt success fail pid remaining
     local ugly_done=0 good_done=0
@@ -2405,7 +2445,8 @@ restore_ccd_isolation() {
 restore_pid_to_origin() {
     local pid="$1"
     local origin
-    origin="$(lookup_pid_origin "${pid}")"
+    (( ORIGIN_CACHE_LOADED )) || load_origin_cache
+    origin="${ORIGIN_CACHE[$pid]:-}"
     if [[ -n "${origin}" && -d "${origin}" && -w "${origin}/cgroup.procs" ]]; then
         if echo "${pid}" > "${origin}/cgroup.procs" 2>/dev/null; then
             return 0
@@ -2435,7 +2476,7 @@ readonly STALE_MIN_AGE=15   # seconds; never drop entries younger than this
 _pid_start() {
     local line
     local -a f
-    line="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+    { IFS= read -r line < "/proc/$1/stat"; } 2>/dev/null || return 1
     line="${line##*) }"
     read -ra f <<< "${line}"
     printf '%s' "${f[19]:-}"
@@ -2446,9 +2487,9 @@ _find_anchor() {
     local pid="$1" depth=0 comm line best=""
     local -a f
     while (( pid > 1 && depth < 32 )); do
-        comm="$(cat "/proc/${pid}/comm" 2>/dev/null)" || break
+        { IFS= read -r comm < "/proc/${pid}/comm"; } 2>/dev/null || break
         if [[ "${comm}" == "${CCD_LAUNCHER}" || "${comm}" == lutris* ]]; then best="${pid}"; fi
-        line="$(cat "/proc/${pid}/stat" 2>/dev/null)" || break
+        { IFS= read -r line < "/proc/${pid}/stat"; } 2>/dev/null || break
         line="${line##*) }"
         read -ra f <<< "${line}"
         pid="${f[1]:-0}"

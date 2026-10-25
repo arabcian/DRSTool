@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -26,6 +27,9 @@ try:
     import yaml  # type: ignore
 except ImportError:          # PyYAML is optional; a regex fallback covers the keys we need
     yaml = None
+
+# libyaml-backed loader is ~8x faster than the pure-Python SafeLoader (same safe semantics)
+_YAML_LOADER = getattr(yaml, "CSafeLoader", getattr(yaml, "SafeLoader", None))
 
 from . import pe_version
 
@@ -189,7 +193,7 @@ def lutris_dirs(home: Optional[Path] = None) -> List[Path]:
 def _yaml_game_section(text: str) -> Dict[str, str]:
     if yaml is not None:
         try:
-            d = yaml.safe_load(text) or {}
+            d = yaml.load(text, Loader=_YAML_LOADER) or {}
             g = d.get("game") if isinstance(d, dict) else None
             return {str(k): str(v) for k, v in g.items()} if isinstance(g, dict) else {}
         except Exception:
@@ -399,7 +403,7 @@ def scan_bottles(home: Optional[Path] = None) -> List[GameEntry]:
             data = None
             if yaml is not None and text:
                 try:
-                    data = yaml.safe_load(text)
+                    data = yaml.load(text, Loader=_YAML_LOADER)
                 except Exception:
                     data = None
             if isinstance(data, dict):
@@ -441,12 +445,15 @@ def custom_entry(path: Path) -> Optional[GameEntry]:
 
 def scan_all(home: Optional[Path] = None, custom: Iterable[str] = ()) -> ScanResult:
     res = ScanResult()
-    for label, fn in (("Steam", scan_steam), ("Lutris", scan_lutris),
-                      ("Heroic", scan_heroic), ("Bottles", scan_bottles)):
-        try:
-            res.games += fn(home)
-        except Exception as ex:          # one broken launcher must not hide the others
-            res.errors.append(f"{label}: {type(ex).__name__}: {ex}")
+    scanners = (("Steam", scan_steam), ("Lutris", scan_lutris),
+                ("Heroic", scan_heroic), ("Bottles", scan_bottles))
+    with ThreadPoolExecutor(max_workers=len(scanners)) as pool:   # mostly file I/O, releases the GIL
+        futures = [(label, pool.submit(fn, home)) for label, fn in scanners]
+        for label, fut in futures:       # collected in launcher order, so results stay deterministic
+            try:
+                res.games += fut.result()
+            except Exception as ex:      # one broken launcher must not hide the others
+                res.errors.append(f"{label}: {type(ex).__name__}: {ex}")
     keys = {g.key for g in res.games}
     for c in custom:
         e = custom_entry(Path(c))

@@ -33,6 +33,26 @@ def fixed_file_version(data: bytes) -> Optional[Tuple[int, int, int, int]]:
     return None
 
 
+def _rsrc_span(f) -> Optional[Tuple[int, int]]:
+    """(file offset, size) of the .rsrc section from the PE headers, or None if they look off."""
+    head = f.read(4096)
+    if head[:2] != b"MZ" or len(head) < 0x40:
+        return None
+    pe = struct.unpack_from("<I", head, 0x3C)[0]
+    if pe + 24 > len(head) or head[pe:pe + 4] != b"PE\0\0":
+        return None
+    nsec = struct.unpack_from("<H", head, pe + 6)[0]
+    sec = pe + 24 + struct.unpack_from("<H", head, pe + 20)[0]
+    if sec + 40 * nsec > len(head):
+        return None
+    for i in range(nsec):
+        o = sec + 40 * i
+        if head[o:o + 8].rstrip(b"\0") == b".rsrc":
+            size, off = struct.unpack_from("<II", head, o + 16)
+            return (off, size) if size else None
+    return None
+
+
 def read_version(path: Path) -> Optional[Tuple[int, int, int, int]]:
     """(major, minor, build, revision) or None when the file has no version resource."""
     try:
@@ -40,6 +60,14 @@ def read_version(path: Path) -> Optional[Tuple[int, int, int, int]]:
         if size > _MAX_READ or size < 64:
             return None
         with open(path, "rb") as f:
+            span = _rsrc_span(f)
+            if span and span[0] + span[1] <= size:
+                # the version resource lives in .rsrc: read only that instead of ~50 MB
+                f.seek(span[0])
+                ver = fixed_file_version(b"MZ" + f.read(span[1]))
+                if ver:
+                    return ver
+            f.seek(0)
             data = f.read()
     except OSError:
         return None

@@ -28,7 +28,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 KEEP_BACKUPS = 10
 
@@ -103,13 +103,18 @@ def replace_files(game_key: str, game_name: str, pairs: List[Tuple[Path, Path, s
     """pairs: [(target in the game, new file, label e.g. 'DLSS SR 310.2.1')]."""
     root = root or backup_root()
     work, skipped = [], []
+    src_sha: Dict[Path, str] = {}       # one source file often goes to several targets
+    old_sha: Dict[Path, str] = {}       # target digest, reused as the backup's old_sha256
     for target, src, label in pairs:
         why = check_target(target)
         if not why and not _is_pe(src):
             why = f"replacement {src.name} is not a Windows DLL"
         if not why:
             try:
-                if sha256(target) == sha256(src):
+                if src not in src_sha:
+                    src_sha[src] = sha256(src)
+                old_sha[target] = sha256(target)
+                if old_sha[target] == src_sha[src]:
                     why = "already this version"
             except OSError as ex:
                 why = str(ex)
@@ -134,7 +139,7 @@ def replace_files(game_key: str, game_name: str, pairs: List[Tuple[Path, Path, s
         bfile = bdir / "files" / f"{i:03d}-{target.name}"
         shutil.copy2(target, bfile)
         manifest["entries"].append({"target": str(target), "backup": bfile.name, "label": label,
-                                    "old_sha256": sha256(bfile), "new_sha256": "",
+                                    "old_sha256": old_sha[target], "new_sha256": "",
                                     "source": str(src)})
     _write_json(mpath, manifest)
 

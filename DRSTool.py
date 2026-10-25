@@ -10,6 +10,7 @@ import os
 import json
 import re
 import shlex
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
@@ -18,7 +19,7 @@ from PySide6.QtCore import Qt, Signal, QObject, QTimer, QProcess, QSize, QSettin
 from datetime import datetime
 
 from PySide6.QtGui import (QColor, QPalette, QFont, QIcon, QIntValidator, QPainter,
-                           QFontMetrics, QKeySequence, QShortcut, QAction, QPen)
+                           QFontMetrics, QKeySequence, QShortcut, QAction, QPen, QPolygonF)
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QListWidget, QListWidgetItem, QStackedWidget,
@@ -41,6 +42,8 @@ import platform
 try:
     import yaml
     _HAVE_YAML = True
+    # libyaml-backed loader is ~8x faster than the pure-Python SafeLoader (same safe semantics)
+    _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 except ImportError:
     _HAVE_YAML = False
 
@@ -641,6 +644,7 @@ ROLE_UNAVAIL = Qt.UserRole + 15  # str: why the system can't run it ("" = fine)
 class SidebarDelegate(QStyledItemDelegate):
     HEADER_H = 34
     ITEM_H = 30
+    _value_fonts: dict = {}          # point size -> (QFont, QFontMetrics) of the value chip
 
     def sizeHint(self, option, index):
         kind = index.data(ROLE_KIND)
@@ -714,11 +718,15 @@ class SidebarDelegate(QStyledItemDelegate):
         avail = card.right() - 8 - pad_l
         val_w = 0
         if value:
-            vf = QFont()
-            vf.setFamilies(["JetBrains Mono", "Fira Code", "DejaVu Sans Mono", "monospace"])
-            vf.setStyleHint(QFont.Monospace)
-            vf.setPointSizeF(max(7.0, base_font.pointSizeF() - 1.5))
-            vfm = QFontMetrics(vf)
+            vsize = max(7.0, base_font.pointSizeF() - 1.5)
+            cached = self._value_fonts.get(vsize)       # built once per size, not once per painted row
+            if cached is None:
+                vf = QFont()
+                vf.setFamilies(["JetBrains Mono", "Fira Code", "DejaVu Sans Mono", "monospace"])
+                vf.setStyleHint(QFont.Monospace)
+                vf.setPointSizeF(vsize)
+                cached = self._value_fonts[vsize] = (vf, QFontMetrics(vf))
+            vf, vfm = cached
             max_val = int(avail * 0.45)
             shown = vfm.elidedText(value, Qt.ElideRight, max_val - 12)
             tw = vfm.horizontalAdvance(shown)
@@ -3748,6 +3756,7 @@ class SettingEditorWidget(QWidget):
         if getattr(self, "_enum_group", None) is not None:
             self._enum_group.deleteLater()
         group = self._enum_group = QButtonGroup(self)
+        self._enum_setting_id = s.id
         group.setExclusive(True)
 
         row, col = 0, 0
@@ -4207,7 +4216,24 @@ QLineEdit:hover{
                 if not self._remove_btn.isVisible():
                     self._remove_btn.show()
                 return
+            if self._sync_enum_buttons(new_value):
+                return
             self._build_editor()
+
+    def _sync_enum_buttons(self, value: str) -> bool:
+        """Same enum setting, new value: move the highlight instead of rebuilding every button
+        (a full rebuild cost ~30 ms per click). False = nothing reusable, caller rebuilds."""
+        s, grp = self._current_setting, getattr(self, "_enum_group", None)
+        if s is None or s.type != "enum" or grp is None or getattr(self, "_enum_setting_id", None) != s.id:
+            return False
+        hit = next((b for b in grp.buttons() if b.property("value") == value), None)
+        if hit is None:
+            return False
+        hit.setChecked(True)                  # the exclusive group unchecks the others
+        self._value_label.setText(f"= {value}")
+        self._value_label.show()
+        self._remove_btn.show()
+        return True
 
 
 # ============================================================================
@@ -8504,7 +8530,7 @@ class LutrisSyncWidget(QWidget):
         for path in found:
             try:
                 with open(path, "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f) or {}
+                    data = yaml.load(f, Loader=_YAML_LOADER) or {}
             except Exception:
                 continue
             if not isinstance(data, dict):
@@ -8630,7 +8656,7 @@ class LutrisSyncWidget(QWidget):
         if self._current_yaml_text is None:
             return set()
         try:
-            data = yaml.safe_load(self._current_yaml_text) or {}
+            data = yaml.load(self._current_yaml_text, Loader=_YAML_LOADER) or {}
         except Exception:
             return set()
         sysdict = data.get("system") or {}
@@ -8654,7 +8680,7 @@ class LutrisSyncWidget(QWidget):
             self._status_label.setText("Select a game first.")
             return
         try:
-            data = yaml.safe_load(self._current_yaml_text) or {}
+            data = yaml.load(self._current_yaml_text, Loader=_YAML_LOADER) or {}
         except Exception as e:
             QMessageBox.critical(self, "Parse failed", f"Could not parse YAML: {e}")
             return
@@ -8971,7 +8997,7 @@ class LutrisSyncWidget(QWidget):
         lines.append("")
         lines.append("─── resulting system section ───")
         try:
-            data = yaml.safe_load(new_text) or {}
+            data = yaml.load(new_text, Loader=_YAML_LOADER) or {}
             sys_sec = data.get("system") or {}
             for k in sorted(sys_sec):
                 if k == "env":
@@ -9006,7 +9032,7 @@ class LutrisSyncWidget(QWidget):
         that step the merge could only ever add or overwrite, so unchecking a
         box in the GUI had no effect on an existing file.
         """
-        data = yaml.safe_load(original_text) or {}
+        data = yaml.load(original_text, Loader=_YAML_LOADER) or {}
         if not isinstance(data, dict):
             raise ValueError("the game YAML's top level is not a mapping")
         if "system" not in data or not isinstance(data.get("system"), dict):
@@ -12516,6 +12542,8 @@ _VDF_TOK = re.compile(r'"((?:[^"\\]|\\.)*)"|([{}])', re.S)
 
 
 def _vdf_unesc(s: str) -> str:
+    if "\\" not in s:
+        return s
     return re.sub(r"\\(.)", lambda m: {"n": "\n", "t": "\t"}.get(m.group(1), m.group(1)), s)
 
 
@@ -12526,6 +12554,7 @@ def _vdf_esc(s: str) -> str:
              .replace("\n", "\\n").replace("\t", "\\t"))
 
 
+@lru_cache(maxsize=4)       # keyed by the file content: re-reads of an unchanged file skip the parse
 def _vdf_parse(text: str):
     toks = []
     for m in _VDF_TOK.finditer(text):
@@ -12946,7 +12975,7 @@ class BottlesBackend(LauncherBackend):
                 if f.is_file():
                     name = d.name
                     try:
-                        name = (yaml.safe_load(f.read_text()) or {}).get("Name", d.name)
+                        name = (yaml.load(f.read_text(), Loader=_YAML_LOADER) or {}).get("Name", d.name)
                     except Exception:
                         pass
                     out.append(LEntry(d.name, f"{name}  [{d.name}]", f))
@@ -12954,7 +12983,7 @@ class BottlesBackend(LauncherBackend):
 
     def _load(self, e):
         try:
-            d = yaml.safe_load(e.path.read_text()) or {}
+            d = yaml.load(e.path.read_text(), Loader=_YAML_LOADER) or {}
             return d if isinstance(d, dict) else {}
         except Exception:
             return {}
@@ -15232,7 +15261,8 @@ def _tm_cache_dir() -> Path:
     return d
 
 
-def _tm_download(url: str, dest: Path, hint: int, cancel, prog):
+def _tm_download(url: str, dest: Path, hint: int, cancel, prog, digest=None):
+    """`digest`: optional hashlib object fed with every chunk, so _tm_verify need not re-read the file."""
     req = urllib.request.Request(url, headers={"User-Agent": _TM_UA})
     done = 0
     try:
@@ -15243,10 +15273,12 @@ def _tm_download(url: str, dest: Path, hint: int, cancel, prog):
             while True:
                 if cancel.is_set():
                     raise _TMCancelled()
-                b = r.read(1 << 18)
+                b = r.read(1 << 20)
                 if not b:
                     break
                 f.write(b)
+                if digest is not None:
+                    digest.update(b)
                 done += len(b)
                 prog("Downloading", done, total)
         if clen and plain and done != clen:
@@ -15259,20 +15291,23 @@ def _tm_download(url: str, dest: Path, hint: int, cancel, prog):
         raise RuntimeError(f"download failed: {getattr(e, 'reason', e)}") from None
 
 
-def _tm_verify(path: Path, csum_url: str, cancel, prog) -> str:
+def _tm_verify(path: Path, csum_url: str, cancel, prog, digest=None) -> str:
+    """`digest`: SHA-512 already computed while downloading; without it the file is read again."""
     if not csum_url:
         return "no checksum published for this build"
     m = re.search(r"\b([0-9a-fA-F]{128})\b", _tm_get(csum_url, "*/*").decode("utf-8", "replace"))
     if not m:
         raise RuntimeError("checksum file has no SHA-512 value")
-    h, done, size = hashlib.sha512(), 0, max(path.stat().st_size, 1)
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            if cancel.is_set():
-                raise _TMCancelled()
-            h.update(chunk)
-            done += len(chunk)
-            prog("Verifying", done, size)
+    h = digest
+    if h is None:
+        h, done, size = hashlib.sha512(), 0, max(path.stat().st_size, 1)
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                if cancel.is_set():
+                    raise _TMCancelled()
+                h.update(chunk)
+                done += len(chunk)
+                prog("Verifying", done, size)
     if h.hexdigest() != m.group(1).lower():
         raise RuntimeError("SHA-512 mismatch — the download is corrupted; nothing was installed")
     return "SHA-512 verified"
@@ -15447,8 +15482,9 @@ def tm_install(tool: TMTool, ver: TMVer, launcher: TMLauncher, force: bool, canc
     archive, stage = Path(tmpname), Path(tempfile.mkdtemp(prefix=".drstool-tm-", dir=dest))
     try:
         log(f"  ↓ {ver.name or ver.url}" + (f"  ({ngx_human(ver.size)})" if ver.size else ""))
-        _tm_download(ver.url, archive, ver.size, cancel, prog)
-        log("  " + _tm_verify(archive, ver.csum, cancel, prog))
+        digest = hashlib.sha512() if ver.csum else None
+        _tm_download(ver.url, archive, ver.size, cancel, prog, digest)
+        log("  " + _tm_verify(archive, ver.csum, cancel, prog, digest))
         _tm_extract(tool, ver, archive, stage, cancel, prog)
         prog("Installing", 0, 0)
         main = _tm_post(tool, stage)
@@ -15588,14 +15624,20 @@ class _TMWorker(QThread):
                 self.versions.emit(self.tool.id, tm_versions(self.tool))
             elif self.mode == "latest":
                 res = {}
-                for t in self.tools:
-                    if self._cancel.is_set():
-                        raise _TMCancelled()
-                    try:
-                        for v in tm_versions(t, 12):
-                            res.setdefault((t.name, tm_variant(t, v.label)), v)
-                    except RuntimeError as e:
-                        self.log.emit(f"⚠ {t.name}: {e}")
+                # ~25 independent API requests: run them in parallel, apply the results in tool order
+                pool = ThreadPoolExecutor(max_workers=6)
+                try:
+                    futs = [(t, pool.submit(tm_versions, t, 12)) for t in self.tools]
+                    for t, fut in futs:
+                        if self._cancel.is_set():
+                            raise _TMCancelled()
+                        try:
+                            for v in fut.result():
+                                res.setdefault((t.name, tm_variant(t, v.label)), v)
+                        except RuntimeError as e:
+                            self.log.emit(f"⚠ {t.name}: {e}")
+                finally:
+                    pool.shutdown(wait=False, cancel_futures=True)
                 self.latest.emit(res)
             else:                                # install / update: [(tool, ver, [old paths])]
                 results = []
@@ -17820,6 +17862,7 @@ class CacheManagerWidget(QWidget):
         super().__init__()
         self._thread: Optional[_CacheScanThread] = None
         self._nodes: List[dict] = []
+        self._scanned = False
         self._stale = False
         self._driver_msg_sent = False
         lay = QVBoxLayout(self)
@@ -17884,7 +17927,12 @@ class CacheManagerWidget(QWidget):
         row.addWidget(self._total)
         lay.addLayout(row)
         SYSHUB.info_changed.connect(lambda _i: self._driver_check())
-        QTimer.singleShot(600, self.rescan)
+
+    def showEvent(self, ev):                  # noqa: N802
+        super().showEvent(ev)
+        if not self._scanned:                 # scan the cache trees on first view, not at startup
+            self._scanned = True
+            self.rescan()
 
     # ── data ──────────────────────────────────────────────────────────────
     def _user_env(self) -> Dict[str, str]:
@@ -18297,17 +18345,24 @@ class _DriftWorker(QThread):
             files: Dict[str, str] = {}
             net_err = ""
             total = len(src["files"])
-            for i, rel in enumerate(src["files"], 1):
-                if self.isInterruptionRequested():
-                    break
-                self.progress.emit(f'{src["title"]}: {rel}  ({i}/{total})')
-                try:
-                    txt = _drift_fetch(f'{_DRIFT_RAW}/{src["repo"]}/{src["ref"]}/{rel}')
-                except Exception as e:                         # network / TLS / timeout
-                    net_err = f"{type(e).__name__}: {e}"
-                    break
-                if txt is not None:
-                    files[rel] = txt
+            # fetched in parallel (each file was a separate sequential TLS round trip),
+            # consumed in the original order so results and the first-error rule stay the same
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                futs = [(rel, pool.submit(_drift_fetch, f'{_DRIFT_RAW}/{src["repo"]}/{src["ref"]}/{rel}'))
+                        for rel in src["files"]]
+                for i, (rel, fut) in enumerate(futs, 1):
+                    if self.isInterruptionRequested():
+                        break
+                    self.progress.emit(f'{src["title"]}: {rel}  ({i}/{total})')
+                    try:
+                        txt = fut.result()
+                    except Exception as e:                     # network / TLS / timeout
+                        net_err = f"{type(e).__name__}: {e}"
+                        break
+                    if txt is not None:
+                        files[rel] = txt
+                for _rel, fut in futs:
+                    fut.cancel()                               # drop what has not started yet
             if net_err:
                 notes.append(f'{src["title"]}: network error — {net_err}')
                 continue
@@ -19786,13 +19841,43 @@ def _walk_kv(o, out: list, key: str = "", depth: int = 0):
             _walk_kv(v, out, key, depth + 1)
 
 
+_KEY_NORM: Dict[str, str] = {}      # report keys repeat across millions of reports; normalise each once
+
+
+def _norm_key(k) -> str:
+    n = _KEY_NORM.get(k) if isinstance(k, str) else None
+    if n is None:
+        n = str(k).lower().replace("_", "").replace("-", "")
+        if isinstance(k, str) and len(_KEY_NORM) < 20000:
+            _KEY_NORM[k] = n
+    return n
+
+
+def _contains_eq(o) -> bool:
+    """True when any key or string value holds '=' (what `"=" in json.dumps(o)` answered, without building the text)."""
+    stack = [o]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, str):
+            if "=" in x:
+                return True
+        elif isinstance(x, dict):
+            for k, v in x.items():
+                if "=" in k:
+                    return True
+                stack.append(v)
+        elif isinstance(x, list):
+            stack.extend(x)
+    return False
+
+
 def _find_key(o, names: set, depth: int = 0):
     """First scalar whose key (lower-cased, no '_' / '-') is in names — the mirror's schema is not guaranteed."""
     if depth > 4:
         return None
     if isinstance(o, dict):
         for k, v in o.items():
-            if str(k).lower().replace("_", "").replace("-", "") in names and isinstance(v, (str, int, float)) \
+            if _norm_key(k) in names and isinstance(v, (str, int, float)) \
                     and not isinstance(v, bool) and str(v).strip():
                 return str(v).strip()
         for v in o.values():
@@ -20002,7 +20087,7 @@ def build_env_index(stream, dump_name: str, progress=None) -> dict:
                 if not isinstance(r, dict) or (_parse_ts(str(r.get("timestamp") or "")) or 0) < cutoff:
                     continue
                 resp = r.get("responses")
-                if isinstance(resp, dict) and "=" in json.dumps(resp, ensure_ascii=False):
+                if isinstance(resp, dict) and _contains_eq(resp):
                     batch.append(r)
                     if len(batch) >= 5000:
                         flush()
@@ -20533,7 +20618,8 @@ class GameHintsWidget(QWidget):
 # Frametime analyser (MangoHud CSV / FLM_CSV) with A/B comparison
 # ----------------------------------------------------------------------------
 
-import statistics as _stat
+import bisect
+import math
 
 
 def load_frametimes(path: str) -> dict:
@@ -20555,7 +20641,7 @@ def load_frametimes(path: str) -> dict:
     if kind == "mangohud":
         ix = cols.index("frametime")
         for ln in lines[hdr + 1:]:
-            p = ln.split(",")
+            p = ln.split(",", ix + 1)
             try:
                 v = float(p[ix])
             except (ValueError, IndexError):
@@ -20567,7 +20653,7 @@ def load_frametimes(path: str) -> dict:
         ih = cols.index("is_hitch") if "is_hitch" in cols else -1
         hit = 0
         for ln in lines[hdr + 1:]:
-            p = ln.split(",")
+            p = ln.split(",", max(ix, ih) + 1)
             try:
                 v = float(p[ix]) / 1e6
             except (ValueError, IndexError):
@@ -20579,14 +20665,18 @@ def load_frametimes(path: str) -> dict:
         extra["FLM hitches"] = hit
     if len(ft) < 10:
         raise ValueError("fewer than 10 frames in the log")
-    return {"name": Path(path).name, "ft": ft, "kind": kind, "extra": extra}
+    srt = sorted(ft)            # sorted once: frame_stats and the plot's scale both need it
+    return {"name": Path(path).name, "ft": ft, "sorted": srt, "kind": kind, "extra": extra,
+            "stats": frame_stats(ft, srt)}
 
 
-def frame_stats(ft: List[float]) -> List[tuple]:
-    """[(label, value, higher_is_better|None, fmt)]"""
+def frame_stats(ft: List[float], s: Optional[List[float]] = None) -> List[tuple]:
+    """[(label, value, higher_is_better|None, fmt)]; `s` = ft already sorted (optional)."""
     n, total = len(ft), sum(ft)
-    s = sorted(ft)
+    if s is None:
+        s = sorted(ft)
     med = s[n // 2]
+    mean = total / n
 
     def worst(frac):
         k = max(1, int(n * frac))
@@ -20603,9 +20693,9 @@ def frame_stats(ft: List[float]) -> List[tuple]:
             ("p99 frametime (ms)", pct(99), False, "{:.2f}"),
             ("p99.9 frametime (ms)", pct(99.9), False, "{:.2f}"),
             ("Max frametime (ms)", s[-1], False, "{:.1f}"),
-            ("Frametime σ (ms)", _stat.pstdev(ft), False, "{:.2f}"),
-            ("Stutters (> 2× median)", sum(1 for x in ft if x > 2 * med), False, "{:.0f}"),
-            ("Hitches (> 50 ms)", sum(1 for x in ft if x > 50), False, "{:.0f}")]
+            ("Frametime σ (ms)", math.sqrt(math.fsum((x - mean) ** 2 for x in ft) / n), False, "{:.2f}"),
+            ("Stutters (> 2× median)", n - bisect.bisect_right(s, 2 * med), False, "{:.0f}"),
+            ("Hitches (> 50 ms)", n - bisect.bisect_right(s, 50), False, "{:.0f}")]
 
 
 class CommunityTipsWidget(QWidget):
@@ -20819,16 +20909,19 @@ class FrametimePlot(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._series: List[tuple] = []          # (label, ft)
+        self._series: List[tuple] = []          # (label, ft, ft_sorted)
+        self._buckets: dict = {}
         self.setMinimumHeight(170)
 
     def set_series(self, series: List[tuple]):
+        """series: [(label, ft, ft_sorted)]"""
         self._series = series
+        self._buckets = {}                      # (series index, width) -> per-pixel maxima
         # Scale once per data change, not per repaint (was a full sort of every
         # series on each paintEvent / resize).
         if series:
-            self._ymax = max(max(sorted(ft)[int(len(ft) * 0.999)] for _l, ft in series) * 1.4, 10.0)
-            self._tmax = max(sum(ft) for _l, ft in series) / 1000
+            self._ymax = max(max(srt[int(len(ft) * 0.999)] for _l, ft, srt in series) * 1.4, 10.0)
+            self._tmax = max(sum(ft) for _l, ft, _s in series) / 1000
         self.update()
 
     def paintEvent(self, _ev):              # noqa: N802
@@ -20856,32 +20949,49 @@ class FrametimePlot(QWidget):
         for i in range(0, 5):
             p.setPen(QColor(T["muted"]))
             p.drawText(L + int(W * i / 4) - 10, self.height() - 5, f"{tmax * i / 4:.0f}s")
-        for si, (label, ft) in enumerate(self._series):
+        for si, (label, ft, _srt) in enumerate(self._series):
             col = QColor(self.COLORS[si % 2])
-            buckets: List[Optional[float]] = [None] * W
-            t = 0.0
-            for v in ft:
-                t += v
-                b = min(W - 1, int(t / 1000 / tmax * (W - 1)))
-                if buckets[b] is None or v > buckets[b]:
-                    buckets[b] = v
+            buckets = self._buckets.get((si, W))
+            if buckets is None:                 # one pass over the samples per (data, width), not per repaint
+                buckets = [None] * W
+                t = 0.0
+                for v in ft:
+                    t += v
+                    b = min(W - 1, int(t / 1000 / tmax * (W - 1)))
+                    if buckets[b] is None or v > buckets[b]:
+                        buckets[b] = v
+                self._buckets[(si, W)] = buckets
             p.setPen(QPen(col, 1))
-            last = None
-            for x, v in enumerate(buckets):
-                if v is None:
-                    continue
-                y = TOP + H - min(v, ymax) / ymax * H
-                if last is not None:
-                    p.drawLine(L + last[0], int(last[1]), L + x, int(y))
-                last = (x, y)
+            poly = QPolygonF([QPointF(L + x, int(TOP + H - min(v, ymax) / ymax * H))
+                              for x, v in enumerate(buckets) if v is not None])
+            p.drawPolyline(poly)
             p.setPen(col)
             p.drawText(L + 8 + si * 200, TOP + 12, "■ " + label[:28])
+
+
+class _FrametimeLoadThread(QThread):
+    """Parsing + sorting + stats of a long log took ~1 s on the UI thread."""
+    done = Signal(int, object, str)
+    failed = Signal(str)
+
+    def __init__(self, k: int, path: str):
+        super().__init__()
+        self._k, self._path = k, path
+
+    def run(self):
+        try:
+            d = load_frametimes(self._path)
+        except Exception as ex:
+            self.failed.emit(f"⚠ {Path(self._path).name}: {ex}")
+            return
+        self.done.emit(self._k, d, self._path)
 
 
 class FrametimeWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._data: List[Optional[dict]] = [None, None]
+        self._loaders: List[QThread] = []
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 8, 4, 4)
         lay.setSpacing(8)
@@ -20931,12 +21041,13 @@ class FrametimeWidget(QWidget):
         if not p:
             return
         self._qs.setValue("frametime/last_dir", str(Path(p).parent))
-        try:
-            d = load_frametimes(p)
-        except Exception as ex:
-            self._status.setText(f"⚠ {Path(p).name}: {ex}")
-            return
-        self._set(k, d, p)
+        self._status.setText(f"Loading {Path(p).name}…")
+        th = _FrametimeLoadThread(k, p)
+        self._loaders.append(th)
+        th.done.connect(self._set)
+        th.failed.connect(self._status.setText)
+        th.finished.connect(lambda t=th: self._loaders.remove(t))
+        th.start()
 
     def _set(self, k: int, d: Optional[dict], path: str):
         self._data[k] = d
@@ -20945,8 +21056,8 @@ class FrametimeWidget(QWidget):
 
     def _render(self):
         ds = self._data
-        self._plot.set_series([(d["name"], d["ft"]) for d in ds if d])
-        stats = [frame_stats(d["ft"]) if d else None for d in ds]
+        self._plot.set_series([(d["name"], d["ft"], d["sorted"]) for d in ds if d])
+        stats = [d["stats"] if d else None for d in ds]
         ref = next((s for s in stats if s), None)
         t = self._table
         t.setRowCount(0)
@@ -21024,15 +21135,18 @@ def list_game_procs(only_wine: bool = True) -> List[tuple]:
         try:
             if os.stat(f"/proc/{n}").st_uid != uid:
                 continue
-            cmd = Path(f"/proc/{n}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+            with open(f"/proc/{n}/cmdline", "rb") as f:
+                cmd = f.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
             if not cmd:
                 continue
             low = cmd.lower()
             if only_wine and (not any(h in low for h in _WINE_HINTS)
                               or any(x in low for x in _WINE_NOISE)):
                 continue
-            rss = int(Path(f"/proc/{n}/statm").read_text().split()[1]) * page / 1048576
-            comm = Path(f"/proc/{n}/comm").read_text().strip()
+            with open(f"/proc/{n}/statm") as f:
+                rss = int(f.read().split()[1]) * page / 1048576
+            with open(f"/proc/{n}/comm") as f:
+                comm = f.read().strip()
         except (OSError, ValueError, IndexError):
             continue
         out.append((pid, rss, comm, cmd))
@@ -21237,6 +21351,61 @@ _LOG_RULES = [
 ]
 
 
+# Lower-case substrings that every match of the rule must contain (a superset of its pattern's
+# literals). The regex only runs on lines that hold one of them: 111k lines took 1.2 s without.
+_LOG_GATES = {
+    "nvapi": ("nvapi",),
+    "nvcuda": ("nvcuda",),
+    "device-lost": ("vk_error_device_lost", "device lost"),
+    "oom": ("memory",),
+    "ntsync": ("ntsync",),
+    "esync": ("too many open files", "esync"),
+    "vk-device": ("vkcreate", "vk_error_", "no suitable vulkan", "failed to create"),
+    "vk-ext": ("vk_error_", "vulkan"),
+    "ngx": ("ngx",),
+    "import-dll": ("import_dll",),
+}
+
+
+def _log_level(ln: str) -> str:
+    low = ln.lower()
+    if ("err" in low or "fatal" in low) and _LOG_ERR.search(ln):
+        return "err"
+    if "warn" in low and _LOG_WARN.search(ln):
+        return "warn"
+    if "fixme" in low and _LOG_FIXME.search(ln):
+        return "fixme"
+    return "info"
+
+
+def _log_analyse(lines: List[str]):
+    """-> (severity per line, {rule code: match count}); same result as running every
+    regex over every line, only cheaper."""
+    levels = [_log_level(ln) for ln in lines]
+    text = "\n".join(lines)
+    low = text.lower()
+    hits: Dict[str, int] = {}
+    for code, rx, *_ in _LOG_RULES:
+        n = 0
+        if len(low) != len(text):                 # lower() changed the length: offsets would drift
+            n = len(re.findall(rx, text))
+        else:
+            crx, seen = re.compile(rx), set()
+            for key in _LOG_GATES[code]:
+                i = low.find(key)
+                while i >= 0:
+                    ls = text.rfind("\n", 0, i) + 1
+                    le = text.find("\n", i)
+                    le = len(text) if le < 0 else le
+                    if ls not in seen:
+                        seen.add(ls)
+                        n += len(crx.findall(text, ls, le))
+                    i = low.find(key, le)
+        if n:
+            hits[code] = n
+    return levels, hits
+
+
 class LogHighlighter(QSyntaxHighlighter):
     def __init__(self, doc):
         super().__init__(doc)
@@ -21253,6 +21422,36 @@ class LogHighlighter(QSyntaxHighlighter):
                 return
 
 
+class _LogLoadThread(QThread):
+    done = Signal(int, int, object, object, object)     # generation, file position, lines, levels, hits
+    failed = Signal(int, str)
+
+    def __init__(self, gen: int, path: Path, max_read: int):
+        super().__init__()
+        self._gen, self._path, self._max = gen, path, max_read
+
+    def run(self):
+        try:
+            size = self._path.stat().st_size
+            with open(self._path, "rb") as f:
+                if size > self._max:
+                    f.seek(size - self._max)
+                    f.readline()
+                start = f.tell()
+                data = f.read()
+                # where we actually stopped: the file may have grown since stat(),
+                # and taking `size` made the next _tail() append those lines twice
+                pos = start + len(data)
+        except OSError as ex:
+            self.failed.emit(self._gen, f"⚠ {ex}")
+            return
+        lines = data.decode("utf-8", "replace").splitlines()
+        if len(lines) > 200000:
+            lines = lines[-150000:]
+        levels, hits = _log_analyse(lines)
+        self.done.emit(self._gen, pos, lines, levels, hits)
+
+
 class LogViewerWidget(QWidget):
     MAX_READ = 6 * 1024 * 1024
     MAX_SHOW = 4000
@@ -21264,6 +21463,9 @@ class LogViewerWidget(QWidget):
         self._lines: List[str] = []
         self._levels: List[str] = []
         self._hits: Dict[str, int] = {}
+        self._gen = 0                         # id of the latest load request
+        self._loading = False
+        self._loaders: List[QThread] = []
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 8, 4, 4)
         lay.setSpacing(8)
@@ -21411,39 +21613,45 @@ class LogViewerWidget(QWidget):
         (they used to be recomputed over the whole buffer on every 1 s tail)."""
         if reset:
             self._lines, self._levels, self._hits = [], [], {}
+        levels, hits = _log_analyse(lines)
         self._lines += lines
-        self._levels += [self._level(ln) for ln in lines]
+        self._levels += levels
         if len(self._lines) > 200000:
             self._lines, self._levels = self._lines[-150000:], self._levels[-150000:]
-            lines, self._hits = self._lines, {}           # trimmed: recount what is left
-        text = "\n".join(lines)
-        for code, rx, *_ in _LOG_RULES:
-            n = len(re.findall(rx, text))
-            if n:
-                self._hits[code] = self._hits.get(code, 0) + n
+            hits = _log_analyse(self._lines)[1]          # trimmed: recount what is left
+            self._hits = {}
+        for code, n in hits.items():
+            self._hits[code] = self._hits.get(code, 0) + n
 
     def _load(self, path: Path):
+        """Reads and analyses on a worker thread (a 6 MB log froze the window for ~1.5 s)."""
         self._path = path
-        try:
-            size = path.stat().st_size
-            with open(path, "rb") as f:
-                if size > self.MAX_READ:
-                    f.seek(size - self.MAX_READ)
-                    f.readline()
-                start = f.tell()
-                data = f.read()
-                # where we actually stopped: the file may have grown since stat(),
-                # and taking `size` made the next _tail() append those lines twice
-                self._pos = start + len(data)
-        except OSError as ex:
-            self._status.setText(f"⚠ {ex}")
+        self._gen += 1
+        self._loading = True
+        self._status.setText(f"Loading {path.name}…")
+        th = _LogLoadThread(self._gen, path, self.MAX_READ)
+        self._loaders.append(th)
+        th.done.connect(self._on_loaded)
+        th.failed.connect(self._on_load_failed)
+        th.finished.connect(lambda t=th: self._loaders.remove(t))
+        th.start()
+
+    def _on_load_failed(self, gen: int, msg: str):
+        if gen == self._gen:
+            self._loading = False
+            self._status.setText(msg)
+
+    def _on_loaded(self, gen: int, pos: int, lines, levels, hits):
+        if gen != self._gen:                  # a newer file was picked meanwhile
             return
-        self._ingest(data.decode("utf-8", "replace").splitlines(), True)
+        self._loading = False
+        self._pos = pos
+        self._lines, self._levels, self._hits = lines, levels, hits
         self._render()
 
     def _tail(self):
         p = self._path
-        if p is None:
+        if p is None or self._loading:
             return
         try:
             size = p.stat().st_size
@@ -21464,16 +21672,6 @@ class LogViewerWidget(QWidget):
         self._pos += len(data)
         self._ingest(data.decode("utf-8", "replace").splitlines(), False)
         self._render()
-
-    @staticmethod
-    def _level(ln: str) -> str:
-        if _LOG_ERR.search(ln):
-            return "err"
-        if _LOG_WARN.search(ln):
-            return "warn"
-        if _LOG_FIXME.search(ln):
-            return "fixme"
-        return "info"
 
     def _render(self):
         want = {k for k, c in self._chk.items() if c.isChecked()}
@@ -23769,6 +23967,15 @@ class UXFilter(QObject):
         app.installEventFilter(self)
         app.focusChanged.connect(self._on_focus)
 
+    def label_tree(self, root: QWidget):
+        """Name the controls that already exist, once. Installing the filter before the window
+        is built made ~62,000 Python eventFilter calls (~0.5 s) during construction."""
+        for w in root.findChildren(QWidget):
+            if isinstance(w, self._A11Y) and not w.property("_a11y"):
+                w.setProperty("_a11y", True)
+                if not w.accessibleName():
+                    _a11y_label(w)
+
     def eventFilter(self, obj, ev):           # noqa: N802
         try:
             t = ev.type()
@@ -25745,10 +25952,11 @@ def main():
     # StartupWMClass eşleşmesini bozduğu için uygulama bunu kendisi yapmaz.
 
     apply_theme(app)
-    global _UX_FILTER
-    _UX_FILTER = UXFilter(app)
 
     window = MainWindow()
+    global _UX_FILTER
+    _UX_FILTER = UXFilter(app)       # after the build: it still names later pages and dialogs on Show
+    _UX_FILTER.label_tree(window)
     if cli_args.profile and not window.load_profile_by_name(cli_args.profile):
         window.statusBar().showMessage(f'No such profile: {cli_args.profile}', 8000)
     window.show()

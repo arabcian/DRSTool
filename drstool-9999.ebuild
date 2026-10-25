@@ -205,10 +205,14 @@ src_test() {
 
 src_install() {
 	# ── Python GUI ───────────────────────────────────────────────────────────
-	python_newscript DRSTool.py drstool
+	# DRSTool.py is installed as a module (and byte-compiled by python_optimize below);
+	# the script is only a thin launcher, so the 25k-line file is not recompiled on every start.
+	python_domodule DRSTool.py
+	python_newscript drstool_launch.py drstool
 	# Qt-free helper package imported by DRSTool.py (share codes, Steam
 	# shortcuts, game / DLL scanning). Must be importable next to the script.
 	python_domodule drstool_core
+	python_optimize
 
 	# Application icon: assets/drstool.png (1024×1024 source) installed into
 	# the hicolor theme.  IMPORTANT: hicolor/index.theme's Directories= list
