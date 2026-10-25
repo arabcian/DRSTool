@@ -357,6 +357,62 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(len(m.dllm_plan(st, targets)["files"]), 1)
         self.assertEqual(m.dllm_cell(st, "sl_sdk_0", targets), ("2.8.0", "old"))
 
+    # ── logging ─────────────────────────────────────────────────────────────
+    def test_log_profiles_match_var_options(self):
+        m = self.m
+        for prof in (m.LOG_ENV_ON, m.LOG_ENV_OFF):
+            for k, v in prof.items():
+                ev = m.env_def(k)
+                self.assertIsNotNone(ev, k)
+                if ev.vtype == "enum":
+                    self.assertIn(v, ev.options, k)
+                elif ev.vtype == "flags":
+                    toks = v.split(",")
+                    self.assertEqual([t for t in toks if t not in ev.options], [], k)
+                    self.assertLessEqual(len(set(toks) & set(ev.exclusive)), 1, k)
+        # ON must be verbose: no level left at error/err
+        self.assertNotIn(m.LOG_ENV_ON["DXVK_LOG_LEVEL"], ("none", "error"))
+        self.assertNotIn("-all", m.LOG_ENV_ON["WINEDEBUG"].split(","))
+
+    def test_log_toggle_and_winedebug_exclusive(self):
+        ew, ed = self.win._env_widget, self.win._env_editor
+        ew.reset_all_values()
+        ew.set_logging(True)
+        self.assertEqual(ew.logging_state(), "on")
+        ed.set_var(self.m.env_def("WINEDEBUG"))
+        btns = ed._flag_btns
+        self.assertTrue(btns["warn+all"].isChecked())
+        btns["-all"].click()                        # base levels are exclusive
+        self.pump()
+        self.assertFalse(btns["warn+all"].isChecked())
+        val = ew.get_value("WINEDEBUG").split(",")
+        self.assertIn("-all", val)
+        self.assertNotIn("warn+all", val)
+        self.assertIn("+seh", val)                  # channel toggles untouched
+        self.assertEqual(ew.logging_state(), "mixed")
+        btns["+relay"].click()                      # non-group flags still combine
+        self.pump()
+        self.assertTrue(btns["-all"].isChecked())
+        # unknown tokens stay visible/editable instead of hidden
+        ew.set_value("WINEDEBUG", "-all,warn+dll")
+        ed.set_var(self.m.env_def("WINEDEBUG"))
+        self.assertEqual(ed._flag_extra_tokens, ["warn+dll"])
+        ew.set_logging(False)
+        self.assertEqual(ew.logging_state(), "off")
+        self.assertEqual(ew.get_value("WINEDEBUG"), "-all")
+
+    def test_log_viewer_enable_sets_full_profile(self):
+        ew = self.win._env_widget
+        ew.reset_all_values()
+        ew.set_logging(False)                       # leftover WINEDEBUG=-all
+        lv = self.m.LogViewerWidget()
+        with mock.patch.object(lv, "window", return_value=self.win):
+            lv._enable_logging()
+        self.assertEqual(ew.logging_state(), "on")
+        self.assertTrue(ew.get_value("PROTON_LOG_DIR"))
+        lv.deleteLater()
+        ew.reset_all_values()
+
 
 if __name__ == "__main__":
     unittest.main()

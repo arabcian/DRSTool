@@ -134,6 +134,7 @@ class EnvVarDef:
     desc: str
     options: List[str] = field(default_factory=list)  # for enum/flags types
     placeholder: str = ""
+    exclusive: List[str] = field(default_factory=list)  # flags: at most one of these at a time
 
 
 @dataclass
@@ -5708,7 +5709,8 @@ PROTON_ENV_VARS: List[EnvVarDef] = [
               "several other variables at once, e.g. PROTON_ADD_CONFIG=wayland,ntsync is the "
               "same as setting PROTON_USE_WAYLAND=1 PROTON_USE_NTSYNC=1. Handy for combining "
               "several of the toggles above without a wall of launch options.",
-              options=["wayland", "ntsync", "nontsync", "sdlinput", "wow64"]),
+              options=["wayland", "ntsync", "nontsync", "sdlinput", "wow64"],
+              exclusive=["ntsync", "nontsync"]),
     EnvVarDef("PROTON_USE_WOW64", "Proton", "enum", "",
               "[GE-Proton / Proton-EM / Proton-CachyOS, experimental] Run the game through "
               "Wine's newer WoW64 architecture (32-bit game, 64-bit Unix process via thunks) "
@@ -5724,7 +5726,9 @@ PROTON_ENV_VARS: List[EnvVarDef] = [
     # ── Debug ────────────────────────────────────────────────────────────────
     EnvVarDef("PROTON_LOG", "Proton", "enum", "",
               "Dump a debug log to $PROTON_LOG_DIR/steam-$APPID.log. Set to 1 for the default "
-              "WINEDEBUG channels, or a string to append extra channels to the default set.",
+              "WINEDEBUG channels, or a string to append extra channels to the default set. "
+              "Proton's logging defaults (WINEDEBUG, DXVK_LOG_LEVEL, VKD3D_DEBUG …) only fill "
+              "in vars that are unset — a leftover WINEDEBUG=-all gives an almost empty log.",
               options=["0", "1"]),
     EnvVarDef("PROTON_LOG_DIR", "Proton", "string", "",
               "Directory to write PROTON_LOG output into. Defaults to your home directory.",
@@ -6042,11 +6046,19 @@ WINE_ENV_VARS: List[EnvVarDef] = [
               options=["0", "1"]),
     # ── Debug ────────────────────────────────────────────────────────────────
     EnvVarDef("WINEDEBUG", "Wine", "flags", "",
-              "Wine's own debug channel logging control. '-all' silences everything (fastest, "
-              "recommended for normal play); '+all' is maximally verbose. Combine toggles with "
-              "commas, e.g. '-all,+loaded' to see only module loads.",
-              options=["-all", "err+all", "+all", "+relay", "+seh", "+heap", "+loaded",
-                       "+module", "+process", "+timestamp", "+pid", "+tid"]),
+              "Wine's own debug channel logging control. Syntax: [class][+|-]channel, comma "
+              "separated, applied left to right; class is err, warn, fixme or trace. Wine's "
+              "default (unset) is err+fixme on every channel. Base level (pick one): '-all' "
+              "silences everything (fastest, normal play); 'fixme-all' = errors only; "
+              "'warn+all' adds warnings (recommended for debugging); '+all' turns on every "
+              "class incl. trace — huge logs, very slow. Channel toggles add to the base, e.g. "
+              "'-all,+loaddll' shows only DLL loads. Note: setting WINEDEBUG overrides the "
+              "channel set PROTON_LOG=1 would otherwise pick.",
+              options=["-all", "fixme-all", "warn+all", "+all",
+                       "+timestamp", "+pid", "+tid", "+seh", "+unwind", "+threadname",
+                       "+debugstr", "+loaddll", "+mscoree", "+relay", "+heap", "+module",
+                       "+process"],
+              exclusive=["-all", "fixme-all", "warn+all", "+all"]),
     # ── Sync Primitives (plain Wine/Lutris — Proton uses PROTON_NO_ESYNC/ ───
     # ── PROTON_NO_FSYNC/PROTON_USE_NTSYNC instead, see Proton category) ──────
     EnvVarDef("WINEESYNC", "Wine", "enum", "1",
@@ -6208,11 +6220,12 @@ SYS_ENV_VARS: List[EnvVarDef] = [
               "VK_ICD_FILENAMES name (both are still accepted).",
               placeholder="/usr/share/vulkan/icd.d/nvidia_icd.json"),
     EnvVarDef("VK_LOADER_DEBUG", "System / Loader", "flags", "",
-              "Vulkan loader debug output channels. 'layer' shows which implicit/explicit "
-              "layers are being discovered and loaded — the first thing to check when a "
-              "Vulkan layer (NVPresent, MangoHud, gamescope's WSI layer, ...) doesn't seem "
-              "to be active.",
-              options=["error", "warn", "info", "debug", "layer", "all"]),
+              "Vulkan loader debug output channels. Each level shows ONLY that level (not "
+              "cumulative), so list them, e.g. 'error,warn,info'. 'layer' shows which "
+              "implicit/explicit layers are being discovered and loaded — the first thing to "
+              "check when a Vulkan layer (NVPresent, MangoHud, gamescope's WSI layer, ...) "
+              "doesn't seem to be active; 'driver' does the same for ICDs.",
+              options=["error", "warn", "info", "debug", "layer", "driver", "all"]),
     # ── Dynamic Linker ───────────────────────────────────────────────────────
     EnvVarDef("LD_PRELOAD", "System / Loader", "string", "",
               "Colon-separated list of shared libraries to load before all others for every "
@@ -6776,24 +6789,29 @@ ALL_ENV_VARS = (DXVK_ENV_VARS + VKD3D_ENV_VARS + NV_ENV_VARS + NVIDIA_PRIME_ENV_
                  FORK_ENV_VARS + OVERLAY_ENV_VARS)
 
 # ── Master logging toggle ────────────────────────────────────────────────────
-# ON  = every logging switch enabled, every verbosity picker at ERROR level
-#       (never debug/trace/info, except DXVK_NVAPI_LOG_LEVEL which has no
-#       error level: "info" is its lowest "on" value).
+# ON  = verbose debugging: every picker at its most detailed level short of
+#       per-call/per-frame tracing (trace / FLM DEBUG / WINEDEBUG +all would
+#       make the game itself unplayable and the log gigabytes).
+#       WINEDEBUG = Proton's own PROTON_LOG=1 channel set + warn+all. It must
+#       be set explicitly: Proton only applies its set when WINEDEBUG is
+#       unset, and plain Wine/Lutris never does.
 # OFF = every picker at its none/off value; pure debug switches removed.
 # Log *path/file* vars are left alone in both states.
 LOG_ENV_ON: Dict[str, str] = {
-    "DXVK_LOG_LEVEL": "error",
-    "D7VK_LOG_LEVEL": "error",
-    "VKD3D_DEBUG": "err",
-    "VKD3D_SHADER_DEBUG": "err",
-    "DXVK_NVAPI_LOG_LEVEL": "info",
-    "DXVK_NVAPI_VKREFLEX_LAYER_LOG_LEVEL": "error",
-    "NVPRESENT_LOG_LEVEL": "1",
-    "FLM_LOG_LEVEL": "ERROR",
-    "__GL_EVENT_LOGLEVEL": "ERROR",
+    "DXVK_LOG_LEVEL": "debug",
+    "D7VK_LOG_LEVEL": "debug",
+    "VKD3D_DEBUG": "warn",              # none<err<info<fixme<warn<trace
+    "VKD3D_SHADER_DEBUG": "warn",
+    "DXVK_NVAPI_LOG_LEVEL": "info",     # only other level is per-call trace
+    "DXVK_NVAPI_VKREFLEX_LAYER_LOG_LEVEL": "debug",
+    "NVPRESENT_LOG_LEVEL": "4",         # NVIDIA README: 4 = debug logging
+    "FLM_LOG_LEVEL": "INFO",            # DEBUG is near per-frame
+    "FLM_STATS": "1",
+    "__GL_EVENT_LOGLEVEL": "DEBUG",
     "PROTON_LOG": "1",
-    "WINEDEBUG": "-all,err+all",
-    "VK_LOADER_DEBUG": "error",
+    "WINEDEBUG": "warn+all,+timestamp,+pid,+tid,+seh,+unwind,+threadname,"
+                 "+debugstr,+loaddll,+mscoree",
+    "VK_LOADER_DEBUG": "error,warn,info,layer,driver",   # levels aren't cumulative
 }
 LOG_ENV_OFF: Dict[str, str] = {
     "DXVK_LOG_LEVEL": "none",
@@ -7546,7 +7564,7 @@ QLineEdit:hover{ background:#1f2430; }
             btn.setChecked(opt in active_plain)
             btn.setFixedHeight(30)
             self._apply_flag_btn_style(btn)
-            btn.toggled.connect(lambda checked, o=opt: self._on_flag_toggled())
+            btn.toggled.connect(lambda checked, o=opt: self._on_flag_toggled(o, checked))
             self._flag_btns[opt] = btn
             grid.addWidget(btn, row, col)
             col += 1
@@ -7561,15 +7579,27 @@ QLineEdit:hover{ background:#1f2430; }
             hint.setWordWrap(True)
             self._control_layout.addWidget(hint)
 
-            extra_edit = QLineEdit(",".join(self._flag_extra_tokens))
-            extra_edit.setStyleSheet(self._EDIT_SS)
-            extra_edit.setPlaceholderText("e.g. scale=2")
-            extra_edit.setFixedHeight(32)
-            extra_edit.textChanged.connect(self._on_extra_flags_changed)
-            self._control_layout.addWidget(extra_edit)
+        # Always shown: tokens without a button (e.g. 'warn+dll' in WINEDEBUG)
+        # were kept in the value but invisible and uneditable.
+        extra_edit = QLineEdit(",".join(self._flag_extra_tokens))
+        extra_edit.setStyleSheet(self._EDIT_SS)
+        extra_edit.setPlaceholderText("e.g. scale=2" if param_options else "other tokens, comma-separated")
+        extra_edit.setFixedHeight(32)
+        extra_edit.textChanged.connect(self._on_extra_flags_changed)
+        self._control_layout.addWidget(extra_edit)
 
-    def _on_flag_toggled(self):
-        """Button click: commit immediately, same as VKD3D_CONFIG's flags."""
+    def _on_flag_toggled(self, opt: str, checked: bool):
+        """Button click: commit immediately, same as VKD3D_CONFIG's flags.
+        Checking a flag from the var's exclusive group (e.g. WINEDEBUG's
+        -all / +all base levels) unchecks the rest of that group."""
+        ev = self._current_ev
+        if checked and ev and opt in ev.exclusive:
+            for o in ev.exclusive:
+                b = self._flag_btns.get(o)
+                if o != opt and b is not None and b.isChecked():
+                    b.blockSignals(True)
+                    b.setChecked(False)
+                    b.blockSignals(False)
         self._commit_flags()
 
     def _on_extra_flags_changed(self, text: str):
@@ -21593,9 +21623,12 @@ class LogViewerWidget(QWidget):
         except OSError as ex:
             self._status.setText(f"⚠ {ex}")
             return
-        for k, v in (("PROTON_LOG", "1"), ("PROTON_LOG_DIR", str(d)), ("DXVK_LOG_PATH", str(d))):
+        # Full verbose profile, not just PROTON_LOG=1: a WINEDEBUG=-all /
+        # DXVK_LOG_LEVEL=none left over from "Log off" would otherwise win over
+        # Proton's logging defaults and leave the log nearly empty.
+        for k, v in (*LOG_ENV_ON.items(), ("PROTON_LOG_DIR", str(d)), ("DXVK_LOG_PATH", str(d))):
             w.set_env_var(k, v)
-        self._status.setText(f"Logging variables set (PROTON_LOG, PROTON_LOG_DIR, DXVK_LOG_PATH → {d}). "
+        self._status.setText(f"Verbose logging profile set (Log on; PROTON_LOG_DIR, DXVK_LOG_PATH → {d}). "
                              "Run the game, then Rescan.")
 
     # -- reading ----------------------------------------------------------
@@ -25469,7 +25502,7 @@ class MainWindow(QMainWindow):
         self._refresh_badges()
 
     def _toggle_logging(self):
-        """One click: off -> ON (error level); on or custom -> OFF."""
+        """One click: off -> ON (verbose); on or custom -> OFF."""
         self._env_widget.set_logging(self._env_widget.logging_state() == "off")
         # Re-open the visible env var so its editor shows the new value.
         name = getattr(self._env_editor, "_current_name", "")
@@ -25486,7 +25519,8 @@ class MainWindow(QMainWindow):
         self._log_btn.setToolTip(
             "One-click logging control for all env vars.\n"
             "Off  -> every log level = none/off\n"
-            "On   -> every log level = error (not debug)\n"
+            "On   -> verbose: every log level at debug/warn (not trace),\n"
+            "        WINEDEBUG = Proton log channels + warn+all\n"
             "Click: Off -> On, On/custom -> Off.")
         self._log_btn.setStyleSheet(
             pill_ss(col))
