@@ -346,7 +346,10 @@ class DllOpsTests(unittest.TestCase):
                 (d / "files").mkdir(parents=True)
                 (d / "manifest.json").write_text('{"entries": []}')
             dll_ops.prune("k", td / "bk")
-            self.assertEqual(len(dll_ops.list_backups("k", td / "bk")), dll_ops.KEEP_BACKUPS)
+            left = dll_ops.list_backups("k", td / "bk")
+            self.assertEqual(len(left), dll_ops.KEEP_BACKUPS)
+            # the oldest backup (the game's original DLLs) is never pruned
+            self.assertEqual(left[-1][0].name, "202601000")
 
 
 if __name__ == "__main__":

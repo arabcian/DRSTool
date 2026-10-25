@@ -12,7 +12,7 @@ import re
 import shlex
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import Qt, Signal, QObject, QTimer, QProcess, QSize, QSettings, QRect
@@ -177,6 +177,27 @@ def _as_dict(v) -> Dict:
     return dict(v) if isinstance(v, dict) else {}
 
 
+def normalize_gs_flags(flags) -> Tuple[Dict[str, str], List[str]]:
+    """Hand-edited profiles may use short flags (-W) or other case; map them to the
+    long flag names the UI uses. Returns (flags, dropped) - unknown keys are reported."""
+    by_key: Dict[str, str] = {}
+    for gf in GAMESCOPE_FLAGS:
+        by_key[gf.flag.lower()] = gf.flag
+        if gf.short:
+            by_key[gf.short] = gf.flag          # short flags are case-sensitive (-W vs -w)
+    out: Dict[str, str] = {}
+    dropped: List[str] = []
+    for k, v in _as_dict(flags).items():
+        k = str(k)
+        key = k if k == GamescopeFlagsWidget.MANGOHUD_KEY else (
+            by_key.get(k) or by_key.get(k.lower()))
+        if key is None:
+            dropped.append(k)
+        else:
+            out[key] = str(v)
+    return out, dropped
+
+
 def find_bundled_dir(name: str, marker: str) -> Path:
     """Locate a bundled helper source tree (vk-flip-meter-main, lutris-game-tune-main).
 
@@ -197,7 +218,7 @@ def find_bundled_dir(name: str, marker: str) -> Path:
 
 
 def user_cache_dir() -> Path:
-    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "drstool"
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "drstool"
 
 
 def default_flm_conf_path() -> Path:
@@ -2865,6 +2886,7 @@ class SettingsManager(QObject):
         self._loaded_env_vars: Dict[str, str] = {}
         self._loaded_gamescope_enabled = False
         self._loaded_gamescope_flags: Dict[str, str] = {}
+        self.load_warnings: List[str] = []
         self._all_settings = ALL_SETTINGS
         # profile_save_error fires from the constructor before MainWindow has
         # connected it, so the message would be lost; MainWindow re-emits this.
@@ -2973,15 +2995,20 @@ class SettingsManager(QObject):
         self._settings = {canonical_drs_key(k): canonical_drs_value(drs_lookup(k), v)
                           for k, v in _as_dict(profile.get("settings")).items()
                           if v is not None and str(v).strip()}
+        self.load_warnings: List[str] = []
         arch_code = profile.get("arch")
         if arch_code:
-            self._arch = next((a for a in GPU_ARCHS if a.code == arch_code), None)
+            self._arch = next((a for a in GPU_ARCHS if a.code == str(arch_code).strip().upper()), None)
+            if self._arch is None:
+                self.load_warnings.append(f"unknown GPU arch “{arch_code}” ignored")
         else:
             self._arch = None
         self._current_profile = name
         self._loaded_env_vars = _as_dict(profile.get("env_vars"))
         self._loaded_gamescope_enabled = bool(profile.get("gamescope_enabled", False))
-        self._loaded_gamescope_flags = _as_dict(profile.get("gamescope_flags"))
+        self._loaded_gamescope_flags, bad = normalize_gs_flags(profile.get("gamescope_flags"))
+        if bad:
+            self.load_warnings.append("unknown gamescope flag(s) ignored: " + ", ".join(bad))
         self.profile_loaded.emit(name)
         self.settings_changed.emit()
         self.arch_changed.emit()
@@ -3049,7 +3076,7 @@ class SettingsManager(QObject):
 
     @staticmethod
     def _profiles_path() -> Path:
-        config_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "drstool"
+        config_dir = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "drstool"
         return config_dir / "profiles.json"
 
     def _load_profiles(self):
@@ -8533,7 +8560,7 @@ class LutrisSyncWidget(QWidget):
 
     @staticmethod
     def _default_games_dir() -> Path:
-        data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+        data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
         return data_home / "lutris" / "games"
 
     def _browse_games_dir(self):
@@ -12560,6 +12587,21 @@ def _umask() -> int:
 
 
 def _proc_running(*names: str) -> bool:
+    if shutil.which("pgrep") is None:
+        # no pgrep: scan /proc instead of silently reporting "not running"
+        want = set(names)
+        try:
+            for d in os.scandir("/proc"):
+                if d.name.isdigit():
+                    try:
+                        with open(f"/proc/{d.name}/comm") as f:
+                            if f.read().strip() in want:
+                                return True
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        return False
     for n in names:
         if _run(["pgrep", "-x", n], 3).strip():
             return True
@@ -12955,7 +12997,11 @@ class HeroicBackend(LauncherBackend):
             if _proc_running("heroic") else ""
 
     def apply(self, e, payload, opts):
-        data = self._load(e) if e.path.is_file() else {}
+        # Not _load(): it maps an unreadable file to {}, which would then be written back
+        # with only DRSTool's keys in it.
+        data = json.loads(e.path.read_text(errors="replace")) if e.path.is_file() else {}
+        if not isinstance(data, dict):
+            raise ValueError(f"{e.path.name} is not a JSON object — nothing written.")
         node = self._node(data, e)
         owned = LutrisSyncWidget._managed_env_keys()
         keep = [x for x in node.get("enviromentOptions", [])
@@ -13058,7 +13104,10 @@ class BottlesBackend(LauncherBackend):
         return txt
 
     def apply(self, e, payload, opts):
-        d = self._load(e)
+        # Not _load(): it maps an unreadable file to {}, which would wipe the bottle's config.
+        d = yaml.load(e.path.read_text(), Loader=_YAML_LOADER) or {}
+        if not isinstance(d, dict):
+            raise ValueError(f"{e.path.name} is not a YAML mapping — nothing written.")
         envs = dict(d.get("Environment_Variables") or {})
         owned = LutrisSyncWidget._managed_env_keys()
         for k in list(envs):
@@ -13684,7 +13733,7 @@ def _extract_archive(path: Path, dest: Path):
 
 
 def _cache_dir() -> Path:
-    d = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "drstool" / "prefix-doctor"
+    d = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")) / "drstool" / "prefix-doctor"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -14163,7 +14212,7 @@ class DllManagerWidget(QWidget):
 
         top = QHBoxLayout()
         self._scan_btn = _tool_btn("⟳  Scan games", bold=True)
-        self._scan_btn.clicked.connect(self.scan)
+        self._scan_btn.clicked.connect(lambda: self.scan())    # not clicked(bool) -> only=False
         top.addWidget(self._scan_btn)
         self._online_btn = _tool_btn("Check for updates", bg="#1d2a10", border="#4a7300", fg="#cfe8a8", bold=True)
         self._online_btn.setToolTip("Lists every DLSS / Streamline build on ngx.download.nvidia.com (staged "
@@ -17765,7 +17814,7 @@ CACHE_GROUP_ORDER = ["NVIDIA GL / compute", "vkd3d-proton", "DXVK", "Mesa / Foss
 def discover_cache_nodes(user_env: Dict[str, str], extra: List[str]) -> List[dict]:
     """Every cache location we know about. Pure filesystem work — safe in a thread."""
     home = Path.home()
-    xdg_cache = Path(os.environ.get("XDG_CACHE_HOME", home / ".cache"))
+    xdg_cache = Path(os.environ.get("XDG_CACHE_HOME") or home / ".cache")
 
     def env(name: str) -> str:
         return (user_env.get(name) or os.environ.get(name) or "").strip()
@@ -22014,10 +22063,10 @@ def state_from_profile(p) -> dict:
     p = p if isinstance(p, dict) else {}
     return {"settings": {canonical_drs_key(k): canonical_drs_value(drs_lookup(k), v)
                          for k, v in _as_dict(p.get("settings")).items() if v is not None and str(v).strip()},
-            "arch": p.get("arch") or None,
+            "arch": str(p["arch"]).strip().upper() if p.get("arch") else None,
             "env": {str(k): str(v) for k, v in _as_dict(p.get("env_vars")).items()},
             "gs_on": bool(p.get("gamescope_enabled")),
-            "gs_flags": {str(k): str(v) for k, v in _as_dict(p.get("gamescope_flags")).items()}}
+            "gs_flags": normalize_gs_flags(p.get("gamescope_flags"))[0]}
 
 
 def canon_flat(p) -> Dict[tuple, str]:
@@ -23729,9 +23778,22 @@ class TaskCenter(QObject):
         super().__init__()
         self._tasks: List[dict] = []
         self._seq = 0
+        self._threads: list = []       # every tracked thread, so wait_all() can stop them on exit
 
     def tasks(self) -> List[dict]:
         return list(self._tasks)
+
+    def wait_all(self):
+        """Cancel and join tracked threads. Qt aborts the process when a QThread is destroyed
+        while it still runs, which is what closing the window during a download/lookup did."""
+        self._threads = [th for th in self._threads if th.isRunning()]
+        for th in self._threads:
+            th.blockSignals(True)      # no result handlers (message boxes) after the window is gone
+            if hasattr(th, "cancel"):
+                th.cancel()
+            th.requestInterruption()
+        for th in self._threads:
+            th.wait()
 
     def track(self, thread, title: str, nav: Optional[dict] = None, progress=None, fail=None) -> dict:
         self._seq += 1
@@ -23739,6 +23801,7 @@ class TaskCenter(QObject):
              "detail": "", "t0": time.monotonic(), "t1": None}
         self._tasks.append(t)
         del self._tasks[:-25]
+        self._threads = [th for th in self._threads if th.isRunning()] + [thread]
         thread.finished.connect(lambda: self._finish(t))
         if progress is not None:
             progress.connect(lambda *a: self._progress(t, a))
@@ -25293,6 +25356,8 @@ class MainWindow(QMainWindow):
             SYSHUB.shutdown()
             if self._extra_tools.is_built("dllmgr"):
                 self._extra_tools.dllmgr.shutdown()
+            self.hide()                  # downloads may need a moment to notice the cancel
+            TASKS.wait_all()
         except Exception:
             pass
         if restart:
@@ -25547,6 +25612,8 @@ class MainWindow(QMainWindow):
 
     def _on_profile_loaded(self, name):
         self._pending_label = f"Load profile “{name}”"
+        if self.settings_manager.load_warnings:
+            self.show_toast(f"Profile “{name}”: " + "; ".join(self.settings_manager.load_warnings), "warn")
         # 1. Reset and reload env vars from profile
         saved_env = self.settings_manager.get_loaded_env_vars()
         self._env_widget.load_values(saved_env)

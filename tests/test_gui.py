@@ -334,6 +334,65 @@ class GuiTests(unittest.TestCase):
         dlg = m.DllRestoreDialog(w._states[cool.game.key])
         self.assertEqual(dlg._list.topLevelItemCount(), 1)
 
+    def test_dll_manager_scan_button(self):
+        # clicked(bool) must not reach scan(only=...) as only=False
+        w = self.win._extra_tools.dllmgr
+        self.win._extra_tools.show_tab("DLL Manager")
+        self.wait_for(lambda: not w._busy())
+        w._scan_btn.click()
+        self.wait_for(lambda: w._scan_worker is not None and not w._scan_worker.isRunning())
+        self.pump(10)
+        self.assertGreaterEqual(len(w._states), 2)
+
+    def test_launcher_apply_refuses_unreadable_config(self):
+        # A config that does not parse must not be replaced by one holding only DRSTool's keys
+        m = self.m
+        payload = {"env": {"PROTON_ENABLE_NVAPI": "1"}, "gs_on": False, "gs_flags": {}, "mangohud": False}
+        bottle = HOME / "bad-bottle/bottle.yml"
+        bottle.parent.mkdir(parents=True, exist_ok=True)
+        bottle.write_text("Name: x\nRunner: [unclosed\n")
+        heroic = HOME / "bad-heroic/GamesConfig/abc.json"
+        heroic.parent.mkdir(parents=True, exist_ok=True)
+        heroic.write_text('{"abc": {"winePrefix": "/x", ')
+        for backend, path in ((m.BottlesBackend(), bottle), (m.HeroicBackend(), heroic)):
+            before = path.read_text()
+            with self.assertRaises(Exception):
+                backend.apply(m.LEntry("abc", "t", path), payload, {})
+            self.assertEqual(path.read_text(), before, backend.name)
+
+    def test_empty_xdg_vars_mean_default(self):
+        # XDG spec: an empty variable counts as unset (not a path relative to the cwd)
+        m = self.m
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": "", "XDG_CACHE_HOME": "", "XDG_DATA_HOME": ""}):
+            self.assertEqual(m.SettingsManager._profiles_path(), HOME / ".config/drstool/profiles.json")
+            self.assertEqual(m.user_cache_dir(), HOME / ".cache/drstool")
+            self.assertEqual(m._cache_dir(), HOME / ".cache/drstool/prefix-doctor")
+            self.assertEqual(m.LutrisSyncWidget._default_games_dir(), HOME / ".local/share/lutris/games")
+            self.assertTrue(all(Path(n["path"]).is_absolute()
+                                for n in m.discover_cache_nodes({}, []) if n.get("path")))
+
+    def test_tasks_wait_all_before_exit(self):
+        # a worker still running when the window goes away aborts the process
+        # ("QThread: Destroyed while thread is still running")
+        m = self.m
+
+        class Slow(m.QThread):
+            cancelled = False
+
+            def cancel(self):
+                Slow.cancelled = True
+
+            def run(self):
+                t0 = time.time()
+                while not Slow.cancelled and time.time() - t0 < 5:
+                    time.sleep(0.01)
+        th = Slow()
+        m.TASKS.track(th, "slow")
+        th.start()
+        m.TASKS.wait_all()
+        self.assertTrue(Slow.cancelled)
+        self.assertFalse(th.isRunning())
+
     def test_dll_manager_streamline_plugins_on_target(self):
         # NGX's Streamline package has no interposer: plugins already on the target version
         # mean "up to date", whatever interposer the game ships.

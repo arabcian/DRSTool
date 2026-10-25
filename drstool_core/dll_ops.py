@@ -224,5 +224,10 @@ def restore(backup_dir: Path, log: Callable[[str], None] = lambda _m: None) -> T
 
 
 def prune(game_key: str, root: Optional[Path] = None, keep: int = KEEP_BACKUPS):
-    for p, _m in list_backups(game_key, root)[keep:]:
+    """Keep the newest `keep` backups plus the oldest one, which holds the game's
+    original DLLs and must survive any number of later updates."""
+    backups = list_backups(game_key, root)          # newest first
+    if len(backups) <= keep:
+        return
+    for p, _m in backups[keep - 1:-1]:
         shutil.rmtree(p, ignore_errors=True)
