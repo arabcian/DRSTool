@@ -13557,12 +13557,19 @@ def scan_dll_version(path: Path, comp: dict) -> Optional[str]:
     pat = re.compile(rb"(?<![\w.])(" + vpre + rb"\d+\.\d+(?:\.\d+)?(?:-\d+-g[0-9a-f]{6,})?[+\w\-]{0,12})\x00")
     # Only hits < 4096 bytes from the marker are accepted below, so scan just that window
     # (+256 slack for the match length) instead of the whole multi-MB DLL.
-    cands = [(abs(m.start() - anchor), m.group(1).decode("ascii", "replace"))
-             for m in pat.finditer(data, max(0, anchor - 4096), anchor + 4096 + 256)]
-    if cands:
-        cands.sort()
-        if cands[0][0] < 4096:                         # must sit close to the marker
-            return cands[0][1]
+    lo, hi = max(0, anchor - 4096), anchor + 4096 + 256
+    pats = [pat]
+    if comp["ver_prefix_required"]:
+        # Builds from a release tarball (Gentoo/Arch/... packages) have no git tag, so meson's
+        # vcs_tag falls back to the bare project version "3.1.1" — no leading "v".
+        pats.append(re.compile(rb"(?<![\w.])(\d+\.\d+\.\d+(?:-\d+-g[0-9a-f]{6,})?[+\w\-]{0,12})\x00"))
+    for p_ in pats:
+        cands = [(abs(m.start() - anchor), m.group(1).decode("ascii", "replace"))
+                 for m in p_.finditer(data, lo, hi)]
+        if cands:
+            cands.sort()
+            if cands[0][0] < 4096:                     # must sit close to the marker
+                return cands[0][1]
     m = re.search(rb"F\x00i\x00l\x00e\x00V\x00e\x00r\x00s\x00i\x00o\x00n\x00\x00\x00((?:[0-9A-Za-z.\-+_]\x00)+)", data)
     if m:
         v = m.group(1).decode("utf-16-le", "replace")
