@@ -13564,7 +13564,7 @@ def _scan_dll_version(path: Path, comp: dict) -> Optional[str]:
         data = path.read_bytes()
     except OSError:
         return None
-    pos = [data.find(m) for m in comp["markers"] if data.find(m) >= 0]
+    pos = [p for p in (data.find(m) for m in comp["markers"]) if p >= 0]
     if not pos:
         # DXVK >= 3.0 moved D3D10 into d3d11.dll; its d3d10core.dll is a marker-less shim that
         # forwards to d3d11.dll. Wine's own builtin carries a "Wine builtin DLL" signature.
@@ -13585,29 +13585,50 @@ def _scan_dll_version(path: Path, comp: dict) -> Optional[str]:
             return cands[0][1]
     # The first marker hit is often an unrelated string far from the version (e.g. a "DXVK_..."
     # env name in dxvk-nvapi), so also try the version string nearest to ANY marker hit.
+    # Speed matters here: Python's re holds the GIL, so a slow pass over a 7 MB DXVK DLL froze the
+    # UI. A leading lookbehind defeats re's literal prefix scan (~180 ms vs ~4 ms per DLL), so the
+    # "not preceded by [\w.]" check is done by hand on each hit instead.
     marks = sorted({m.start() for mk in comp["markers"] for m in re.finditer(re.escape(mk), data)})[:4000]
 
-    def nearest(rx, limit):
+    def clean_start(i: int) -> bool:
+        return i == 0 or not (chr(data[i - 1]).isalnum() or data[i - 1] in b"_.")
+
+    def dist(i: int) -> int:
+        k = bisect.bisect_left(marks, i)
+        return min(abs(i - marks[j]) for j in (k - 1, k) if 0 <= j < len(marks))
+
+    def pick(hits, limit):
         best = None
-        for m in rx.finditer(data):
-            i = bisect.bisect_left(marks, m.start())
-            d = min(abs(m.start() - marks[j]) for j in (i - 1, i) if 0 <= j < len(marks))
+        for m in hits:
+            if not clean_start(m.start(1)):
+                continue
+            d = dist(m.start(1))
             if d <= limit and (best is None or d < best[0]):
                 best = (d, m.group(1).decode("ascii", "replace"))
         return best[1] if best else None
-    v = nearest(pat, 4096)
+    fast = re.compile(rb"(" + vpre + rb"\d+\.\d+(?:\.\d+)?(?:-\d+-g[0-9a-f]{6,})?[+\w\-]{0,12})\x00")
+    v = pick(fast.finditer(data), 4096)
     if v:
         return v
     if comp["ver_prefix_required"]:
         # Release-tarball builds (Gentoo, Arch, ...) have no git tag, so meson's vcs_tag falls
         # back to the bare project version: "DXVK: \0" "3.1.1" without the leading "v".
-        v = nearest(re.compile(rb"(?<![\w.])(\d+\.\d+\.\d+)\x00"), 128)
+        # Only hits within 128 bytes of a marker count, so scan just those windows.
+        bare = re.compile(rb"(\d+\.\d+\.\d+)\x00")
+        hits, end = [], -1
+        for mp in marks:
+            lo, hi = max(mp - 128, end), mp + 128 + 32
+            if lo < hi:
+                hits.extend(bare.finditer(data, lo, hi))   # overlap is fine: duplicates, no gaps
+            end = max(end, mp + 128)
+        v = pick(hits, 128)
         if v:
             return v
-    # Last resort: the source directory baked into assert/log paths ("../dxvk-3.1.1/src/...")
-    m = re.search(rb"[/\\]" + re.escape(comp["repo"].split("/")[1].encode()) + rb"-v?(\d+\.\d+(?:\.\d+)?)[/\\]", data)
-    if m:
-        return m.group(1).decode("ascii")
+    # Last resort: the source directory baked into assert/log paths ("../dxvk-3.1.1/src/...").
+    # Literal-first pattern + manual separator check: a leading [/\\] class made re crawl.
+    for m in re.finditer(re.escape(comp["repo"].split("/")[1].encode()) + rb"-v?(\d+\.\d+(?:\.\d+)?)[/\\]", data):
+        if m.start() > 0 and data[m.start() - 1] in b"/\\":
+            return m.group(1).decode("ascii")
     m = re.search(rb"F\x00i\x00l\x00e\x00V\x00e\x00r\x00s\x00i\x00o\x00n\x00\x00\x00((?:[0-9A-Za-z.\-+_]\x00)+)", data)
     if m:
         v = m.group(1).decode("utf-16-le", "replace")
@@ -14004,6 +14025,9 @@ class _DllScanWorker(QThread):
         else:
             games = list(self._only)
         n = len(games)
+        # Many games share one prefix (every Lutris game on ~/.wine): inspect it once per scan
+        # instead of re-reading and re-hashing the same DLLs for each game.
+        seen_pfx: Dict[tuple, dict] = {}
         for i, g in enumerate(games):
             if self._cancel.is_set():
                 break
@@ -14017,7 +14041,10 @@ class _DllScanWorker(QThread):
             if g.prefix is not None and g.prefix_manager != "Proton":
                 for c in PD_COMPONENTS:
                     try:
-                        pref[c["id"]] = detect_installed(g.prefix, c)
+                        k = (str(g.prefix), c["id"])
+                        if k not in seen_pfx:
+                            seen_pfx[k] = detect_installed(g.prefix, c)
+                        pref[c["id"]] = seen_pfx[k]
                     except Exception as ex:               # noqa: BLE001
                         errors.append(f"{g.name} ({c['name']}): {ex}")
             self.game_ready.emit(DllGameState(g, dlls, pref))
