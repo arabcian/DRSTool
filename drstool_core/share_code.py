@@ -47,6 +47,7 @@ SENSITIVE_ENV = {
     "DXVK_CONFIG_FILE", "VKD3D_SHADER_CACHE_PATH", "DXVK_STATE_CACHE_PATH",
     "LIBGL_DRIVERS_PATH", "__EGL_VENDOR_LIBRARY_FILENAMES", "__GLX_VENDOR_LIBRARY_NAME",
     "GST_PLUGIN_PATH", "GST_PLUGIN_SYSTEM_PATH", "QT_PLUGIN_PATH",
+    "BASH_ENV", "ENV", "SHELLOPTS", "IFS",                  # change how a shell wrapper / launch script runs
 }
 _SHELL_META_RE = re.compile(r"[`$;|&<>]|\$\(")
 

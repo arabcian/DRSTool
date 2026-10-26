@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 import shutil
 import glob
+import itertools
 import signal
 import tempfile
 import time
@@ -3202,14 +3203,24 @@ class SettingsManager(QObject):
         data_file = self._profiles_path()
         try:
             data_file.parent.mkdir(parents=True, exist_ok=True)
-            tmp_file = data_file.with_suffix(".json.tmp")
             text = json.dumps(self._profiles, indent=2)
-            with open(tmp_file, "w", encoding="utf-8") as f:
-                f.write(text)
-                f.flush()
-                os.fsync(f.fileno())
-            self._snapshot_old(data_file, text)
-            os.replace(tmp_file, data_file)  # atomic on POSIX — no partial-write corruption
+            # unique temp name: two running instances used to share "<file>.json.tmp"
+            fd, tmp_name = tempfile.mkstemp(dir=str(data_file.parent), prefix=f".{data_file.name}.", suffix=".tmp")
+            tmp_file = Path(tmp_name)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(text)
+                    f.flush()
+                    os.fsync(f.fileno())
+                if data_file.exists():             # mkstemp is 0600; keep the file's existing mode
+                    shutil.copymode(data_file, tmp_file)
+                else:
+                    os.chmod(tmp_file, 0o644 & ~_umask())
+                self._snapshot_old(data_file, text)
+                os.replace(tmp_file, data_file)  # atomic on POSIX — no partial-write corruption
+            except BaseException:
+                tmp_file.unlink(missing_ok=True)
+                raise
             self.disk_written.emit()
             return True
         except Exception as e:
@@ -9164,10 +9175,12 @@ class LutrisSyncWidget(QWidget):
         except OSError:
             pass
 
-    def _apply_to_game(self, *_, confirm: bool = True):
+    def _apply_to_game(self, *_, confirm: bool = True) -> bool:
+        """True when the file was written or already matched; False on any failure/abort
+        (the CLI reports its exit status from this, not from the status label)."""
         index = self._game_combo.currentIndex()
         if not (0 <= index < len(self._games)):
-            return
+            return False
         entry = self._games[index]
         all_env = self._collect_all_env()
         system_keys, env_vars, warnings = self._split_gamescope(all_env)
@@ -9180,7 +9193,7 @@ class LutrisSyncWidget(QWidget):
             )
         except Exception as e:
             QMessageBox.critical(self, "Merge failed", f"Could not merge: {e}")
-            return
+            return False
 
         # A removal-only round is still a real change. The old guard bailed
         # out whenever nothing was being WRITTEN, so clearing a control in
@@ -9189,7 +9202,7 @@ class LutrisSyncWidget(QWidget):
                  + len(sys_removed) + len(env_removed))
         if total == 0:
             self._status_label.setText("Nothing to write — file already matches the GUI.")
-            return
+            return True
         sys_line = f"\n  • {len(sys_changed)} key(s) into system.*" if sys_changed else ""
         env_line = f"\n  • {len(env_changed)} var(s) into system.env" if env_changed else ""
         del_line = (f"\n  • {len(sys_removed)} stale key(s) removed from system.*: "
@@ -9205,7 +9218,7 @@ class LutrisSyncWidget(QWidget):
             QMessageBox.Yes | QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
-            return
+            return False
 
         # Lutris (or the user) may have touched the file while the dialog was
         # open; merging into stale text would silently overwrite that change.
@@ -9214,7 +9227,7 @@ class LutrisSyncWidget(QWidget):
                 fresh = f.read()
         except Exception as e:
             QMessageBox.critical(self, "Write failed", f"Could not re-read {entry.path}: {e}")
-            return
+            return False
         if fresh != original_text:
             self._current_yaml_text = fresh
             self._update_preview()
@@ -9222,7 +9235,7 @@ class LutrisSyncWidget(QWidget):
                 self, "File changed on disk",
                 f"{entry.path.name} was modified while the confirmation dialog was open.\n"
                 "Nothing was written. The preview has been refreshed — review it and apply again.")
-            return
+            return False
 
         try:
             # Resolve symlinks first: os.replace() on the link itself would
@@ -9252,7 +9265,7 @@ class LutrisSyncWidget(QWidget):
             self._prune_backups(target)
         except Exception as e:
             QMessageBox.critical(self, "Write failed", f"Could not write {entry.path}: {e}")
-            return
+            return False
 
         self._current_yaml_text = new_text
         w = self.window()
@@ -9263,6 +9276,7 @@ class LutrisSyncWidget(QWidget):
         )
         self._update_preview()
         offer_undo(f"Wrote {total} change(s) to {entry.path.name}")
+        return True
 
 
 # FLM v2.x variables removed in v3.0 (mirrors k_legacy_keys in
@@ -12626,7 +12640,7 @@ def _vdf_esc(s: str) -> str:
              .replace("\n", "\\n").replace("\t", "\\t"))
 
 
-@lru_cache(maxsize=4)       # keyed by the file content: re-reads of an unchanged file skip the parse
+@lru_cache(maxsize=8)       # keyed by the file content: re-reads of an unchanged file skip the parse
 def _vdf_parse(text: str):
     toks = []
     for m in _VDF_TOK.finditer(text):
@@ -12651,7 +12665,9 @@ def _vdf_parse(text: str):
                     continue
                 if n[0] == "open":
                     sub, j = block(i + 2)
-                    items.append((k, "block", (n, sub, toks[j] if j < len(toks) else n)))
+                    if j >= len(toks):      # EOF before the matching "}" — never hand out the open brace as a close position
+                        raise ValueError(f'unbalanced braces in VDF: block "{k[1]}" is never closed')
+                    items.append((k, "block", (n, sub, toks[j])))
                     i = j + 1
                     continue
             i += 1
@@ -12705,7 +12721,7 @@ def vdf_set_launch_options(text: str, appid: str, value: str) -> str:
         ls = text.rfind("\n", 0, pos) + 1
         indent = text[ls:pos]
         if indent.strip() == "":                       # brace alone on its line
-            return text[:ls] + body.replace("\n", "\n", 1) + text[ls:]
+            return text[:ls] + body + text[ls:]
         return text[:pos] + "\n" + body + text[pos:]
 
     def indent_of(close_tok) -> str:
@@ -12897,7 +12913,7 @@ class SteamBackend(LauncherBackend):
         try:
             cur = vdf_get_app_value(steam_config_vdf(e.path).read_text(errors="replace"),
                                     STEAM_COMPAT_PATH, e.key, "name")
-        except OSError:
+        except (OSError, ValueError):
             cur = ""
         ct = opts.get("compat_tool") or ""
         new = ("remove the per-game override" if ct == "__default__" else ct) if ct else "unchanged"
@@ -19557,7 +19573,7 @@ class SteamShortcutsWidget(QWidget):
         verb = "Added" if created else "Updated"
         self._status.setText(f"✔ {verb} “{pl['name']}” in the Steam library (app id {appid}).{msg}"
                              + (f" Backup: {bak}" if bak else "") + " Start Steam to see it.")
-        toast(f"{verb} “{pl['name']}” in Steam", "ok")
+        offer_undo(f"{verb} “{pl['name']}” in Steam")
         self._list_existing()
         i = self._existing.findData(appid)
         if i >= 0:
@@ -19586,7 +19602,7 @@ class SteamShortcutsWidget(QWidget):
         try:
             cur = vdf_get_app_value((a[0] / "config" / "config.vdf").read_text(errors="replace"),
                                     STEAM_COMPAT_PATH, str(appid), "name")
-        except OSError:
+        except (OSError, ValueError):
             cur = ""
         i = self._compat.findData(cur)
         self._compat.setCurrentIndex(i if i >= 0 else 0)
@@ -19615,7 +19631,7 @@ class SteamShortcutsWidget(QWidget):
             self._status.setText(f"⚠ {ex}")
             return
         self._status.setText(f"Removed “{name}”. Backup: {bak}")
-        toast(f"Removed “{name}” from Steam", "ok")
+        offer_undo(f"Removed “{name}” from Steam")
         self._list_existing()
 
 
@@ -20702,9 +20718,15 @@ import math
 
 
 def load_frametimes(path: str) -> dict:
-    lines = Path(path).read_text(errors="replace").splitlines()
+    # Streamed: a long MangoHud log can be 100 MB; only the first 12 lines are needed up front.
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        head = [ln.rstrip("\r\n") for ln in itertools.islice(fh, 12)]
+        return _parse_frametimes(path, head, fh)
+
+
+def _parse_frametimes(path: str, head: List[str], rest) -> dict:
     hdr, kind = None, ""
-    for i, ln in enumerate(lines[:12]):
+    for i, ln in enumerate(head):
         low = ln.lower()
         if low.startswith("flip_ns,"):
             hdr, kind = i, "flm"
@@ -20714,12 +20736,13 @@ def load_frametimes(path: str) -> dict:
             break
     if hdr is None:
         raise ValueError("not a MangoHud log (no 'frametime' column) or an FLM_CSV file")
-    cols = [c.strip().lower() for c in lines[hdr].split(",")]
+    cols = [c.strip().lower() for c in head[hdr].split(",")]
+    body = itertools.chain(head[hdr + 1:], rest)
     ft: List[float] = []
     extra = {}
     if kind == "mangohud":
         ix = cols.index("frametime")
-        for ln in lines[hdr + 1:]:
+        for ln in body:
             p = ln.split(",", ix + 1)
             try:
                 v = float(p[ix])
@@ -20731,7 +20754,7 @@ def load_frametimes(path: str) -> dict:
         ix = cols.index("interval_ns")
         ih = cols.index("is_hitch") if "is_hitch" in cols else -1
         hit = 0
-        for ln in lines[hdr + 1:]:
+        for ln in body:
             p = ln.split(",", max(ix, ih) + 1)
             try:
                 v = float(p[ix]) / 1e6
@@ -21578,7 +21601,12 @@ class LogViewerWidget(QWidget):
         self._find.setPlaceholderText("search…")
         self._find.setClearButtonEnabled(True)
         self._find.setStyleSheet(_LINEEDIT_QSS)
-        self._find.textChanged.connect(lambda _t: self._render())
+        # debounce: each keystroke used to re-render up to MAX_SHOW lines + the highlighter
+        self._find_timer = QTimer(self)
+        self._find_timer.setSingleShot(True)
+        self._find_timer.setInterval(150)
+        self._find_timer.timeout.connect(self._render)
+        self._find.textChanged.connect(lambda _t: self._find_timer.start())
         row.addWidget(self._find, 1)
         self._follow = QCheckBox("follow")
         self._follow.setStyleSheet(f"color:{T['text2']};")
@@ -25859,10 +25887,9 @@ def _cli_dispatch(a) -> int:
             sys.stdout.write(diff)
             if input("Write these changes? [y/N] ").strip().lower() not in ("y", "yes"):
                 return 1
-        ls._apply_to_game(confirm=False)
-        msg = ls._status_label.text()
-        print(msg)
-        return 0 if msg.startswith(("Wrote", "Nothing")) else 1
+        ok = ls._apply_to_game(confirm=False)
+        print(ls._status_label.text())
+        return 0 if ok else 1
 
     if a.share:
         if _CORE_ERR:

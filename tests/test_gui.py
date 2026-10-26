@@ -473,5 +473,65 @@ class GuiTests(unittest.TestCase):
         ew.reset_all_values()
 
 
+    def test_vdf_unbalanced_block_is_rejected(self):
+        m = self.m
+        good = '"UserLocalConfigStore"\n{\n\t"Software"\n\t{\n\t\t"Valve"\n\t\t{\n\t\t\t"Steam"\n\t\t\t{\n\t\t\t\t"apps"\n\t\t\t\t{\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n'
+        bad = good.rsplit("}", 2)[0]                       # truncated: outer blocks never closed
+        self.assertIn('"7"', m.vdf_set_launch_options(good, "7", "x"))
+        with self.assertRaises(ValueError):
+            m.vdf_set_launch_options(bad, "7", "x")
+        self.assertEqual(m.vdf_get_launch_options(bad, "7"), "")
+
+    def test_load_frametimes_streams_both_formats(self):
+        m = self.m
+        with tempfile.TemporaryDirectory() as td:
+            mh = Path(td) / "mh.csv"
+            mh.write_text("os,cpu\nLinux,x\nfps,frametime,cpu_load\n"
+                          + "".join(f"60,{16.6 + i % 3},5\n" for i in range(50)))
+            d = m.load_frametimes(str(mh))
+            self.assertEqual((d["kind"], len(d["ft"])), ("mangohud", 50))
+            flm = Path(td) / "flm.csv"                       # frametime is the LAST column, CRLF endings
+            flm.write_text("flip_ns,interval_ns,is_hitch\r\n"
+                           + "".join(f"{i},16666666,{int(i == 3)}\r\n" for i in range(40)))
+            d = m.load_frametimes(str(flm))
+            self.assertEqual((d["kind"], len(d["ft"]), d["extra"]["FLM hitches"]), ("flm", 40, 1))
+            junk = Path(td) / "junk.txt"
+            junk.write_text("hello\nworld\n")
+            with self.assertRaises(ValueError):
+                m.load_frametimes(str(junk))
+
+    def test_save_profiles_unique_tmp_and_mode(self):
+        sm = self.win.settings_manager
+        path = sm._profiles_path()
+        before = path.stat().st_mode & 0o777 if path.exists() else None
+        self.assertTrue(sm._save_profiles())
+        self.assertEqual([p.name for p in path.parent.glob("*.tmp")], [])      # no leftovers
+        if before is not None:
+            self.assertEqual(path.stat().st_mode & 0o777, before)
+        with mock.patch.object(sm, "_snapshot_old", side_effect=RuntimeError("boom")), \
+                mock.patch.object(self.m.QMessageBox, "warning"):          # the error signal opens a modal box
+            self.assertFalse(sm._save_profiles())
+        self.assertEqual([p.name for p in path.parent.glob("*.tmp")], [])      # cleaned after a failure
+
+    def test_log_search_is_debounced(self):
+        lv = self.m.LogViewerWidget()
+        with mock.patch.object(lv, "_render") as r:
+            lv._find_timer.timeout.disconnect()
+            lv._find_timer.timeout.connect(r)
+            for ch in "abc":
+                lv._find.setText(lv._find.text() + ch)
+            self.assertEqual(r.call_count, 0)
+            self.pump()
+            time.sleep(0.25)
+            self.pump()
+            self.assertEqual(r.call_count, 1)
+        lv.deleteLater()
+
+    def test_share_code_flags_shell_env(self):
+        from drstool_core import share_code
+        for k in ("BASH_ENV", "ENV", "SHELLOPTS", "IFS"):
+            self.assertIn(k, share_code.SENSITIVE_ENV)
+
+
 if __name__ == "__main__":
     unittest.main()
