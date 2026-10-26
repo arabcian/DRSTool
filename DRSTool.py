@@ -4246,7 +4246,7 @@ QLineEdit:hover{
             # focus; only line-edit/spinbox style controls take the
             # shortcut.
             focus_widget = QApplication.focusWidget()
-            no_shortcut_types = ("bitfield", "enum")
+            no_shortcut_types = ("bitfield", "enum", "hex-preset")   # preset grids are buttons too
             if (self._current_setting.type not in no_shortcut_types
                     and focus_widget is not None
                     and self._control_widget.isAncestorOf(focus_widget)):
@@ -13540,7 +13540,22 @@ def _vcmp(a: tuple, b: tuple) -> int:
     return (a2 > b2) - (a2 < b2)
 
 
+_DLL_VER_CACHE: Dict[tuple, Optional[str]] = {}
+
+
 def scan_dll_version(path: Path, comp: dict) -> Optional[str]:
+    """Cached wrapper: many games share one prefix, and a full scan of a 7 MB DXVK DLL is not free."""
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size, comp["id"])
+    except OSError:
+        return _scan_dll_version(path, comp)
+    if key not in _DLL_VER_CACHE:
+        _DLL_VER_CACHE[key] = _scan_dll_version(path, comp)
+    return _DLL_VER_CACHE[key]
+
+
+def _scan_dll_version(path: Path, comp: dict) -> Optional[str]:
     """Heuristic: version-looking string nearest to the component's marker; falls back to
     the PE FileVersion resource. Returns None for 'not this component', '' for 'unknown'."""
     try:
@@ -13551,25 +13566,48 @@ def scan_dll_version(path: Path, comp: dict) -> Optional[str]:
         return None
     pos = [data.find(m) for m in comp["markers"] if data.find(m) >= 0]
     if not pos:
+        # DXVK >= 3.0 moved D3D10 into d3d11.dll; its d3d10core.dll is a marker-less shim that
+        # forwards to d3d11.dll. Wine's own builtin carries a "Wine builtin DLL" signature.
+        if (comp["id"] == "dxvk" and path.stem.lower() == "d3d10core"
+                and b"Wine builtin DLL" not in data[:1024] and b"D3D11CoreCreateDevice" in data):
+            return ""
         return None                                    # a Wine builtin / something else
     anchor = min(pos)
     vpre = rb"v" if comp["ver_prefix_required"] else rb"v?"
     pat = re.compile(rb"(?<![\w.])(" + vpre + rb"\d+\.\d+(?:\.\d+)?(?:-\d+-g[0-9a-f]{6,})?[+\w\-]{0,12})\x00")
     # Only hits < 4096 bytes from the marker are accepted below, so scan just that window
     # (+256 slack for the match length) instead of the whole multi-MB DLL.
-    lo, hi = max(0, anchor - 4096), anchor + 4096 + 256
-    pats = [pat]
+    cands = [(abs(m.start() - anchor), m.group(1).decode("ascii", "replace"))
+             for m in pat.finditer(data, max(0, anchor - 4096), anchor + 4096 + 256)]
+    if cands:
+        cands.sort()
+        if cands[0][0] < 4096:                         # must sit close to the marker
+            return cands[0][1]
+    # The first marker hit is often an unrelated string far from the version (e.g. a "DXVK_..."
+    # env name in dxvk-nvapi), so also try the version string nearest to ANY marker hit.
+    marks = sorted({m.start() for mk in comp["markers"] for m in re.finditer(re.escape(mk), data)})[:4000]
+
+    def nearest(rx, limit):
+        best = None
+        for m in rx.finditer(data):
+            i = bisect.bisect_left(marks, m.start())
+            d = min(abs(m.start() - marks[j]) for j in (i - 1, i) if 0 <= j < len(marks))
+            if d <= limit and (best is None or d < best[0]):
+                best = (d, m.group(1).decode("ascii", "replace"))
+        return best[1] if best else None
+    v = nearest(pat, 4096)
+    if v:
+        return v
     if comp["ver_prefix_required"]:
-        # Builds from a release tarball (Gentoo/Arch/... packages) have no git tag, so meson's
-        # vcs_tag falls back to the bare project version "3.1.1" — no leading "v".
-        pats.append(re.compile(rb"(?<![\w.])(\d+\.\d+\.\d+(?:-\d+-g[0-9a-f]{6,})?[+\w\-]{0,12})\x00"))
-    for p_ in pats:
-        cands = [(abs(m.start() - anchor), m.group(1).decode("ascii", "replace"))
-                 for m in p_.finditer(data, lo, hi)]
-        if cands:
-            cands.sort()
-            if cands[0][0] < 4096:                     # must sit close to the marker
-                return cands[0][1]
+        # Release-tarball builds (Gentoo, Arch, ...) have no git tag, so meson's vcs_tag falls
+        # back to the bare project version: "DXVK: \0" "3.1.1" without the leading "v".
+        v = nearest(re.compile(rb"(?<![\w.])(\d+\.\d+\.\d+)\x00"), 128)
+        if v:
+            return v
+    # Last resort: the source directory baked into assert/log paths ("../dxvk-3.1.1/src/...")
+    m = re.search(rb"[/\\]" + re.escape(comp["repo"].split("/")[1].encode()) + rb"-v?(\d+\.\d+(?:\.\d+)?)[/\\]", data)
+    if m:
+        return m.group(1).decode("ascii")
     m = re.search(rb"F\x00i\x00l\x00e\x00V\x00e\x00r\x00s\x00i\x00o\x00n\x00\x00\x00((?:[0-9A-Za-z.\-+_]\x00)+)", data)
     if m:
         v = m.group(1).decode("utf-16-le", "replace")
@@ -23537,7 +23575,7 @@ class ShareImportDialog(QDialog):
 # ============================================================================
 # Feature pack 6 — toasts (+ "Undo" for file writes), background task centre,
 # desktop notifications, keyboard-shortcut sheet, appearance dialog,
-# keyboard focus ring and accessible names.
+# accessible names.
 # ============================================================================
 
 from PySide6.QtCore import QPoint, QEventLoop, QEvent
@@ -23896,7 +23934,7 @@ SHORTCUT_SHEET = [
         ("Ctrl+1 … 5", "Switch the top tabs"),
         ("F1  /  Ctrl+/", "This sheet"),
         ("Ctrl+,", "Appearance (theme, accent, density, scale)"),
-        ("Tab / Shift+Tab", "Move between controls (a focus ring shows where you are)"),
+        ("Tab / Shift+Tab", "Move between controls"),
     ]),
     ("Edit", [
         ("Ctrl+Z", "Undo"),
@@ -24053,7 +24091,7 @@ def _spawn_restart():
 
 
 # ----------------------------------------------------------------------------
-# Keyboard focus ring + accessible names (one application-wide event filter)
+# Accessible names (one application-wide event filter)
 # ----------------------------------------------------------------------------
 
 def _a11y_label(w: QWidget):
@@ -24085,18 +24123,15 @@ def _a11y_label(w: QWidget):
 
 
 class UXFilter(QObject):
-    """Names unlabeled controls when they are first shown and draws a focus ring after Tab."""
+    """Names unlabeled controls (accessible names) when they are first shown.
+    The Tab focus ring was removed: the option grids cannot be browsed with the arrow keys,
+    and the ring also wrapped the big list / editor panels in a stray green box."""
     _A11Y = (QAbstractButton, QLineEdit, QComboBox, QAbstractSpinBox, QAbstractSlider,
              QAbstractItemView, QPlainTextEdit, QTextEdit, QTabBar, QGroupBox)
-    _NO_RING = (QLineEdit, QAbstractSpinBox, QPlainTextEdit, QTextEdit)
 
     def __init__(self, app):
         super().__init__(app)
-        self._kbd = False
-        self._ring: Optional[QFrame] = None
-        self._target: Optional[QWidget] = None
         app.installEventFilter(self)
-        app.focusChanged.connect(self._on_focus)
 
     def label_tree(self, root: QWidget):
         """Name the controls that already exist, once. Installing the filter before the window
@@ -24109,53 +24144,13 @@ class UXFilter(QObject):
 
     def eventFilter(self, obj, ev):           # noqa: N802
         try:
-            t = ev.type()
-            if t == QEvent.Show:
-                if isinstance(obj, self._A11Y) and not obj.property("_a11y"):
-                    obj.setProperty("_a11y", True)
-                    if not obj.accessibleName():
-                        _a11y_label(obj)
-            elif t == QEvent.KeyPress:
-                if ev.key() in (Qt.Key_Tab, Qt.Key_Backtab):
-                    self._kbd = True
-            elif t == QEvent.MouseButtonPress:
-                if self._kbd:
-                    self._kbd = False
-                    self._hide()
-            elif t in (QEvent.Move, QEvent.Resize) and obj is self._target:
-                self._place()
+            if ev.type() == QEvent.Show and isinstance(obj, self._A11Y) and not obj.property("_a11y"):
+                obj.setProperty("_a11y", True)
+                if not obj.accessibleName():
+                    _a11y_label(obj)
         except Exception:
             pass
         return False
-
-    def _hide(self):
-        if self._ring is not None:
-            self._ring.hide()
-
-    def _on_focus(self, _old, new):
-        self._target = new
-        if not self._kbd or new is None or isinstance(new, self._NO_RING) or not new.isVisible():
-            self._hide()
-            return
-        self._place()
-
-    def _place(self):
-        w = self._target
-        if w is None or not w.isVisible():
-            self._hide()
-            return
-        win = w.window()
-        if self._ring is None or self._ring.parent() is not win:
-            if self._ring is not None:
-                self._ring.deleteLater()
-            r = QFrame(win)
-            r.setAttribute(Qt.WA_TransparentForMouseEvents)
-            r.setFocusPolicy(Qt.NoFocus)
-            r.setStyleSheet(f"QFrame{{border:2px solid {T['accent']};border-radius:6px;background:transparent;}}")
-            self._ring = r
-        self._ring.setGeometry(QRect(w.mapTo(win, QPoint(0, 0)), w.size()).adjusted(-2, -2, 2, 2))
-        self._ring.show()
-        self._ring.raise_()
 
 
 _UX_FILTER: Optional[UXFilter] = None
