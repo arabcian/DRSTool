@@ -1,0 +1,45 @@
+8822c8822
+<         # ── Env vars ────────────────────────────────────────────────
+---
+>         # ── Env vars + DRS settings + GPU arch ─────────────────────────
+8824,8836c8824,8849
+<         if isinstance(env_sec, dict):
+<             win = self.window()
+<             if win is not None and hasattr(win, "_env_widget"):
+<                 # These two are DERIVED from the DRS settings grid + arch
+<                 # selector, not free-form env vars — pushing them into the env
+<                 # widget would create a second, conflicting source of truth.
+<                 derived = {"DXVK_NVAPI_DRS_SETTINGS", "DXVK_NVAPI_GPU_ARCH"}
+<                 vals = {str(k): str(v) for k, v in env_sec.items() if str(k) not in derived}
+<                 skipped = derived & {str(k) for k in env_sec}
+<                 if skipped:
+<                     notes.append("not imported (owned by the DRS settings tab): "
+<                                  + ", ".join(sorted(skipped)))
+<                 win._env_widget.load_values(vals)
+---
+>         if not isinstance(env_sec, dict):
+>             env_sec = {}
+>         # DXVK_NVAPI_DRS_SETTINGS / DXVK_NVAPI_GPU_ARCH are DERIVED from the
+>         # DRS settings grid + arch selector, so they must not land in the env
+>         # widget (a second, conflicting source of truth). They go to the
+>         # SettingsManager instead, mirroring what _apply_to_game wrote.
+>         derived = {"DXVK_NVAPI_DRS_SETTINGS", "DXVK_NVAPI_GPU_ARCH"}
+>         win = self.window()
+>         if win is not None and hasattr(win, "_env_widget"):
+>             vals = {str(k): str(v) for k, v in env_sec.items() if str(k) not in derived}
+>             win._env_widget.load_values(vals)
+> 
+>         parsed = ParsedLaunch()
+>         drs_raw = env_sec.get("DXVK_NVAPI_DRS_SETTINGS")
+>         if drs_raw not in (None, ""):
+>             _parse_drs_string(str(drs_raw), parsed)
+>         arch_code: Optional[str] = None
+>         arch_raw = env_sec.get("DXVK_NVAPI_GPU_ARCH")
+>         if arch_raw not in (None, ""):
+>             a = arch_by_code(str(arch_raw).strip().upper())
+>             if a:
+>                 arch_code = a.code
+>             else:
+>                 notes.append(f"DXVK_NVAPI_GPU_ARCH={arch_raw!r} is not a known arch — skipped")
+>         notes.extend(text for sev, text in parsed.notes if sev == "warn")
+>         self.settings_manager.replace_state(parsed.drs, arch_code)
