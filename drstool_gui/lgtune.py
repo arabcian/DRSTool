@@ -402,6 +402,17 @@ LGTUNE_KEYS: List[tuple] = [
      "none is the usual best choice for NVMe; the others are for experiments.",
      ["none", "mq-deadline", "kyber", "bfq"]),
 
+    ("SET_SCX_SCHED", "check", "0",
+     "Run a sched_ext (scx) scheduler during gameplay",
+     "Starts the scheduler chosen below while games run and stops it on POST. Needs a kernel with "
+     "sched_ext (CachyOS ships one) and the scx_* binary. Skipped if another sched_ext scheduler is active."),
+
+    ("SCX_SCHEDULER", "combo", "scx_lavd",
+     "sched_ext scheduler",
+     "lavd: latency-aware, a good default for games. bpfland: favours interactive tasks. "
+     "rusty: general purpose. flash: low-latency, experimental.",
+     ["scx_lavd", "scx_bpfland", "scx_rusty", "scx_flash"]),
+
     # ── Logging ───────────────────────────────────────────────────────────────
     ("LOG_LEVEL", "combo", "INFO",
      "Log level",
@@ -960,6 +971,8 @@ QPlainTextEdit{
             f"SET_WIFI_POWERSAVE={_val('SET_WIFI_POWERSAVE')}",
             f"SET_NVME_SCHED={_val('SET_NVME_SCHED')}",
             f"NVME_IO_SCHEDULER={_val('NVME_IO_SCHEDULER')}",
+            f"SET_SCX_SCHED={_val('SET_SCX_SCHED')}",
+            f"SCX_SCHEDULER={_val('SCX_SCHEDULER')}",
             "",
             "# --- Logging -----------------------------------------------------",
             f"LOG_LEVEL={_val('LOG_LEVEL')}",

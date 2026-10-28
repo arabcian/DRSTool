@@ -4,7 +4,6 @@ import shlex
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QPushButton, QSizePolicy, QVBoxLayout, QWidget,
@@ -18,12 +17,14 @@ from .catalog_data import (
     vkd3d_config_tokens,
 )
 from .favorites import FAVS
+from .field_check import watch
 from .lookup import _ENV_BY_NAME, _ENV_NAME_RX, CUSTOM_ENV_CAT, env_def
 from .setting_editor import (
     _make_scrollable_control_area, EDITOR_CRUMB_SS, EDITOR_DESC_SS, EDITOR_ID_SS,
     EDITOR_TITLE_SS, EDITOR_VALUE_SS, FLAG_BTN_SS, OPTION_BTN_SS,
 )
 from .settings_manager import SettingsManager
+from drstool_core.validate import check_int
 from .sysinfo import dxvk_cfg_unavailable, env_unavailable, unavail_banner, vkd3d_flag_unavailable
 from .theme import btn_ss, caption, T
 from .widgets import (
@@ -328,6 +329,7 @@ QLineEdit:hover{ background:#1f2430; }
         self._debounce_timer.setSingleShot(True)
         self._debounce_timer.timeout.connect(self._commit_pending_value)
         self._pending_value: str = ""
+        self._value_check = None          # validity check of the current field, if any
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -426,6 +428,7 @@ QLineEdit:hover{ background:#1f2430; }
         self._desc_label.updateGeometry()
         self.layout().activate()
         self._clear_layout(self._control_layout)
+        self._value_check = None
         _why = env_unavailable(ev)
         if _why:
             self._control_layout.addWidget(unavail_banner(
@@ -810,13 +813,16 @@ QLineEdit:hover{ background:#1f2430; }
         edit.setFixedHeight(32)
         if ev.vtype == "int":
             # Vars declared as "int" (FLM_TARGET_FPS, FLM_RT_PRIORITY, ...) only
-            # ever hold a non-negative integer — flip_meter.cpp atoi/atoll's
-            # them and clamps. Reject non-numeric keystrokes here so a typo
-            # like "6o" can't be committed and silently parsed as 6 (or 0)
-            # by the layer. String-typed vars (paths, CPU ranges) untouched.
-            edit.setValidator(QIntValidator(0, 2_000_000_000, edit))
+            # ever hold a non-negative integer. A typo like "6o" is shown as a
+            # warning and is not committed, so the layer never sees it.
+            # String-typed vars (paths, CPU ranges) are not checked here.
+            warn = QLabel()
+            warn.setStyleSheet("color:#d9534f; font-size:11px;")
+            self._value_check = watch(edit, check_int, warn)
         edit.textChanged.connect(self._on_text_changed)
         self._control_layout.addWidget(edit)
+        if ev.vtype == "int":
+            self._control_layout.addWidget(warn)
 
     # ── Setters ───────────────────────────────────────────────────────────────
 
@@ -854,6 +860,8 @@ QLineEdit:hover{ background:#1f2430; }
         self._debounce_timer.start(200)
 
     def _commit_pending_value(self):
+        if self._value_check is not None and not self._value_check():
+            return                        # invalid: keep the last valid value, the warning stays visible
         self._set_value(self._pending_value)
 
     def discard_pending_edit(self):

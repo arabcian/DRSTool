@@ -11,7 +11,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from drstool_core.validate import check_dir
 from .base import _atomic_write, _backup_file
+from .field_check import watch
 from .env_widgets import EnvVarEditorWidget
 from .steam_utils import steam_install_dirs
 from .theme import T
@@ -87,6 +89,8 @@ class DxvkConfWidget(QWidget):
         self._dir.setPlaceholderText("game folder (where the .exe runs) / name for mode 2")
         self._dir.setStyleSheet(_LINEEDIT_QSS)
         self._dir.textChanged.connect(lambda _t: self.refresh())
+        self._dir_check = watch(self._dir, lambda t: check_dir(t) if self._mode.currentData() == 0 else "")
+        self._mode.currentIndexChanged.connect(lambda _i: self._dir_check())
         row.addWidget(self._dir, 2)
         b = _tool_btn("Browse…")
         b.clicked.connect(self._browse)

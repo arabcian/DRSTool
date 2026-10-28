@@ -14,6 +14,8 @@ Modules:
     game_scan       find installed games (Steam, Lutris, Heroic, Bottles) and
                     the DLSS / Streamline DLLs inside them
     dll_ops         replace DLLs atomically with a restorable backup
+    winetricks      winetricks / protontricks command for a Wine prefix (component whitelist)
+    validate        checks for free-text fields (integers, hex values, folders)
 """
 
-__all__ = ["models", "catalog", "share_code", "steam_shortcuts", "pe_version", "game_scan", "dll_ops"]
+__all__ = ["models", "catalog", "share_code", "steam_shortcuts", "pe_version", "game_scan", "dll_ops", "winetricks", "validate"]

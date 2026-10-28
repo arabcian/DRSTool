@@ -951,6 +951,11 @@ class DllManagerWidget(QWidget):
         self._restore_btn.setToolTip("Put back the DLLs a previous update replaced in the selected game")
         self._restore_btn.clicked.connect(self._restore)
         btns.addWidget(self._restore_btn)
+        self._tricks_btn = _tool_btn("Windows components…")
+        self._tricks_btn.setToolTip("Install runtime components (vcrun, d3dcompiler, d3dx9, xact) into the "
+                                    "selected game's Wine prefix with winetricks or protontricks")
+        self._tricks_btn.clicked.connect(self._open_tricks)
+        btns.addWidget(self._tricks_btn)
         self._open_btn = _tool_btn("Open folder")
         self._open_btn.clicked.connect(self._open_folder)
         btns.addWidget(self._open_btn)
@@ -997,6 +1002,13 @@ class DllManagerWidget(QWidget):
     def _busy(self) -> bool:
         return any(w is not None and w.isRunning() for w in (self._worker, self._scan_worker))
 
+    def _open_tricks(self):
+        st = self._current_state()
+        if st is None or st.game.prefix is None:
+            return
+        from .winetricks_dialog import WinetricksDialog
+        WinetricksDialog(st.game.prefix, st.game.name, self).exec()
+
     def _sync_buttons(self):
         if not self._ok:
             return
@@ -1010,6 +1022,7 @@ class DllManagerWidget(QWidget):
         self._update_btn.setEnabled(not busy and plan_n > 0)
         self._update_btn.setText(f"Update {len(sel)} game(s) · {plan_n} item(s)" if sel else "Update selected")
         self._restore_btn.setEnabled(not busy and st is not None)
+        self._tricks_btn.setEnabled(not busy and st is not None and st.game.prefix is not None)
         self._open_btn.setEnabled(st is not None)
         self._dl_only.setEnabled(not busy and any(isinstance(self._target(c), NgxBuild) for c in _DLLM_NGX))
         self._rm_custom.setEnabled(st is not None and st.game.launcher == "Custom")

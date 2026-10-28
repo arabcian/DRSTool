@@ -10,7 +10,9 @@ from PySide6.QtWidgets import (
 )
 
 from drstool_core.models import Setting
+from drstool_core.validate import check_hex
 
+from .field_check import watch
 from .lookup import _parse_int_any
 from .settings_manager import SettingsManager
 from .sysinfo import drs_unavailable, unavail_banner
@@ -456,6 +458,7 @@ QLineEdit:hover{
     background:#1f2430;
 }
 """)
+        watch(hex_edit, check_hex)
         hex_edit.textChanged.connect(lambda t: self._set_hex_from_edit(s.id, t))
         grid.addWidget(hex_edit, 0, 3)
 
@@ -580,6 +583,7 @@ QLineEdit:hover{
     background:#1f2430;
 }
 """)
+        watch(hex_edit, check_hex)
         hex_edit.textChanged.connect(lambda t: self._set_hex_from_edit(s.id, t))
         hbox.addWidget(hex_edit)
 

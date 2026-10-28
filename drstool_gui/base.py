@@ -30,10 +30,10 @@ except ImportError:
 # installs). The catalog (drstool_core.catalog) is required; if one of the helper modules
 # below cannot be imported, the pages that need it say what is missing.
 try:
-    from drstool_core import share_code, steam_shortcuts, game_scan, dll_ops, pe_version
+    from drstool_core import share_code, steam_shortcuts, game_scan, dll_ops, pe_version, winetricks
     _CORE_ERR = ""
 except ImportError as _ex:          # pragma: no cover - depends on the install
-    share_code = steam_shortcuts = game_scan = dll_ops = pe_version = None
+    share_code = steam_shortcuts = game_scan = dll_ops = pe_version = winetricks = None
     _CORE_ERR = (f"The drstool_core package was not found ({_ex}). Install DRSTool with its "
                  "package (or run DRSTool.py from the repository folder) to use this feature.")
 
