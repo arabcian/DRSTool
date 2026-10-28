@@ -12,6 +12,7 @@ import importlib.util
 import io
 import pkgutil
 import os
+import shutil
 import struct
 import sys
 import tarfile
@@ -135,6 +136,19 @@ def build_fake_home():
     return pfx, exe
 
 
+_PDB_TIERS = {"42": "gold", "777": "silver", "999": "borked"}
+
+
+def _fake_hints(appid, use_cache=True):
+    """Stands in for the ProtonDB / PCGamingWiki network lookup."""
+    import drstool_gui.game_hints as gh
+    tier = _PDB_TIERS.get(str(appid), "")
+    pd = {"tier": tier, "trendingTier": tier, "bestReportedTier": tier, "total": 9, "confidence": "good"} \
+        if tier else None
+    return {"v": gh._HINT_CACHE_VER, "appid": str(appid), "ts": time.time(), "protondb": pd, "pcgw": None,
+            "reports": None, "errors": [] if tier else ["ProtonDB: 404"]}
+
+
 @unittest.skipUnless(HAVE_QT, "PySide6 not installed")
 class GuiTests(unittest.TestCase):
     @classmethod
@@ -148,6 +162,11 @@ class GuiTests(unittest.TestCase):
         m.apply_theme(cls.app)
         cls.errors = []
         sys.excepthook = lambda *a: cls.errors.append("".join(traceback.format_exception(*a)))
+        import drstool_gui.game_hints as gh
+        cls._hint_patches = [mock.patch.object(gh, "fetch_game_hints", _fake_hints),
+                             mock.patch.object(gh, "steam_appid_search", return_value=[])]
+        for pt in cls._hint_patches:
+            pt.start()
         cls.win = m.MainWindow()
         cls.win.resize(1400, 900)
         cls.win.show()
@@ -156,6 +175,8 @@ class GuiTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.win.close()
+        for pt in cls._hint_patches:
+            pt.stop()
         cls.pump()
 
     @classmethod
@@ -360,6 +381,46 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(m._vtuple(m.detect_installed(self.pfx, m._DLLM_PD["dxvk"])["version"]), (2, 3))
         dlg = m.DllRestoreDialog(w._states[cool.game.key])
         self.assertEqual(dlg._list.topLevelItemCount(), 1)
+
+    def test_prefix_install_missing_is_undone_by_restore(self):
+        """A component installed into a prefix that had none has no original to put back:
+        Restore must delete what the update created, and put back what it replaced."""
+        m = self.m
+        root = Path(tempfile.mkdtemp(prefix="drs-pfx-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        pfx = root / "pfx"
+        for sub in ("system32", "syswow64"):
+            (pfx / "drive_c/windows" / sub).mkdir(parents=True)
+        src = root / "src/dxvk-nvapi-v9.9"
+        for d, name in (("x64", "nvapi64.dll"), ("x32", "nvapi.dll")):
+            (src / d).mkdir(parents=True)
+            (src / d / name).write_bytes(b"MZ new " + name.encode())
+        arch = root / "dxvk-nvapi-v9.9.tar.gz"
+        with tarfile.open(arch, "w:gz") as tf:
+            tf.add(src, arcname="dxvk-nvapi-v9.9")
+        cache = m._cache_dir() / "v9.9"
+        cache.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(shutil.rmtree, cache, True)
+        shutil.copy2(arch, cache / arch.name)
+        rel = {"tag_name": "v9.9", "assets": [{"name": arch.name, "size": arch.stat().st_size,
+                                                "browser_download_url": "https://invalid.example/never"}]}
+        sys32 = pfx / "drive_c/windows/system32/nvapi64.dll"
+        wow = pfx / "drive_c/windows/syswow64/nvapi.dll"
+        n = m.apply_component_update(pfx, m._DLLM_PD["nvapi"], rel, pfx / ".drstool-backup/20260101-000000",
+                                     lambda _m: None)
+        self.assertEqual(n, 2)
+        self.assertTrue(sys32.is_file() and wow.is_file())
+        # a second update replaces one of them: that one has an original now
+        sys32.write_bytes(b"MZ older")
+        m.apply_component_update(pfx, m._DLLM_PD["nvapi"], rel, pfx / ".drstool-backup/20260102-000000",
+                                 lambda _m: None)
+        n, stamp = m.restore_prefix_backup(pfx)
+        self.assertEqual(stamp, "20260102-000000")
+        self.assertEqual(sys32.read_bytes(), b"MZ older")                  # original back
+        self.assertTrue(wow.is_file())                                      # not created by this update
+        n, stamp = m.restore_prefix_backup(pfx)                             # the first update created both
+        self.assertEqual(stamp, "20260101-000000")
+        self.assertFalse(sys32.exists() or wow.exists())
 
     def test_dll_manager_scan_button(self):
         # clicked(bool) must not reach scan(only=...) as only=False
@@ -576,13 +637,14 @@ class GuiTests(unittest.TestCase):
         gl, card = win._games_list, win._game_card
         self.wait_for(lambda: gl.game("steam:42") is not None and gl.game("lutris:rpg-1") is not None)
         self.assertTrue(gl.select_key("steam:42"))
+        card.set_game(gl.game("steam:42"))              # read the files written above, whatever was shown before
         self.wait_for(lambda: card.game is not None and card.game.key == "steam:42" and card._info)
         self.assertEqual(win._right_stack.currentIndex(), win.PAGE_GAMES)
         self.assertIn("DLSS 310.1.0", card.t_dlls.value.text())
         self.assertIn("2.7.0", card.t_dlls.detail.text())            # Streamline
         self.assertEqual(card.t_log.value.text(), "1 known problem")
         self.assertIn("FPS avg", card.t_ft.value.text())
-        self.assertEqual(card.t_pdb.value.text(), "not fetched")       # no network unless asked
+        self.wait_for(lambda: card.t_pdb.value.text() == "Gold")        # looked up by itself, network stubbed
         self.assertEqual(card.t_profile.value.text(), "No profile")
 
         # profile → card → write to Steam: the link is recorded with the profile's fingerprint
@@ -640,6 +702,203 @@ class GuiTests(unittest.TestCase):
             win.set_env_var(k, "")
         win._switch_tab(win.TAB_DRS)
 
+    def test_game_hints_picks_the_game_and_finds_the_appid_itself(self):
+        m, win = self.m, self.win
+        import drstool_gui.game_hints as gh
+        info = {"v": gh._HINT_CACHE_VER, "appid": "42", "ts": time.time(), "errors": [], "reports": None,
+                "protondb": {"tier": "gold", "trendingTier": "platinum", "bestReportedTier": "platinum",
+                             "total": 321, "confidence": "strong", "score": 0.7},
+                "pcgw": {"title": "Cool Game", "url": "x", "engines": ["Unity"], "d3d": ["11"],
+                         "vulkan": [], "opengl": []}}
+        calls = []
+        win._switch_tab(win.TAB_GAMES)
+        gl = win._games_list
+        self.wait_for(lambda: gl.game("steam:42") is not None and gl.game("lutris:rpg-1") is not None)
+        win._extra_tools.show_tab("Game hints")
+        hw = win._extra_tools.hints
+        hw._fill_games()
+        labels = [hw._games.itemText(i) for i in range(hw._games.count())]
+        self.assertTrue(any("Cool Game" in x and "Steam" in x for x in labels), labels)
+        self.assertTrue(any("Lutris" in x for x in labels), labels)           # not only Steam games
+        self.addCleanup(win.set_env_var, "PROTON_ENABLE_NVAPI", "")
+        win.set_env_var("PROTON_ENABLE_NVAPI", "")
+
+        def fake_fetch(appid, use_cache=True):
+            calls.append(appid)
+            return dict(info, appid=str(appid))
+        rows = [("PROTON_ENABLE_NVAPI", "1", "D3D11 title on NVIDIA", "heuristic", True),
+                ("PROTON_USE_NTSYNC", "1", "/dev/ntsync exists", "system", False)]
+        self.addCleanup(win.set_env_var, "PROTON_USE_NTSYNC", "")
+        with mock.patch.object(gh, "fetch_game_hints", fake_fetch), \
+                mock.patch.object(gh, "hint_suggestions", return_value=(rows, ["Try GE-Proton."])):
+            # a Steam game: the appid is known, the lookup starts by itself
+            self.assertTrue(hw.select_game("steam:42"))
+            self.assertEqual(hw._appid.text(), "42")
+            self.wait_for(lambda: hw._worker is not None and not hw._worker.isRunning() and not hw._verdict.isHidden())
+            self.pump(5)
+            self.assertTrue(calls and set(calls) == {"42"}, calls)   # the card may look it up too
+            self.assertIn("GOLD", hw._verdict.text())
+            self.assertIn("Try GE-Proton.", hw._verdict.text())
+            self.assertEqual(hw._table.rowCount(), 2)
+            self.assertEqual(hw._table.item(0, gh._C_USE).checkState(), m.Qt.Checked)    # preselected = ticked
+            self.assertEqual(hw._table.item(1, gh._C_USE).checkState(), m.Qt.Unchecked)
+            self.assertEqual(hw._apply.text(), "Apply 1 checked")
+            hw._table.item(1, gh._C_USE).setCheckState(m.Qt.Checked)
+            hw._table.item(0, gh._C_USE).setCheckState(m.Qt.Unchecked)               # only ticked rows are applied
+            self.assertEqual(hw._apply.text(), "Apply 1 checked")
+            hw._apply_selected()
+            env = win.collect_launch_payload().get("env", {})
+            self.assertEqual(env.get("PROTON_USE_NTSYNC"), "1")
+            self.assertNotEqual(env.get("PROTON_ENABLE_NVAPI"), "1")
+
+            # a Lutris game: its appid is searched by name and a clear winner is taken without asking
+            found = [{"id": "777", "name": "RPG One", "score": 0.97}, {"id": "778", "name": "RPG Two", "score": 0.4}]
+            with mock.patch.object(gh, "steam_appid_search", return_value=found):
+                self.assertTrue(hw.select_game("lutris:rpg-1"))
+                self.wait_for(lambda: hw._aw is not None and not hw._aw.isRunning())
+                self.pump(10)
+                self.wait_for(lambda: hw._worker is not None and not hw._worker.isRunning() and "777" in calls)
+            self.assertEqual(hw._appid.text(), "777")
+            self.assertEqual(m.LINKS.get("lutris:rpg-1")["appid"], "777")     # remembered for the Games tab
+            self.assertTrue(hw._matches.isHidden())
+
+            # an ambiguous name is not guessed: the user chooses
+            close = [{"id": "1", "name": "Dark Quest", "score": 0.95}, {"id": "2", "name": "Dark Quest 2", "score": 0.93}]
+            self.assertIsNone(gh.pick_appid(close))
+            self.assertIsNone(gh.pick_appid([{"id": "1", "name": "x", "score": 0.5}]))
+            self.assertEqual(gh.pick_appid(found)["id"], "777")
+            hw._auto_pick = True
+            hw._matches_ready(close, "")
+            self.assertFalse(hw._matches.isHidden())
+            self.assertEqual(hw._matches.count(), 2)
+            hw._matches.setCurrentRow(1)
+            hw._use_match(False)
+            self.assertEqual(hw._appid.text(), "2")
+            self.wait_for(lambda: hw._worker is not None and not hw._worker.isRunning() and "2" in calls)
+            self.pump(5)
+        m.LINKS.set_field("lutris:rpg-1", "appid", "")
+        win._switch_tab(win.TAB_DRS)
+
+    def test_games_card_protondb_is_automatic(self):
+        """The rating is looked up by itself, the appid is found and remembered, and Fetch / Enter
+        always fetch the appid that is shown in the field (never an older game's result)."""
+        m, win = self.m, self.win
+        import drstool_gui.game_hints as gh
+        calls = []
+        orig = _fake_hints
+
+        def record(appid, use_cache=True):
+            calls.append(str(appid))
+            return orig(appid, use_cache)
+        win._switch_tab(win.TAB_GAMES)
+        gl, card = win._games_list, win._game_card
+        self.wait_for(lambda: gl.game("lutris:rpg-1") is not None and gl.game("steam:42") is not None)
+        m.LINKS.set_field("lutris:rpg-1", "appid", "")
+        m.LINKS.set_field("lutris:rpg-1", "appid_miss", "")
+        found = [{"id": "777", "name": "RPG One", "score": 0.97}, {"id": "778", "name": "RPG Two", "score": 0.4}]
+        with mock.patch.object(gh, "fetch_game_hints", record), \
+                mock.patch.object(gh, "steam_appid_search", return_value=found) as search:
+            # no appid yet: searched once, the clear winner is taken and remembered
+            self.assertTrue(gl.select_key("lutris:rpg-1"))
+            self.wait_for(lambda: card.t_pdb.value.text() == "Silver")
+            self.assertEqual(search.call_count, 1)
+            self.assertEqual(m.LINKS.get("lutris:rpg-1")["appid"], "777")
+            self.assertEqual(card._appid.text(), "777")
+            self.assertEqual(calls, ["777"])
+
+            # typed appid + Enter: that appid is fetched, not the previous game's result
+            card._appid.setText("999")
+            card._appid.returnPressed.emit()
+            self.wait_for(lambda: card.t_pdb.value.text() == "Borked")
+            self.assertEqual(calls[-1], "999")
+            self.assertEqual(m.LINKS.get("lutris:rpg-1")["appid"], "999")
+
+            # Fetch is never disabled, and it uses the typed appid
+            self.assertTrue(card._pdb_btn.isEnabled())
+            card._appid.setText("42")
+            card._pdb_btn.click()
+            self.wait_for(lambda: card.t_pdb.value.text() == "Gold")
+            self.assertEqual(calls[-1], "42")
+
+            # a game that matched no Steam app is not searched again for 30 days
+            m.LINKS.set_field("lutris:rpg-1", "appid", "")
+            m.LINKS.set_field("lutris:rpg-1", "appid_miss", "")
+            search.reset_mock()
+            search.return_value = []
+            self.assertTrue(gl.select_key("steam:42"))
+            self.assertTrue(gl.select_key("lutris:rpg-1"))
+            self.wait_for(lambda: card.t_pdb.value.text() == "not on Steam")
+            self.assertEqual(search.call_count, 1)
+            self.assertIsNone(m.LINKS.get("lutris:rpg-1").get("appid") or None)
+            gl.select_key("steam:42")
+            self.wait_for(lambda: card.game is not None and card.game.key == "steam:42")
+            gl.select_key("lutris:rpg-1")
+            self.wait_for(lambda: card.game is not None and card.game.key == "lutris:rpg-1")
+            self.assertEqual(search.call_count, 1)            # still the one search
+
+        m.LINKS.set_field("lutris:rpg-1", "appid", "")
+        m.LINKS.set_field("lutris:rpg-1", "appid_miss", "")
+        win._switch_tab(win.TAB_DRS)
+
+    def test_write_to_game_keeps_what_the_editor_holds(self):
+        """Game B is linked to profile Q while the editor holds profile P: the user decides, and
+        "write the editor" must not swap the editor for Q or write Q."""
+        m, win, sm = self.m, self.win, self.win.settings_manager
+        win._switch_tab(win.TAB_GAMES)
+        gl, card = win._games_list, win._game_card
+        self.wait_for(lambda: gl.game("lutris:rpg-1") is not None)
+        win.set_env_var("DXVK_ASYNC", "1")
+        sm.save_profile("WriteP", win._env_widget.get_env_dict())
+        win.set_env_var("DXVK_ASYNC", "")
+        win.set_env_var("PROTON_ENABLE_NVAPI", "1")
+        sm.save_profile("WriteQ", win._env_widget.get_env_dict())
+        self.pump()
+        self.assertTrue(gl.select_key("lutris:rpg-1"))
+        self.wait_for(lambda: card.game is not None and card.game.key == "lutris:rpg-1")
+        card._prof_combo.setCurrentIndex(card._prof_combo.findData("WriteQ"))
+        card._assign_from_combo(0)
+        win.load_profile_by_name("WriteP")
+        yml = HOME / ".local/share/lutris/games/rpg-1.yml"
+        before = yml.read_text()
+        self.addCleanup(yml.write_text, before)
+        try:
+            # 1) write the editor as it is: P goes in, the editor still holds P
+            with patch_name(m, "_proc_running", return_value=False), \
+                    mock.patch.object(win, "_ask_write_source", return_value="editor"):
+                card._write()
+            self.assertEqual(sm.get_current_profile(), "WriteP")
+            txt = yml.read_text()
+            self.assertIn("DXVK_ASYNC", txt)
+            self.assertNotIn("PROTON_ENABLE_NVAPI", txt)
+            self.assertEqual(m.LINKS.get("lutris:rpg-1")["profile"], "WriteP")   # what it now runs
+            card._prof_combo.setCurrentIndex(card._prof_combo.findData("WriteQ"))
+            card._assign_from_combo(0)
+            # 2) cancel: nothing is written, nothing is loaded
+            yml.write_text(before)
+            with mock.patch.object(win, "_ask_write_source", return_value=None):
+                card._write()
+            self.assertEqual(yml.read_text(), before)
+            self.assertEqual(sm.get_current_profile(), "WriteP")
+            # 3) load the linked profile and write it
+            with patch_name(m, "_proc_running", return_value=False), \
+                    mock.patch.object(win, "_ask_write_source", return_value="profile"), \
+                    mock.patch.object(m.QMessageBox, "question", return_value=m.QMessageBox.Ok):
+                card._write()
+            self.assertEqual(sm.get_current_profile(), "WriteQ")
+            self.assertIn("PROTON_ENABLE_NVAPI", yml.read_text())
+            # 4) the editor already holds the linked profile: no question at all
+            with patch_name(m, "_proc_running", return_value=False), \
+                    mock.patch.object(win, "_ask_write_source", side_effect=AssertionError("asked")), \
+                    mock.patch.object(m.QMessageBox, "question", return_value=m.QMessageBox.Yes):
+                card._write()
+        finally:
+            for k in ("DXVK_ASYNC", "PROTON_ENABLE_NVAPI"):
+                win.set_env_var(k, "")
+            for n in ("WriteP", "WriteQ"):        # no saved profile = nothing to ask about on close
+                sm.delete_profile(n)
+            win._set_dirty(False)
+            win._switch_tab(win.TAB_DRS)
+
 
 @unittest.skipUnless(HAVE_QT, "PySide6 not installed")
 class WinetricksDialogTests(unittest.TestCase):
@@ -669,9 +928,10 @@ class WinetricksDialogTests(unittest.TestCase):
         from drstool_gui.winetricks_dialog import WinetricksDialog
         dlg = WinetricksDialog(self.prefix, "Test Game")
         self.assertTrue(dlg._run_btn.isEnabled() is False)        # nothing selected yet
-        dlg._checks["xact"].setChecked(True)
-        dlg._checks["vcrun2022"].setChecked(True)
+        self.assertTrue(dlg.set_checked("xact"))
+        self.assertTrue(dlg.set_checked("vcrun2022"))
         self.assertTrue(dlg._run_btn.isEnabled())
+        self.assertIn("-q vcrun2022 xact", dlg._cmd.text())       # the command is previewed
         dlg._run()
         dlg._worker.wait(10000)
         self.app.processEvents()
@@ -679,6 +939,48 @@ class WinetricksDialogTests(unittest.TestCase):
         self.assertIn(f"WINEPREFIX={self.prefix} args=-q vcrun2022 xact", text)
         self.assertIn("✓ done", text)
         dlg.close()
+
+    def test_every_winetricks_library_is_listed_searchable_and_selectable(self):
+        from drstool_core import winetricks as wt
+        from drstool_gui.winetricks_dialog import WinetricksDialog
+        verbs = {e["verb"] for e in wt.catalog()}
+        self.assertGreaterEqual(len(verbs), 300)
+        for v in ("vcrun2022", "vcrun6", "d3dx9_43", "d3dcompiler_47", "dotnet48", "xact_x64", "mfc140",
+                  "msxml6", "faudio", "physx", "dxvk", "vkd3d", "quartz", "gdiplus"):
+            self.assertIn(v, verbs)
+        (self.prefix / "winetricks.log").write_text("vcrun2022\nd3dx9\n")
+        dlg = WinetricksDialog(self.prefix, "Test Game")
+        dlg._view.setCurrentIndex(dlg._view.findData("__all"))
+        self.assertEqual(len(dlg._items), len(verbs))             # nothing is dropped from the list
+        self.assertEqual(dlg._items["vcrun2022"].text(2), "✓ installed")
+        dlg._search.setText("d3dx9_4")
+        self.assertEqual(sorted(dlg._items), ["d3dx9_40", "d3dx9_41", "d3dx9_42", "d3dx9_43"])
+        dlg.set_checked("d3dx9_43")
+        dlg._search.setText("")                                   # the selection survives the filter
+        self.assertEqual(dlg._selected(), ["d3dx9_43"])
+        dlg._view.setCurrentIndex(dlg._view.findData("__inst"))
+        self.assertEqual(sorted(dlg._items), ["d3dx9", "vcrun2022"])
+        dlg.close()
+
+    def test_suggestions_from_a_log_preselect_the_right_library(self):
+        from drstool_core import winetricks as wt
+        found = dict(wt.suggest_from_text(
+            "info: start\nerr:module:import_dll Library MSVCP140.dll (which is needed by x.exe) not found\n"
+            "err:module: Library d3dx9_43.dll not found\nerr: all fine here\n"))
+        self.assertEqual(sorted(found), ["d3dx9", "vcrun2022"])
+        from drstool_gui.winetricks_dialog import WinetricksDialog
+        dlg = WinetricksDialog(self.prefix, "Test Game", suggest=list(found.items()) + [("nonsense", "x")])
+        self.assertEqual(dlg._selected(), ["d3dx9", "vcrun2022"])
+        self.assertTrue(dlg._run_btn.isEnabled())
+        dlg.close()
+
+    def test_force_flag_and_unknown_verbs(self):
+        from drstool_core import winetricks as wt
+        with mock.patch.object(wt.shutil, "which", lambda n: f"/usr/bin/{n}"):
+            p = wt.plan(self.prefix, ["vcrun2022"], force=True)
+            self.assertEqual(p.argv, ["/usr/bin/winetricks", "-q", "--force", "vcrun2022"])
+            with self.assertRaises(ValueError):
+                wt.plan(self.prefix, ["--self-update"])
 
 
 @unittest.skipUnless(HAVE_QT, "PySide6 not installed")
