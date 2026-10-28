@@ -17,6 +17,7 @@ from drstool_core.models import GPUArch
 from .base import _as_dict, _umask
 from .catalog_data import ALL_SETTINGS, GPU_ARCHS
 from .gamescope import normalize_gs_flags
+from .links import LINKS
 from .lookup import canonical_drs_key, canonical_drs_value, drs_lookup
 from .profile_io import unique_profile_name
 
@@ -200,6 +201,8 @@ class SettingsManager(QObject):
         if self._current_profile == old:
             self._current_profile = new
         ok = self._save_profiles()
+        if ok:
+            LINKS.rename_profile(old, new)        # the games written from it follow the new name
         self.profiles_changed.emit()
         return ok
 
@@ -229,7 +232,8 @@ class SettingsManager(QObject):
             del self._profiles[name]
             if self._current_profile == name:
                 self._current_profile = None
-            self._save_profiles()
+            if self._save_profiles():
+                LINKS.drop_profile(name)
             self.profiles_changed.emit()
 
     # ── Profile file location ────────────────────────────────────────────────

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 
 from .base import _as_dict, _atomic_write, _CORE_ERR, share_code
 from .dialogs import ChangesDialog, ShareImportDialog
+from .links import LINKS
 from .profile_io import parse_profile_import, profile_export_text, profile_share_code
 from .settings_manager import SettingsManager
 from .state import state_as_profile
@@ -166,6 +167,7 @@ class ProfileManagerWidget(QWidget):
         # every single DRS setting edit.
         self.settings_manager.profiles_changed.connect(self._refresh)
         self.settings_manager.profile_loaded.connect(lambda _name: self._refresh())
+        LINKS.changed.connect(self._refresh)          # "· N games" next to each profile
         self._refresh()
 
     def _create_profile(self):
@@ -233,7 +235,8 @@ class ProfileManagerWidget(QWidget):
         acts = [("Load", self._load_selected), ("Rename…", self._rename_selected),
                 ("Duplicate", self._duplicate_selected), ("Compare with editor…", self._compare_selected),
                 ("Export to file…", self._export_selected),
-                ("Copy share code", self._copy_share_code), (None, None),
+                ("Copy share code", self._copy_share_code),
+                ("Linked games…", self._linked_games), (None, None),
                 ("Delete", self._delete_selected)]
         for label, fn in acts:
             if label is None:
@@ -247,6 +250,12 @@ class ProfileManagerWidget(QWidget):
         a = menu.addAction("Import share code…")
         a.setEnabled(not _CORE_ERR)
         a.triggered.connect(lambda: self.open_share_import())
+
+    def _linked_games(self):
+        name = self._selected_name()
+        w = self.window()
+        if name and hasattr(w, "open_linked_games"):
+            w.open_linked_games(name)
 
     def _copy_share_code(self):
         name = self._selected_name()
@@ -358,9 +367,14 @@ class ProfileManagerWidget(QWidget):
             hint.setFlags(Qt.NoItemFlags)
             self._profile_list.addItem(hint)
             return
+        counts = LINKS.counts()
         for name in sorted(profiles, key=str.lower):
             prof = profiles.get(name)
             summary, tip = self._summarize(prof)
+            n_games = counts.get(name, 0)
+            if n_games:
+                summary += f" · {n_games} game{'s' if n_games != 1 else ''}"
+                tip += f"\nUsed by {n_games} game(s) — right-click › Linked games…"
             item = make_list_item(name, name, is_set=(name == current), value=summary)
             item.setToolTip(tip)
             self._profile_list.addItem(item)

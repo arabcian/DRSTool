@@ -25,6 +25,7 @@ from .env_widgets import EnvVarEditorWidget, EnvVarsWidget
 from .external_change import ExternalChangeBanner, ExternalChangeWatcher
 from .extra_tools import ExtraToolsWidget
 from .favorites import FAVS, install_fav_menu
+from .game_card import GameCardWidget, GameListWidget, LinkedGamesDialog
 from .gamescope import GamescopeFlagsWidget
 from .history import HistoryWidget
 from .launch_import import looks_like_launch_text
@@ -32,6 +33,7 @@ from .launch_line import build_launch_line
 from .launchers import (
     BottlesBackend, HeroicBackend, LauncherSyncWidget, LaunchLineWidget, SteamBackend,
 )
+from .links import game_key_for_target, LINKS, plain_title, profile_fp, state_fp
 from .lint import lint_config, LintIssue
 from .lookup import (
     _ENV_BY_NAME, canonical_drs_key, canonical_drs_value, custom_drs_setting, drs_lookup,
@@ -65,15 +67,17 @@ if TYPE_CHECKING:
 
 class MainWindow(QMainWindow):
     # Tab indices (sidebar stack pages). Nav order on screen matches.
-    TAB_DRS, TAB_ARCH, TAB_ENV, TAB_TOOLS, TAB_PROFILES = range(5)
+    TAB_DRS, TAB_ARCH, TAB_ENV, TAB_TOOLS, TAB_PROFILES, TAB_GAMES = range(6)
     # Right-stack pages
-    PAGE_EMPTY, PAGE_SETTING, PAGE_ARCH, PAGE_ENV, PAGE_GAMESCOPE, PAGE_TOOLS, PAGE_LUTRIS = range(7)
+    PAGE_EMPTY, PAGE_SETTING, PAGE_ARCH, PAGE_ENV, PAGE_GAMESCOPE, PAGE_TOOLS, PAGE_LUTRIS, PAGE_GAMES = range(8)
 
     EMPTY_HINTS = {
         0: "Pick a DRS setting\nGreen dots mark settings already in the launch string; their value shows on the right.",
         1: "Pick a GPU generation to spoof\nSets DXVK_NVAPI_GPU_ARCH — leave it unset to report the real card.",
         2: "Pick an environment variable\nDXVK, VKD3D-Proton, Proton, Wine, NVIDIA, Gamescope and more — set ones carry a green dot.",
         4: "",
+        5: "Pick a game\nOne card per game: linked profile, Proton build, DLSS / DXVK versions, "
+           "the last frametime capture, log errors and the ProtonDB tier.",
     }
 
     def __init__(self):
@@ -143,8 +147,11 @@ class MainWindow(QMainWindow):
                                  "Wine, vk_flip_meter and Gamescope")
         self._flm_tab = NavTab("Extra Tools", "\u2692")
         self._profiles_tab = NavTab("Profiles", "\u25a4")
+        self._games_tab = NavTab("Games", "\u25b6")
+        self._games_tab.setToolTip("Every installed game with its profile, Proton, DLSS / DXVK, "
+                                   "frametime, log errors and ProtonDB tier")
         self._nav_tabs = [self._settings_tab, self._arch_tab, self._env_tab,
-                          self._flm_tab, self._profiles_tab]
+                          self._flm_tab, self._profiles_tab, self._games_tab]
         for idx, btn in enumerate(self._nav_tabs):
             btn.clicked.connect(lambda _c=False, i=idx: self._switch_tab(i))
             btn.setToolTip((btn.toolTip() + "\n" if btn.toolTip() else "") + f"Ctrl+{idx + 1}")
@@ -331,6 +338,10 @@ class MainWindow(QMainWindow):
         profiles_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
         self._sidebar_stack.addWidget(profiles_scroll)
 
+        # Page 5: Games (one card per game on the right)
+        self._games_list = GameListWidget(self.settings_manager)
+        self._sidebar_stack.addWidget(self._games_list)
+
         self._lutris_sync_widget = LutrisSyncWidget(self.settings_manager)
         self._env_widget.env_changed.connect(self._lutris_sync_widget._update_preview)
         lutris_scroll = QScrollArea()
@@ -420,6 +431,11 @@ class MainWindow(QMainWindow):
         # Page 6: Lutris Sync (Profiles tab)
         self._right_stack.addWidget(self._sync_tabs)
 
+        # Page 7: Game card (Games tab)
+        self._game_card = GameCardWidget(self.settings_manager)
+        self._right_stack.addWidget(self._game_card)
+        self._games_list.game_selected.connect(self._open_game)
+
         # Wire the Gamescope CLI-flag builder into the Lutris sync mapping
         self._lutris_sync_widget.set_gamescope_widget(self._gamescope)
         self._gamescope.changed.connect(self._lutris_sync_widget._update_preview)
@@ -462,6 +478,12 @@ class MainWindow(QMainWindow):
         self.settings_manager.profile_saved.connect(lambda _n: self._set_dirty(False))
         self.settings_manager.profiles_changed.connect(self._refresh_badges)
         self.settings_manager.profiles_changed.connect(self._update_window_title)
+        # Profile ↔ game links: every write from a sync tab is remembered per game, and saving
+        # a profile offers to bring the games that use it up to date.
+        for _w in (self._lutris_sync_widget, self._steam_sync, self._heroic_sync, self._bottles_sync):
+            _w.applied.connect(self._on_game_written)
+        self.settings_manager.profile_saved.connect(self._suggest_linked_update)
+        LINKS.changed.connect(self._refresh_badges)
 
         # Anything that changes the output marks a loaded profile dirty.
         self.settings_manager.settings_changed.connect(self._mark_dirty)
@@ -1047,6 +1069,109 @@ class MainWindow(QMainWindow):
         else:
             super().dropEvent(e)
 
+    # ===== Games: game card and profile ↔ game links =====
+    def _open_game(self, game):
+        self._game_card.set_game(game)
+        if self._sidebar_stack.currentIndex() == self.TAB_GAMES:
+            self._right_stack.setCurrentIndex(self.PAGE_GAMES)
+
+    def _on_game_written(self, target: dict):
+        """A sync tab wrote the editor to a game: remember which profile it was."""
+        key = game_key_for_target(target)
+        if not key:
+            return
+        LINKS.record(key, name=plain_title(target.get("title", "")),
+                     launcher=str(target.get("kind", "")).capitalize(), target=target,
+                     profile=self.settings_manager.get_current_profile(), fp=state_fp(self.capture_state()))
+
+    def _apply_target(self, target: dict) -> tuple:
+        w = {"lutris": self._lutris_sync_widget, "steam": self._steam_sync,
+             "heroic": self._heroic_sync, "bottles": self._bottles_sync}.get(target.get("kind"))
+        if w is None:
+            return False, f"no sync tab for “{target.get('kind')}”"
+        return w.apply_target(target)
+
+    def _confirm_load_for_write(self, profile: str) -> bool:
+        """Writing a profile writes the editor, so the saved profile has to be in it."""
+        if self.settings_manager.get_current_profile() == profile and not self._dirty:
+            return True
+        msg = f"“{profile}” is loaded into the editor first; that is what gets written."
+        if self._dirty:
+            msg += ("\n\nThe editor has unsaved changes"
+                    f" to “{self.settings_manager.get_current_profile()}”. They are replaced "
+                    "(Ctrl+Z brings them back).")
+        if QMessageBox.question(self, "Load profile", msg, QMessageBox.Ok | QMessageBox.Cancel,
+                                QMessageBox.Ok) != QMessageBox.Ok:
+            return False
+        return self.load_profile_by_name(profile)
+
+    def write_profile_to_games(self, profile: Optional[str], items: List[tuple], confirm: bool = True) -> list:
+        """Write a saved profile (None = the editor as it is) to [(game key, name, target)].
+        -> [(name, ok, message)]"""
+        if not items:
+            return []
+        if profile:
+            if profile not in self.settings_manager.get_profiles():
+                QMessageBox.warning(self, "Write to game", f"Profile “{profile}” does not exist any more.")
+                return []
+            if confirm:
+                names = "\n".join(f"  • {n}" for _k, n, _t in items)
+                if QMessageBox.question(
+                        self, "Write to game",
+                        f"Write “{profile}” to:\n\n{names}\n\nA timestamped backup of each file is kept.",
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes) != QMessageBox.Yes:
+                    return []
+            if not self._confirm_load_for_write(profile):
+                return []
+        elif confirm and QMessageBox.question(
+                self, "Write to game",
+                "No profile is linked — write the editor's current configuration to:\n\n"
+                + "\n".join(f"  • {n}" for _k, n, _t in items) + "\n\nA timestamped backup is kept.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes) != QMessageBox.Yes:
+            return []
+        results = []
+        for _key, name, target in items:
+            ok, msg = self._apply_target(target)
+            results.append((name, ok, msg))
+        bad = [r for r in results if not r[1]]
+        what = f"“{profile}”" if profile else "the editor"
+        if not bad:
+            toast(f"Wrote {what} to {len(results)} game(s)", "ok", 6000)
+        else:
+            QMessageBox.warning(
+                self, "Write to game",
+                f"Wrote {what} to {len(results) - len(bad)} of {len(results)} game(s).\n\n"
+                + "\n".join(f"{'✔' if ok else '✖'} {n}: {m}" for n, ok, m in results))
+        return results
+
+    def load_profile_for_game(self, name: str):
+        if self._dirty and QMessageBox.question(
+                self, "Load profile",
+                f"Load “{name}”? The editor's unsaved changes are replaced (Ctrl+Z brings them back).",
+                QMessageBox.Ok | QMessageBox.Cancel, QMessageBox.Ok) != QMessageBox.Ok:
+            return
+        if self.load_profile_by_name(name):
+            toast(f"Loaded “{name}” into the editor", "ok")
+
+    def open_linked_games(self, name: str):
+        """List the games that use a profile and update the chosen ones."""
+        profiles = self.settings_manager.get_profiles()
+        if name not in profiles:
+            return
+        dlg = LinkedGamesDialog(name, profiles, self)
+        if dlg.exec() == QDialog.Accepted and dlg.chosen:
+            self.write_profile_to_games(name, dlg.chosen, confirm=False)
+
+    def _suggest_linked_update(self, name: str):
+        prof = self.settings_manager.get_profiles().get(name)
+        if not isinstance(prof, dict):
+            return
+        keys = [k for k in LINKS.outdated(name, profile_fp(prof)) if LINKS.get(k).get("target")]
+        if keys:
+            n = len(keys)
+            toast(f"{n} game{'s' if n != 1 else ''} use “{name}” with an older version of it",
+                  "info", 15000, (f"Update {n} game{'s' if n != 1 else ''}…", lambda: self.open_linked_games(name)))
+
     # ===== Shortcuts / persisted UI state =====
     def _install_shortcuts(self):
         def sc(seq, fn, parent=None, ctx=Qt.WindowShortcut):
@@ -1057,7 +1182,7 @@ class MainWindow(QMainWindow):
 
         sc("Ctrl+F", self._focus_search)
         sc("Escape", self._clear_search, self._search, Qt.WidgetShortcut)
-        for i in range(5):
+        for i in range(len(self._nav_tabs)):
             sc(f"Ctrl+{i + 1}", lambda i=i: self._switch_tab(i))
         sc("Ctrl+S", self._shortcut_save)
         sc("Ctrl+Shift+C", lambda: self._output_bar._copy_all(steam=False))
@@ -1211,7 +1336,8 @@ class MainWindow(QMainWindow):
         self._menu_btn.setAccessibleName("Menu: appearance, shortcuts, tasks")
         self._search.setAccessibleName("Filter the current list")
         for lw, nm in ((self._settings_list, "DRS settings list"), (self._env_widget, "Environment variables list"),
-                       (self._arch_list, "GPU architecture list"), (self._flm_sidebar, "Extra tools list")):
+                       (self._arch_list, "GPU architecture list"), (self._flm_sidebar, "Extra tools list"),
+                       (self._games_list.list, "Games list")):
             lw.setAccessibleName(nm)
         chain = [*self._nav_tabs, self._undo_btn, self._redo_btn, self._recipes_btn, self._log_btn,
                  self._lint_btn, self._tasks_btn, self._profile_chip, self._menu_btn, self._search,
@@ -1247,7 +1373,7 @@ class MainWindow(QMainWindow):
             if split is not None:
                 self._splitter.restoreState(split)
             tab = int(self._qsettings.value("window/tab", 0))
-            if 0 <= tab < 5 and tab != 0:
+            if 0 < tab < len(self._nav_tabs):
                 self._switch_tab(tab)
         except Exception:
             self.resize(1440, 900)
@@ -1286,6 +1412,7 @@ class MainWindow(QMainWindow):
             pass
         try:
             SYSHUB.shutdown()
+            self._game_card.shutdown()
             if self._extra_tools.is_built("dllmgr"):
                 self._extra_tools.dllmgr.shutdown()
             self.hide()                  # downloads may need a moment to notice the cancel
@@ -1318,6 +1445,8 @@ class MainWindow(QMainWindow):
         self._env_tab.set_badge(str(n_env) if n_env else "")
         n_prof = len(self.settings_manager.get_profiles())
         self._profiles_tab.set_badge(str(n_prof) if n_prof else "")
+        n_linked = sum(LINKS.counts().values())
+        self._games_tab.set_badge(str(n_linked) if n_linked else "")
 
     # ===== Tab switching =====
     def _switch_tab(self, idx):
@@ -1329,8 +1458,8 @@ class MainWindow(QMainWindow):
         for i, btn in enumerate(self._nav_tabs):
             btn.setChecked(i == idx)
 
-        # The filter only applies to the two long lists.
-        filterable = idx in (self.TAB_DRS, self.TAB_ENV)
+        # The filter only applies to the long lists.
+        filterable = idx in (self.TAB_DRS, self.TAB_ENV, self.TAB_GAMES)
         self._search.setEnabled(filterable)
         self._search.setVisible(filterable)
         self._chips.setVisible(idx in (self.TAB_DRS, self.TAB_ARCH, self.TAB_ENV))
@@ -1343,14 +1472,18 @@ class MainWindow(QMainWindow):
             self._env_widget.populate(self._search.text())
         elif idx == self.TAB_ARCH:
             self._populate_arch_list()
+        elif idx == self.TAB_GAMES:
+            self._games_list.set_filter(self._search.text())
 
         _hint = self.EMPTY_HINTS.get(idx, "")
-        self._placeholder.set_content({0: "\u25c8", 1: "\u25a3", 2: "\u2630"}.get(idx, "\u25c7"),
+        self._placeholder.set_content({0: "\u25c8", 1: "\u25a3", 2: "\u2630", 5: "\u25b6"}.get(idx, "\u25c7"),
                                       *(_hint.split("\n", 1) + [""])[:2])
 
         if idx == self.TAB_PROFILES:
             self._right_stack.setCurrentIndex(self.PAGE_LUTRIS)
             self._refresh_sync_previews()
+        elif idx == self.TAB_GAMES:
+            self._right_stack.setCurrentIndex(self.PAGE_GAMES if self._game_card.game else self.PAGE_EMPTY)
         elif idx in self._tab_right_memory:
             self._right_stack.setCurrentIndex(self._tab_right_memory[idx])
         else:
@@ -1399,6 +1532,8 @@ class MainWindow(QMainWindow):
             self._env_widget.populate(text)
         elif active == self.TAB_DRS:
             self._populate_settings(text)
+        elif active == self.TAB_GAMES:
+            self._games_list.set_filter(text)
 
     def _open_setting(self, setting_id):
         setting = self._settings_list._by_id.get(setting_id) or drs_lookup(setting_id)
@@ -1578,6 +1713,8 @@ class MainWindow(QMainWindow):
             self._right_stack.setCurrentIndex(self.PAGE_LUTRIS)
         elif active_tab == self.TAB_TOOLS:
             self._right_stack.setCurrentIndex(self.PAGE_TOOLS)
+        elif active_tab == self.TAB_GAMES:
+            self._right_stack.setCurrentIndex(self.PAGE_GAMES if self._game_card.game else self.PAGE_EMPTY)
         else:
             self._right_stack.setCurrentIndex(self.PAGE_EMPTY)
         self._env_widget.set_gamescope_enabled(self._gamescope.is_enabled())

@@ -25,7 +25,7 @@ SHORTCUT_SHEET = [
         ("Ctrl+K", "Command palette — settings, variables, architectures, tools, actions"),
         ("Ctrl+F", "Filter the current list"),
         ("Esc", "Clear the filter"),
-        ("Ctrl+1 … 5", "Switch the top tabs"),
+        ("Ctrl+1 … 6", "Switch the top tabs"),
         ("F1  /  Ctrl+/", "This sheet"),
         ("Ctrl+,", "Appearance (theme, accent, density, scale)"),
         ("Tab / Shift+Tab", "Move between controls"),

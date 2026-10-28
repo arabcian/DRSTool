@@ -295,11 +295,18 @@ class LogViewerWidget(QWidget):
     def _browse(self):
         p, _ = QFileDialog.getOpenFileName(self, "Open log", str(Path.home()), "Logs (*.log *.txt);;All files (*)")
         if p:
-            self._combo.blockSignals(True)
-            self._combo.addItem(Path(p).name + "   (browsed)", Path(p))
-            self._combo.setCurrentIndex(self._combo.count() - 1)
-            self._combo.blockSignals(False)
-            self._load(Path(p))
+            self.open_path(Path(p), "browsed")
+
+    def open_path(self, p: Path, why: str = "game card"):
+        """Show one log file (from the file dialog or a game card)."""
+        if self._first:                        # run the discovery scan now, it would replace the list
+            self._first = False
+            self._scan_logs()
+        self._combo.blockSignals(True)
+        self._combo.addItem(f"{p.name}   ({why})", p)
+        self._combo.setCurrentIndex(self._combo.count() - 1)
+        self._combo.blockSignals(False)
+        self._load(p)
 
     def _on_pick(self, _i):
         p = self._combo.currentData()

@@ -248,6 +248,10 @@ class FrametimeWidget(QWidget):
         if not p:
             return
         self._qs.setValue("frametime/last_dir", str(Path(p).parent))
+        self.load_file(k, p)
+
+    def load_file(self, k: int, p: str):
+        """Load a capture as run A (k=0) or B (k=1) — also used by the game card."""
         self._status.setText(f"Loading {Path(p).name}…")
         th = _FrametimeLoadThread(k, p)
         self._loaders.append(th)

@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPlainTextEdit, QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
@@ -116,6 +117,9 @@ class LutrisSyncWidget(QWidget):
         "gamescope_game_res":   ("--nested-width",   "--nested-height"),
     }
     # lutris-game-tune-wrapper install path (kept in sync with LGTUNE_WRAPPER)
+    # After a successful write: {"kind": "lutris", "key": <yml stem>, "path", "title"}
+    applied = Signal(dict)
+
     _LGTUNE_WRAPPER_PATH = "/usr/local/bin/lutris-game-tune-wrapper"
     # system.* keys wired to the lutris-game-tune checkbox
     _LGTUNE_KEYS = ("prelaunch_command", "postexit_command", "prefix_command")
@@ -1038,6 +1042,7 @@ class LutrisSyncWidget(QWidget):
                  + len(sys_removed) + len(env_removed))
         if total == 0:
             self._status_label.setText("Nothing to write — file already matches the GUI.")
+            self.applied.emit(self._target(entry))
             return True
         sys_line = f"\n  • {len(sys_changed)} key(s) into system.*" if sys_changed else ""
         env_line = f"\n  • {len(env_changed)} var(s) into system.env" if env_changed else ""
@@ -1112,4 +1117,32 @@ class LutrisSyncWidget(QWidget):
         )
         self._update_preview()
         offer_undo(f"Wrote {total} change(s) to {entry.path.name}")
+        self.applied.emit(self._target(entry))
         return True
+
+    @staticmethod
+    def _target(entry: "LutrisGameEntry") -> dict:
+        return {"kind": "lutris", "key": entry.path.stem, "path": str(entry.path), "title": entry.game_name}
+
+    def apply_target(self, target: dict) -> tuple:
+        """Select the game YAML a link points to and write without asking. -> (ok, message)"""
+        path = Path(target.get("path") or "")
+        if not path.is_file():
+            return False, f"{path} no longer exists"
+
+        def find():
+            return next((i for i, g in enumerate(self._games) if g.path == path), -1)
+        i = find()
+        if i < 0:                                   # the game lives in another Lutris folder
+            self._games_dir = path.parent
+            self._path_label.setText(str(self._games_dir))
+            self._scan_games()
+            i = find()
+        if i < 0:
+            return False, f"{path.name} could not be read"
+        self._game_combo.blockSignals(True)
+        self._game_combo.setCurrentIndex(i)
+        self._game_combo.blockSignals(False)
+        self._on_game_selected(i)
+        ok = self._apply_to_game(confirm=False)
+        return ok, self._status_label.text()

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QVBoxLayout, QWidget,
@@ -432,6 +432,8 @@ class BottlesBackend(LauncherBackend):
 
 class LauncherSyncWidget(QWidget):
     """One tab per launcher (Steam / Heroic / Bottles): pick target -> preview -> apply."""
+    # After a successful write: {"kind", "key", "path", "title"} (MainWindow links it to the profile)
+    applied = Signal(dict)
 
     def __init__(self, backend: LauncherBackend, parent=None):
         super().__init__(parent)
@@ -623,10 +625,33 @@ class LauncherSyncWidget(QWidget):
             msg = self.backend.apply(e, self._payload(), self._opts())
             self._status.setText("✔ " + msg)
             offer_undo(msg)
+            self.applied.emit(self._target(e))
         except Exception as ex:
             self._status.setText(f"⚠ failed: {ex}")
             QMessageBox.critical(self, self.backend.name, str(ex))
         self.refresh_preview()
+
+    def _target(self, e: LEntry) -> dict:
+        return {"kind": self.backend.name.lower(), "key": e.key, "path": str(e.path), "title": e.title}
+
+    def apply_target(self, target: dict) -> tuple:
+        """Write the current configuration to a target recorded by `applied` earlier, without
+        asking (the caller confirmed). The Proton override is left as it is. -> (ok, message)"""
+        busy = self.backend.busy()
+        if busy:
+            return False, busy
+        path = Path(target.get("path") or "")
+        if not path.is_file() and self.backend.name != "Heroic":
+            return False, f"{path} no longer exists"
+        e = LEntry(str(target.get("key", "")), str(target.get("title", "")), path)
+        try:
+            msg = self.backend.apply(e, self._payload(), {"use_env": True, "compat_tool": ""})
+        except Exception as ex:                    # noqa: BLE001 - reported per game
+            return False, str(ex)
+        self.applied.emit(self._target(e))
+        if self.isVisible():
+            self.refresh_preview()
+        return True, msg
 
 
 class LaunchLineWidget(QWidget):
