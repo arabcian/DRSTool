@@ -1,0 +1,547 @@
+[
+ {
+  "name": "Output Width",
+  "flag": "--output-width",
+  "cat": "Geometry",
+  "kind": "int",
+  "desc": "Output width in pixels presented to the display/host compositor.",
+  "short": "-W",
+  "placeholder": "e.g. 2560"
+ },
+ {
+  "name": "Output Height",
+  "flag": "--output-height",
+  "cat": "Geometry",
+  "kind": "int",
+  "desc": "Output height in pixels presented to the display/host compositor.",
+  "short": "-H",
+  "placeholder": "e.g. 1440"
+ },
+ {
+  "name": "Game Width",
+  "flag": "--nested-width",
+  "cat": "Geometry",
+  "kind": "int",
+  "desc": "Render width presented to the game itself; gamescope up/downscales from this to the output resolution.",
+  "short": "-w",
+  "placeholder": "e.g. 1920"
+ },
+ {
+  "name": "Game Height",
+  "flag": "--nested-height",
+  "cat": "Geometry",
+  "kind": "int",
+  "desc": "Render height presented to the game itself.",
+  "short": "-h",
+  "placeholder": "e.g. 1080"
+ },
+ {
+  "name": "Game Refresh Rate",
+  "flag": "--nested-refresh",
+  "cat": "Geometry",
+  "kind": "int",
+  "desc": "Game refresh rate in frames per second.",
+  "short": "-r",
+  "placeholder": "e.g. 165"
+ },
+ {
+  "name": "Unfocused Refresh Rate",
+  "flag": "--nested-unfocused-refresh",
+  "cat": "Geometry",
+  "kind": "int",
+  "desc": "Game refresh rate to use only while the gamescope window is unfocused (nested mode). Lets you drop clocks/power when alt-tabbed.",
+  "short": "-o",
+  "placeholder": "e.g. 30"
+ },
+ {
+  "name": "Max Scale",
+  "flag": "--max-scale",
+  "cat": "Geometry",
+  "kind": "int",
+  "desc": "Maximum scale factor gamescope will apply.",
+  "short": "-m",
+  "placeholder": "e.g. 2"
+ },
+ {
+  "name": "Force Windows Fullscreen",
+  "flag": "--force-windows-fullscreen",
+  "cat": "Geometry",
+  "kind": "toggle",
+  "desc": "Force windows inside gamescope to always be the size of the nested display (fullscreen)."
+ },
+ {
+  "name": "Cursor Scale Height",
+  "flag": "--cursor-scale-height",
+  "cat": "Geometry",
+  "kind": "int",
+  "desc": "Base output height to linearly scale the cursor image against.",
+  "placeholder": "e.g. 1080"
+ },
+ {
+  "name": "Force Orientation",
+  "flag": "--force-orientation",
+  "cat": "Geometry",
+  "kind": "enum",
+  "desc": "Rotate the internal display.",
+  "options": [
+   "left",
+   "right",
+   "normal",
+   "upsidedown"
+  ]
+ },
+ {
+  "name": "Scaler",
+  "flag": "--scaler",
+  "cat": "Upscaling",
+  "kind": "enum",
+  "desc": "Upscaler type. 'integer' restricts scaling to integer multiples only (best for pixel-art with the pixel/nearest filter).",
+  "short": "-S",
+  "options": [
+   "auto",
+   "integer",
+   "fit",
+   "fill",
+   "stretch"
+  ]
+ },
+ {
+  "name": "Upscale Filter",
+  "flag": "--filter",
+  "cat": "Upscaling",
+  "kind": "enum",
+  "desc": "Upscaler filter. fsr = AMD FidelityFX Super Resolution 1.0. nis = NVIDIA Image Scaling v1.0.3.",
+  "short": "-F",
+  "options": [
+   "linear",
+   "nearest",
+   "fsr",
+   "nis",
+   "pixel",
+   "sgsr"
+  ]
+ },
+ {
+  "name": "Sharpness",
+  "flag": "--sharpness",
+  "cat": "Upscaling",
+  "kind": "int",
+  "desc": "Upscaler sharpness, 0 (max) to 20 (min). Alias: --fsr-sharpness.",
+  "placeholder": "0-20"
+ },
+ {
+  "name": "HDR Enabled",
+  "flag": "--hdr-enabled",
+  "cat": "HDR",
+  "kind": "toggle",
+  "desc": "Enable HDR output. Needs the Gamescope WSI layer enabled on the client side for HDR clients to be supported."
+ },
+ {
+  "name": "SDR Gamut Wideness",
+  "flag": "--sdr-gamut-wideness",
+  "cat": "HDR",
+  "kind": "string",
+  "desc": "Wideness of the gamut for SDR content, 0-1.",
+  "placeholder": "0.0-1.0"
+ },
+ {
+  "name": "SDR Content Nits",
+  "flag": "--hdr-sdr-content-nits",
+  "cat": "HDR",
+  "kind": "int",
+  "desc": "Luminance of SDR content in nits. Default: 400.",
+  "placeholder": "e.g. 400"
+ },
+ {
+  "name": "Inverse Tonemap SDR->HDR",
+  "flag": "--hdr-itm-enabled",
+  "cat": "HDR",
+  "kind": "toggle",
+  "desc": "Enable SDR->HDR inverse tone mapping. Only affects SDR input."
+ },
+ {
+  "name": "ITM Input Nits",
+  "flag": "--hdr-itm-sdr-nits",
+  "cat": "HDR",
+  "kind": "int",
+  "desc": "Luminance of SDR content used as input for inverse tone mapping. Default 100, max 1000.",
+  "placeholder": "e.g. 100"
+ },
+ {
+  "name": "ITM Target Nits",
+  "flag": "--hdr-itm-target-nits",
+  "cat": "HDR",
+  "kind": "int",
+  "desc": "Target luminance of the inverse tone mapping process. Default 1000, max 10000.",
+  "placeholder": "e.g. 1000"
+ },
+ {
+  "name": "Frame-rate Limit",
+  "flag": "--framerate-limit",
+  "cat": "Frame Pacing",
+  "kind": "int",
+  "desc": "Simple frame-rate limit, used as a divisor of the refresh rate (rounds down): 60/59->60fps, 60/25->30fps. 0 = disabled.",
+  "placeholder": "e.g. 60"
+ },
+ {
+  "name": "Adaptive Sync (VRR)",
+  "flag": "--adaptive-sync",
+  "cat": "Frame Pacing",
+  "kind": "toggle",
+  "desc": "Enable adaptive sync / VRR if the display and driver support it."
+ },
+ {
+  "name": "Immediate Flips",
+  "flag": "--immediate-flips",
+  "cat": "Frame Pacing",
+  "kind": "toggle",
+  "desc": "Allow immediate (tearing) flips instead of FIFO presentation - trades a compositor frame of latency for possible tear lines."
+ },
+ {
+  "name": "Realtime Scheduling",
+  "flag": "--rt",
+  "cat": "Frame Pacing",
+  "kind": "toggle",
+  "desc": "Use realtime scheduling for gamescope's own threads."
+ },
+ {
+  "name": "Mouse Sensitivity",
+  "flag": "-s",
+  "cat": "Input",
+  "kind": "string",
+  "desc": "Multiply mouse movement by the given decimal factor.",
+  "placeholder": "e.g. 1.2"
+ },
+ {
+  "name": "Force Grab Cursor",
+  "flag": "--force-grab-cursor",
+  "cat": "Input",
+  "kind": "toggle",
+  "desc": "Always use relative mouse mode instead of flipping depending on cursor visibility."
+ },
+ {
+  "name": "Hide Cursor Delay",
+  "flag": "--hide-cursor-delay",
+  "cat": "Input",
+  "kind": "int",
+  "desc": "Hide the cursor image after this many milliseconds of inactivity.",
+  "short": "-C",
+  "placeholder": "e.g. 3000"
+ },
+ {
+  "name": "Cursor Image",
+  "flag": "--cursor",
+  "cat": "Input",
+  "kind": "string",
+  "desc": "Path to a default cursor image."
+ },
+ {
+  "name": "Grab Keyboard (nested)",
+  "flag": "--grab",
+  "cat": "Input",
+  "kind": "toggle",
+  "desc": "Grab the keyboard (nested mode only).",
+  "short": "-g"
+ },
+ {
+  "name": "Default Touch Mode",
+  "flag": "--default-touch-mode",
+  "cat": "Input",
+  "kind": "enum",
+  "desc": "0: hover, 1: left, 2: right, 3: middle, 4: passthrough.",
+  "options": [
+   "0",
+   "1",
+   "2",
+   "3",
+   "4"
+  ]
+ },
+ {
+  "name": "Steam Integration",
+  "flag": "--steam",
+  "cat": "Session",
+  "kind": "toggle",
+  "desc": "Enable Steam integration.",
+  "short": "-e"
+ },
+ {
+  "name": "XWayland Count",
+  "flag": "--xwayland-count",
+  "cat": "Session",
+  "kind": "int",
+  "desc": "Create N XWayland servers (2 lets overlay windows run isolated from the game's own XWayland instance - see STEAM_MULTIPLE_XWAYLANDS in the env-var list above).",
+  "placeholder": "e.g. 2"
+ },
+ {
+  "name": "Expose Wayland (xdg-shell)",
+  "flag": "--expose-wayland",
+  "cat": "Session",
+  "kind": "toggle",
+  "desc": "Support Wayland clients using xdg-shell."
+ },
+ {
+  "name": "Backend",
+  "flag": "--backend",
+  "cat": "Session",
+  "kind": "enum",
+  "desc": "Rendering backend. auto autodetects (default).",
+  "options": [
+   "auto",
+   "drm",
+   "sdl",
+   "headless",
+   "wayland"
+  ]
+ },
+ {
+  "name": "Prefer VK Device",
+  "flag": "--prefer-vk-device",
+  "cat": "Session",
+  "kind": "string",
+  "desc": "Prefer this Vulkan device for compositing.",
+  "placeholder": "e.g. 10de:2820 (RTX 4080 Mobile)"
+ },
+ {
+  "name": "Prefer Output (embedded)",
+  "flag": "--prefer-output",
+  "cat": "Session",
+  "kind": "string",
+  "desc": "List of connectors in order of preference (embedded mode only).",
+  "short": "-O",
+  "placeholder": "e.g. DP-1,DP-2,HDMI-A-1"
+ },
+ {
+  "name": "Display Index (nested)",
+  "flag": "--display-index",
+  "cat": "Session",
+  "kind": "int",
+  "desc": "Force a specific display index in nested mode.",
+  "placeholder": "e.g. 0"
+ },
+ {
+  "name": "Generate DRM Mode",
+  "flag": "--generate-drm-mode",
+  "cat": "Session",
+  "kind": "enum",
+  "desc": "DRM mode generation algorithm (embedded mode).",
+  "options": [
+   "cvt",
+   "fixed"
+  ]
+ },
+ {
+  "name": "Virtual Connector Strategy",
+  "flag": "--virtual-connector-strategy",
+  "cat": "Session",
+  "kind": "string",
+  "desc": "Specifies how virtual connectors are created."
+ },
+ {
+  "name": "Ready FD",
+  "flag": "--ready-fd",
+  "cat": "Session",
+  "kind": "int",
+  "desc": "Notify this FD when gamescope is ready.",
+  "short": "-R",
+  "placeholder": "e.g. 3"
+ },
+ {
+  "name": "Stats Path",
+  "flag": "--stats-path",
+  "cat": "Session",
+  "kind": "string",
+  "desc": "Write statistics to this path.",
+  "short": "-T"
+ },
+ {
+  "name": "Allow Deferred Backend",
+  "flag": "--allow-deferred-backend",
+  "cat": "Session",
+  "kind": "toggle",
+  "desc": "Allow initting the backend in a deferred way if it doesn't work immediately (minor correctness trade-off with modifiers etc)."
+ },
+ {
+  "name": "Keep Alive",
+  "flag": "--keep-alive",
+  "cat": "Session",
+  "kind": "toggle",
+  "desc": "Keep gamescope alive even after the primary process has died."
+ },
+ {
+  "name": "Fullscreen (nested)",
+  "flag": "--fullscreen",
+  "cat": "Session",
+  "kind": "toggle",
+  "desc": "Make the nested window fullscreen.",
+  "short": "-f"
+ },
+ {
+  "name": "Borderless (nested)",
+  "flag": "--borderless",
+  "cat": "Session",
+  "kind": "toggle",
+  "desc": "Make the nested window borderless.",
+  "short": "-b"
+ },
+ {
+  "name": "ReShade Effect",
+  "flag": "--reshade-effect",
+  "cat": "ReShade",
+  "kind": "string",
+  "desc": "Name of a ReShade shader to use, looked up in /usr/share/gamescope/reshade/Shaders or ~/.local/share/gamescope/reshade/Shaders. Requires a gamescope build with ReShade support compiled in.",
+  "placeholder": "e.g. CRT-Royale"
+ },
+ {
+  "name": "ReShade Technique Index",
+  "flag": "--reshade-technique-idx",
+  "cat": "ReShade",
+  "kind": "int",
+  "desc": "Technique index to use from the selected ReShade effect.",
+  "placeholder": "e.g. 0"
+ },
+ {
+  "name": "Mura Map",
+  "flag": "--mura-map",
+  "cat": "Steam Deck",
+  "kind": "string",
+  "desc": "Path to the mura compensation map to use for the display (Steam Deck panel calibration)."
+ },
+ {
+  "name": "Disable Hardware Planes",
+  "flag": "--disable-layers",
+  "cat": "Debug",
+  "kind": "toggle",
+  "desc": "Disable libliftoff (hardware plane) usage - forces full compositing. Useful to rule out plane-assignment issues."
+ },
+ {
+  "name": "Debug Layers",
+  "flag": "--debug-layers",
+  "cat": "Debug",
+  "kind": "toggle",
+  "desc": "Debug libliftoff plane assignment."
+ },
+ {
+  "name": "Debug Focus",
+  "flag": "--debug-focus",
+  "cat": "Debug",
+  "kind": "toggle",
+  "desc": "Debug XWM focus handling."
+ },
+ {
+  "name": "Synchronous X11",
+  "flag": "--synchronous-x11",
+  "cat": "Debug",
+  "kind": "toggle",
+  "desc": "Force synchronous X11 connection (slower, deterministic ordering for debugging)."
+ },
+ {
+  "name": "Debug HUD",
+  "flag": "--debug-hud",
+  "cat": "Debug",
+  "kind": "toggle",
+  "desc": "Paint a HUD with gamescope's own debug info."
+ },
+ {
+  "name": "Debug Events",
+  "flag": "--debug-events",
+  "cat": "Debug",
+  "kind": "toggle",
+  "desc": "Log X11 events."
+ },
+ {
+  "name": "Force Composition",
+  "flag": "--force-composition",
+  "cat": "Debug",
+  "kind": "toggle",
+  "desc": "Disable direct scan-out; always composite through gamescope's Vulkan renderer. Useful to isolate whether an artifact comes from the direct-scanout path or the compositor itself."
+ },
+ {
+  "name": "Composite Debug",
+  "flag": "--composite-debug",
+  "cat": "Debug",
+  "kind": "toggle",
+  "desc": "Draw frame markers on alternating screen corners while compositing."
+ },
+ {
+  "name": "Disable Color Management",
+  "flag": "--disable-color-management",
+  "cat": "Debug",
+  "kind": "toggle",
+  "desc": "Disable gamescope's color management pipeline."
+ },
+ {
+  "name": "Disable XRes",
+  "flag": "--disable-xres",
+  "cat": "Debug",
+  "kind": "toggle",
+  "desc": "Disable XRes-based PID lookup."
+ },
+ {
+  "name": "Force HDR Support",
+  "flag": "--hdr-debug-force-support",
+  "cat": "Debug",
+  "kind": "toggle",
+  "desc": "Force HDR support even if the display doesn't advertise it. HDR clients are still tone-mapped to SDR output in that case."
+ },
+ {
+  "name": "Force HDR Output",
+  "flag": "--hdr-debug-force-output",
+  "cat": "Debug",
+  "kind": "toggle",
+  "desc": "Force HDR10 PQ output even if the display doesn't support it - looks very wrong if the display genuinely can't do it."
+ },
+ {
+  "name": "HDR Debug Heatmap",
+  "flag": "--hdr-debug-heatmap",
+  "cat": "Debug",
+  "kind": "toggle",
+  "desc": "Display a heatmap-style debug view of HDR luminance across the scene."
+ },
+ {
+  "name": "MangoApp Overlay",
+  "flag": "--mangoapp",
+  "cat": "Session",
+  "kind": "toggle",
+  "desc": "Launch with the mangoapp (MangoHud) performance overlay. gamescope's recommended way to get MangoHud: use this instead of MANGOHUD=1 on the game or on gamescope itself (avoids double overlays and the extra present hook on the game's swapchain). Don't combine with the 'MangoHud' prefix toggle in this builder — that runs a second MangoHud instance on the game."
+ },
+ {
+  "name": "Mouse Sensitivity",
+  "flag": "--mouse-sensitivity",
+  "cat": "Input",
+  "kind": "string",
+  "desc": "Multiply mouse movement by the given decimal number (e.g. 0.5, 1.25). Useful when the game renders at a lower -w/-h than the output.",
+  "short": "-s",
+  "placeholder": "e.g. 1.0"
+ },
+ {
+  "name": "Cursor Hotspot",
+  "flag": "--cursor-hotspot",
+  "cat": "Input",
+  "kind": "string",
+  "desc": "Hotspot of the default cursor image set with --cursor, as x,y.",
+  "placeholder": "e.g. 0,0"
+ },
+ {
+  "name": "Force Touch Pointer Emulation",
+  "flag": "--xwayland-force-touch-pointer-emulation",
+  "cat": "Input",
+  "kind": "toggle",
+  "desc": "Force XWayland to emulate pointer events from touch input."
+ },
+ {
+  "name": "Fade-out Duration",
+  "flag": "--fade-out-duration",
+  "cat": "Session",
+  "kind": "int",
+  "desc": "Duration in ms of the fade-out when switching between windows/apps.",
+  "placeholder": "e.g. 200"
+ },
+ {
+  "name": "Force Composition Rotation",
+  "flag": "--force-composition-rotation",
+  "cat": "Debug",
+  "kind": "toggle",
+  "desc": "Always rotate the output in the compositor instead of at scanout (autodetected otherwise). Costs a composite pass every frame."
+ }
+]

@@ -1,0 +1,3077 @@
+{
+ "DXVK_ENV_VARS": [
+  {
+   "name": "DXVK_HUD",
+   "cat": "DXVK",
+   "vtype": "flags",
+   "default": "",
+   "desc": "In-game HUD overlay. Comma-separated list of elements to display.",
+   "options": [
+    "devinfo",
+    "fps",
+    "frametimes",
+    "submissions",
+    "drawcalls",
+    "pipelines",
+    "descriptors",
+    "memory",
+    "allocations",
+    "gpuload",
+    "version",
+    "api",
+    "cs",
+    "compiler",
+    "samplers",
+    "swvp",
+    "latency",
+    "1",
+    "full",
+    "scale=N",
+    "opacity=N"
+   ],
+   "placeholder": "e.g. devinfo,fps,memory"
+  },
+  {
+   "name": "DXVK_FRAME_RATE",
+   "cat": "DXVK",
+   "vtype": "int",
+   "default": "0",
+   "desc": "Frame rate limiter. 0 = uncapped. Positive value limits to N FPS.\nREMOVED in upstream DXVK 3.0 — the variable is no longer read there. Still honoured by DXVK <= 2.7 and forks such as dxvk-low-latency. On DXVK 3.x use DXVK_CONFIG=\"dxvk.maxFrameRate = 60\" instead, or an external limiter (gamescope -r, MangoHud, vk_flip_meter).",
+   "placeholder": "e.g. 60"
+  },
+  {
+   "name": "DXVK_LOG_LEVEL",
+   "cat": "DXVK",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Controls message logging verbosity.",
+   "options": [
+    "none",
+    "error",
+    "warn",
+    "info",
+    "debug"
+   ]
+  },
+  {
+   "name": "DXVK_LOG_PATH",
+   "cat": "DXVK",
+   "vtype": "string",
+   "default": "",
+   "desc": "Directory path for DXVK log files (app_d3d11.log, app_dxgi.log etc.).",
+   "placeholder": "/path/to/dir"
+  },
+  {
+   "name": "DXVK_SHADER_DUMP_PATH",
+   "cat": "DXVK",
+   "vtype": "string",
+   "default": "",
+   "desc": "Dump compiled shader bytecode to this directory for debugging.",
+   "placeholder": "/tmp/shaders"
+  },
+  {
+   "name": "DXVK_SHADER_CACHE_PATH",
+   "cat": "DXVK",
+   "vtype": "string",
+   "default": "",
+   "desc": "Override the shader pipeline state cache directory.",
+   "placeholder": "/path/to/cache"
+  },
+  {
+   "name": "DXVK_STATE_CACHE",
+   "cat": "DXVK",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Legacy] Pipeline state cache control. Set to 0 to disable. Not read by current upstream DXVK (the state cache is gone; DXVK 3.x caches compiled shaders instead — see DXVK_SHADER_CACHE). Kept for older builds and DXVK-Sarek (1.10-based).",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_STATE_CACHE_PATH",
+   "cat": "DXVK",
+   "vtype": "string",
+   "default": "",
+   "desc": "[Legacy] Directory for pipeline state cache files. Same caveat as DXVK_STATE_CACHE — use DXVK_SHADER_CACHE_PATH on DXVK 3.x.",
+   "placeholder": "/path/to/cache"
+  },
+  {
+   "name": "DXVK_FILTER_DEVICE_NAME",
+   "cat": "DXVK",
+   "vtype": "string",
+   "default": "",
+   "desc": "Select GPU by substring match on Vulkan device name.",
+   "placeholder": "e.g. RTX 4080"
+  },
+  {
+   "name": "DXVK_FILTER_DEVICE_UUID",
+   "cat": "DXVK",
+   "vtype": "string",
+   "default": "",
+   "desc": "Select GPU by 32-char hex Vulkan device UUID (no dashes).",
+   "placeholder": "00000000000000000000000000000001"
+  },
+  {
+   "name": "DXVK_HDR",
+   "cat": "DXVK",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enable HDR10 color space exposure (DXGI_COLOR_SPACE_RGB_FULL_G2084). Needed by some HDR-capable games.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_NO_HDR",
+   "cat": "DXVK",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE / Proton-CachyOS / Proton-EM] Opposite of DXVK_HDR=1: forcefully disables HDR when it would otherwise be switched on automatically (current Protons detect HDR by themselves). Useful on GNOME, which does not yet expose enough colour-management features for DXVK's HDR path.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_DEBUG",
+   "cat": "DXVK",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enables one DXVK debugging mode.\ncapture: debug names and markers for render passes/shaders (default under some capture tools).\nhang: detects GPU hangs / VK_ERROR_DEVICE_LOST and logs the failing command(s) — attach the log to bug reports.\nmarkers: forwards application-provided resource names and markers via VK_EXT_debug_utils.\nvalidation: enables the validation callback; also needs VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation.",
+   "options": [
+    "capture",
+    "hang",
+    "markers",
+    "validation"
+   ]
+  },
+  {
+   "name": "DXVK_CAPTURE_FRAMES",
+   "cat": "DXVK",
+   "vtype": "string",
+   "default": "",
+   "desc": "Triggers a frame capture (RenderDoc) for a range of frames: 'first' or 'first:count'. E.g. 500:3 captures frames 500-502. Malformed values are logged and ignored. Debugging only.",
+   "placeholder": "e.g. 500:3"
+  },
+  {
+   "name": "DXVK_ASYNC",
+   "cat": "DXVK",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Async shader compilation (unofficial/patched builds). 1 = enable.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "VK_INSTANCE_LAYERS",
+   "cat": "DXVK",
+   "vtype": "string",
+   "default": "",
+   "desc": "Enable Vulkan instance layers. Use VK_LAYER_KHRONOS_validation for debug.",
+   "placeholder": "VK_LAYER_KHRONOS_validation"
+  },
+  {
+   "name": "DXVK_ENABLE_NVAPI",
+   "cat": "DXVK",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enable NVAPI support. Required for DLSS, Reflex, and MFG.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_NUM_COMPILER_THREADS",
+   "cat": "DXVK",
+   "vtype": "int",
+   "default": "0",
+   "desc": "Number of pipeline compiler threads. 0 = use all available CPU cores; a positive number enforces that exact thread count. Some threads are reserved for high-priority work when the graphics pipeline library feature is enabled. Set to 1 to force fully single-threaded shader compilation (deterministic, but slower cold-start compiles).\nNote: upstream DXVK 3.x does not read this variable — use DXVK_CONFIG=\"dxvk.numCompilerThreads = N\" there.",
+   "placeholder": "0 = all cores, or e.g. 1"
+  },
+  {
+   "name": "DXVK_CONFIG_FILE",
+   "cat": "DXVK",
+   "vtype": "string",
+   "default": "",
+   "desc": "Overrides the path DXVK searches for its dxvk.conf. By default DXVK looks for dxvk.conf in the working directory (usually the game's exe folder). Useful for keeping a shared config outside a Windows-only game folder.",
+   "placeholder": "/home/user/dxvk.conf"
+  },
+  {
+   "name": "DXVK_CONFIG",
+   "cat": "DXVK",
+   "vtype": "dxvk_config",
+   "default": "",
+   "desc": "Sets one or more dxvk.conf keys directly through the environment instead of a config file, using the same key = value syntax, with ; as a separator between entries. Any key documented in dxvk.conf can be set this way (dxgi.*, d3d9.*, d3d11.*, dxvk.*), e.g. dxgi.maxFrameLatency, dxgi.hideNvidiaGpu, dxvk.enableGraphicsPipelineLibrary, d3d11.samplerAnisotropy. Takes priority over an on-disk dxvk.conf for the keys it sets.\nThe picker below covers the latency/Reflex, present, pipeline, NVIDIA and filtering keys from upstream dxvk.conf; any other key goes into 'Other entries' and is kept verbatim.",
+   "placeholder": "dxgi.hideAmdGpu = True; dxgi.syncInterval = 0"
+  },
+  {
+   "name": "DXVK_WSI_DRIVER",
+   "cat": "DXVK",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Selects the windowing backend DXVK talks to. On Linux builds this is NOT optional — DXVK throws DxvkError(\"DXVK_WSI_DRIVER environment variable unset\") when it is empty, since only the Win32 build has a sane fallback. Proton and Lutris set it for you; you only touch it when running DXVK outside a launcher, or to force SDL3 vs SDL2 while chasing a fullscreen/HDR/cursor bug. The value must match a backend that was actually compiled in, otherwise WSI init fails outright. Syntax: DXVK_WSI_DRIVER=SDL3 %command%",
+   "options": [
+    "SDL3",
+    "SDL2",
+    "GLFW",
+    "Win32"
+   ]
+  },
+  {
+   "name": "DXVK_NO_VR",
+   "cat": "DXVK",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Stops DXVK from loading and querying OpenVR. DXVK asks OpenVR which Vulkan instance/device extensions a VR runtime needs; on a machine with SteamVR installed but no headset in use that probe can cost startup time or hang if the runtime is in a bad state. Set to 1 for non-VR games on a VR-capable system. Syntax: DXVK_NO_VR=1 %command%",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_FORCE_WINDOWED",
+   "cat": "DXVK",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Forces D3D9 swapchains to stay windowed, ignoring the game's request for exclusive fullscreen. Useful for old D3D9 titles that mode-switch badly on Wayland or on a multi-monitor setup, and for keeping a compositor's VRR / HDR path in charge instead of handing the display over to the game. D3D9 path only. Syntax: DXVK_FORCE_WINDOWED=1 %command%",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_SHADER_CACHE",
+   "cat": "DXVK",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Set to 0 to disable the driver-level shader cache DXVK enables by default (only checked when no shader dump path is set). Distinct from DXVK_STATE_CACHE, which is DXVK's own pipeline state cache. Mostly a debugging switch — disabling it means every run pays full compilation cost. Syntax: DXVK_SHADER_CACHE=0 %command%",
+   "options": [
+    "0",
+    "1"
+   ]
+  }
+ ],
+ "VKD3D_ENV_VARS": [
+  {
+   "name": "VKD3D_CONFIG",
+   "cat": "VKD3D-Proton",
+   "vtype": "vkd3d_config",
+   "default": "",
+   "desc": "Comma/semicolon-separated list of behavior flags for vkd3d-proton.",
+   "options": [
+    "nodxr",
+    "dxr",
+    "dxr12",
+    "allow_sbt_collection",
+    "extra_rtas_sync",
+    "rtas_allow_blas_rebuild_sizes",
+    "zero_fill_blp",
+    "force_static_cbv",
+    "single_queue",
+    "no_upload_hvv",
+    "no_gpu_upload_heap",
+    "small_vram_rebar",
+    "recycle_command_pools",
+    "memory_allocator_skip_clear",
+    "memory_allocator_skip_image_heap_clear",
+    "host_import_fallback",
+    "disallow_committed_texture_suballocation",
+    "allow_image_heap_suballocation",
+    "avoid_image_buffer_aliasing",
+    "no_staggered_submit",
+    "one_time_submit",
+    "no_clear_uav_sync",
+    "pipeline_library_ignore_mismatch_driver",
+    "pipeline_library_app_cache",
+    "pipeline_library_no_serialize_spirv",
+    "pipeline_library_ignore_spirv",
+    "pipeline_library_sanitize_spirv",
+    "pipeline_library_log",
+    "global_pipeline_cache",
+    "shader_cache_sync",
+    "retain_psos",
+    "descriptor_heap",
+    "mutable_single_set",
+    "force_raw_va_cbv",
+    "preallocate_srv_mip_clamps",
+    "no_invariant_position",
+    "disable_uav_compression",
+    "disable_simultaneous_uav_compression",
+    "disable_color_compression",
+    "disable_depth_compression",
+    "force_initial_transition",
+    "defer_resource_destruction",
+    "prefer_thin_uav_tiling",
+    "skip_null_sparse_tiles",
+    "force_dynamic_msaa",
+    "reject_padded_small_resource_alignment",
+    "no_nvx",
+    "skip_driver_workarounds",
+    "enable_experimental_features",
+    "ignore_shared_fence",
+    "breadcrumbs",
+    "breadcrumbs_sync",
+    "breadcrumbs_trace",
+    "fault",
+    "log_memory_budget",
+    "vk_debug",
+    "debug_utils",
+    "app_debug_marker_only",
+    "queue_profile_extra",
+    "descriptor_qa_checks",
+    "instruction_qa_checks",
+    "damage_not_zeroed_allocations",
+    "debug_wave64_simulation",
+    "fail_unsupported_state_template",
+    "adreno_7xx_extra_compat",
+    "skip_application_workarounds",
+    "force_host_cached"
+   ],
+   "placeholder": "e.g. dxr,retain_descriptor_heaps"
+  },
+  {
+   "name": "VKD3D_FRAME_RATE",
+   "cat": "VKD3D-Proton",
+   "vtype": "int",
+   "default": "0",
+   "desc": "Frame rate limiter. 0 = uncapped. Positive value = limit to N FPS.",
+   "placeholder": "e.g. 120"
+  },
+  {
+   "name": "VKD3D_DEBUG",
+   "cat": "VKD3D-Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Debug log verbosity for vkd3d-proton runtime.",
+   "options": [
+    "none",
+    "err",
+    "info",
+    "fixme",
+    "warn",
+    "trace"
+   ]
+  },
+  {
+   "name": "VKD3D_SHADER_DEBUG",
+   "cat": "VKD3D-Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Debug log verbosity for shader compilers.",
+   "options": [
+    "none",
+    "err",
+    "info",
+    "fixme",
+    "warn",
+    "trace"
+   ]
+  },
+  {
+   "name": "VKD3D_LOG_FILE",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Redirect VKD3D_DEBUG log output to this file.",
+   "placeholder": "/tmp/vkd3d.log"
+  },
+  {
+   "name": "VKD3D_VULKAN_DEVICE",
+   "cat": "VKD3D-Proton",
+   "vtype": "int",
+   "default": "",
+   "desc": "Zero-based Vulkan device index to force device selection.",
+   "placeholder": "0"
+  },
+  {
+   "name": "VKD3D_FILTER_DEVICE_NAME",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Skip Vulkan devices that don't contain this substring.",
+   "placeholder": "e.g. RTX 4080"
+  },
+  {
+   "name": "VKD3D_DISABLE_EXTENSIONS",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Comma-separated list of Vulkan extensions to disable.",
+   "placeholder": "VK_EXT_foo,VK_KHR_bar"
+  },
+  {
+   "name": "VKD3D_SHADER_CACHE_PATH",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Override directory for vkd3d-proton.cache. Set to '0' to disable.",
+   "placeholder": "/path/to/cache or 0"
+  },
+  {
+   "name": "VKD3D_SHADER_DUMP_PATH",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Dump shader bytecode (SPIR-V/DXBC/DXIL) to this directory.",
+   "placeholder": "/tmp/vkd3d-shaders"
+  },
+  {
+   "name": "VKD3D_SHADER_OVERRIDE",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Directory containing override SPIR-V shaders by hash.",
+   "placeholder": "/path/to/overrides"
+  },
+  {
+   "name": "VKD3D_SWAPCHAIN_PRESENT_MODE",
+   "cat": "VKD3D-Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Force a specific Vulkan present mode for the swapchain.",
+   "options": [
+    "IMMEDIATE",
+    "MAILBOX",
+    "FIFO",
+    "FIFO_RELAXED",
+    "FIFO_LATEST_READY"
+   ]
+  },
+  {
+   "name": "VKD3D_DESCRIPTOR_QA_LOG",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Path to log descriptor heap operations. Requires descriptor_qa build.",
+   "placeholder": "/tmp/desc_qa.log"
+  },
+  {
+   "name": "VKD3D_SHADER_DEBUG_RING_SIZE_LOG2",
+   "cat": "VKD3D-Proton",
+   "vtype": "int",
+   "default": "",
+   "desc": "Log2 size in bytes of the shader printf debug ring buffer (e.g. 28 = 256 MiB).",
+   "placeholder": "28"
+  },
+  {
+   "name": "VKD3D_SWAPCHAIN_LATENCY_FRAMES",
+   "cat": "VKD3D-Proton",
+   "vtype": "int",
+   "default": "",
+   "desc": "Maximum number of frames in flight, enforced through KHR_present_wait (default 3). Lower = less input lag at the cost of CPU/GPU starvation risk; 2 is often stable, 1 is aggressive. Also accepted on the DXGI path. Default removed in v2.14 (was previously forced to 2).\nUpstream applies it to the swapchain's internal frame latency, accepting 1 up to the DXGI swap-chain buffer maximum.\nvkd3d-low-latency ALSO feeds it to the frame pacer's wait latency, and there only 1-3 is accepted. That fork deliberately defaults to 3 rather than dxvk-low-latency's 2: at 2 a lot of D3D12 games throttle their fps, so 2 is left as a manual choice for the titles where it doesn't. Syntax: VKD3D_SWAPCHAIN_LATENCY_FRAMES=2 %command%",
+   "placeholder": "2  (1-3 on vkd3d-low-latency)"
+  },
+  {
+   "name": "VKD3D_LIMIT_TESS_FACTORS",
+   "cat": "VKD3D-Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Clamp tessellation factors to reduce GPU load in titles with excessive tessellation (e.g. Wo Long: Fallen Dynasty). 0 = disabled (default). Automatically enabled for known problematic games.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "VKD3D_FEATURE_LEVEL",
+   "cat": "VKD3D-Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Force the reported D3D12 feature level, regardless of what the Vulkan driver would otherwise expose. Useful for games that refuse to start when they detect a feature level they don't expect, or that under-report driver capability.",
+   "options": [
+    "12_0",
+    "12_1"
+   ]
+  },
+  {
+   "name": "VKD3D_WORKER_THREAD_COUNT",
+   "cat": "VKD3D-Proton",
+   "vtype": "int",
+   "default": "",
+   "desc": "Number of background worker threads vkd3d-proton uses for shader/pipeline compilation and pipeline-library disk-cache I/O. Fewer threads reduce CPU contention from compile storms on busy many-core systems; more can speed up cold-cache compile bursts at the cost of using more cores at once.",
+   "placeholder": "e.g. 2"
+  },
+  {
+   "name": "VKD3D_PIPELINE_LIBRARY_SIZE",
+   "cat": "VKD3D-Proton",
+   "vtype": "int",
+   "default": "",
+   "desc": "Caps the size (in bytes) of the automatic vkd3d-proton.cache pipeline library vkd3d-proton maintains on disk. Once the cap is hit, older/least-used entries are evicted rather than letting the cache grow without bound.",
+   "placeholder": "e.g. 2147483648 (2 GiB)"
+  },
+  {
+   "name": "VKD3D_PIPELINE_LIBRARY_APP_CACHE_ONLY",
+   "cat": "VKD3D-Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Restrict pipeline caching to whatever the application itself explicitly manages through ID3D12PipelineLibrary, instead of also letting vkd3d-proton silently cache every PSO it sees in its own automatic vkd3d-proton.cache disk cache.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "VKD3D_SWAPCHAIN_IMAGES",
+   "cat": "VKD3D-Proton",
+   "vtype": "int",
+   "default": "",
+   "desc": "Overrides the swapchain's minimum image count. The driver minimum is still respected, so this can only raise it. More images smooth over presentation hitches at the cost of latency and VRAM; fewer is not achievable this way. Syntax: VKD3D_SWAPCHAIN_IMAGES=3 %command%",
+   "placeholder": "e.g. 3"
+  },
+  {
+   "name": "VKD3D_SWAPCHAIN_DEBUG_LATENCY",
+   "cat": "VKD3D-Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Logs per-present latency information from the swapchain. Diagnostic — pair with PROTON_LOG=1 when checking whether a game actually drives the low-latency path at all. Syntax: VKD3D_SWAPCHAIN_DEBUG_LATENCY=1 %command%",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "VKD3D_SHADER_MODEL",
+   "cat": "VKD3D-Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Caps the shader model vkd3d-proton reports to the game. Lowering it can steer a title onto a simpler rendering path (or work around a broken SM6.6+ path); raising it above what the driver supports will not work. Unrecognised strings are ignored. Syntax: VKD3D_SHADER_MODEL=6_6 %command%",
+   "options": [
+    "5_1",
+    "6_0",
+    "6_1",
+    "6_2",
+    "6_3",
+    "6_4",
+    "6_5",
+    "6_6",
+    "6_7",
+    "6_8",
+    "6_9"
+   ]
+  },
+  {
+   "name": "VKD3D_LOG_BUFFERED",
+   "cat": "VKD3D-Proton",
+   "vtype": "int",
+   "default": "",
+   "desc": "Buffers log output in memory instead of writing it out line by line; the value is the ring buffer size in bytes. Keeps heavy VKD3D_DEBUG logging from distorting the very frame timings you are trying to measure. Note the trade-off: on a hard crash the tail of the log may never be flushed. Syntax: VKD3D_LOG_BUFFERED=1048576 VKD3D_DEBUG=info %command%",
+   "placeholder": "e.g. 1048576 (bytes)"
+  },
+  {
+   "name": "VKD3D_UNIX_ENV",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Passes environment variables from the Unix side into the D3D12 core module at load time (applied early, before device creation). Escape hatch for launchers that cannot set a variable in the Wine environment directly. Syntax: VKD3D_UNIX_ENV=\"VKD3D_CONFIG=dxr\" %command%",
+   "placeholder": "e.g. VKD3D_CONFIG=dxr"
+  },
+  {
+   "name": "VKD3D_UNIX_POST_ENV",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Same mechanism as VKD3D_UNIX_ENV but applied LATE in initialisation, for settings that must not be visible during early setup. Syntax: VKD3D_UNIX_POST_ENV=\"...\" %command%",
+   "placeholder": "e.g. VAR=value"
+  },
+  {
+   "name": "VKD3D_QUEUE_PROFILE",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Writes a queue timeline trace to the given path — submissions, waits and signals per Vulkan queue. The tool of choice when frametime spikes look like queue starvation or a serialised submit rather than raw GPU cost. Syntax: VKD3D_QUEUE_PROFILE=/tmp/queue.json %command%",
+   "placeholder": "e.g. /tmp/queue.json"
+  },
+  {
+   "name": "VKD3D_QUEUE_PROFILE_ABSOLUTE",
+   "cat": "VKD3D-Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Emits queue-profile timestamps as absolute values instead of relative ones, so the trace lines up with Wine's QPC-relative logs. Only meaningful together with VKD3D_QUEUE_PROFILE. Syntax: VKD3D_QUEUE_PROFILE=/tmp/q.json VKD3D_QUEUE_PROFILE_ABSOLUTE=1 %command%",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "VKD3D_TIMESTAMP_PROFILE",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Writes GPU timestamp profiling data to the given path — per-pass GPU cost, as opposed to VKD3D_QUEUE_PROFILE's submission-level view. Syntax: VKD3D_TIMESTAMP_PROFILE=/tmp/ts.json %command%",
+   "placeholder": "e.g. /tmp/timestamps.json"
+  },
+  {
+   "name": "VKD3D_PROFILE_PATH",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Output path for vkd3d-proton's built-in profiling counters (enabled in builds compiled with profiling support). Syntax: VKD3D_PROFILE_PATH=/tmp/vkd3d-profile %command%",
+   "placeholder": "e.g. /tmp/vkd3d-profile"
+  },
+  {
+   "name": "VKD3D_AUTO_CAPTURE_SHADER",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "RenderDoc auto-capture: captures the frame in which the shader with this hash is used. Requires the RenderDoc layer to be loaded; vkd3d warns and does nothing when neither this nor VKD3D_AUTO_CAPTURE_COUNTS is set. Syntax: VKD3D_AUTO_CAPTURE_SHADER=<hash> %command%",
+   "placeholder": "e.g. deadbeefdeadbeef"
+  },
+  {
+   "name": "VKD3D_AUTO_CAPTURE_COUNTS",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "RenderDoc auto-capture by frame number — a comma-separated list of frame indices to capture. Can be used on its own or alongside VKD3D_AUTO_CAPTURE_SHADER. Syntax: VKD3D_AUTO_CAPTURE_COUNTS=100,200,300 %command%",
+   "placeholder": "e.g. 100,200,300"
+  },
+  {
+   "name": "VKD3D_QA_HASHES",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Path to a file of shader hashes for descriptor QA / validation runs. Note the side effect: setting this (like VKD3D_SHADER_OVERRIDE or VKD3D_SHADER_DUMP_PATH) forces the pipeline_library_ignore_spirv config flag on, so the pipeline library stops being reused — expect slower startup while it is set. Syntax: VKD3D_QA_HASHES=/tmp/hashes.txt %command%",
+   "placeholder": "e.g. /tmp/hashes.txt"
+  },
+  {
+   "name": "VKD3D_BARRIER_HASHES",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Path to a file of shader hashes used by the breadcrumb/barrier debugging path, for narrowing a GPU hang down to specific barriers. Debug only. Syntax: VKD3D_BARRIER_HASHES=/tmp/barriers.txt %command%",
+   "placeholder": "e.g. /tmp/barriers.txt"
+  },
+  {
+   "name": "VKD3D_SHADER_QUIRKS",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Path to a file of per-shader quirk overrides, applied at shader compile time. Development aid for testing a workaround before it is baked into vkd3d-proton's own quirk tables. Syntax: VKD3D_SHADER_QUIRKS=/tmp/quirks.txt %command%",
+   "placeholder": "e.g. /tmp/quirks.txt"
+  },
+  {
+   "name": "VKD3D_BLOOM_BUFFER_SIZE_LOG2",
+   "cat": "VKD3D-Proton",
+   "vtype": "int",
+   "default": "24",
+   "desc": "Size of the descriptor-QA bloom filter buffer, as a power of two (24 = 16 MiB, the default). Only allocated when descriptor QA with sync validation is active; raise it if the QA layer reports collisions. Syntax: VKD3D_BLOOM_BUFFER_SIZE_LOG2=26 %command%",
+   "placeholder": "e.g. 24 (log2 of bytes)"
+  }
+ ],
+ "NV_ENV_VARS": [
+  {
+   "name": "__GL_ALLOW_UNOFFICIAL_PROTOCOL",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Allows the NVIDIA GLX client to use 'unofficial' GLX protocol extensions for OpenGL features beyond v1.5. Requires NVIDIA GLX libraries on both client and server.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_FORCE_INDIRECT",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Forces the NVIDIA OpenGL driver to use indirect GLX rendering — sends GL commands over the network to an X server. Workaround for certain compatibility issues. (1 = enable)",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_DISALLOW_SOFTWARE_FALLBACK",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Prevents the OpenGL driver from falling back to software rendering when hardware acceleration fails.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_NO_DSO_FINALIZER",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Workaround for multithreaded OpenGL apps: forces libGL's DSO finalizer to leave resources in place on exit so other threads can still call OpenGL safely. OS reclaims all memory when the process terminates.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_WRITE_TEXT_SECTION",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Controls whether the NVIDIA OpenGL driver can write to executable memory sections. Set to 0 to disable this optimization — workaround for segfaults in some apps.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_IGNORE_GLSL_EXT_REQS",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Ignores certain GLSL extension requirements. Useful workaround for specific games such as Dying Light. (1 = enable)",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_YIELD",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Specifies what the NVIDIA OpenGL driver does when it needs to yield CPU time. USLEEP changes the yielding behavior to usleep(). Workaround for scheduling problems.",
+   "options": [
+    "USLEEP",
+    "NOTHING"
+   ],
+   "placeholder": "e.g. USLEEP"
+  },
+  {
+   "name": "__GL_SYNC_DISPLAY_DEVICE",
+   "cat": "NVIDIA __GL",
+   "vtype": "string",
+   "default": "",
+   "desc": "Specifies which display connector to synchronize rendering to (VSync target). Use in multi-monitor setups to eliminate tearing. Also works with Vulkan apps. Example values: HDMI-0, DP-4, DVI-D-0",
+   "placeholder": "e.g. HDMI-0 or DP-4"
+  },
+  {
+   "name": "__GL_SHADER_DISK_CACHE_PATH",
+   "cat": "NVIDIA __GL",
+   "vtype": "string",
+   "default": "",
+   "desc": "Overrides the directory path for the NVIDIA OpenGL shader disk cache. By default the cache lives in ~/.nv. Useful to redirect to faster storage or a shared location across users.",
+   "placeholder": "/path/to/cache/dir"
+  },
+  {
+   "name": "__GL_SHADER_DISK_CACHE_APP_NAME",
+   "cat": "NVIDIA __GL",
+   "vtype": "string",
+   "default": "",
+   "desc": "Specifies an application name for the shader disk cache, creating app-specific cache entries. Prevents cache key collisions between different applications.",
+   "placeholder": "MyAppName"
+  },
+  {
+   "name": "__GL_SHADER_DISK_CACHE_READ_ONLY",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Makes the shader disk cache read-only. When set, the driver will not write new compiled shader entries to the cache — useful for locked/shared deployments.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_SHADER_DISK_CACHE_READ_ONLY_APP_NAME",
+   "cat": "NVIDIA __GL",
+   "vtype": "string",
+   "default": "",
+   "desc": "Specifies an application name for a read-only shader disk cache. Used in conjunction with __GL_SHADER_DISK_CACHE_READ_ONLY.",
+   "placeholder": "MyAppName"
+  },
+  {
+   "name": "__GL_SHADER_DISK_CACHE_SKIP_CLEANUP",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Prevents the NVIDIA driver from cleaning up (evicting) old shader disk cache entries. Can help reduce shader compilation stuttering by keeping all cached shaders intact. (1 = skip cleanup)",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_SHARPEN_ALLOW",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Allows the NVIDIA Image Sharpening feature to be used by this process. Must be enabled before __GL_SHARPEN_ENABLE takes effect.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_SHARPEN_ENABLE",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enables NVIDIA Image Sharpening for OpenGL and Vulkan games. Improves clarity and sharpness. Available since driver 441.41. Requires __GL_SHARPEN_ALLOW=1.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_SHARPEN_VALUE",
+   "cat": "NVIDIA __GL",
+   "vtype": "int",
+   "default": "",
+   "desc": "Controls the sharpening strength. Higher values produce a stronger effect. Typical range 0–100.",
+   "placeholder": "0-100"
+  },
+  {
+   "name": "__GL_SHARPEN_IGNORE_FILM_GRAIN",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Controls whether the sharpening filter ignores film grain effects. Prevents the sharpening pass from accentuating synthetic film grain noise.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_SHARPEN_INDICATOR_ENABLE",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Shows an on-screen indicator when NVIDIA Image Sharpening is active.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_LOG_MAX_ANISO",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enables automatic anisotropic texture filtering for OpenGL: 0 = none, 1 = 2x, 2 = 4x, 3 = 8x, 4 = 16x.",
+   "options": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4"
+   ]
+  },
+  {
+   "name": "__GL_ALLOW_FXAA_USAGE",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Set to 0 to let an individual application opt out of FXAA when FXAA is enabled globally in nvidia-settings.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_HEAP_ALLOC_LIMIT",
+   "cat": "NVIDIA __GL",
+   "vtype": "string",
+   "default": "",
+   "desc": "Per-process limit on the driver's heap allocations, written as BYTES with an optional case-insensitive suffix (k, kB, M, MB, G, GB); no suffix = bytes. Values below 12 MB are clamped up to 12 MB.",
+   "placeholder": "e.g. 4G"
+  },
+  {
+   "name": "__GL_ConformantBlitFramebufferScissor",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "glBlitFramebuffer() scissor test: enabled by default (spec-conformant). Set 0 to disable it for old applications that relied on the previous behaviour.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_SORT_FBCONFIGS",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Set to 0 to return GLX FBConfigs in the order the X server reports them instead of the driver's sorted order.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_SHOW_GRAPHICS_OSD",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Shows an on-screen display (OSD) indicator for the graphics API currently in use. Can also be set via nvidia-settings or an application profile.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_APPLICATION_PROFILE",
+   "cat": "NVIDIA __GL",
+   "vtype": "string",
+   "default": "",
+   "desc": "Specifies an application profile name to load. Application profiles override global and base profile settings. The driver loads these on process init.",
+   "placeholder": "ProfileName"
+  },
+  {
+   "name": "__GL_SELINUX_BOOLEANS",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Controls SELinux policy detection for the NVIDIA OpenGL driver. Some fallback allocation methods may be prohibited under SELinux; this variable allows manual override of the detection.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_MAYA_OPTIMIZE",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enables/disables OpenGL optimizations for Autodesk Maya. The NVIDIA Linux driver 295.59 disabled certain OpenGL optimizations that affect Maya performance. Set to 1 to re-enable if you experience performance loss.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_EVENT_LOGFILE",
+   "cat": "NVIDIA __GL",
+   "vtype": "string",
+   "default": "",
+   "desc": "Specifies a file path for NVIDIA OpenGL event logging. Used for debugging and troubleshooting by NVIDIA support.",
+   "placeholder": "/tmp/gl_events.log"
+  },
+  {
+   "name": "__GL_EVENT_LOGLEVEL",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Controls the verbosity level of NVIDIA OpenGL event logging. TRACE is most verbose; OFF disables logging entirely.",
+   "options": [
+    "TRACE",
+    "DEBUG",
+    "INFO",
+    "WARN",
+    "ERROR",
+    "CRITICAL",
+    "OFF"
+   ]
+  },
+  {
+   "name": "__GL_EXPERT_DETAIL_LEVEL",
+   "cat": "NVIDIA __GL",
+   "vtype": "int",
+   "default": "",
+   "desc": "Controls the level of detail for GLExpert debugging output. GLExpert is part of the instrumented driver providing real-time OpenGL runtime info. Higher values produce more detailed output.",
+   "placeholder": "0-5"
+  },
+  {
+   "name": "__GL_EXPERT_OUTPUT_MASK",
+   "cat": "NVIDIA __GL",
+   "vtype": "string",
+   "default": "",
+   "desc": "Bitmask controlling where GLExpert debugging output is sent (e.g. console, stdout, debugger). Used together with __GL_EXPERT_REPORT_MASK.",
+   "placeholder": "0x01 (stdout)"
+  },
+  {
+   "name": "__GL_EXPERT_REPORT_MASK",
+   "cat": "NVIDIA __GL",
+   "vtype": "string",
+   "default": "",
+   "desc": "Bitmask filtering which types of GLExpert debugging reports are generated. Used together with __GL_EXPERT_OUTPUT_MASK.",
+   "placeholder": "0xFF (all)"
+  },
+  {
+   "name": "__GL_DEBUG_FILENAME",
+   "cat": "NVIDIA __GL",
+   "vtype": "string",
+   "default": "",
+   "desc": "Specifies a filename for debug trace output from the NVIDIA OpenGL driver. Used in conjunction with __GL_DEBUG to redirect trace output.",
+   "placeholder": "/tmp/gl_debug.log"
+  },
+  {
+   "name": "__GL_FIX_VIEWPERF2020_BUFFER_NAME_BUG",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Fixes a specific bug in SPEC Viewperf 2020 benchmarks related to buffer naming. Viewperf data sets are GL API traces from CAD apps; the bug caused rendering to appear darker than expected.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_DOOM3",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Legacy variable for the Doom 3 game. A driver bug (fixed in 319.32) caused crashes when this was set. Kept here for reference; not needed on modern drivers.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_13ebad",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "idTech engine VRAM placement workaround. Tells the NVIDIA Vulkan driver to override application-requested memory locations and force performance-critical resources into video memory. First needed for Doom Eternal (2020), later confirmed for Indiana Jones and the Great Circle (Dec 2024). Workaround confirmed by an NVIDIA engineer on the developer forum; planned for auto-enablement in a future driver release. Only effective on idTech-based games with the proprietary NVIDIA Linux Vulkan driver. Steam launch options: __GL_13ebad=0x1 %command%",
+   "options": [
+    "0x1"
+   ]
+  },
+  {
+   "name": "__GL_MaxFramesAllowed",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Caps how many frames the OpenGL driver will queue ahead of the display (pre-rendered frames). Defaults to 2. Set to 1 for the Linux equivalent of Windows' NVIDIA 'Low Latency Mode: On' — noticeably reduces input lag and frame-pacing jitter in compositors/games that rely on it. 0 aims for the 'Ultra' equivalent but is reported to not fully work on Linux.",
+   "options": [
+    "0",
+    "1",
+    "2"
+   ]
+  },
+  {
+   "name": "__GL_THREADED_OPTIMIZATIONS",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Offloads some of the OpenGL driver's CPU-side work to a separate worker thread. Helps CPU-bound OpenGL titles; can hurt titles that make heavy synchronous calls like glGet*. Requires the app to link pthreads (use LD_PRELOAD=libpthread.so.0 if it doesn't). Enabled by default under some conditions with self-disable if it isn't helping; this forces it on.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_SYNC_TO_VBLANK",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Classic OpenGL VSync toggle. 0 lets glXSwapBuffers return immediately without waiting for vblank (tearing possible, lowest latency); 1 (default) syncs every swap to the display's vertical refresh.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_GSYNC_ALLOWED",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Allows (1) or blocks (0) G-SYNC/variable refresh rate on a G-SYNC-capable display for OpenGL applications. NOTE: only affects OpenGL — Vulkan/DXVK/VKD3D-Proton titles ignore this entirely; VRR for those is controlled at the compositor/display-server level instead.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_VRR_ALLOWED",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Same G-SYNC/adaptive-sync allow/block toggle as __GL_GSYNC_ALLOWED, under the more generic 'VRR' name. Same OpenGL-only caveat applies — has no effect on Vulkan applications.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_SHADER_DISK_CACHE",
+   "cat": "NVIDIA __GL",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Master on/off switch for the NVIDIA OpenGL driver's shader disk cache. The other __GL_SHADER_DISK_CACHE_* variables only take effect while this is on (on by default when a cache directory is resolvable).",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GL_SHADER_DISK_CACHE_SIZE",
+   "cat": "NVIDIA __GL",
+   "vtype": "int",
+   "default": "",
+   "desc": "Maximum size in bytes of the NVIDIA OpenGL shader disk cache. Once exceeded, older entries are evicted. Raise this if a big/long game library keeps thrashing the cache and causing re-compiles.",
+   "placeholder": "e.g. 1073741824 (1 GiB)"
+  },
+  {
+   "name": "__GL_FSAA_MODE",
+   "cat": "NVIDIA __GL",
+   "vtype": "int",
+   "default": "",
+   "desc": "Forces a specific driver-level full-screen antialiasing mode, using the same integer values as `nvidia-settings --assign FSAA=N`. Run `nvidia-settings --query fsaa` to list the modes your GPU supports. Only takes effect for modes the app doesn't already control itself (see FSAAAppControlled).",
+   "placeholder": "e.g. 5"
+  }
+ ],
+ "NVIDIA_PRIME_ENV_VARS": [
+  {
+   "name": "__NV_PRIME_RENDER_OFFLOAD",
+   "cat": "NVIDIA PRIME",
+   "vtype": "enum",
+   "default": "",
+   "desc": "On a hybrid laptop (iGPU driving the display, NVIDIA dGPU idle), forces the OpenGL/EGL side of an application to render on the NVIDIA GPU via PRIME render offload instead of the iGPU. Pair with __GLX_VENDOR_LIBRARY_NAME=nvidia (System / Loader category) and __VK_LAYER_NV_optimus below for the Vulkan half. Directly relevant on this machine's Ryzen iGPU + RTX 4080 Mobile combo.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__NV_PRIME_RENDER_OFFLOAD_PROVIDER",
+   "cat": "NVIDIA PRIME",
+   "vtype": "string",
+   "default": "",
+   "desc": "Only needed with more than one discrete GPU to offload to: names the specific Xorg PRIME provider to render on, e.g. 'NVIDIA-G0'. Find yours with `xrandr --listproviders`. Leave unset on a normal single-dGPU laptop.",
+   "placeholder": "e.g. NVIDIA-G0"
+  },
+  {
+   "name": "__VK_LAYER_NV_optimus",
+   "cat": "NVIDIA PRIME",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Loads NVIDIA's Vulkan PRIME-offload layer so a Vulkan app actually picks the NVIDIA GPU. Needed because Vulkan apps otherwise just take the first device the loader enumerates, which on a hybrid laptop is often the iGPU. 'NVIDIA_only' is the value actually used, not a boolean.",
+   "options": [
+    "NVIDIA_only"
+   ]
+  },
+  {
+   "name": "DRI_PRIME",
+   "cat": "NVIDIA PRIME",
+   "vtype": "string",
+   "default": "",
+   "desc": "The Mesa-side equivalent PRIME offload switch (1 = use the secondary GPU, or a specific 'pci-xxxx_xx_xx_x' bus address). Mainly relevant here if you're running the open-source Nouveau driver on the RTX 4080 Mobile instead of the proprietary driver — has no effect on the proprietary NVIDIA driver path.",
+   "placeholder": "1 or pci-0000_01_00_0"
+  }
+ ],
+ "FLM_ENV_VARS": [
+  {
+   "name": "ENABLE_LAYER_cpu_flip_meter",
+   "cat": "vk_flip_meter",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Activates the Vulkan implicit layer. This is the enable_environment key from the layer manifest; without it the layer stays inactive even if loaded. Syntax: ENABLE_LAYER_cpu_flip_meter=1 %command%",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "DISABLE_LAYER_cpu_flip_meter",
+   "cat": "vk_flip_meter",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Globally disables the layer (e.g. to turn off a system-wide implicit layer for one specific game). Syntax: DISABLE_LAYER_cpu_flip_meter=1 %command%",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "FLM_MODE",
+   "cat": "vk_flip_meter",
+   "vtype": "enum",
+   "default": "auto",
+   "desc": "v3.0: the layer configures itself — frame-generation multiplier, floor ratio, spin margin, hitch handling and FIFO fixed-refresh/VRR detection are all automatic. auto: FPS cap if FLM_TARGET_FPS>0, otherwise the floor pacer wherever it can help (presentWait + MAILBOX/IMMEDIATE, or FIFO whose measured cadence is VRR). latency: like auto with a looser floor and faster hitch recovery. present: like auto, but also paces FIFO swapchains judged fixed-refresh. cap: limiter only (needs FLM_TARGET_FPS). off: layer loaded but inactive (A/B baseline). The legacy FLM_PROFILE=vrr|mfg|latency|cap|off and FLM_MODE=limiter are still accepted as aliases. Hot-reloadable. Syntax: FLM_MODE=latency %command%",
+   "options": [
+    "auto",
+    "latency",
+    "present",
+    "cap",
+    "off"
+   ]
+  },
+  {
+   "name": "FLM_TARGET_FPS",
+   "cat": "vk_flip_meter",
+   "vtype": "int",
+   "default": "0",
+   "desc": ">0 = FPS cap (absolute-timeline limiter, no presentWait needed, works on every driver). 0 = natural cadence: the floor pacer smooths delivery without capping. Hot-reloadable. Syntax: FLM_TARGET_FPS=120 %command%",
+   "placeholder": "e.g. 120"
+  },
+  {
+   "name": "FLM_FLOOR_RATIO",
+   "cat": "vk_flip_meter",
+   "vtype": "int",
+   "default": "",
+   "desc": "Optional override of the floor pacer's base ratio (500-1000; 1000 = one full slot). Unset = mode default (auto 850, latency 780). The closed loop still adjusts around it per frame-generation multiplier, and the ratchet guard still keeps the floor below the slot. Higher = flatter, lower = less held. Leave unset unless A/B data says otherwise. Hot-reloadable. Syntax: FLM_FLOOR_RATIO=900 %command%",
+   "placeholder": "unset = auto"
+  },
+  {
+   "name": "FLM_MFG_MULTIPLIER",
+   "cat": "vk_flip_meter",
+   "vtype": "enum",
+   "default": "0",
+   "desc": "Frame-generation multiplier. 0 = auto-detect (default; re-checked periodically, follows in-game changes). 1-4 = force. Load-time only. Syntax: FLM_MFG_MULTIPLIER=4 %command%",
+   "options": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4"
+   ]
+  },
+  {
+   "name": "FLM_MEASURE_CPU",
+   "cat": "vk_flip_meter",
+   "vtype": "string",
+   "default": "",
+   "desc": "CPU affinity of the measurement thread — comma list of cores/ranges, e.g. '0-3,8'. Useful with CCD isolation. Load-time only. Syntax: FLM_MEASURE_CPU=0-3 %command%",
+   "placeholder": "e.g. 0-3"
+  },
+  {
+   "name": "FLM_RT_PRIORITY",
+   "cat": "vk_flip_meter",
+   "vtype": "int",
+   "default": "0",
+   "desc": "SCHED_FIFO priority of the measurement thread (1-99, needs CAP_SYS_NICE). 0 = normal scheduling. Load-time only. Syntax: FLM_RT_PRIORITY=40 %command%",
+   "placeholder": "e.g. 40"
+  },
+  {
+   "name": "FLM_LOG_LEVEL",
+   "cat": "vk_flip_meter",
+   "vtype": "enum",
+   "default": "WARN",
+   "desc": "Log verbosity (default WARN). INFO shows the resolved config, MFG multiplier changes and the FIFO/VRR verdict; DEBUG is near per-frame. Removed v2.x variables are reported once at WARN. Hot-reloadable. Syntax: FLM_LOG_LEVEL=INFO %command%",
+   "options": [
+    "DEBUG",
+    "INFO",
+    "WARN",
+    "ERROR"
+   ]
+  },
+  {
+   "name": "FLM_LOG_FILE",
+   "cat": "vk_flip_meter",
+   "vtype": "string",
+   "default": "",
+   "desc": "Log file path (default stderr, which Steam/Lutris often swallow). Load-time only. Syntax: FLM_LOG_LEVEL=INFO FLM_LOG_FILE=/tmp/flm.log %command%",
+   "placeholder": "e.g. /tmp/flm.log"
+  },
+  {
+   "name": "FLM_STATS",
+   "cat": "vk_flip_meter",
+   "vtype": "enum",
+   "default": "0",
+   "desc": "1 = summary line every 5 s at INFO: avg, p99, max interval, fake/hitch counts, detected multiplier, effective floor ratio (0 = pacer not running on this swapchain) and the FIFO verdict. Load-time only. Syntax: FLM_LOG_LEVEL=INFO FLM_STATS=1 %command%",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "FLM_CSV",
+   "cat": "vk_flip_meter",
+   "vtype": "string",
+   "default": "",
+   "desc": "Per-flip measurement dump for A/B analysis (columns flip_ns, interval_ns, is_fake, is_hitch, slot, mfg, slot_mean_ns, pacing). Survives swapchain recreation (appends), flushed every 5 s. Load-time only. Syntax: FLM_MODE=off FLM_CSV=/tmp/off.csv %command%",
+   "placeholder": "e.g. /tmp/flm.csv"
+  },
+  {
+   "name": "FLM_CONFIG",
+   "cat": "vk_flip_meter",
+   "vtype": "string",
+   "default": "",
+   "desc": "KEY=VALUE file re-read on SIGUSR1 for live tuning. Hot-reloadable keys: FLM_MODE, FLM_TARGET_FPS, FLM_FLOOR_RATIO, FLM_LOG_LEVEL (FLM_PROFILE alias too). Each reload starts from defaults → env → file, so deleting a line reverts it. Syntax: FLM_CONFIG=/tmp/flm.conf %command%  →  then: echo 'FLM_MODE=latency' > /tmp/flm.conf && kill -USR1 $(pgrep -f game)",
+   "placeholder": "e.g. /tmp/flm.conf"
+  }
+ ],
+ "PROTON_ENV_VARS": [
+  {
+   "name": "PROTON_USE_NTSYNC",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Use the kernel-backed ntsync driver for Wine's in-process synchronization primitives instead of Esync/Fsync. Lower CPU overhead and more consistent timing than Fsync in titles that need it. On newer Proton-CachyOS/Valve Proton 11 builds ntsync is already the default and this variable has been removed there — use PROTON_NO_NTSYNC=1 on those builds to go back to Fsync.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NO_NTSYNC",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Disable ntsync (the default kernel sync driver on Proton 11 / current Proton-CachyOS) and fall back to Fsync. Useful for the rare title that misbehaves specifically under ntsync.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NO_ESYNC",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Do not use eventfd-based in-process synchronization primitives (disables Esync).",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NO_FSYNC",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Do not use futex-based in-process synchronization primitives (disables Fsync). Automatically disabled anyway on systems without FUTEX_WAIT_MULTIPLE support.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_PRIORITY_HIGH",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Not part of any official Proton, Proton-CachyOS or Proton-GE variable table — no confirmed source reads this exact name. Community shorthand for 'give the game process a higher scheduling priority' is usually done via a launch wrapper (gamemoderun, CachyOS's game-performance) rather than an env var read by Proton itself. Kept here so the value is captured, but verify it actually does anything on your setup before relying on it.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_ENABLE_HDR",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Legacy HDR toggle. Retired in current Proton-CachyOS in favour of DXVK_HDR (see the DXVK category), but Valve's stable Proton and most Proton-GE builds still read this name directly. Combine with ENABLE_HDR_WSI if needed.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "ENABLE_HDR_WSI",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enables the HDR window-system-integration Vulkan extension path. Needed alongside DXVK_HDR/PROTON_ENABLE_HDR on NVIDIA driver versions older than 595.x, or together with a compositor-side HDR layer (e.g. vk-hdr-layer on KDE 6) when the compositor itself needs to be told HDR is coming.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_ENABLE_WAYLAND",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enable Wine's native winewayland.drv instead of XWayland/winex11.drv. Experimental — can improve latency and frame pacing and is required for HDR without Gamescope, but currently breaks the Steam Overlay and Steam Input in several builds. Alias: PROTON_USE_WAYLAND.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_HIDE_NVIDIA_GPU",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Force NVIDIA GPUs to always be reported as AMD GPUs. Some games require this if they depend on Windows-only NVIDIA driver functionality. See also DXVK's nvapiHack config, which only affects reporting from Direct3D.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_ENABLE_NVAPI",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enable NVIDIA's NVAPI GPU support library inside the Wine prefix. Needed on older Proton (<= 9) and some forks. Valve Proton 10 copies nvapi64.dll into the prefix by default unless the game is marked 'disablenvapi' — there, use PROTON_FORCE_NVAPI=1 to override such a per-game block instead. Usually paired with PROTON_HIDE_NVIDIA_GPU=0.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_DISABLE_NVAPI",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Disable NVIDIA's NVAPI GPU support library. Occasionally fixes crashes or low performance in titles that have buggy NVAPI code paths on Linux.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_FORCE_NVAPI",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Proton 10: forces NVAPI on even for titles Proton disables it for by default (maps to the 'forcenvapi' compat flag, which wins over 'disablenvapi'). Use when DLSS/Reflex is missing in a game Proton blocks NVAPI for.",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_HIDE_APU",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Hides an AMD APU's integrated GPU from the game (Proton sets WINE_HIDE_APU=1). On hybrid laptops (Ryzen iGPU + NVIDIA dGPU) this stops games that enumerate adapters from picking or mis-detecting the iGPU. Proton applies it automatically for a few titles (e.g. Deathloop).",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_LIMIT_RESOLUTIONS",
+   "cat": "Proton",
+   "vtype": "int",
+   "default": "",
+   "desc": "Caps how many display modes Wine reports to the game. Some titles crash or misbehave with very long mode lists on high-refresh panels; Proton sets 16/32 automatically for e.g. Sekiro, Nier: Automata, Dark Souls III.",
+   "placeholder": "e.g. 32"
+  },
+  {
+   "name": "PROTON_CPU_TOPOLOGY",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Proton alias for WINE_CPU_TOPOLOGY ('N:i,j,k,...'); copied into WINE_CPU_TOPOLOGY by the Proton script. Useful for pinning a game to specific cores (e.g. one CCD / the V-Cache CCD).",
+   "placeholder": "e.g. 8:0,1,2,3,4,5,6,7"
+  },
+  {
+   "name": "PROTON_NVAPI_BYPASS",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Not a documented Proton/DXVK/VKD3D variable — no official source for this exact name was found. Most likely a mix-up with PROTON_DISABLE_NVAPI or DXVK_ENABLE_NVAPI (see the DXVK category). Kept here so the typed value is captured, but treat it as unconfirmed.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_ENABLE_NGX_UPDATER",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enables NVIDIA's NGX Updater inside the Wine prefix, letting NGX Core download newer DLSS/DLSS-G DLLs at runtime instead of using the ones shipped with the game. This is the one-launch-option way to force a newer DLSS preset via DXVK_NVAPI_DRS_NGX_* (see DXVK-NVAPI category). Known to cause 2nd-run crashes in a few Unreal Engine titles — disable it again if that happens.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_DLSS_UPGRADE",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Automatically download and use a newer nvngx_dlss(d|g).dll than the one the game ships with. Set to 1 for the latest known-good version, or a specific version string (e.g. '310.2') to pin one. Also sets DXVK_NVAPI_DRS_SETTINGS to the latest preset unless you override it yourself.",
+   "placeholder": "1 or e.g. 310.2"
+  },
+  {
+   "name": "PROTON_NVIDIA_LIBS",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enable alternative NVIDIA library shims (nvcuda, nvenc, nvml, nvoptix) missing from stock Proton. Needed for things like hardware-accelerated PhysX. Only enable when a game actually needs it — incompatible with PROTON_USE_WOW64=1.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NVIDIA_LIBS_NO_32BIT",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Use together with PROTON_NVIDIA_LIBS to restrict the shims to 64-bit only. Fixes bad performance/crashes on RTX 4000/5000-series cards when the 32-bit nvidia-libs shims get loaded for a 32-bit game.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NVIDIA_NVCUDA",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enable only the alternative nvcuda.dll shim from nvidia-libs, without pulling in nvenc/nvml/nvoptix too. Narrower alternative to PROTON_NVIDIA_LIBS.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NVIDIA_NVENC",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enable only the alternative NVENC hardware-encode shim from nvidia-libs. Relevant for in-game recording/streaming pipelines that call NVENC directly.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NVIDIA_NVML",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enable only the NVML shim from nvidia-libs (GPU temperature/utilization queries). Lets in-game or overlay tools read real GPU stats. Enabled by default in Proton-CachyOS.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NVIDIA_NVOPTIX",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enable only the OptiX ray-tracing shim from nvidia-libs. Needed by the rare title that uses NVIDIA OptiX directly rather than DXR/VKD3D-Proton's raytracing path.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_DLSS_INDICATOR",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Show a small on-screen DLSS status overlay confirming DLSS is actually active and which mode it's running in — the same overlay toggled by DXVK_NVAPI_SET_NGX_DEBUG_OPTIONS=DLSSIndicator=1024 (DXVK-NVAPI category), just as a one-flag shortcut.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_USE_WINED3D",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Use OpenGL-based wined3d instead of Vulkan-based DXVK for d3d11/d3d10/d3d9. Rarely an improvement, but occasionally works around a DXVK-specific bug.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_DXVK_SAREK",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[proton-cachyos] Switches the DXVK shipped with proton-cachyos over to DXVK-Sarek, a Vulkan 1.1/1.2 build maintained off the 1.10.x branch for GPUs that no longer meet upstream DXVK's requirements (and for Box64/FEX on Mali/Adreno). Sarek is the officially supported way to use it. On current hardware there is no reason to enable this — upstream DXVK is newer — except to reach Sarek-only options such as dyasync (DXVK_DISABLE_DYASYNC) or DXVK_ALL_CORES. Mutually exclusive in practice with PROTON_DXVK_LOWLATENCY: both replace the same DXVK. Syntax: PROTON_DXVK_SAREK=1 %command%",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_DXVK_LOWLATENCY",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enable the dxvk-low-latency fork (Proton-CachyOS/community builds), which adds low-latency frame pacing on top of DXVK to reduce input lag and improve frame pacing consistency. Mainly worth it in single-player titles.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_DXVK_LLASYNC",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Not a documented Proton/Proton-CachyOS variable under this exact spelling. Most likely intended as PROTON_DXVK_LOWLATENCY (low-latency frame pacing) or the now-removed PROTON_DXVK_GPLASYNC (old async-compile patch). Kept here so the typed value is captured, but treat it as unconfirmed.",
+   "placeholder": "likely meant PROTON_DXVK_LOWLATENCY"
+  },
+  {
+   "name": "PROTON_VKD3D_HEAP",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Retired in current Proton-CachyOS with no replacement. Historically toggled an alternate vkd3d-proton heap allocation strategy. Kept here for older builds.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_LOCAL_SHADER_CACHE",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enable a per-game shader cache even when Steam's own 'Shader Pre-Caching' is off, mimicking it by keeping each game's cache under <steamlibrary>/shadercache/<appid>. Does not precompile shaders ahead of time — it only isolates each game's cache.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_PREFER_SDL",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Use SDL for controller input instead of HIDRAW/Steam Input. Can help controller detection issues under winewayland.drv. Alias: PROTON_USE_SDL.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NO_WM_DECORATION",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Disable window decorations drawn by the window manager, letting Wine draw its own decorations instead. Occasionally fixes windowed-mode focus/resize glitches.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_FORCE_LARGE_ADDRESS_AWARE",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Force Wine to enable the LARGE_ADDRESS_AWARE flag for all executables, letting 32-bit processes use more than 2 GiB of address space. Enabled by default.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_SET_GAME_DRIVE",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Create an S: drive inside the Wine prefix pointing at the Steam library that contains the game. Some titles look for their install on a specific drive letter.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_ADD_CONFIG",
+   "cat": "Proton",
+   "vtype": "flags",
+   "default": "",
+   "desc": "[Proton-EM / Proton-CachyOS] Comma-separated shortcut list that expands to several other variables at once, e.g. PROTON_ADD_CONFIG=wayland,ntsync is the same as setting PROTON_USE_WAYLAND=1 PROTON_USE_NTSYNC=1. Handy for combining several of the toggles above without a wall of launch options.",
+   "options": [
+    "wayland",
+    "ntsync",
+    "nontsync",
+    "sdlinput",
+    "wow64"
+   ],
+   "exclusive": [
+    "ntsync",
+    "nontsync"
+   ]
+  },
+  {
+   "name": "PROTON_USE_WOW64",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[GE-Proton / Proton-EM / Proton-CachyOS, experimental] Run the game through Wine's newer WoW64 architecture (32-bit game, 64-bit Unix process via thunks) instead of a traditional 32-bit process. Some 32-bit titles report smoother frame timings with this on; others are still rough since it's experimental. Incompatible with PROTON_NVIDIA_LIBS.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_HEAP_DELAY_FREE",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Delay freeing some memory instead of releasing it immediately, to work around application use-after-free bugs. A stability tweak more than a speed one, but avoids the stutter/crash a UAF bug would otherwise cause mid-game.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_LOG",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Dump a debug log to $PROTON_LOG_DIR/steam-$APPID.log. Set to 1 for the default WINEDEBUG channels, or a string to append extra channels to the default set. Proton's logging defaults (WINEDEBUG, DXVK_LOG_LEVEL, VKD3D_DEBUG …) only fill in vars that are unset — a leftover WINEDEBUG=-all gives an almost empty log.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_LOG_DIR",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Directory to write PROTON_LOG output into. Defaults to your home directory.",
+   "placeholder": "/path/to/log/dir"
+  },
+  {
+   "name": "PROTON_DEBUG_DIR",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Root directory Proton writes its per-game debug helper scripts into (proton_$USER/ subfolder, e.g. gdb_run for attaching a debugger). Defaults to /tmp. Only useful together with debugging workflows; has no effect on normal gameplay.",
+   "placeholder": "/tmp"
+  },
+  {
+   "name": "PROTON_EAC_RUNTIME",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Path to the 'Proton EasyAntiCheat Runtime' Steam depot, needed by some EAC-protected games that don't auto-detect it (install the runtime via Steam's 'Tools' category first, then point this at its folder). Usually not needed manually when the game's Steam depot already declares the dependency.",
+   "placeholder": "\"/home/user/.steam/steam/steamapps/common/Proton EasyAntiCheat Runtime/\""
+  },
+  {
+   "name": "PROTON_BATTLEYE_RUNTIME",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Path to the 'Proton BattlEye Runtime' Steam depot, needed by some BattlEye-protected games that don't auto-detect it. Same idea as PROTON_EAC_RUNTIME — install the Steam Tools depot, then point here.",
+   "placeholder": "\"/home/user/.steam/steam/steamapps/common/Proton BattlEye Runtime/\""
+  },
+  {
+   "name": "PROTON_DXVK_D3D8",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Use DXVK's d3d8 implementation instead of wined3d for Direct3D 8 games.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NO_D3D10",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Disable d3d10 / d3d10_1 AND dxgi DLL overrides (blank override = not loaded). Forces games with another renderer to fall back to it.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NO_D3D11",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Disable the d3d11 DLL (blank override). Forces games with a D3D9/D3D12 renderer to pick another API.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_USE_WINED3D11",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Use wined3d (OpenGL) for d3d11 only, keeping DXVK for the rest. Debug/compat.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_HEAP_ZERO_MEMORY",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Zero all Win32 heap allocations (sets WINE_HEAP_ZERO_MEMORY=1). Fixes crashes in games that read uninitialised heap memory; small CPU cost.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_LIMIT_ADDRESS_SPACE",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Limit the process's usable virtual address space (read by Proton's Wine). Proton auto-sets it for AppIDs 1282270 and 2963870; try it for games that crash when given a very large address space.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_USE_XALIA",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Xalia: controller-navigable UI for launchers/dialogs without gamepad support. Proton enables it by default (only for supported apps). Set 0 if it grabs input or adds an overlay you don't want.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_DISABLE_HIDRAW",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Comma-separated VID/PID list of controllers that must NOT be exposed through hidraw (they fall back to SDL/evdev). Proton sets Sony DS4/DualSense IDs by default for some games.",
+   "placeholder": "e.g. 0x054C/0x0CE6,0x054C/0x0DF2"
+  },
+  {
+   "name": "PROTON_CRASH_REPORT_DIR",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Write Wine crash reports (minidumps) to this directory (sets WINE_CRASH_REPORT_DIR).",
+   "placeholder": "e.g. /tmp/proton-crashes"
+  },
+  {
+   "name": "PROTON_FSR4_UPGRADE",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "[Proton-GE / Proton-CachyOS] Download amdxcffx64.dll and upgrade games that ship FSR 3.1 to FSR 4. 1 = default version from the upscaler manifest, or pin a version (e.g. 4.1.1). Opt-in. Needs a GPU/driver with FSR4 support — AMD RDNA3/4 only; it has no effect on an NVIDIA GPU (use PROTON_DLSS_UPGRADE there). Replaces the obsolete PROTON_FSR4_RDNA3_UPGRADE.",
+   "placeholder": "1 or e.g. 4.1.1"
+  },
+  {
+   "name": "PROTON_FSR4_INDICATOR",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE / Proton-CachyOS] Show the FSR upscaling and frame-generation watermarks (shorthand for FSR_WATERMARK=1 and FSR_FG_WATERMARK=1).",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_FSR3_UPGRADE",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "[Proton-GE] Download and use a newer FSR 3.x FidelityFX DLL than the game ships with. 1 = latest from the manifest, or pin a version string.",
+   "placeholder": "1 or a version"
+  },
+  {
+   "name": "PROTON_FFX3_UPGRADE",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "[Proton-CachyOS] FidelityFX 3 counterpart of PROTON_FSR3_UPGRADE (used by the OptiScaler/upgrade path; not described in the fork's README table).",
+   "placeholder": "1 or a version"
+  },
+  {
+   "name": "PROTON_FFX4_UPGRADE",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "[Proton-CachyOS] FidelityFX 4 counterpart of PROTON_FSR4_UPGRADE (used by the OptiScaler/upgrade path; not described in the fork's README table).",
+   "placeholder": "1 or a version"
+  },
+  {
+   "name": "PROTON_XESS_UPGRADE",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "[Proton-GE / Proton-CachyOS] Download and use a newer Intel XeSS DLL than the game ships with. 1 = latest from the manifest, or pin a version string. XeSS runs on NVIDIA GPUs through its DP4a path.",
+   "placeholder": "1 or a version"
+  },
+  {
+   "name": "PROTON_MLFG_UPGRADE",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE / Proton-CachyOS] Enable MLFG (ML frame generation) together with FSR 4 >= 4.0.3. AMD-only; set together with PROTON_FSR4_UPGRADE.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_USE_OPTISCALER",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE / Proton-CachyOS] Inject OptiScaler automatically so games can swap their upscaler (DLSS / FSR / XeSS) and add frame generation where the game has no option. The PROTON_<UPSCALER>_UPGRADE variables then choose the DLL versions. Config files live in <prefix>/drive_c/windows/system32/umu/.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_OPTISCALER_NAME",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-CachyOS] File name OptiScaler is injected as. Defaults to dxgi.dll; switch if the game already uses that DLL name.",
+   "options": [
+    "dxgi.dll",
+    "d3d12.dll",
+    "dbghelp.dll"
+   ]
+  },
+  {
+   "name": "PROTON_OPTISCALER_CONFIG",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "[Proton-CachyOS] Semicolon-separated {section}.{option}={value} entries written into OptiScaler.ini (only options that already exist in the file). Changes persist until OptiScaler is upgraded and strip the file's comments. Example: Upscalers.Dx11Upscaler=fsr31;Upscalers.Dx12Upscaler=dlss",
+   "placeholder": "Upscalers.Dx12Upscaler=dlss"
+  },
+  {
+   "name": "PROTON_VKD3D_LOWLATENCY",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-CachyOS] Switch to the vkd3d-low-latency fork of vkd3d-proton (low-latency frame pacing for Direct3D 12 with a native Reflex implementation). Companion of PROTON_DXVK_LOWLATENCY for D3D12 titles.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_D7VK_DDRAW",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-CachyOS] Use ddraw.dll from the D7VK project for DirectX 7-and-older games instead of Wine's built-in ddraw.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_USE_D7VK",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE] Use D7VK's ddraw implementation for DirectX 7-and-older games (GE spelling of PROTON_D7VK_DDRAW).",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NO_D3D9",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE] Disable the D3D9 DLLs, for games that run better on another API.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NO_D3D12",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE] Disable the D3D12 DLLs, so a game with a DX11 fallback uses it instead of vkd3d-proton.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "LOW_LATENCY_LAYER",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE] Enable the low_latency_layer Vulkan layer (Korthos-Software), which provides Reflex-style latency reduction (VK_NV_low_latency2) on GPUs that lack it natively. Not needed on the proprietary NVIDIA driver.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "ENABLE_VKBASALT",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE] Load the vkBasalt post-processing Vulkan layer (sharpening, CAS, SMAA, LUTs). Configure it with VKBASALT_CONFIG_FILE.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PYROVEIL",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE] Enable the Pyroveil Vulkan layer, which patches broken shader/pipeline behaviour per game; the config name goes in PYROVEIL_CONFIG.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NATIVE_AGS",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE / Proton-EM] Use AMD's proprietary AMD GPU Services binary instead of Proton's built-in one, and allow statically linked AGS. Mainly useful to enable HDR in some UE4 D3D11 games on AMD GPUs.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_USE_WRITECOPY",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE] Simulate Windows copy-on-write (writecopy) semantics for loaded images (sets WINE_SIMULATE_WRITECOPY=1). Needed by some DRM/anti-cheat.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NO_WRITE_WATCH",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE] Disable memory write-watch support in ntdll. Can improve performance in a few specific games; only use after verifying the game runs without it.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_OLD_GL_STRING",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Limit the length of the GL extension string through driver overrides (sets MESA_EXTENSION_MAX_YEAR=2003 and __GL_ExtensionStringVersion=17700), for old OpenGL games that crash on very long strings.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_HIDE_INTEL_GPU",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Hide Intel GPUs from the game (sets WINE_HIDE_INTEL_GPU=1), for titles that break on Intel-specific code paths. Relevant on hybrid laptops with an Intel iGPU.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_HIDE_VANGOGH_GPU",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Hide the Steam Deck (Van Gogh) GPU from the game (sets WINE_HIDE_VANGOGH_GPU=1).",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_NO_XIM",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Disable the X Input Method (XIM) in Wine's X11 driver. Works around text-input/focus problems in a few games.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_SET_STEAM_DRIVE",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Create a T: drive in the Wine prefix pointing at the Steam installation directory (counterpart of PROTON_SET_GAME_DRIVE's S: drive).",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_DLL_COPY",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "Comma-separated list of built-in DLL globs Proton copies into the prefix (default: the DirectX / VC++ redistributable set, e.g. d3dcompiler_*.dll, xaudio*.dll, msvcp1*.dll). Setting it REPLACES that default list.",
+   "placeholder": "e.g. d3dcompiler_*.dll,xaudio*.dll"
+  },
+  {
+   "name": "PROTON_USE_X11_EXCLUSIVE",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "[Proton-GE] Under Wine-Wayland, run only this executable on winex11.drv while everything else stays on Wayland. Takes an exact basename (Launcher.exe) or a case-insensitive path fragment.",
+   "placeholder": "e.g. Launcher.exe"
+  },
+  {
+   "name": "PROTON_WAYLAND_MONITOR",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "[Proton-GE] Primary monitor for Wine-Wayland (sets WAYLANDDRV_PRIMARY_MONITOR). Auto-detected when unset.",
+   "placeholder": "e.g. DP-1"
+  },
+  {
+   "name": "PROTON_NO_STEAMINPUT",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE / Proton-CachyOS / Proton-EM] Disable Steam Input support for the game. Proton-GE also sets it by itself in some controller-fallback cases; disable Steam Input for the game in Steam too.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_EMULATE_STEAMINPUT",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE / Proton-EM] Force Steam Input emulation on. Explicitly setting it also disables Proton-GE's automatic Sony-controller compatibility fallback.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_USE_PIPEWIRE",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-CachyOS] Use the native winepipewire.drv audio driver (enabled by default). Set 0 to fall back to winepulse.drv.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "PROTON_MEDIA_FORCE_GST",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-CachyOS] Force the GStreamer media path. Fixes cutscene video/audio in some games.",
+   "options": [
+    "0",
+    "1"
+   ]
+  }
+ ],
+ "WINE_ENV_VARS": [
+  {
+   "name": "WINE_CPU_TOPOLOGY",
+   "cat": "Wine",
+   "vtype": "string",
+   "default": "",
+   "desc": "Overrides the CPU topology Wine reports to the game: 'N:i,j,k,...' exposes N logical CPUs, mapped onto host CPU indices i,j,k,.... Works around games that crash or refuse to launch on very high thread-count systems (Far Cry 4, Warhammer 40k: Space Marine and others cap out around 26-31 threads).",
+   "placeholder": "e.g. 12:0,1,2,3,4,5,6,7,8,9,10,11"
+  },
+  {
+   "name": "WINE_DISABLE_HARDWARE_SCHEDULING",
+   "cat": "Wine",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Disable Wine's hardware-accelerated GPU scheduling emulation path. Community workaround for titles (e.g. RTX Remix ports) that misbehave when this path is active on Linux.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "WINE_DISABLE_VULKAN_OPWR",
+   "cat": "Wine",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Disable Vulkan 'other process window rendering'. Works around issues on Wayland where the blit ends up one frame behind (compat string: noopwr).",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "WINE_FULLSCREEN_INTEGER_SCALING",
+   "cat": "Wine",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enable integer scaling in fullscreen mode, for sharp pixel-perfect upscaling instead of a blurry bilinear stretch.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER",
+   "cat": "Wine",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Workaround for video/audio playback issues in some games caused by incomplete IMFDXGIDeviceManager support (compat string: nomfdxgiman).",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "WINE_USE_KWIN_HACKS",
+   "cat": "Wine",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enable KDE-specific windowing workarounds that can help on KDE Plasma older than 6.4 on Wayland or older than 6.6 on X11.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "WAYLANDDRV_RAWINPUT",
+   "cat": "Wine",
+   "vtype": "string",
+   "default": "",
+   "desc": "[Proton-EM only, 10.0-1e+] Tunes mouse input under winewayland.drv. Set to 0 to fall back to accelerated (OS pointer-accel) input if raw input feels overly sensitive. On Proton-EM 10.0-2D+ you can instead pass any positive real number (e.g. 0.5) as a sensitivity multiplier for raw input — directly useful for dialing in mouse feel in FPS/aim-heavy titles run through the Wayland driver.",
+   "placeholder": "0, or a multiplier like 0.5"
+  },
+  {
+   "name": "WAYLANDDRV_PRIMARY_MONITOR",
+   "cat": "Wine",
+   "vtype": "string",
+   "default": "",
+   "desc": "[Proton-EM only, 10.0-1b+] Explicitly names which monitor winewayland.drv should treat as primary (e.g. for fullscreen placement), since Wayland has no concept of a global primary monitor the way X11 does. Value is a compositor output name like 'eDP-1'. Shouldn't be needed on Proton-EM 10.0-25+.",
+   "placeholder": "e.g. eDP-1"
+  },
+  {
+   "name": "WINE_WAYLAND_HACKS",
+   "cat": "Wine",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-EM / Proton-CachyOS] Master toggle for winewayland.drv-specific workarounds. Set to 0 to disable them if they're the cause of an issue — one known case is critical-section timeouts in some launchers (e.g. EA App via the link2ea protocol) that clear up with this off.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "WINEPULSE_FAST_POLLING",
+   "cat": "Wine",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Retired variable (no longer read by current Proton-CachyOS). Used to help eliminate crackling with the default PulseAudio driver, at the cost of rare crackling in some titles (e.g. God of War Ragnarok) with power-of-two quantum sizes like 512/768/1024. Kept here for older Proton/Wine builds.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "WINEALSA_CHANNELS",
+   "cat": "Wine",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Select the channel count for the winealsa driver, or force-disable spatial audio. 2 disables spatial audio; 4/6/8 select 2-front+2-rear/5.1/7.1. Useful when dialogue or effects come out of the wrong speaker.",
+   "options": [
+    "2",
+    "4",
+    "6",
+    "8"
+   ]
+  },
+  {
+   "name": "WINEALSA_SPATIAL",
+   "cat": "Wine",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Properly downmix spatial audio (including height channels) with winealsa. Only recommended if WINEALSA_CHANNELS alone still sounds wrong.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "WINE_BLOCK_HOSTS",
+   "cat": "Wine",
+   "vtype": "string",
+   "default": "",
+   "desc": "Comma- or semicolon-separated list of hosts Wine should refuse to connect to (max 16 hosts, 256 chars each). Useful for blocking telemetry/DRM phone-home hosts that cause launch hangs.",
+   "placeholder": "host1.org,host2.net"
+  },
+  {
+   "name": "WINE_FULLSCREEN_FSR",
+   "cat": "Wine",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE] Enable AMD FSR upscaling inside Wine's fullscreen hack, so a game running at a lower fake resolution is upscaled to the monitor. Works in Vulkan games only (DXVK and VKD3D-Proton included) and needs the fullscreen hack, i.e. not under Wine-Wayland. Vendor-neutral, so it also runs on NVIDIA GPUs.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "WINE_FULLSCREEN_FSR_STRENGTH",
+   "cat": "Wine",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-GE] FSR sharpening for WINE_FULLSCREEN_FSR, 0-5. 0 is the sharpest, higher values sharpen less; 2 is AMD's recommended default and GE's default.",
+   "options": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+   ]
+  },
+  {
+   "name": "WINE_FULLSCREEN_FSR_CUSTOM_MODE",
+   "cat": "Wine",
+   "vtype": "string",
+   "default": "",
+   "desc": "[Proton-GE] Fake screen resolution (WIDTHxHEIGHT) shown to the game while FSR upscales to the real mode. Useful for games that always render at native resolution.",
+   "placeholder": "e.g. 1280x720"
+  },
+  {
+   "name": "WINE_ENABLE_TIMEOUT_FIX",
+   "cat": "Wine",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[Proton-DW (dwproton) only] Works around connection-timeout failures some setups hit launching live-service titles (originally documented for Genshin Impact / Zenless Zone Zero) that otherwise hang or fail to reach their servers.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "WINEDEBUG",
+   "cat": "Wine",
+   "vtype": "flags",
+   "default": "",
+   "desc": "Wine's own debug channel logging control. Syntax: [class][+|-]channel, comma separated, applied left to right; class is err, warn, fixme or trace. Wine's default (unset) is err+fixme on every channel. Base level (pick one): '-all' silences everything (fastest, normal play); 'fixme-all' = errors only; 'warn+all' adds warnings (recommended for debugging); '+all' turns on every class incl. trace — huge logs, very slow. Channel toggles add to the base, e.g. '-all,+loaddll' shows only DLL loads. Note: setting WINEDEBUG overrides the channel set PROTON_LOG=1 would otherwise pick.",
+   "options": [
+    "-all",
+    "fixme-all",
+    "warn+all",
+    "+all",
+    "+timestamp",
+    "+pid",
+    "+tid",
+    "+seh",
+    "+unwind",
+    "+threadname",
+    "+debugstr",
+    "+loaddll",
+    "+mscoree",
+    "+relay",
+    "+heap",
+    "+module",
+    "+process"
+   ],
+   "exclusive": [
+    "-all",
+    "fixme-all",
+    "warn+all",
+    "+all"
+   ]
+  },
+  {
+   "name": "WINEESYNC",
+   "cat": "Wine",
+   "vtype": "enum",
+   "default": "1",
+   "desc": "Enables the eventfd-based esync fast synchronization primitives in vanilla Wine/Lutris runners (not the Steam Proton wrapper, which is toggled via PROTON_NO_ESYNC instead). Reduces sync overhead vs the default server-side wineserver sync. Superseded by fsync/ntsync on kernels that support them, but still the common baseline on custom Wine builds without those patches.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "WINEFSYNC",
+   "cat": "Wine",
+   "vtype": "enum",
+   "default": "1",
+   "desc": "Enables futex-based fsync synchronization in vanilla Wine/Lutris runners (requires a Wine build with the fsync patches and a reasonably recent kernel). Lower overhead than esync; takes priority over WINEESYNC when both a build supports fsync and this is set. Proton's equivalent toggle is PROTON_NO_FSYNC.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "WINEDLLOVERRIDES",
+   "cat": "Wine",
+   "vtype": "string",
+   "default": "",
+   "desc": "Per-DLL override list controlling whether Wine uses its own built-in implementation or a native Windows DLL placed in the prefix, e.g. for staging in a DXVK/VKD3D DLL manually, or forcing a component to 'disabled' to work around a broken native/builtin implementation. Comma-separated 'dllname=mode' pairs; mode is n (native), b (builtin), n,b or b,n (try both, first listed wins), or empty (disabled).",
+   "placeholder": "e.g. d3d11,dxgi=n;winemenubuilder.exe=d"
+  }
+ ],
+ "DXVK_NVAPI_ENV_VARS": [
+  {
+   "name": "DXVK_NVAPI_D3D12_NV_SHADER_EXTN",
+   "cat": "DXVK-NVAPI",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enables experimental support for NVIDIA shader extensions in D3D12 titles (via VKD3D-Proton).",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_NVAPI_SET_NGX_DEBUG_OPTIONS",
+   "cat": "DXVK-NVAPI",
+   "vtype": "string",
+   "default": "",
+   "desc": "Comma-separated key=value pairs forwarded to NVIDIA NGX's own debug-option system — the same mechanism as the Windows registry indicator keys. Commonly used to show an on-screen DLSS/DLSS-G indicator to confirm which preset/build is actually active.",
+   "placeholder": "DLSSIndicator=1024,DLSSGIndicator=2"
+  },
+  {
+   "name": "__NV_SIGNED_LOAD_CHECK",
+   "cat": "DXVK-NVAPI",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Disables the NGX Core signature check that normally blocks loading non-NVIDIA-signed NGX features. Only disable this when you're confident every NGX feature DLL on the system is authentic — it exists to stop malicious NGX feature loading.",
+   "options": [
+    "none"
+   ]
+  },
+  {
+   "name": "DXVK_NVAPI_VKREFLEX",
+   "cat": "DXVK-NVAPI",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enables DXVK-NVAPI's own Vulkan Reflex compatibility layer, for Reflex support in native-Vulkan titles (Portal RTX, Path of Exile 1/2, DOOM: The Dark Ages). Disabled by default even when installed, since it can interfere with other Vulkan apps that don't use Reflex. Formerly named PROTON_VKREFLEX.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "DISABLE_DXVK_NVAPI_VKREFLEX",
+   "cat": "DXVK-NVAPI",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Any non-empty value forcibly disables the Vulkan Reflex layer, overriding DXVK_NVAPI_VKREFLEX=1.",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_NVAPI_VKREFLEX_LAYER_LOG_LEVEL",
+   "cat": "DXVK-NVAPI",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Log verbosity for the Vulkan Reflex compatibility layer specifically (separate from DXVK_NVAPI_LOG_LEVEL below).",
+   "options": [
+    "none",
+    "error",
+    "warn",
+    "info",
+    "debug",
+    "trace"
+   ]
+  },
+  {
+   "name": "DXVK_NVAPI_LOG_LEVEL",
+   "cat": "DXVK-NVAPI",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Log verbosity for DXVK-NVAPI itself; logging is off by default. 'info' logs the normal messages (incl. which DRS settings the game requested). 'trace' (newer releases) logs every entry point enter/exit — heavy on performance and log size.",
+   "options": [
+    "none",
+    "info",
+    "trace"
+   ]
+  },
+  {
+   "name": "DXVK_NVAPI_LOG_PATH",
+   "cat": "DXVK-NVAPI",
+   "vtype": "string",
+   "default": "",
+   "desc": "Also write DXVK-NVAPI's log to nvapi.log / nvapi64.log / nvofapi64.log (per DLL) in this directory, in addition to console output. Needs LOG_LEVEL info or trace. Entries are appended to an existing file.",
+   "placeholder": "/path/to/log/dir"
+  },
+  {
+   "name": "DXVK_NVAPI_DRIVER_VERSION",
+   "cat": "DXVK-NVAPI",
+   "vtype": "int",
+   "default": "",
+   "desc": "Override the driver version DXVK-NVAPI reports to the game. Value is the version number with no dots, e.g. 47141 reports as driver 471.41.",
+   "placeholder": "e.g. 47141"
+  },
+  {
+   "name": "DXVK_NVAPI_ALLOW_OTHER_DRIVERS",
+   "cat": "DXVK-NVAPI",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Allow using DXVK-NVAPI without an NVIDIA GPU on the proprietary driver. Useful for exercising NVAPI D3D11 extensions on a non-NVIDIA GPU (e.g. Mesa/NVK).",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_NVAPI_DISABLE_ENTRYPOINTS",
+   "cat": "DXVK-NVAPI",
+   "vtype": "string",
+   "default": "",
+   "desc": "Comma-separated NVAPI entry point names to hide from the game — the game then sees those functions as unavailable. Workaround tool for titles that crash in one specific NVAPI path.",
+   "placeholder": "e.g. NvAPI_D3D11_BeginUAVOverlap,NvAPI_D3D11_EndUAVOverlap"
+  },
+  {
+   "name": "DXVK_NVAPI_FAKE_VKREFLEX",
+   "cat": "DXVK-NVAPI",
+   "vtype": "enum",
+   "default": "",
+   "desc": "1 = let Vulkan Reflex initialise successfully even when the dxvk-nvapi Vulkan Reflex layer is NOT installed (fake success, no latency reduction). 0 = never fake. Enabled automatically for DOOM: The Dark Ages to avoid its pink-tint bug. For real Reflex install the layer and use DXVK_NVAPI_VKREFLEX=1.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_NVAPI_VKREFLEX_INJECT_SUBMIT_FRAME_IDS",
+   "cat": "DXVK-NVAPI",
+   "vtype": "enum",
+   "default": "",
+   "desc": "VK Reflex layer: inject frame IDs (from NvAPI_Vulkan_SetLatencyMarker) into vkQueueSubmit* calls, helping the driver correlate submits with frames. Enables VK_KHR_present_id. May interfere with the game's own present IDs. Requires DXVK_NVAPI_VKREFLEX=1.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_NVAPI_VKREFLEX_INJECT_PRESENT_FRAME_IDS",
+   "cat": "DXVK-NVAPI",
+   "vtype": "enum",
+   "default": "",
+   "desc": "VK Reflex layer: inject frame IDs into vkQueuePresentKHR. Same caveats as ..._INJECT_SUBMIT_FRAME_IDS. Requires DXVK_NVAPI_VKREFLEX=1.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_NVAPI_VKREFLEX_ALLOW_FALLBACK_TO_OOB_FRAME_ID",
+   "cat": "DXVK-NVAPI",
+   "vtype": "enum",
+   "default": "",
+   "desc": "VK Reflex layer: when the game's latency markers carry no usable frame ID, the layer falls back to an out-of-band frame ID in submit and present calls (default on). 0 = disable that fallback. Only meaningful together with the INJECT_*_FRAME_IDS options. Requires DXVK_NVAPI_VKREFLEX=1.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_NVAPI_VKREFLEX_ALLOW_FALLBACK_TO_PRESENT_FRAME_ID",
+   "cat": "DXVK-NVAPI",
+   "vtype": "enum",
+   "default": "",
+   "desc": "VK Reflex layer: allow falling back to the present frame ID in vkQueueSubmit* calls (default on). 0 = disable that fallback. Only meaningful together with the INJECT_*_FRAME_IDS options. Requires DXVK_NVAPI_VKREFLEX=1.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_NVAPI_VKREFLEX_ALLOW_FALLBACK_TO_SIMULATION_FRAME_ID",
+   "cat": "DXVK-NVAPI",
+   "vtype": "enum",
+   "default": "",
+   "desc": "VK Reflex layer: allow falling back to the simulation frame ID in vkQueueSubmit* calls (default on). 0 = disable that fallback. Only meaningful together with the INJECT_*_FRAME_IDS options. Requires DXVK_NVAPI_VKREFLEX=1.",
+   "options": [
+    "0",
+    "1"
+   ]
+  }
+ ],
+ "NVPRESENT_ENV_VARS": [
+  {
+   "name": "NVPRESENT_ENABLE_SMOOTH_MOTION",
+   "cat": "NVIDIA Smooth Motion",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enables VK_LAYER_NV_present, NVIDIA's driver-based frame-interpolation layer for Vulkan titles that don't have DLSS Frame Generation. RTX 50-series only.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "NVPRESENT_QUEUE_FAMILY",
+   "cat": "NVIDIA Smooth Motion",
+   "vtype": "enum",
+   "default": "",
+   "desc": "The layer presents from an asynchronous compute queue by default, which can conflict with some third-party overlays. Set to 1 to present from the graphics queue instead, at a small performance cost.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "NVPRESENT_LOG_LEVEL",
+   "cat": "NVIDIA Smooth Motion",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Debug log verbosity for the NVPresent/Smooth Motion layer. Logs go to stderr by default; redirect with NVPRESENT_LOG_FILE. If nothing gets logged, check with VK_LOADER_DEBUG=layer whether the layer is loading at all.",
+   "options": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4"
+   ]
+  },
+  {
+   "name": "NVPRESENT_LOG_FILE",
+   "cat": "NVIDIA Smooth Motion",
+   "vtype": "string",
+   "default": "",
+   "desc": "Redirect NVPresent/Smooth Motion debug logging to this file instead of stderr.",
+   "placeholder": "/tmp/nvpresent.log"
+  }
+ ],
+ "SYS_ENV_VARS": [
+  {
+   "name": "VK_DRIVER_FILES",
+   "cat": "System / Loader",
+   "vtype": "string",
+   "default": "",
+   "desc": "Colon-separated list of Vulkan ICD manifest JSON files for the loader to use, overriding normal driver discovery. Modern replacement for the older VK_ICD_FILENAMES name (both are still accepted).",
+   "placeholder": "/usr/share/vulkan/icd.d/nvidia_icd.json"
+  },
+  {
+   "name": "VK_LOADER_DEBUG",
+   "cat": "System / Loader",
+   "vtype": "flags",
+   "default": "",
+   "desc": "Vulkan loader debug output channels. Each level shows ONLY that level (not cumulative), so list them, e.g. 'error,warn,info'. 'layer' shows which implicit/explicit layers are being discovered and loaded — the first thing to check when a Vulkan layer (NVPresent, MangoHud, gamescope's WSI layer, ...) doesn't seem to be active; 'driver' does the same for ICDs.",
+   "options": [
+    "error",
+    "warn",
+    "info",
+    "debug",
+    "layer",
+    "driver",
+    "all"
+   ]
+  },
+  {
+   "name": "LD_PRELOAD",
+   "cat": "System / Loader",
+   "vtype": "string",
+   "default": "",
+   "desc": "Colon-separated list of shared libraries to load before all others for every process. Commonly used to preload an alternative allocator such as jemalloc or tcmalloc to reduce heap fragmentation/allocation overhead in some titles, or to inject overlay/hook libraries.",
+   "placeholder": "/usr/lib64/libjemalloc.so:/usr/lib32/libjemalloc.so"
+  },
+  {
+   "name": "LD_BIND_NOW",
+   "cat": "System / Loader",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Force immediate (non-lazy) symbol binding at process start instead of lazy PLT resolution on first call. Slightly longer startup in exchange for removing small first-call resolution stutters later — mostly a micro-optimization.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "__GLX_VENDOR_LIBRARY_NAME",
+   "cat": "System / Loader",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Forces which GLX vendor implementation libglvnd's vendor-neutral dispatch loads. Set to 'nvidia' to force the NVIDIA GLX path on hybrid/PRIME laptops where Mesa might otherwise be picked for the display GPU.",
+   "options": [
+    "nvidia",
+    "mesa"
+   ]
+  },
+  {
+   "name": "SDL_VIDEODRIVER",
+   "cat": "System / Loader",
+   "vtype": "enum",
+   "default": "",
+   "desc": "SDL2 hint forcing which video backend SDL uses. 'wayland' forces native Wayland instead of SDL's default XWayland fallback; useful together with PROTON_ENABLE_WAYLAND.",
+   "options": [
+    "x11",
+    "wayland",
+    "kmsdrm",
+    "offscreen"
+   ]
+  }
+ ],
+ "GAMESCOPE_ENV_VARS": [
+  {
+   "name": "STEAMID",
+   "cat": "Gamescope",
+   "vtype": "string",
+   "default": "",
+   "desc": "The Steam App ID of the game currently running inside gamescope.  Set automatically by the Steam client when launching through Steam.  gamescope reads this to look up the game's artwork for the overlay, apply per-game DRS presets on Steam Deck, and for FPS limit reporting in the Steam HUD.  You can set it manually in a Lutris command to give gamescope the right game context without going through Steam.  Example: STEAMID=730  (Counter-Strike 2)",
+   "placeholder": "e.g. 730"
+  },
+  {
+   "name": "STEAM_GAMESCOPE_HW_UPSCALE_FILTER",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Steam-specific override to select the upscale filter for gamescope via the Steam Settings UI path.  Maps to the same -F / --filter flag as the CLI 'Upscale Filter' option below but is written by the Steam client itself based on the per-game 'Scaling Filter' setting.  Setting it manually overrides whatever the Steam UI chose.  Example: STEAM_GAMESCOPE_HW_UPSCALE_FILTER=fsr",
+   "options": [
+    "fsr",
+    "nis",
+    "pixel",
+    "linear",
+    "nearest"
+   ]
+  },
+  {
+   "name": "STEAM_GAMESCOPE_HW_UPSCALE_SHARPNESS",
+   "cat": "Gamescope",
+   "vtype": "int",
+   "default": "",
+   "desc": "Steam-specific sharpness override corresponding to the sharpness slider in Steam Settings -> Resolution.  Written by the client; override manually to bypass the UI.  Same 0-20 (FSR) / 0-5 (NIS) scale as the CLI --sharpness flag.  Example: STEAM_GAMESCOPE_HW_UPSCALE_SHARPNESS=5",
+   "placeholder": "0-20 (FSR) or 0-5 (NIS)"
+  },
+  {
+   "name": "STEAM_GAMESCOPE_VRR_ENABLED",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Steam client's per-game VRR toggle, written into gamescope's environment when you enable 'Allow Tearing' or 'VRR' in the Steam per-game settings.  Same effect as the CLI --adaptive-sync flag; the STEAM_ prefix just indicates it was set by the client rather than the user.  Override to force VRR on/off regardless of what the Steam UI shows.  Example: STEAM_GAMESCOPE_VRR_ENABLED=1",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "STEAM_GAMESCOPE_TEARING_SUPPORT",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Steam client flag advertising that the gamescope session supports tearing presents.  When set, the Steam HUD and the per-game settings panel show the 'Allow Tearing' toggle.  Set automatically in SteamOS; on desktop you may need to set it manually if you want Steam's tearing toggle to have any effect.  Example: STEAM_GAMESCOPE_TEARING_SUPPORT=1",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "STEAM_GAMESCOPE_DYNAMIC_REFRESH_SUPPORT",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Advertises VRR / dynamic refresh rate support to the Steam client so the per-game refresh-rate selector is shown.  Required on desktop gamescope if you want Steam's frame-rate-limit UI to work correctly.  Example: STEAM_GAMESCOPE_DYNAMIC_REFRESH_SUPPORT=1",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "STEAM_GAMESCOPE_LIMITER_RES",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Enables gamescope's own Steam-integrated FPS limiter UI.  When set to 1, the Steam overlay's frame-rate slider adjusts gamescope's -r cap in real time without restarting the game.  Set to 0 to manage the cap entirely via the CLI --framerate-limit flag below.  Example: STEAM_GAMESCOPE_LIMITER_RES=1",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "STEAM_GAMESCOPE_XWAYLAND_DISPLAY",
+   "cat": "Gamescope",
+   "vtype": "string",
+   "default": "",
+   "desc": "The :DISPLAY number of the XWayland server gamescope started internally.  Set automatically by gamescope; forwarded to the game process so it can connect to gamescope's private XWayland rather than the host X server.  You normally never set this manually - it appears here so you can inspect or pin it when debugging multi-compositor scenarios.  Example: STEAM_GAMESCOPE_XWAYLAND_DISPLAY=:1",
+   "placeholder": "e.g. :1"
+  },
+  {
+   "name": "DISABLE_GAMESCOPE_WSI",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Disable switch of gamescope's Vulkan WSI layer (VkLayer_FROG_gamescope_wsi): the layer manifest's disable_environment, so DISABLE_GAMESCOPE_WSI=1 stops the layer from loading at all. Use it when a game misbehaves with the layer (black video, bad swapchain) and ENABLE_GAMESCOPE_WSI=0 is not enough.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "GAMESCOPE_MANGOAPP_SOCKET_DISABLE",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Read by gamescope itself (set it on the gamescope process): stops gamescope from sending its per-frame data to mangoapp over the mangoapp socket. Debug/compat switch, e.g. when mangoapp is not draining the socket.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "ENABLE_GAMESCOPE_WSI",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Toggles gamescope's Vulkan WSI (VK_layer) integration for the wrapped game. Proton sets this to 1 automatically when it detects it's running under gamescope, which lets the game present directly through gamescope's low-latency compositing path. Native (non-Proton) titles launched directly under gamescope do NOT get this set automatically, so setting it manually can improve latency for native Linux games. Conversely, some games show black/corrupted video playback or cutscenes with the WSI layer active - set to 0 as a workaround in that case. Community-sourced (gamescope issue #1958 / #1537), not in gamescope --help. Example: ENABLE_GAMESCOPE_WSI=0 gamescope -- %command%",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "STEAM_MULTIPLE_XWAYLANDS",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Requests a second, dedicated XWayland server from gamescope so overlay windows (Steam overlay, some anti-cheat/launcher UIs) run in their own XWayland instance separate from the game's - pair with the CLI --xwayland-count 2 flag below. Reduces overlay-related stutter/input issues in embedded gamescope sessions. Community-sourced session-script convention, not in gamescope --help. Example: STEAM_MULTIPLE_XWAYLANDS=1 gamescope --xwayland-count 2 -e -- steam -gamepadui",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "STEAM_GAMESCOPE_VRR_SUPPORTED",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Advertises to the Steam client that the current gamescope session is capable of VRR at all (distinct from STEAM_GAMESCOPE_VRR_ENABLED, which is the per-game on/off toggle). Needed on some desktop setups for Steam's VRR toggle to appear/function in per-game display settings. Community-sourced, not in gamescope --help. Example: STEAM_GAMESCOPE_VRR_SUPPORTED=1",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "GAMESCOPE_WSI_MIN_IMAGE_COUNT",
+   "cat": "Gamescope",
+   "vtype": "int",
+   "default": "3",
+   "desc": "Minimum swapchain image count the gamescope WSI layer reports to the game (default 3). Lower = less queued latency but more risk of stalls; higher = smoother under load. Also honours vk_wsi_override_min_image_count. Takes effect only with the WSI layer active (ENABLE_GAMESCOPE_WSI).",
+   "placeholder": "e.g. 2"
+  },
+  {
+   "name": "GAMESCOPE_WSI_ENSURE_MIN_IMAGE_COUNT",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Force the game's swapchain to use at least GAMESCOPE_WSI_MIN_IMAGE_COUNT images even if it asks for fewer.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "GAMESCOPE_WSI_FORCE_BYPASS",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Ask gamescope to bypass composition (direct scanout) for this client whenever possible. Lowest latency path; may break overlays.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "GAMESCOPE_WSI_FRAME_LIMITER_AWARE",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Tell gamescope the game's swapchain handles the gamescope frame limiter itself. Auto-enabled for DXVK >= 2.3 and vkd3d >= 2.12; set 1 for native Vulkan games that pace correctly, 0 to force gamescope-side limiting.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "GAMESCOPE_DISABLE_ASYNC_FLIPS",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "DRM backend: never use async (tearing) page flips. Workaround for flicker/corruption with --immediate-flips on some drivers.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "GAMESCOPE_FORCE_GENERAL_QUEUE",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Run gamescope's compositing on the general graphics queue instead of an async compute queue. Workaround for driver issues; may add latency.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "GAMESCOPE_DISABLE_TIMERFD",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Use the fallback sleep-based vblank timer instead of timerfd. Debug only.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "GAMESCOPE_LIFTOFF_CACHE_DISABLE",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "DRM backend: disable libliftoff's plane-allocation cache. Debug for direct-scanout / overlay-plane glitches.",
+   "options": [
+    "0",
+    "1"
+   ]
+  }
+ ],
+ "FORK_ENV_VARS": [
+  {
+   "name": "DXVK_FRAME_PACE",
+   "cat": "DXVK Forks",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[dxvk-low-latency | DXVK-Sarek] Frame pacing mode — how CPU and GPU are synchronised. Overrides the dxvk.framePace config option.\nmax-frame-latency: stable latency in the GPU limit as long as render times are stable; higher latency but very smooth. Also what both forks fall back to when the value isn't recognised.\nlow-latency: the default in both forks. Lower latency in the GPU limit, fine-tunable via dxvk.lowLatencyOffset and dxvk.lowLatencyAllowCpuFramesOverlap.\nmin-latency: potentially the lowest latency, at the cost of fps — it stalls the GPU between frames. Generally not recommended; useful for tuning low-latency against, or for CPU-limited games.\nlow-latency-vrr-<Hz>: dxvk-low-latency ONLY — VRR-aware pacing at the given refresh rate. The fork's README suggests DXVK_FRAME_RATE=225 together with low-latency-vrr-235 on a 240 Hz VRR panel. Sarek does not implement this mode and will fall back to max-frame-latency.\nProton: proton-cachyos ships dxvk-low-latency behind PROTON_DXVK_LOWLATENCY=1 and DXVK-Sarek behind PROTON_DXVK_SAREK=1. Syntax: DXVK_FRAME_PACE=low-latency-vrr-235 DXVK_FRAME_RATE=225 %command%",
+   "options": [
+    "max-frame-latency",
+    "low-latency",
+    "min-latency",
+    "low-latency-vrr-165",
+    "low-latency-vrr-235"
+   ]
+  },
+  {
+   "name": "DXVK_ALL_CORES",
+   "cat": "DXVK Forks",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[DXVK-Sarek] Lets the pipeline compiler and the state-cache worker use every logical core instead of Sarek's default reduced thread count. Sarek targets older/weaker CPUs where saturating all cores during shader compilation starves the render thread, so it holds threads back by default. Worth setting on a modern many-core CPU where that reasoning no longer applies. Not present in upstream DXVK. Syntax: PROTON_DXVK_SAREK=1 DXVK_ALL_CORES=1 %command%",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_DISABLE_DYASYNC",
+   "cat": "DXVK Forks",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[DXVK-Sarek] Turns OFF dyasync (Dynamic Asynchronous Pipeline Compilation), which Sarek enables by default (dxvk.enableDyasync = True). With dyasync, a shader is compiled synchronously the first time it is seen; every later VARIANT of it (new blend mode, depth test, cull mode, render pass — same shaders) compiles in the background while DXVK draws with the closest already-compiled pipeline as a placeholder, then swaps it in. Safer than a classic async patch because something is always drawn, but it is still pipeline substitution — disable it for multiplayer titles with strict anti-cheat. Thread count is dxvk.numDyasyncThreads. Syntax: PROTON_DXVK_SAREK=1 DXVK_DISABLE_DYASYNC=1 %command%",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_PERF_EVENTS",
+   "cat": "DXVK Forks",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[DXVK-Sarek] Enables VK_EXT_debug_utils so performance/debug events reach capture tools. Sarek hides the extension behind this variable because it adds real overhead in winevulkan — the fork logs a warning when it is on. Profiling only; leave unset for play. Syntax: PROTON_DXVK_SAREK=1 DXVK_PERF_EVENTS=1 %command%",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "D7VK_LOG_LEVEL",
+   "cat": "DXVK Forks",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[d7vk] Log level for the D3D7/6/5/3 translation layer. d7vk keeps its own logger separate from the DXVK D3D9 backend it sits on, so DXVK_LOG_LEVEL does NOT cover it — set both when tracing a DDraw-era title. Syntax: D7VK_LOG_LEVEL=debug D7VK_LOG_PATH=/tmp %command%",
+   "options": [
+    "trace",
+    "debug",
+    "info",
+    "warn",
+    "error",
+    "none"
+   ]
+  },
+  {
+   "name": "D7VK_LOG_PATH",
+   "cat": "DXVK Forks",
+   "vtype": "string",
+   "default": "",
+   "desc": "[d7vk] Directory for the d7vk log file. Same split as D7VK_LOG_LEVEL: independent of DXVK_LOG_PATH. Use 'none' to suppress the file entirely. Syntax: D7VK_LOG_PATH=/tmp %command%",
+   "placeholder": "e.g. /tmp  or  none"
+  },
+  {
+   "name": "VKD3D_LOW_LATENCY_OFFSET",
+   "cat": "VKD3D Forks",
+   "vtype": "int",
+   "default": "100",
+   "desc": "[vkd3d-low-latency] Fine-tunes the low-latency frame pacer, in MICROSECONDS. Larger values start a frame later, which can improve responsiveness slightly; the fork defaults to 100us rather than 0 because it does not yet measure the blit cost. Clamped to 0-500 in the fork's code (values are parsed unsigned, so a negative number wraps — don't use one here, unlike DXVK's dxvk.lowLatencyOffset which genuinely accepts -10000..10000).\nOnly active when the game actually drives the pacer: it needs either the Nvidia Reflex API or a waitable DXGI swapchain. Confirm with PROTON_LOG=1 and look for the swapchain lines in the vkd3d log.\nProton-CachyOS: enable the fork with PROTON_VKD3D_LOWLATENCY=1; other Protons need d3d12.dll and d3d12core.dll replaced by hand. Syntax: VKD3D_LOW_LATENCY_OFFSET=100 %command%",
+   "placeholder": "e.g. 100 (microseconds, 0-500)"
+  }
+ ],
+ "OVERLAY_ENV_VARS": [
+  {
+   "name": "MANGOHUD",
+   "cat": "MangoHud / vkBasalt",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Load the MangoHud Vulkan layer for this process (alternative to the `mangohud` command prefix). Options come from MANGOHUD_CONFIG / MANGOHUD_CONFIGFILE or ~/.config/MangoHud/MangoHud.conf.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "MANGOHUD_CONFIG",
+   "cat": "MangoHud / vkBasalt",
+   "vtype": "string",
+   "default": "",
+   "desc": "Inline MangoHud options, comma separated (fps,cpu_temp,position=top-left). Overrides the config file for the keys it sets. Use the MangoHud builder (Extra Tools) to generate it.",
+   "placeholder": "fps,frametime,position=top-left"
+  },
+  {
+   "name": "MANGOHUD_CONFIGFILE",
+   "cat": "MangoHud / vkBasalt",
+   "vtype": "string",
+   "default": "",
+   "desc": "Path of an explicit MangoHud config file instead of the per-user default.",
+   "placeholder": "/home/you/.config/MangoHud/game.conf"
+  },
+  {
+   "name": "MANGOHUD_DLSYM",
+   "cat": "MangoHud / vkBasalt",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Hook dlsym so MangoHud also works with OpenGL / when injected via LD_PRELOAD. The `mangohud --dlsym` prefix sets this for you.",
+   "options": [
+    "0",
+    "1"
+   ]
+  },
+  {
+   "name": "VKBASALT_CONFIG_FILE",
+   "cat": "MangoHud / vkBasalt",
+   "vtype": "string",
+   "default": "",
+   "desc": "Path of the vkBasalt config file (default: ~/.config/vkBasalt/vkBasalt.conf). Pair with ENABLE_VKBASALT=1.",
+   "placeholder": "/home/you/.config/vkBasalt/game.conf"
+  },
+  {
+   "name": "VKBASALT_LOG_LEVEL",
+   "cat": "MangoHud / vkBasalt",
+   "vtype": "enum",
+   "default": "",
+   "desc": "vkBasalt log verbosity.",
+   "options": [
+    "trace",
+    "debug",
+    "info",
+    "warn",
+    "error",
+    "none"
+   ]
+  },
+  {
+   "name": "VKBASALT_LOG_FILE",
+   "cat": "MangoHud / vkBasalt",
+   "vtype": "string",
+   "default": "",
+   "desc": "Write the vkBasalt log to this file instead of stderr.",
+   "placeholder": "/tmp/vkbasalt.log"
+  }
+ ]
+}
