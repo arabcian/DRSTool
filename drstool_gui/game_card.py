@@ -22,10 +22,11 @@ from PySide6.QtWidgets import (
 
 from drstool_core import game_info
 
-from .base import _CORE_ERR, APP_ID, game_scan
+from .base import _CORE_ERR, APP_ID, game_scan, winetricks
 from .dll_manager import detect_installed, PD_COMPONENTS
 from .frametime import load_frametimes
-from .game_hints import _HINT_CACHE_VER, _hints_cache_path, _HintWorker
+from . import game_hints as _gh
+from .game_hints import _HINT_CACHE_VER, _hints_cache_path, _HintWorker, pick_appid
 from .launchers import SteamBackend
 from .links import LINKS, profile_fp
 from .logs import _log_analyse, _LOG_RULES, LogViewerWidget
@@ -42,6 +43,8 @@ _TIER_COLOR = {"platinum": "#b9cde4", "gold": "#d8b638", "silver": "#b0b6c0", "b
                "borked": T["danger"], "native": T["accent"]}
 _RULE_TITLE = {code: title for code, _rx, title, *_ in _LOG_RULES}
 _LAUNCHERS = ("Steam", "Lutris", "Heroic", "Bottles", "Custom")
+_PDB_TTL = 7 * 86400         # a ProtonDB summary older than this is fetched again when the game is opened
+_MISS_TTL = 30 * 86400       # a game that matched no Steam app is searched for again only after this
 
 
 def _ago(ts: float) -> str:
@@ -120,6 +123,21 @@ class _GameScanWorker(QThread):
         self.done.emit(res)
 
 
+class _AppidFindWorker(QThread):
+    """Steam store search by game name (network); the card decides what the matches mean."""
+    done = Signal(object, str)            # [match dicts], error text
+
+    def __init__(self, name: str, parent=None):
+        super().__init__(parent)
+        self._name = name
+
+    def run(self):
+        try:
+            self.done.emit(_gh.steam_appid_search(self._name), "")
+        except Exception as ex:           # noqa: BLE001
+            self.done.emit([], str(ex))
+
+
 class _CardWorker(QThread):
     """Collects everything the card shows (disk only, no network)."""
     done = Signal(str, dict)
@@ -168,8 +186,10 @@ class _CardWorker(QThread):
         lines = game_info.read_tail(p)
         levels, hits = _log_analyse(lines)
         errs = [ln.strip() for ln, lv in zip(lines, levels) if lv == "err"]
+        fixes = winetricks.suggest_from_text("\n".join(errs)) if winetricks is not None else []
         return {"path": str(p), "mtime": p.stat().st_mtime, "n_err": len(errs), "errors": errs[-4:],
-                "hits": sorted(hits.items(), key=lambda kv: -kv[1]), "others": [str(x) for x in logs[1:6]]}
+                "hits": sorted(hits.items(), key=lambda kv: -kv[1]), "others": [str(x) for x in logs[1:6]],
+                "fixes": fixes}
 
     def _ft(self, info):
         files = info.get("files") or {}
@@ -208,6 +228,7 @@ class _CardWorker(QThread):
 class GameListWidget(QWidget):
     """Every game found by game_scan, grouped by launcher; linked profiles shown on the right."""
     game_selected = Signal(object)        # game_scan.GameEntry
+    scanned = Signal()                    # self.games was (re)filled
 
     def __init__(self, settings_manager, parent=None):
         super().__init__(parent)
@@ -269,6 +290,7 @@ class GameListWidget(QWidget):
         self.games = list(res.games)
         self._by_key = {g.key: g for g in self.games}
         self.refresh()
+        self.scanned.emit()
         tail = f"  ·  {len(res.errors)} launcher error(s)" if res.errors else ""
         self._count.setText(f"{len(self.games)} game(s){tail}")
         self._count.setToolTip("\n".join(res.errors))
@@ -400,6 +422,10 @@ class GameCardWidget(QWidget):
         self._worker: Optional[_CardWorker] = None
         self._threads: List[QThread] = []
         self._narrow: Optional[bool] = None
+        self._req = 0                       # counts ProtonDB requests; only the newest may update the tile
+        self._busy: Optional[tuple] = None  # (request no, game key) while a lookup runs
+        self._over: Optional[tuple] = None  # (game key, value, detail, colour) shown instead of the summary
+        self._auto_for: Optional[str] = None  # game key whose ProtonDB lookup starts once its info is read
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -452,6 +478,9 @@ class GameCardWidget(QWidget):
         self._unlink_btn = self.t_profile.add_button("Unlink", lambda: self._assign(None), "ghost")
 
         self.t_runtime = _Tile("Proton / Wine")
+        self._tricks_btn = self.t_runtime.add_button(
+            "Windows libraries…", lambda: self._open_tricks(), "default",
+            "Install Visual C++, DirectX / D3DX, .NET and every other winetricks library into this game's prefix")
 
         self.t_dlls = _Tile("DLSS / DXVK")
         self.t_dlls.add_button("DLL Manager", lambda: self._open_tool("DLL Manager"), "ghost")
@@ -462,6 +491,8 @@ class GameCardWidget(QWidget):
         self._ft_open = self.t_ft.add_button("Open in Frametime", self._open_frametime, "ghost")
 
         self.t_log = _Tile("Last log errors")
+        self._fix_btn = self.t_log.add_button("", lambda: self._open_tricks(self._fixes()), "primary")
+        self._fix_btn.hide()
         self._log_open = self.t_log.add_button("Open in Logs", self._open_log, "ghost")
 
         self.t_pdb = _Tile("ProtonDB")
@@ -470,9 +501,10 @@ class GameCardWidget(QWidget):
         self._appid.setPlaceholderText("Steam appid")
         self._appid.setStyleSheet(_LINEEDIT_QSS)
         self._appid.setMaximumWidth(150)
-        self._appid.setToolTip("Games that are not on Steam: the Steam appid of the same game "
-                               "(Game hints › Find appid looks it up)")
+        self._appid.setToolTip("Games that are not on Steam: the Steam appid of the same game. It is found "
+                               "automatically when possible; type one to set it yourself, Enter fetches it.")
         self._appid.editingFinished.connect(self._save_appid)
+        self._appid.returnPressed.connect(lambda: self._use_appid(self._appid.text().strip(), False))
         arow.addWidget(self._appid)
         arow.addStretch(1)
         self.t_pdb.body.addLayout(arow)
@@ -531,12 +563,20 @@ class GameCardWidget(QWidget):
     def set_game(self, game):
         self.game = game
         self._info = {}
+        self._busy = None
+        self._over = None
+        self._auto_for = game.key
         self._title.setText(game.name)
         folders = "  ·  ".join(str(f) for f in game.folders) or (str(game.prefix) if game.prefix else "")
         self._sub.setText(f"{game.launcher}  ·  {game.key}  ·  {folders}")
         self._sub.setToolTip("\n".join([game.key] + [str(f) for f in game.folders]
                                        + ([f"prefix: {game.prefix}"] if game.prefix else [])))
         self._folder_btn.setEnabled(bool(game.folders))
+        self._tricks_btn.setEnabled(game.prefix is not None and winetricks is not None)
+        self._tricks_btn.setToolTip(
+            "Install Visual C++, DirectX / D3DX, .NET and every other winetricks library into this "
+            "game's prefix" if game.prefix is not None else "This game has no Wine prefix")
+        self._fix_btn.hide()
         for t in self._tiles[1:]:
             t.set("…", "reading …", T["muted"])
         self._render_profile()
@@ -565,6 +605,9 @@ class GameCardWidget(QWidget):
         self._render_log(info.get("log") or {})
         self._render_pdb(info.get("pdb") or {})
         self._equalize()
+        if self._auto_for == key:
+            self._auto_for = None
+            self._auto_pdb()
 
     # ── tiles ───────────────────────────────────────────────────────────────
     def _render_profile(self, *_):
@@ -604,8 +647,8 @@ class GameCardWidget(QWidget):
         self._write_btn.setEnabled(can_write)
         self._write_btn.setText("Write to game" if prof else "Write editor to game")
         self._write_btn.setToolTip(
-            ("Write the linked profile into the launcher's config of this game "
-             "(loads it into the editor first)." if prof else
+            ("Write into this game's launcher config. If the editor holds another profile "
+             "you choose: write the editor as it is, or load the linked profile first." if prof else
              "Write the editor's current configuration into the launcher's config of this game.")
             if can_write else "No launcher config to write to (custom folder or launcher not found).")
         self._load_btn.setEnabled(bool(prof) and prof in profiles)
@@ -679,8 +722,23 @@ class GameCardWidget(QWidget):
                f'{" (picked)" if ft.get("pinned") else ""} · {_esc(_when(ft.get("mtime", 0)))}</span>')
         self.t_ft.set(f"{fmt(ft.get('avg'))} FPS avg", _rows_html(rows) + src)
 
+    def _fixes(self) -> list:
+        """Libraries the last log asks for that the prefix does not have yet -> [(verb, why)]."""
+        pfx = self.game.prefix if self.game is not None else None
+        if pfx is None or winetricks is None:
+            return []
+        have = winetricks.installed_verbs(pfx)
+        return [(v, w) for v, w in (self._info.get("log") or {}).get("fixes", []) if v not in have]
+
     def _render_log(self, lg: dict):
         self._log_open.setEnabled(bool(lg.get("path")))
+        fixes = self._fixes()
+        self._fix_btn.setVisible(bool(fixes))
+        if fixes:
+            names = ", ".join(v for v, _w in fixes[:3]) + (" …" if len(fixes) > 3 else "")
+            self._fix_btn.setText(f"Fix: install {names}…")
+            self._fix_btn.setToolTip("The log says a Windows library is missing in this prefix:\n"
+                                     + "\n".join(f"• {v} — {w}" for v, w in fixes))
         if lg.get("error"):
             self.t_log.set("unreadable", _esc(lg["error"]), T["danger"])
             return
@@ -715,15 +773,21 @@ class GameCardWidget(QWidget):
         self._appid.setVisible(not is_steam)
         if not self._appid.hasFocus():
             self._appid.setText(appid if not is_steam else "")
-        self._pdb_btn.setEnabled(bool(appid))
+        busy = self._busy is not None and self.game is not None and self._busy[1] == self.game.key
+        self._pdb_btn.setEnabled(not busy)           # always available: with no appid it searches Steam
+        if self._over is not None and self.game is not None and self._over[0] == self.game.key:
+            self.t_pdb.set(self._over[1], self._over[2], self._over[3])
+            return
         pd = p.get("protondb")
         if p.get("error"):
             self.t_pdb.set("?", _esc(p["error"]), T["danger"])
         elif not appid:
-            self.t_pdb.set("no appid", "Not a Steam game: enter its Steam appid to look it up.", T["muted"])
-        elif not pd or not pd.get("tier"):
-            self.t_pdb.set("not fetched", f"appid {appid} · press Fetch to download the ProtonDB summary.",
+            self.t_pdb.set("no appid", "Press Fetch to find this game on Steam, or type its Steam appid.",
                            T["muted"])
+        elif p.get("norating"):
+            self.t_pdb.set("no rating", f"ProtonDB has no summary for appid {appid} yet.", T["muted"])
+        elif not pd or not pd.get("tier"):
+            self.t_pdb.set("not fetched", f"appid {appid}", T["muted"])
         else:
             tier = str(pd.get("tier"))
             rows = [("trending", str(pd.get("trendingTier") or "—"), _TIER_COLOR.get(str(pd.get("trendingTier")), "")),
@@ -753,13 +817,21 @@ class GameCardWidget(QWidget):
         tgt = ln.get("target") or default_target(self.game)
         if tgt is None:
             return
-        w.write_profile_to_games(ln.get("profile") or None, [(self.game.key, self.game.name, tgt)])
+        w.write_profile_to_games(ln.get("profile") or None, [(self.game.key, self.game.name, tgt)],
+                                 ask_source=True)
 
     def _load_profile(self):
         prof = self.link().get("profile")
         w = self._win()
         if prof and hasattr(w, "load_profile_for_game"):
             w.load_profile_for_game(prof)
+
+    def _open_tricks(self, suggest=None):
+        if self.game is None or self.game.prefix is None or winetricks is None:
+            return
+        from .winetricks_dialog import WinetricksDialog
+        WinetricksDialog(self.game.prefix, self.game.name, self, suggest=suggest).exec()
+        self.reload()                      # the log / DLL tiles may have changed
 
     def _open_folder(self):
         if self.game and self.game.folders:
@@ -801,7 +873,20 @@ class GameCardWidget(QWidget):
             hw._appid.setText(appid)
             hw._fetch(False)
 
+    def _known_appid(self) -> str:
+        """The Steam appid of this game: its own (Steam) or the one remembered for it."""
+        if self.game is None:
+            return ""
+        return game_info.steam_appid(self.game) or str(self.link().get("appid") or "")
+
+    def _link_time(self, field: str) -> float:
+        try:
+            return float(self.link().get(field) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
     def _save_appid(self):
+        """Editing finished: remember a typed appid (no lookup; Enter or Fetch does that)."""
         if self.game is None or game_info.steam_appid(self.game):
             return
         v = self._appid.text().strip()
@@ -810,28 +895,116 @@ class GameCardWidget(QWidget):
             return
         if v != (self.link().get("appid") or ""):
             LINKS.set_field(self.game.key, "appid", v, name=self.game.name)
-            self.reload()
 
-    def _fetch_pdb(self):
-        appid = (self._info.get("pdb") or {}).get("appid") or self._appid.text().strip()
-        if not appid.isdigit():
+    def _begin(self, value: str, detail: str) -> int:
+        """Show a running lookup on the tile; returns the request number that must still be current."""
+        self._req += 1
+        self._busy = (self._req, self.game.key)
+        self._over = (self.game.key, value, detail, T["muted"])
+        self._render_pdb(self._info.get("pdb") or {})
+        self._equalize()
+        return self._req
+
+    def _end(self, token: int) -> bool:
+        """True when `token` is still the running request (a newer one or a switch to another game wins)."""
+        if self._busy is None or self._busy[0] != token:
+            return False
+        self._busy = None
+        return True
+
+    def _set_over(self, value: str, detail: str, colour: str):
+        self._over = (self.game.key, value, detail, colour)
+        self._render_pdb(self._info.get("pdb") or {})
+        self._equalize()
+
+    def _auto_pdb(self):
+        """Opening a game: ProtonDB summary from the cache when fresh, otherwise look it up now."""
+        appid = self._known_appid()
+        if appid:
+            pd = self._info.get("pdb") or {}
+            fresh = bool(pd.get("protondb")) and time.time() - float(pd.get("ts") or 0) < _PDB_TTL
+            if not fresh:
+                self._start_pdb(appid, False)
             return
-        self._pdb_btn.setEnabled(False)
-        self.t_pdb.set("fetching …", f"appid {appid}", T["muted"])
-        th = _HintWorker(appid, True, self)
+        if self._link_time("appid_miss") and time.time() - self._link_time("appid_miss") < _MISS_TTL:
+            self._set_over("not on Steam", "No Steam game matched this title (searched again after 30 days). "
+                           "Type its appid to set it yourself.", T["muted"])
+            return
+        self._find_appid()
+
+    def _find_appid(self):
+        """No appid known: search Steam by the game's name."""
+        g = self.game
+        token = self._begin("looking up …", f"searching Steam for “{g.name}”")
+        w = _AppidFindWorker(g.name, self)
+        self._threads = [t for t in self._threads if t.isRunning()] + [w]
+        w.done.connect(lambda items, err, t=token, k=g.key: self._on_found(t, k, items, err))
+        TASKS.track(w, f"ProtonDB: find appid for {g.name}")
+        w.start()
+
+    def _on_found(self, token: int, key: str, items, err: str):
+        if not self._end(token) or self.game is None or self.game.key != key:
+            return
+        if err:
+            self._set_over("?", f"Steam search failed: {err}", T["danger"])
+            return
+        best = pick_appid(list(items or []))
+        if best is not None:                        # a clear winner: take it, the user can still change it
+            if not game_info.steam_appid(self.game):
+                LINKS.set_field(key, "appid", best["id"], name=self.game.name)
+                LINKS.set_field(key, "appid_miss", "")
+            self._appid.setText(best["id"])
+            self._start_pdb(best["id"], False)
+            return
+        if items:
+            self._set_over("choose", f"{len(items)} Steam games look similar: type the right appid above, "
+                           "or pick it in Game hints.", T["warn"])
+            return
+        LINKS.set_field(key, "appid_miss", str(time.time()))
+        self._set_over("not on Steam", "No Steam game matched this title. Type its appid to set it yourself.",
+                       T["muted"])
+
+    def _start_pdb(self, appid: str, force: bool):
+        key = self.game.key
+        token = self._begin("fetching …", f"appid {appid} · ProtonDB")
+        th = _HintWorker(appid, force, self)
         self._threads = [t for t in self._threads if t.isRunning()] + [th]
-        th.done.connect(lambda res: self._on_pdb(appid, res))
+        th.done.connect(lambda res, t=token, k=key, a=appid: self._on_pdb(t, k, a, res))
         TASKS.track(th, f"ProtonDB: {appid}")
         th.start()
 
-    def _on_pdb(self, appid: str, res: dict):
-        self._pdb_btn.setEnabled(True)
-        cur = (self._info.get("pdb") or {}).get("appid") or self._appid.text().strip()
-        if cur != appid:
+    def _use_appid(self, text: str, force: bool):
+        """Typed appid (Enter): remember it for this game and fetch its summary."""
+        g = self.game
+        if g is None or not text:
             return
+        if not text.isdigit():
+            toast("A Steam appid is a number", "warn")
+            return
+        if not game_info.steam_appid(g) and text != str(self.link().get("appid") or ""):
+            LINKS.set_field(g.key, "appid", text, name=g.name)
+        if self._link_time("appid_miss"):
+            LINKS.set_field(g.key, "appid_miss", "")
+        self._start_pdb(text, force)
+
+    def _fetch_pdb(self):
+        """Fetch button: the typed or remembered appid, forced to refresh; without one, search Steam."""
+        if self.game is None:
+            return
+        typed = "" if game_info.steam_appid(self.game) else self._appid.text().strip()
+        appid = typed or self._known_appid()
+        if appid:
+            self._use_appid(appid, True)
+        else:
+            self._find_appid()
+
+    def _on_pdb(self, token: int, key: str, appid: str, res: dict):
+        if not self._end(token) or self.game is None or self.game.key != key:
+            return
+        self._over = None
         p = {"appid": appid, "protondb": res.get("protondb"), "ts": res.get("ts", time.time())}
         if not res.get("protondb"):
-            p["error"] = "; ".join(e for e in res.get("errors", []) if e.startswith("ProtonDB")) or "no data"
+            p["norating"] = True
         self._info["pdb"] = p
         self._render_pdb(p)
         self._equalize()

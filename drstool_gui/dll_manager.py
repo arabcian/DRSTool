@@ -67,6 +67,7 @@ PD_COMPONENTS = [
 ]
 _PD_UA = "DRSTool-prefix-doctor"
 _PD_MANIFEST = ".drstool-doctor.json"
+_PD_ADDED = "added.json"        # in a prefix backup: files the update created (no original to put back)
 
 
 def _vtuple(s: str) -> tuple:
@@ -393,7 +394,7 @@ def apply_component_update(prefix: Path, comp: dict, rel: dict, backup_root: Pat
             jobs.append((root / comp["d32"], s64, "syswow64"))
         else:                                          # 32-bit prefix
             jobs.append((root / comp["d32"], s32, "system32"))
-        n, manifest_files = 0, {}
+        n, manifest_files, added = 0, {}, []
         for src, dst, tag in jobs:
             if not src.is_dir():
                 continue
@@ -407,10 +408,20 @@ def apply_component_update(prefix: Path, comp: dict, rel: dict, backup_root: Pat
                     bdir.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(target, bdir / f.name)
                     target.unlink()
+                else:
+                    added.append(f"{tag}/{f.name}")       # nothing to back up: Restore has to delete it
                 shutil.copy2(f, target)
                 manifest_files[f"{tag}/{f.name}"] = _sha256(target)
                 n += 1
                 log(f"  {tag}/{f.name}")
+        if added:
+            backup_root.mkdir(parents=True, exist_ok=True)
+            apath = backup_root / _PD_ADDED
+            try:
+                prev = json.loads(apath.read_text())
+            except Exception:
+                prev = []
+            apath.write_text(json.dumps(sorted(set(prev) | set(added))))
         mpath = prefix / _PD_MANIFEST
         try:
             man = json.loads(mpath.read_text())
@@ -459,6 +470,18 @@ def restore_prefix_backup(prefix: Path) -> tuple:
                 dst.unlink()
             shutil.copy2(f, dst)
             n += 1
+    try:                                       # files that update created: there was no original
+        added = json.loads((last / _PD_ADDED).read_text())
+    except (OSError, ValueError):
+        added = []
+    for rel in added if isinstance(added, list) else []:
+        sub, _, name = str(rel).partition("/")
+        if sub in ("system32", "syswow64") and name and "/" not in name and name != "..":
+            try:
+                (win / sub / name).unlink()
+                n += 1
+            except OSError:
+                pass
     try:
         (prefix / _PD_MANIFEST).unlink()
     except OSError:
@@ -833,7 +856,8 @@ class DllManagerWidget(QWidget):
             "replaced file is backed up and can be restored. Proton prefixes are kept in sync by Proton "
             "itself and are left alone. Launchers may put the original files back on a game update or "
             "“verify files”; games with anti-cheat may refuse modified DLLs (they are never selected "
-            "automatically)."))
+            "automatically). Games that say “… .dll not found”: select them and use "
+            "<b>Windows libraries…</b> to install the missing Visual C++ / DirectX / .NET runtime."))
         if _CORE_ERR:
             lay.addWidget(_desc_label("⚠ " + _CORE_ERR))
             lay.addStretch(1)
@@ -850,6 +874,12 @@ class DllManagerWidget(QWidget):
                                     "drops included) and the newest DXVK, vkd3d-proton and dxvk-nvapi releases")
         self._online_btn.clicked.connect(self.check_online)
         top.addWidget(self._online_btn)
+        self._tricks_btn = _tool_btn("⊞  Windows libraries…", bold=True)
+        self._tricks_btn.setToolTip(
+            "Select a game, then install Visual C++ runtimes, DirectX / D3DX, .NET, codecs and every other "
+            "winetricks library into its Wine prefix (winetricks, or protontricks for Steam games)")
+        self._tricks_btn.clicked.connect(self._open_tricks)
+        top.addWidget(self._tricks_btn)
         add = _tool_btn("Add folder…")
         add.setToolTip("A game folder or a Wine prefix that the scan does not find on its own")
         add.clicked.connect(self._add_folder)
@@ -958,11 +988,6 @@ class DllManagerWidget(QWidget):
         self._restore_btn.setToolTip("Put back the DLLs a previous update replaced in the selected game")
         self._restore_btn.clicked.connect(self._restore)
         btns.addWidget(self._restore_btn)
-        self._tricks_btn = _tool_btn("Windows components…")
-        self._tricks_btn.setToolTip("Install runtime components (vcrun, d3dcompiler, d3dx9, xact) into the "
-                                    "selected game's Wine prefix with winetricks or protontricks")
-        self._tricks_btn.clicked.connect(self._open_tricks)
-        btns.addWidget(self._tricks_btn)
         self._open_btn = _tool_btn("Open folder")
         self._open_btn.clicked.connect(self._open_folder)
         btns.addWidget(self._open_btn)
@@ -1011,10 +1036,15 @@ class DllManagerWidget(QWidget):
 
     def _open_tricks(self):
         st = self._current_state()
-        if st is None or st.game.prefix is None:
+        if st is None:
+            toast("Click a game in the list first — its Wine prefix gets the libraries", "info")
+            return
+        if st.game.prefix is None:
+            toast(f"{st.game.name} has no Wine prefix (native game?) — nothing to install into", "warn")
             return
         from .winetricks_dialog import WinetricksDialog
         WinetricksDialog(st.game.prefix, st.game.name, self).exec()
+        self.scan(only=[st.game])
 
     def _sync_buttons(self):
         if not self._ok:
@@ -1029,7 +1059,7 @@ class DllManagerWidget(QWidget):
         self._update_btn.setEnabled(not busy and plan_n > 0)
         self._update_btn.setText(f"Update {len(sel)} game(s) · {plan_n} item(s)" if sel else "Update selected")
         self._restore_btn.setEnabled(not busy and st is not None)
-        self._tricks_btn.setEnabled(not busy and st is not None and st.game.prefix is not None)
+        self._tricks_btn.setEnabled(not busy)          # without a game it says what to do instead
         self._open_btn.setEnabled(st is not None)
         self._dl_only.setEnabled(not busy and any(isinstance(self._target(c), NgxBuild) for c in _DLLM_NGX))
         self._rm_custom.setEnabled(st is not None and st.game.launcher == "Custom")
@@ -1065,7 +1095,11 @@ class DllManagerWidget(QWidget):
 
     # ── scan ────────────────────────────────────────────────────────────────
     def scan(self, only: Optional[list] = None):
-        if not self._ok or self._busy():
+        if not self._ok:
+            return
+        if self._busy():
+            if only is not None:        # e.g. right after an update: its thread is still winding down
+                QTimer.singleShot(250, lambda: self.scan(only=only))
             return
         if only is None:
             self._tree.clear()

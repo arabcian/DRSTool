@@ -17,20 +17,22 @@ from typing import Dict, List, Optional
 from PySide6.QtCore import Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QPlainTextEdit, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QComboBox, QCompleter, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from drstool_core import game_info
+
 from .catalog_data import ALL_ENV_VARS
-from .launchers import BottlesBackend, HeroicBackend, SteamBackend
+from .launchers import SteamBackend
+from .links import LINKS
 from .steam_utils import steam_compat_tools, steam_install_dirs
 from .sysinfo import SYSHUB
 from .tasks import _NAV, TASKS
 from .theme import T
 from .tool_ui import _tool_btn
 from .widgets import (
-    _COMBO_QSS, _desc_label, _LAUNCHER_QSS, _LINEEDIT_QSS, _MONO_BOX_QSS, _table_qss,
-    _title_label, _xdg,
+    _COMBO_QSS, _desc_label, _LAUNCHER_QSS, _LINEEDIT_QSS, _table_qss, _title_label, _xdg,
 )
 
 _log = logging.getLogger(__name__)
@@ -627,33 +629,6 @@ class _AppidWorker(QThread):
             self.done.emit([], str(ex))
 
 
-def launcher_game_names(win) -> List[tuple]:
-    """[(label, plain name)] of games known to Lutris / Heroic / Bottles (best effort)."""
-    out, seen = [], set()
-    try:
-        for g in getattr(win, "_lutris_sync_widget", None)._games:
-            nm = (g.game_name or "").strip()
-            if nm and nm.lower() not in seen:
-                seen.add(nm.lower())
-                out.append((f"Lutris: {nm}", nm))
-    except Exception:
-        _log.debug("ignored error", exc_info=True)
-        pass
-    for be in (HeroicBackend(), BottlesBackend()):
-        try:
-            if be.unavailable():
-                continue
-            for e in be.scan(None):
-                nm = re.sub(r"\s*\[.*?\]\s*$", "", e.title).strip()
-                if nm and nm.lower() not in seen:
-                    seen.add(nm.lower())
-                    out.append((f"{be.name}: {nm}", nm))
-        except Exception:
-            _log.debug("ignored error", exc_info=True)
-            continue
-    return out
-
-
 class _HintWorker(QThread):
     done = Signal(dict)
 
@@ -671,69 +646,95 @@ class _HintWorker(QThread):
         self.done.emit(res)
 
 
+_TIER_COLOR = {"platinum": "#b9cde4", "gold": "#d8b638", "silver": "#b0b6c0", "bronze": "#cd8a4a",
+               "borked": T["danger"], "native": T["accent"]}
+_C_USE, _C_VAR, _C_VAL, _C_WHY, _C_SRC = range(5)
+
+
+def pick_appid(matches: List[dict]) -> Optional[dict]:
+    """The match to use without asking: a clear winner of a name search (>= 90 % similar and
+    clearly ahead of the runner-up). None = ask the user."""
+    if not matches:
+        return None
+    best = matches[0]
+    if best.get("score", 0) < 0.9:
+        return None
+    if len(matches) > 1 and best["score"] - matches[1].get("score", 0) < 0.08:
+        return None
+    return best
+
+
+def _h(s) -> str:
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 class GameHintsWidget(QWidget):
+    """Pick a game (any launcher) -> its Steam appid is found by itself -> ProtonDB / PCGamingWiki
+    verdict, what to try, and settings to tick and apply. The appid of a non-Steam game is
+    remembered, so the Games tab shows its ProtonDB tier too."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._worker: Optional[_HintWorker] = None
+        self._aw: Optional[_AppidWorker] = None
+        self._auto_pick = False
         self._info: dict = {}
+        self._note = ""
+        self._game = None                       # game_scan.GameEntry picked in the list, if any
+        self._games_hooked = False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 8, 4, 4)
         lay.setSpacing(8)
         lay.addWidget(_title_label("Game hints (ProtonDB · PCGamingWiki)"))
         lay.addWidget(_desc_label(
-            "Looks up a Steam appid: ProtonDB rating and PCGamingWiki's graphics-API facts, cached for a week. "
-            "Suggestions come from (1) simple heuristics on those facts and on this system, (2) the engine, "
-            "(3) the ProtonDB tier (which Proton build to try). Settings that several ProtonDB user reports mention "
-            "are kept apart on the “Community tips” tab. Not on Steam? Find the game's appid by name below."))
+            "Pick one of your games (Steam, Lutris, Heroic, Bottles …): its Steam appid is found "
+            "automatically, then you get ProtonDB's verdict, what to try, and settings you can tick and "
+            "apply to the Environment tab. Results are cached for a week."))
+
+        # 1 ── which game
         row = QHBoxLayout()
         self._games = QComboBox()
+        self._games.setEditable(True)
+        self._games.setInsertPolicy(QComboBox.NoInsert)
         self._games.setStyleSheet(_COMBO_QSS)
-        self._games.addItem("Installed Steam game…", None)
-        for label, _p, aid in steam_install_dirs():
-            self._games.addItem(label, aid)
-        self._games.currentIndexChanged.connect(
-            lambda _i: self._games.currentData() and self._appid.setText(self._games.currentData()))
+        self._games.lineEdit().setPlaceholderText("1 · pick your game — or type to search the list")
+        comp = QCompleter(self._games.model(), self._games)
+        comp.setFilterMode(Qt.MatchContains)
+        comp.setCaseSensitivity(Qt.CaseInsensitive)
+        self._games.setCompleter(comp)
+        self._games.activated.connect(self._game_activated)
+        comp.activated[str].connect(self._completer_picked)
         row.addWidget(self._games, 1)
-        self._appid = QLineEdit()
-        self._appid.setPlaceholderText("Steam appid")
-        self._appid.setMaximumWidth(140)
-        self._appid.setStyleSheet(_LINEEDIT_QSS)
-        self._appid.returnPressed.connect(lambda: self._fetch(False))
-        row.addWidget(self._appid)
-        self._go = _tool_btn("Look up", bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True)
-        self._go.clicked.connect(lambda: self._fetch(False))
-        row.addWidget(self._go)
-        rf = _tool_btn("Refresh")
-        rf.clicked.connect(lambda: self._fetch(True))
-        row.addWidget(rf)
         lay.addLayout(row)
 
-        # appid finder for games that are not on Steam's library (Lutris / Heroic / Bottles / manual)
-        frow = QHBoxLayout()
-        self._launcher_games = QComboBox()
-        self._launcher_games.setStyleSheet(_COMBO_QSS)
-        self._launcher_games.setToolTip("Games known to Lutris / Heroic / Bottles")
-        self._launcher_games.currentIndexChanged.connect(self._pick_launcher_game)
-        frow.addWidget(self._launcher_games, 1)
-        self._find_name = QLineEdit()
-        self._find_name.setPlaceholderText("Game name → find its Steam appid (for games not added through Steam)")
-        self._find_name.setStyleSheet(_LINEEDIT_QSS)
-        self._find_name.returnPressed.connect(self._find_appid)
-        frow.addWidget(self._find_name, 2)
-        self._find_btn = _tool_btn("Find appid")
-        self._find_btn.clicked.connect(self._find_appid)
-        frow.addWidget(self._find_btn)
-        lay.addLayout(frow)
+        # not in the list: an appid or a name
+        row = QHBoxLayout()
+        self._appid = QLineEdit()
+        self._appid.setPlaceholderText("or: a Steam appid, or a game name to search for")
+        self._appid.setStyleSheet(_LINEEDIT_QSS)
+        self._appid.setToolTip("Digits = Steam appid. Anything else is searched on Steam by name.")
+        self._appid.returnPressed.connect(self._go_clicked)
+        row.addWidget(self._appid, 1)
+        self._go = _tool_btn("Look up", bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True)
+        self._go.clicked.connect(self._go_clicked)
+        row.addWidget(self._go)
+        self._refresh = _tool_btn("Refresh")
+        self._refresh.setToolTip("Ignore the one-week cache and ask ProtonDB / PCGamingWiki again")
+        self._refresh.clicked.connect(lambda: self._go_clicked(True))
+        row.addWidget(self._refresh)
+        lay.addLayout(row)
+
+        # only shown when a name matches several Steam apps
         self._matches = QListWidget()
         self._matches.setStyleSheet(_LAUNCHER_QSS)
-        self._matches.setMaximumHeight(110)
+        self._matches.setMaximumHeight(120)
         self._matches.hide()
         self._matches.itemDoubleClicked.connect(lambda _i: self._use_match(False))
         lay.addWidget(self._matches)
         mrow = QHBoxLayout()
-        self._use_btn = _tool_btn("Use selected appid")
+        self._use_btn = _tool_btn("This is the game")
         self._use_btn.clicked.connect(lambda: self._use_match(False))
-        self._umu_btn = _tool_btn("Use + set as umu GAMEID")
+        self._umu_btn = _tool_btn("This is the game + set as umu GAMEID")
         self._umu_btn.setToolTip("Fills the Launch line tab's GAMEID with umu-<appid> so umu applies its protonfixes")
         self._umu_btn.clicked.connect(lambda: self._use_match(True))
         for b_ in (self._use_btn, self._umu_btn):
@@ -741,107 +742,211 @@ class GameHintsWidget(QWidget):
             mrow.addWidget(b_)
         mrow.addStretch(1)
         lay.addLayout(mrow)
-        self._summary = QPlainTextEdit()
-        self._summary.setReadOnly(True)
-        self._summary.setStyleSheet(_MONO_BOX_QSS)
-        self._summary.setMaximumHeight(230)
-        lay.addWidget(self._summary)
-        self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["Variable", "Value", "Source", "Why"])
-        self._table.verticalHeader().setVisible(False)
-        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self._table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._table.setSelectionMode(QTableWidget.MultiSelection)
-        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        self._table.setStyleSheet(_table_qss())
-        lay.addWidget(self._table, 1)
-        btns = QHBoxLayout()
-        ctb = _tool_btn("Community tips ⚠", bg="#33270f", border=T["warn"], fg="#f0d79a")
-        ctb.setToolTip("User-reported settings from ProtonDB — separate tab, use at your own risk")
-        ctb.clicked.connect(lambda: self.window()._extra_tools.show_tab("Community tips"))
-        btns.addWidget(ctb)
-        self._apply = _tool_btn("Apply selected", bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True)
-        self._apply.clicked.connect(self._apply_selected)
-        btns.addWidget(self._apply)
-        for label, fn in (("Open ProtonDB", lambda: self._open("https://www.protondb.com/app/{id}")),
-                          ("Open PCGamingWiki", self._open_pcgw)):
-            b = _tool_btn(label)
-            b.clicked.connect(fn)
-            btns.addWidget(b)
-        btns.addStretch(1)
-        lay.addLayout(btns)
+
         self._status = QLabel("")
         self._status.setWordWrap(True)
         self._status.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
         lay.addWidget(self._status)
 
-    # -- appid finder -----------------------------------------------------
+        # 2 ── verdict and what to try
+        self._verdict = QLabel("")
+        self._verdict.setTextFormat(Qt.RichText)
+        self._verdict.setWordWrap(True)
+        self._verdict.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._verdict.setStyleSheet(f"background:{T['surface']}; border:1px solid {T['border']};"
+                                    f" border-radius:8px; color:{T['text2']}; padding:10px 12px; font-size:12px;")
+        self._verdict.hide()
+        lay.addWidget(self._verdict)
+
+        # 3 ── settings to tick
+        self._table_title = QLabel("")
+        self._table_title.setStyleSheet(f"color:{T['text']}; font-size:13px; font-weight:700;")
+        self._table_title.hide()
+        lay.addWidget(self._table_title)
+        self._table = QTableWidget(0, 5)
+        self._table.setHorizontalHeaderLabels(["Apply", "Variable", "Value", "Why", "Source"])
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._table.setSelectionMode(QTableWidget.NoSelection)
+        hh = self._table.horizontalHeader()
+        hh.setSectionResizeMode(_C_USE, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(_C_VAR, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(_C_VAL, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(_C_WHY, QHeaderView.Stretch)
+        hh.setSectionResizeMode(_C_SRC, QHeaderView.ResizeToContents)
+        self._table.setStyleSheet(_table_qss())
+        self._table.itemChanged.connect(lambda _i: self._sync_apply())
+        self._table.hide()
+        lay.addWidget(self._table)
+
+        btns = QHBoxLayout()
+        self._apply = _tool_btn("Apply checked", bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True)
+        self._apply.clicked.connect(self._apply_selected)
+        btns.addWidget(self._apply)
+        self._ctb = _tool_btn("Community tips ⚠", bg="#33270f", border=T["warn"], fg="#f0d79a")
+        self._ctb.setToolTip("User-reported settings from ProtonDB — separate tab, use at your own risk")
+        self._ctb.clicked.connect(lambda: self.window()._extra_tools.show_tab("Community tips"))
+        btns.addWidget(self._ctb)
+        for label, fn in (("ProtonDB ↗", lambda: self._open("https://www.protondb.com/app/{id}")),
+                          ("PCGamingWiki ↗", self._open_pcgw)):
+            b = _tool_btn(label)
+            b.clicked.connect(fn)
+            btns.addWidget(b)
+        btns.addStretch(1)
+        lay.addLayout(btns)
+        lay.addStretch(1)
+        self._apply.setEnabled(False)
+        self._ctb.setEnabled(False)
+        self._show_empty()
+
+    # ── game list ───────────────────────────────────────────────────────────
+    def _games_source(self) -> List[tuple]:
+        """[(label, appid or "", game or None)] from the Games tab's scan; Steam's own list as fallback."""
+        gl = getattr(self.window(), "_games_list", None)
+        out = []
+        if gl is not None and gl.games:
+            for g in sorted(gl.games, key=lambda g: (g.name.casefold(), g.launcher)):
+                aid = game_info.steam_appid(g) or str(LINKS.get(g.key).get("appid") or "")
+                out.append((f"{g.name}   ·   {g.launcher}" + (f"  [{aid}]" if aid else ""), aid, g))
+            return out
+        return [(label, aid, None) for label, _p, aid in steam_install_dirs()]
+
+    def _fill_games(self):
+        src = self._games_source()
+        keep = self._games.currentText()
+        self._games.blockSignals(True)
+        self._games.clear()
+        for label, aid, g in src:
+            self._games.addItem(label, (aid, g))
+        self._games.setCurrentIndex(-1)
+        self._games.setEditText(keep if keep and self._games.findText(keep) < 0 else "")
+        if keep:
+            i = self._games.findText(keep)
+            if i >= 0:
+                self._games.setCurrentIndex(i)
+        self._games.blockSignals(False)
+
     def showEvent(self, ev):               # noqa: N802
         super().showEvent(ev)
-        self._fill_launcher_games()
+        gl = getattr(self.window(), "_games_list", None)
+        if gl is not None and not self._games_hooked:
+            self._games_hooked = True
+            gl.scanned.connect(self._fill_games)
+            if not gl.games:
+                gl.rescan()               # the Games tab has not been opened yet
+        self._fill_games()
+        card = getattr(self.window(), "_game_card", None)
+        if card is not None and card.game is not None and not self._games.currentText() and not self._info:
+            self.select_game(card.game.key, fetch=False)     # no network until the user asks
 
-    def _fill_launcher_games(self):
-        names = launcher_game_names(self.window())
-        if [self._launcher_games.itemData(i) for i in range(1, self._launcher_games.count())] == [n for _l, n in names]:
-            return
-        self._launcher_games.blockSignals(True)
-        self._launcher_games.clear()
-        self._launcher_games.addItem("Game from Lutris / Heroic / Bottles…", None)
-        for label, nm in names:
-            self._launcher_games.addItem(label, nm)
-        self._launcher_games.blockSignals(False)
+    def select_game(self, key: str, fetch: bool = True) -> bool:
+        for i in range(self._games.count()):
+            _aid, g = self._games.itemData(i)
+            if g is not None and g.key == key:
+                self._games.setCurrentIndex(i)
+                self._use_game(i, fetch)
+                return True
+        return False
 
-    def _pick_launcher_game(self, _i):
-        nm = self._launcher_games.currentData()
-        if nm:
-            self._find_name.setText(nm)
-            self._find_appid()
+    def _completer_picked(self, text: str):
+        i = self._games.findText(text)
+        if i >= 0:
+            self._games.setCurrentIndex(i)
+            self._game_activated(i)
 
-    def _find_appid(self):
-        name = self._find_name.text().strip()
-        if len(name) < 2:
+    def _game_activated(self, i: int):
+        self._use_game(i, True)
+
+    def _use_game(self, i: int, fetch: bool):
+        data = self._games.itemData(i)
+        if not data:
             return
-        if getattr(self, "_aw", None) and self._aw.isRunning():
+        aid, g = data
+        self._game = g
+        self._clear_matches()
+        if aid:
+            self._appid.setText(aid)
+            if fetch:
+                self._fetch(False)
             return
-        self._status.setText("Searching Steam…")
-        self._find_btn.setEnabled(False)
+        # not a Steam game and no appid remembered: find it by name
+        self._appid.setText("")
+        if g is not None and fetch:
+            self._search_name(g.name, auto=True)
+
+    # ── appid lookup ────────────────────────────────────────────────────────
+    def _go_clicked(self, force: bool = False):
+        text = self._appid.text().strip()
+        if text.isdigit():
+            self._fetch(bool(force))
+        elif len(text) >= 2:
+            self._game = None
+            self._search_name(text, auto=False)
+        else:
+            self._status.setText("⚠ Pick a game above, or enter a Steam appid / a game name.")
+
+    def _search_name(self, name: str, auto: bool):
+        if self._aw is not None and self._aw.isRunning():
+            return
+        self._status.setText(f"Searching Steam for “{name}” …")
+        self._go.setEnabled(False)
         self._aw = _AppidWorker(name, self)
+        self._auto_pick = auto
         TASKS.track(self._aw, "Game hints: find appid", _NAV("Game hints"), None, self._aw.done)
         self._aw.done.connect(self._matches_ready)
         self._aw.start()
 
-    def _matches_ready(self, items: list, err: str):
-        self._find_btn.setEnabled(True)
+    def _clear_matches(self):
         self._matches.clear()
+        for w_ in (self._matches, self._use_btn, self._umu_btn):
+            w_.hide()
+
+    def _matches_ready(self, items: list, err: str):
+        self._go.setEnabled(True)
+        self._clear_matches()
         if err:
             self._status.setText(f"⚠ Steam search failed: {err}")
+            return
+        if not items:
+            self._status.setText("No Steam match: this game is probably not sold on Steam. "
+                                 "Without an appid there is no ProtonDB data (umu-0 works as GAMEID).")
+            return
+        best = pick_appid(items) if self._auto_pick else None
+        if best is not None:
+            self._accept_appid(best["id"], f"Found “{best['name']}” on Steam ({int(best['score'] * 100)}% match)")
             return
         for it in items[:12]:
             tag = "  ← likely" if it["score"] >= 0.9 else ""
             li = QListWidgetItem(f"{it['id']:>9}   {it['name']}   ({int(it['score'] * 100)}%){tag}")
             li.setData(Qt.UserRole, it["id"])
+            li.setData(Qt.UserRole + 1, it["name"])
             self._matches.addItem(li)
-        has = bool(items)
         for w_ in (self._matches, self._use_btn, self._umu_btn):
-            w_.setVisible(has)
-        if has:
-            self._matches.setCurrentRow(0)
-            self._status.setText(f"{len(items)} match(es). Pick the right one — games that are not on Steam have no appid.")
-        else:
-            self._status.setText("No Steam match: this game is probably not sold on Steam (use umu-0 as GAMEID).")
+            w_.show()
+        self._matches.setCurrentRow(0)
+        self._status.setText(f"{len(items)} match(es) — which one is your game? "
+                             "(double-click, or pick it and press “This is the game”)")
+
+    def _accept_appid(self, aid: str, why: str = "", umu: bool = False):
+        self._appid.setText(aid)
+        if self._game is not None and not game_info.steam_appid(self._game):
+            LINKS.set_field(self._game.key, "appid", aid, name=self._game.name)   # the Games tab shows ProtonDB too
+            why += "  ·  remembered for this game" if why else "remembered for this game"
+        if umu:
+            ll = getattr(self.window(), "_launch_line", None)
+            if ll is not None:
+                ll._umu_gid.setText(f"umu-{aid}")
+                why += f"  ·  GAMEID = umu-{aid} on the Launch line tab (tick its umu-run box to use it)"
+        self._status.setText(why)
+        self._fetch(False, note=why)
 
     def _use_match(self, umu: bool):
         it = self._matches.currentItem()
         if it is None:
             return
-        aid = it.data(Qt.UserRole)
-        self._appid.setText(aid)
-        if umu:
-            ll = getattr(self.window(), "_launch_line", None)
-            if ll is not None:
-                ll._umu_gid.setText(f"umu-{aid}")
-                self._status.setText(f"GAMEID set to umu-{aid} on the Launch line tab (enable its umu-run box to use it).")
-        self._fetch(False)
+        aid, name = it.data(Qt.UserRole), it.data(Qt.UserRole + 1)       # read before the list is cleared
+        self._clear_matches()
+        self._accept_appid(aid, f"Using “{name}”", umu)
 
     def _open(self, tmpl: str):
         aid = self._appid.text().strip()
@@ -853,15 +958,24 @@ class GameHintsWidget(QWidget):
         if aid.isdigit():
             QDesktopServices.openUrl(QUrl(f"https://www.pcgamingwiki.com/api/appid.php?appid={aid}"))
 
-    def _fetch(self, force: bool):
+    # ── results ─────────────────────────────────────────────────────────────
+    def _show_empty(self):
+        self._verdict.hide()
+        self._table.hide()
+        self._table_title.hide()
+        self._status.setText("Pick a game to see what ProtonDB and PCGamingWiki know about it.")
+
+    def _fetch(self, force: bool, note: str = ""):
         aid = self._appid.text().strip()
         if not aid.isdigit():
             self._status.setText("⚠ Enter a numeric Steam appid.")
             return
         if self._worker and self._worker.isRunning():
             return
-        self._status.setText("Looking up…")
+        self._note = note
+        self._status.setText((note + "  ·  " if note else "") + "looking up …")
         self._go.setEnabled(False)
+        self._refresh.setEnabled(False)
         self._worker = _HintWorker(aid, force, self)
         TASKS.track(self._worker, "Game hints: lookup", _NAV("Game hints"))
         self._worker.done.connect(self._show)
@@ -869,50 +983,87 @@ class GameHintsWidget(QWidget):
 
     def _show(self, info: dict):
         self._go.setEnabled(True)
+        self._refresh.setEnabled(True)
         self._info = info
-        lines = [f"appid {info['appid']}" + ("  (cached)" if info.get("cached") else "")]
-        pd = info.get("protondb")
-        if pd:
-            lines.append(f"ProtonDB: {pd.get('tier')}  (trending {pd.get('trendingTier')}, best {pd.get('bestReportedTier')}, "
-                         f"{pd.get('total')} reports, confidence {pd.get('confidence')})")
-        pc = info.get("pcgw")
-        if pc:
-            lines.append(f"PCGamingWiki: {pc['title']}")
-            lines.append("  Engine: " + (", ".join(pc["engines"]) or "?"))
-            lines.append("  Direct3D: " + (", ".join(pc["d3d"]) or "—") +
-                         "   Vulkan: " + (", ".join(pc["vulkan"]) or "—") +
-                         "   OpenGL: " + (", ".join(pc["opengl"]) or "—"))
-        rp = info.get("reports")
-        if rp:
-            lines.append(f"ProtonDB reports with settings (last {_IDX_MONTHS} months, {rp.get('dump', '')}): {rp.get('n', 0)}")
-        else:
-            lines.append("ProtonDB user-report data is not downloaded yet — see the Community tips tab.")
         w = self.window()
         cur = w.collect_launch_payload().get("env", {}) if hasattr(w, "collect_launch_payload") else {}
         rows, notes = hint_suggestions(info, SYSHUB.info, cur)
         crows, _st = community_entries(info, SYSHUB.info, cur, 6, bool(SYSHUB.info.has_nvidia), False)
-        if crows:
-            notes.append(f"{len(crows)} setting example(s) from recent ProtonDB user reports (with the reporters' hardware "
-                         "and Proton) are on the “Community tips” tab — unverified, use at your own risk.")
         ct = getattr(getattr(w, "_extra_tools", None), "community", None)
         if ct is not None:
             ct.set_data(info)
-        lines += [f"→ {n}" for n in notes]
-        lines += [f"⚠ {e}" for e in info.get("errors", [])]
-        self._summary.setPlainText("\n".join(lines))
+
+        parts = []
+        pd, pc, rp = info.get("protondb"), info.get("pcgw"), info.get("reports")
+        if pd and pd.get("tier"):
+            tier = str(pd.get("tier"))
+            col = _TIER_COLOR.get(tier.lower(), T["text"])
+            trend = str(pd.get("trendingTier") or "")
+            parts.append(f'<span style="font-size:15px; font-weight:800; color:{col}">ProtonDB: {_h(tier.upper())}</span>'
+                         f' &nbsp;<span style="color:{T["muted"]}">trending {_h(trend or "—")} · best reported '
+                         f'{_h(pd.get("bestReportedTier") or "—")} · {_h(pd.get("total") or "?")} reports · '
+                         f'confidence {_h(pd.get("confidence") or "?")}</span>')
+        else:
+            parts.append(f'<span style="font-weight:700; color:{T["warn"]}">No ProtonDB rating found for appid '
+                         f'{_h(info.get("appid", ""))}</span>')
+        if pc:
+            parts.append(f'<span style="color:{T["muted"]}">{_h(pc["title"])} · engine '
+                         f'{_h(", ".join(pc["engines"]) or "?")} · Direct3D {_h(", ".join(pc["d3d"]) or "—")} · '
+                         f'Vulkan {_h(", ".join(pc["vulkan"]) or "—")} · OpenGL {_h(", ".join(pc["opengl"]) or "—")}</span>')
+        if notes:
+            parts.append("<b>What to try</b><br>" + "<br>".join(f"→ {_h(n)}" for n in notes))
+        if rp:
+            parts.append(f'<span style="color:{T["muted"]}">{rp.get("n", 0)} ProtonDB report(s) with settings in the '
+                         f'last {_IDX_MONTHS} months ({_h(rp.get("dump", ""))}).</span>')
+        else:
+            parts.append(f'<span style="color:{T["muted"]}">User-report data is not downloaded — '
+                         "get it on the Community tips tab.</span>")
+        for e in info.get("errors", []):
+            parts.append(f'<span style="color:{T["warn"]}">⚠ {_h(e)}</span>')
+        self._verdict.setText("<br>".join(parts))
+        self._verdict.show()
+
+        self._table.blockSignals(True)
         self._table.setRowCount(0)
         for r, (n, v, why, src, pre) in enumerate(rows):
             self._table.insertRow(r)
-            for c, t in enumerate((n, v, src, why)):
-                self._table.setItem(r, c, QTableWidgetItem(t))
-            if pre:
-                self._table.selectRow(r)
-        self._status.setText(f"{len(rows)} suggestion(s); {sum(1 for x in rows if x[4])} preselected."
-                             if rows else "No suggestions for this title.")
+            use = QTableWidgetItem("")
+            use.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            use.setCheckState(Qt.Checked if pre else Qt.Unchecked)
+            self._table.setItem(r, _C_USE, use)
+            for c, t in ((_C_VAR, n), (_C_VAL, v), (_C_WHY, why), (_C_SRC, src)):
+                it = QTableWidgetItem(t)
+                it.setFlags(Qt.ItemIsEnabled)
+                self._table.setItem(r, c, it)
+        self._table.blockSignals(False)
+        self._table.resizeRowsToContents()
+        self._table.setFixedHeight(min(360, self._table.horizontalHeader().height() + 4
+                                       + sum(self._table.rowHeight(r) for r in range(self._table.rowCount()))))
+        has = bool(rows)
+        self._table.setVisible(has)
+        self._table_title.setVisible(True)
+        self._table_title.setText("Suggested settings — tick what you want, then apply to the Environment tab"
+                                  if has else "No settings to suggest for this title (nothing missing here, "
+                                              "or no data)")
+        self._ctb.setEnabled(True)
+        self._ctb.setText(f"Community tips ({len(crows)}) ⚠" if crows else "Community tips ⚠")
+        note = self._note
+        self._status.setText((note + "  ·  " if note else "") + ("cached result (Refresh to ask again)"
+                                                             if info.get("cached") else "up to date"))
+        self._sync_apply()
+
+    def _checked_rows(self) -> List[int]:
+        return [r for r in range(self._table.rowCount())
+                if self._table.item(r, _C_USE) is not None and self._table.item(r, _C_USE).checkState() == Qt.Checked]
+
+    def _sync_apply(self):
+        n = len(self._checked_rows())
+        self._apply.setEnabled(n > 0)
+        self._apply.setText(f"Apply {n} checked" if n else "Apply checked")
 
     def _apply_selected(self):
         w = self.window()
-        rows = sorted({i.row() for i in self._table.selectedIndexes()})
+        rows = self._checked_rows()
         for r in rows:
-            w.set_env_var(self._table.item(r, 0).text(), self._table.item(r, 1).text())
-        self._status.setText(f"Applied {len(rows)} variable(s) to the Environment tab.")
+            w.set_env_var(self._table.item(r, _C_VAR).text(), self._table.item(r, _C_VAL).text())
+        self._status.setText(f"Applied {len(rows)} variable(s) to the Environment tab (Ctrl+Z undoes it).")

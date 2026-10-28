@@ -1111,15 +1111,52 @@ class MainWindow(QMainWindow):
             return False
         return self.load_profile_by_name(profile)
 
-    def write_profile_to_games(self, profile: Optional[str], items: List[tuple], confirm: bool = True) -> list:
+    def _editor_matches(self, profile: str) -> bool:
+        return self.settings_manager.get_current_profile() == profile and not self._dirty
+
+    def _ask_write_source(self, profile: str, items: List[tuple]) -> Optional[str]:
+        """The editor holds something other than the game's linked profile: which one is written?
+        -> "editor" | "profile" | None (cancel)."""
+        cur = self.settings_manager.get_current_profile()
+        what = (f"“{cur}”" + (" (with unsaved changes)" if self._dirty else "")) if cur else "the current settings"
+        names = "\n".join(f"  • {n}" for _k, n, _t in items)
+        box = QMessageBox(QMessageBox.Question, "Write to game",
+                          f"The editor holds {what}, but the game is linked to “{profile}”.\n\n"
+                          f"Write to:\n{names}\n\nA timestamped backup of each file is kept. " + (
+                              f"Writing the editor links the game to “{cur}” instead." if cur else
+                              f"Writing the editor unlinks “{profile}” from the game."), parent=self)
+        b_editor = box.addButton("Write the editor as it is", QMessageBox.AcceptRole)
+        b_prof = box.addButton(f"Load “{profile}” and write it", QMessageBox.ActionRole)
+        box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(b_editor)
+        box.exec()
+        clicked = box.clickedButton()
+        return "editor" if clicked is b_editor else "profile" if clicked is b_prof else None
+
+    def write_profile_to_games(self, profile: Optional[str], items: List[tuple], confirm: bool = True,
+                               ask_source: bool = False) -> list:
         """Write a saved profile (None = the editor as it is) to [(game key, name, target)].
+        With ask_source, a profile that is not what the editor holds right now can be swapped for
+        the editor (Games tab: whatever is loaded stays what gets written).
         -> [(name, ok, message)]"""
         if not items:
             return []
-        if profile:
-            if profile not in self.settings_manager.get_profiles():
-                QMessageBox.warning(self, "Write to game", f"Profile “{profile}” does not exist any more.")
+        if profile and profile not in self.settings_manager.get_profiles():
+            QMessageBox.warning(self, "Write to game", f"Profile “{profile}” does not exist any more.")
+            return []
+        loaded = False                               # the editor already holds `profile`
+        if profile and ask_source and not self._editor_matches(profile):
+            choice = self._ask_write_source(profile, items)
+            if choice is None:
                 return []
+            confirm = False                          # that dialog was the confirmation
+            if choice == "editor":
+                profile = None
+            elif not self._confirm_load_for_write(profile):
+                return []
+            else:
+                loaded = True
+        if profile:
             if confirm:
                 names = "\n".join(f"  • {n}" for _k, n, _t in items)
                 if QMessageBox.question(
@@ -1127,7 +1164,7 @@ class MainWindow(QMainWindow):
                         f"Write “{profile}” to:\n\n{names}\n\nA timestamped backup of each file is kept.",
                         QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes) != QMessageBox.Yes:
                     return []
-            if not self._confirm_load_for_write(profile):
+            if not loaded and not self._confirm_load_for_write(profile):
                 return []
         elif confirm and QMessageBox.question(
                 self, "Write to game",
