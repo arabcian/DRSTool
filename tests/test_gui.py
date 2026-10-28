@@ -641,5 +641,67 @@ class GuiTests(unittest.TestCase):
         win._switch_tab(win.TAB_DRS)
 
 
+@unittest.skipUnless(HAVE_QT, "PySide6 not installed")
+class WinetricksDialogTests(unittest.TestCase):
+    """Runs the real worker against a fake winetricks on PATH (no network, no Wine)."""
+
+    def setUp(self):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        from PySide6.QtWidgets import QApplication
+        self.app = QApplication.instance() or QApplication([])
+        self._tmp = tempfile.TemporaryDirectory(prefix="drstool-wt-")
+        self.root = Path(self._tmp.name)
+        self.prefix = self.root / "game" / "pfx"
+        (self.prefix / "drive_c" / "windows").mkdir(parents=True)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        fake = self.bin / "winetricks"
+        fake.write_text('#!/bin/sh\necho "WINEPREFIX=$WINEPREFIX args=$*"\n')
+        fake.chmod(0o755)
+        self._old_path = os.environ["PATH"]
+        os.environ["PATH"] = f"{self.bin}{os.pathsep}{self._old_path}"
+
+    def tearDown(self):
+        os.environ["PATH"] = self._old_path
+        self._tmp.cleanup()
+
+    def test_install_runs_tool_with_prefix_and_selected_verbs(self):
+        from drstool_gui.winetricks_dialog import WinetricksDialog
+        dlg = WinetricksDialog(self.prefix, "Test Game")
+        self.assertTrue(dlg._run_btn.isEnabled() is False)        # nothing selected yet
+        dlg._checks["xact"].setChecked(True)
+        dlg._checks["vcrun2022"].setChecked(True)
+        self.assertTrue(dlg._run_btn.isEnabled())
+        dlg._run()
+        dlg._worker.wait(10000)
+        self.app.processEvents()
+        text = dlg._log.toPlainText()
+        self.assertIn(f"WINEPREFIX={self.prefix} args=-q vcrun2022 xact", text)
+        self.assertIn("✓ done", text)
+        dlg.close()
+
+
+@unittest.skipUnless(HAVE_QT, "PySide6 not installed")
+class FieldCheckTests(unittest.TestCase):
+    def test_live_warning_marks_invalid_hex(self):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        from PySide6.QtWidgets import QApplication, QLabel, QLineEdit
+        QApplication.instance() or QApplication([])
+        from drstool_core.validate import check_hex
+        from drstool_gui.field_check import watch
+        edit, label = QLineEdit(), QLabel()
+        check = watch(edit, check_hex, label)
+        edit.setText("1F")
+        self.assertTrue(check())
+        self.assertNotIn("#d9534f", edit.styleSheet())
+        self.assertFalse(label.isVisible())
+        edit.setText("ZZ")
+        self.assertFalse(check())
+        self.assertIn("#d9534f", edit.styleSheet())
+        self.assertIn("hex", label.text())
+        edit.setText("")
+        self.assertTrue(check())
+
+
 if __name__ == "__main__":
     unittest.main()

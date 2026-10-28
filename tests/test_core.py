@@ -10,11 +10,12 @@ import struct
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from drstool_core import catalog, dll_ops, game_scan, pe_version, share_code, steam_shortcuts as ss  # noqa: E402
+from drstool_core import catalog, dll_ops, game_scan, pe_version, share_code, steam_shortcuts as ss, validate, winetricks  # noqa: E402
 
 
 def fake_dll(path: Path, ver=(310, 2, 1, 0), filler=b"") -> Path:
@@ -25,6 +26,79 @@ def fake_dll(path: Path, ver=(310, 2, 1, 0), filler=b"") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(body + b"\0" * 64)
     return path
+
+
+class WinetricksPlanTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _prefix(self, *parts) -> Path:
+        p = self.root.joinpath(*parts)
+        (p / "drive_c" / "windows").mkdir(parents=True)
+        return p
+
+    def test_lutris_prefix_uses_winetricks_with_wineprefix(self):
+        pfx = self._prefix("lutris", "game")
+        with mock.patch.object(winetricks.shutil, "which", lambda n: f"/usr/bin/{n}"):
+            p = winetricks.plan(pfx, ["vcrun2022", "xact"])
+        self.assertEqual(p.tool, "winetricks")
+        self.assertEqual(p.argv, ["/usr/bin/winetricks", "-q", "vcrun2022", "xact"])
+        self.assertEqual(p.env, {"WINEPREFIX": str(pfx)})
+
+    def test_steam_prefix_uses_protontricks_with_appid(self):
+        pfx = self._prefix("steamapps", "compatdata", "1245620", "pfx")
+        with mock.patch.object(winetricks.shutil, "which", lambda n: f"/usr/bin/{n}"):
+            p = winetricks.plan(pfx, ["d3dx9"])
+        self.assertEqual(p.tool, "protontricks")
+        self.assertEqual(p.argv, ["/usr/bin/protontricks", "1245620", "-q", "d3dx9"])
+        self.assertEqual(p.env, {})
+
+    def test_unknown_component_is_rejected(self):
+        pfx = self._prefix("game")
+        with mock.patch.object(winetricks.shutil, "which", lambda n: f"/usr/bin/{n}"):
+            with self.assertRaises(ValueError):
+                winetricks.plan(pfx, ["vcrun2022; rm -rf ~"])
+
+    def test_folder_without_drive_c_is_rejected(self):
+        with self.assertRaises(ValueError):
+            winetricks.plan(self.root / "nothing", ["xact"])
+
+    def test_missing_tool_is_reported(self):
+        pfx = self._prefix("game")
+        with mock.patch.object(winetricks.shutil, "which", lambda n: None):
+            with self.assertRaises(RuntimeError):
+                winetricks.plan(pfx, ["xact"])
+
+
+class ValidateTests(unittest.TestCase):
+    def test_int(self):
+        self.assertEqual(validate.check_int(""), "")
+        self.assertEqual(validate.check_int("60"), "")
+        self.assertEqual(validate.check_int(" 60 "), "")
+        self.assertNotEqual(validate.check_int("6o"), "")
+        self.assertNotEqual(validate.check_int("1.5"), "")
+        self.assertNotEqual(validate.check_int("-1"), "")
+        self.assertNotEqual(validate.check_int("3000000000"), "")
+
+    def test_hex(self):
+        self.assertEqual(validate.check_hex(""), "")
+        self.assertEqual(validate.check_hex("0x1F"), "")
+        self.assertEqual(validate.check_hex("DEADBEEF"), "")
+        self.assertNotEqual(validate.check_hex("0xZZ"), "")
+        self.assertNotEqual(validate.check_hex("123456789"), "")
+
+    def test_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "file.txt"
+            f.write_text("x")
+            self.assertEqual(validate.check_dir(""), "")
+            self.assertEqual(validate.check_dir(d), "")
+            self.assertNotEqual(validate.check_dir(str(Path(d) / "missing")), "")
+            self.assertNotEqual(validate.check_dir(str(f)), "")
 
 
 class ShareCodeTests(unittest.TestCase):

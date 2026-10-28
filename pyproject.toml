@@ -73,3 +73,12 @@ drstool_core = ["data/*.json"]
     "lutris-game-tune-main/README.md",
 ]
 "share/drstool/lutris-game-tune-main/profiles" = ["lutris-game-tune-main/profiles/heavy-game.conf.example"]
+
+[tool.ruff]
+target-version = "py312"
+exclude = ["vk-flip-meter-main", "lutris-game-tune-main", "packaging"]
+
+# Only hard errors for now: syntax errors and undefined names. Widen this list
+# once the existing style findings have been cleaned up.
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
