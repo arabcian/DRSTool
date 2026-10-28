@@ -1,5 +1,6 @@
 """Favourites store and the right-click menu that toggles them."""
 
+import logging
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QObject, QSettings, Qt, Signal
@@ -7,6 +8,8 @@ from PySide6.QtWidgets import QListWidget, QMenu
 
 from .base import APP_ID
 from .widgets import ROLE_KIND
+
+_log = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------------
@@ -31,6 +34,7 @@ class FavoritesStore(QObject):
                         v = [v] if v else []
                     self._data[kind] = [str(x) for x in (v or [])]
             except Exception:
+                _log.debug("ignored error", exc_info=True)
                 self._data = {}
         return self._data
 
@@ -40,6 +44,7 @@ class FavoritesStore(QObject):
             for kind, lst in self._load().items():
                 qs.setValue(f"favorites/{kind}", list(lst))
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
 
     def is_fav(self, kind: str, key: str) -> bool:

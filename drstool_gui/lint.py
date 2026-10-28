@@ -1,5 +1,6 @@
 """Consistency linter for env vars, DRS settings and gamescope flags."""
 
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -9,6 +10,8 @@ from .lookup import (
     _parse_int_any, arch_by_code, arch_rank, canonical_drs_key, detect_real_arch, drs_lookup,
 )
 from .sysinfo import SysInfo
+
+_log = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------------
@@ -38,6 +41,7 @@ def _driver_tuple(v: str):
     try:
         return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
     except Exception:
+        _log.debug("ignored error", exc_info=True)
         return ()
 
 

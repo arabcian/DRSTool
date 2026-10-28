@@ -5,12 +5,15 @@ simply left out.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 from . import game_scan
+
+_log = logging.getLogger(__name__)
 
 try:
     import yaml  # type: ignore
@@ -35,6 +38,7 @@ def _load_yaml(path: Path):
         try:
             return yaml.load(text, Loader=_YAML_LOADER), text
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
     return None, text
 

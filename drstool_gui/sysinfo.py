@@ -2,6 +2,7 @@
 available on this system' greying.
 """
 
+import logging
 import os
 import re
 import shutil
@@ -14,6 +15,8 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
 
 from .base import _run, APP_ID
 from .theme import T
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from drstool_core.models import EnvVarDef, Setting
@@ -181,6 +184,7 @@ class SysHub(QObject):
         try:
             self.enabled = QSettings(APP_ID, APP_ID).value("sys/grey_unsupported", True, type=bool)
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
 
     def set_enabled(self, on: bool):
@@ -188,6 +192,7 @@ class SysHub(QObject):
         try:
             QSettings(APP_ID, APP_ID).setValue("sys/grey_unsupported", on)
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
         self.info_changed.emit(self.info)
 

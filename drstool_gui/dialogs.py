@@ -1,5 +1,6 @@
 """Dialogs: change plan / import preview, recipe gallery, changes, share-code import."""
 
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
@@ -27,6 +28,8 @@ from .sysinfo import SYSHUB
 from .theme import btn_ss, caption, T
 from .tool_ui import _tool_btn
 from .widgets import _COMBO_QSS, _LINEEDIT_QSS, _MONO_BOX_QSS, _pack2_table_ss, _pack2_title
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .settings_manager import SettingsManager
@@ -262,6 +265,7 @@ class PlanDialog(QDialog):
             before = lint_config(q["env"], q["drs"], q["arch"], q["gs_on"], q["gs_flags"],
                                  q["mangohud"], SYSHUB.info)
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             issues, before = [], []
         before_codes = {i.code for i in before}
         fresh = [i for i in issues if i.code not in before_codes and i.sev in ("error", "warn")]

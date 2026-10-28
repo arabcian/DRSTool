@@ -1,5 +1,6 @@
 """Recipes: curated bundles of settings."""
 
+import logging
 import sys
 from dataclasses import dataclass
 from typing import List
@@ -11,6 +12,8 @@ from .lookup import (
 )
 from .lutris_sync import LutrisSyncWidget
 from .sysinfo import SYSHUB
+
+_log = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------------
@@ -207,6 +210,7 @@ def recipe_requirement(r: Recipe, si=None) -> str:
     try:
         return r.requires(si or SYSHUB.info) if r.requires else ""
     except Exception:
+        _log.debug("ignored error", exc_info=True)
         return ""
 
 

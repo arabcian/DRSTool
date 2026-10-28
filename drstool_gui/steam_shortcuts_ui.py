@@ -1,5 +1,6 @@
 """Shortcut (launcher script) and Add-to-Steam pages."""
 
+import logging
 import os
 import re
 import shlex
@@ -30,6 +31,8 @@ from .tool_ui import _tool_btn
 from .widgets import (
     _COMBO_QSS, _desc_label, _LINEEDIT_QSS, _MONO_BOX_QSS, _slugify, _title_label, _xdg,
 )
+
+_log = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------------
@@ -419,10 +422,12 @@ class SteamShortcutsWidget(QWidget):
         try:
             self._games["lutris"] = game_scan.scan_lutris()
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             self._games["lutris"] = []
         try:
             self._games["heroic"] = game_scan.scan_heroic()
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             self._games["heroic"] = []
         self._on_account()
         self._on_source()

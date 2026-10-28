@@ -1,5 +1,6 @@
 """Install Windows runtime components (winetricks / protontricks) into one Wine prefix."""
 
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -13,6 +14,8 @@ from .base import winetricks
 from .theme import T
 from .tool_ui import _tool_btn
 from .widgets import _MONO_BOX_QSS, _desc_label, _title_label
+
+_log = logging.getLogger(__name__)
 
 
 class _TricksWorker(QThread):
@@ -98,6 +101,7 @@ class WinetricksDialog(QDialog):
             tool = winetricks.required_tool(self._prefix)
             found = winetricks.tool_path(self._prefix) is not None
         except Exception:                                # noqa: BLE001
+            _log.debug("ignored error", exc_info=True)
             tool, found = "winetricks", False
         if found:
             self._status.setText(f"Using {tool}.")

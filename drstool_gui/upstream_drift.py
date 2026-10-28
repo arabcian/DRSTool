@@ -1,5 +1,6 @@
 """Upstream drift check (new / removed env vars, dxvk.conf keys, DRS ids upstream)."""
 
+import logging
 import re
 import urllib.error
 import urllib.parse
@@ -24,6 +25,8 @@ from .tasks import _NAV, TASKS
 from .theme import T
 from .tool_ui import _tool_btn
 from .widgets import _pack2_table_ss, _pack2_title
+
+_log = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------------
@@ -339,6 +342,7 @@ class UpstreamDriftWidget(QWidget):
                 v = [v] if v else []
             return set(str(x) for x in (v or []))
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             return set()
 
     @staticmethod
@@ -349,6 +353,7 @@ class UpstreamDriftWidget(QWidget):
         try:
             QSettings(APP_ID, APP_ID).setValue("drift/reviewed", sorted(s))
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
 
     def _start(self):

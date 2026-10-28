@@ -1,5 +1,6 @@
 """Game hints: Steam appid lookup, ProtonDB / PCGamingWiki hints and the ProtonDB report index."""
 
+import logging
 import codecs as _codecs
 import json
 import os
@@ -31,6 +32,8 @@ from .widgets import (
     _COMBO_QSS, _desc_label, _LAUNCHER_QSS, _LINEEDIT_QSS, _MONO_BOX_QSS, _table_qss,
     _title_label, _xdg,
 )
+
+_log = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------------
@@ -351,6 +354,7 @@ def find_latest_dump() -> str:
                 if r.status == 200:
                     return name
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             continue
     raise RuntimeError("no ProtonDB dump found in the last 9 months at " + PROTONDB_DUMP_BASE)
 
@@ -633,6 +637,7 @@ def launcher_game_names(win) -> List[tuple]:
                 seen.add(nm.lower())
                 out.append((f"Lutris: {nm}", nm))
     except Exception:
+        _log.debug("ignored error", exc_info=True)
         pass
     for be in (HeroicBackend(), BottlesBackend()):
         try:
@@ -644,6 +649,7 @@ def launcher_game_names(win) -> List[tuple]:
                     seen.add(nm.lower())
                     out.append((f"{be.name}: {nm}", nm))
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             continue
     return out
 

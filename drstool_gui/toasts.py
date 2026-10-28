@@ -1,5 +1,6 @@
 """Toast notifications, the Undo offer after file writes and desktop notifications."""
 
+import logging
 import os
 import shutil
 import tempfile
@@ -15,6 +16,8 @@ from PySide6.QtWidgets import (
 from .base import _PENDING_BAKS
 from .theme import btn_ss, T
 
+_log = logging.getLogger(__name__)
+
 
 # ----------------------------------------------------------------------------
 # Toasts
@@ -29,6 +32,7 @@ def toast(text: str, kind: str = "info", timeout: int = 3500, action=None):
         try:
             TOASTS.show_toast(text, kind, timeout, action)
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
 
 
@@ -230,6 +234,7 @@ def offer_undo(label: str):
                 try:
                     getattr(w, fn)()
                 except Exception:
+                    _log.debug("ignored error", exc_info=True)
                     pass
         toast(f"Restored {done} file(s) from backup" + ((" — " + "; ".join(bad)) if bad else ""),
               "warn" if bad else "ok", 7000)
@@ -256,4 +261,5 @@ def desktop_notify(title: str, body: str = ""):
                 "--method", "org.freedesktop.Notifications.Notify",
                 "DRSTool", "0", "", title, body, "[]", "{}", "6000"])
     except Exception:
+        _log.debug("ignored error", exc_info=True)
         pass

@@ -2,6 +2,7 @@
 persistence.
 """
 
+import logging
 import json
 import os
 import shutil
@@ -20,6 +21,8 @@ from .gamescope import normalize_gs_flags
 from .links import LINKS
 from .lookup import canonical_drs_key, canonical_drs_value, drs_lookup
 from .profile_io import unique_profile_name
+
+_log = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -270,6 +273,7 @@ class SettingsManager(QObject):
                     raise ValueError("profiles file is not a JSON object")
                 self._profiles = loaded
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             # Corrupt or unreadable file. Starting with an empty in-memory set
             # is fine, but the very next save_profile() would rewrite the file
             # and destroy whatever was recoverable in it — so move it aside

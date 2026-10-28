@@ -1,5 +1,6 @@
 """Shortcut sheet, Appearance dialog, accessibility labelling."""
 
+import logging
 import re
 import sys
 
@@ -14,6 +15,8 @@ from PySide6.QtWidgets import (
 from .base import APP_ID
 from .theme import ACCENT_PRESETS, APPEARANCE, btn_ss, T
 from .widgets import NavTab
+
+_log = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------------
@@ -173,6 +176,7 @@ class AppearanceDialog(QDialog):
             qs.setValue("appearance/restore_session", self._restore.isChecked())
             qs.sync()
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
         self.restart_requested = restart and self.needs_restart
         self.accept()
@@ -243,6 +247,7 @@ class UXFilter(QObject):
                 if not obj.accessibleName():
                     _a11y_label(obj)
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
         return False
 

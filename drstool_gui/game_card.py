@@ -336,7 +336,7 @@ class _Tile(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(f"#gcTile {{ background:{T['surface']}; border:1px solid {T['border']};"
                            " border-radius:10px; }")
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(5)
@@ -355,6 +355,7 @@ class _Tile(QFrame):
         self.body = QVBoxLayout()
         self.body.setSpacing(6)
         lay.addLayout(self.body)
+        lay.addStretch(1)              # keeps the buttons at the bottom of equal-height tiles
         self.buttons = QHBoxLayout()
         self.buttons.setSpacing(6)
         lay.addSpacing(2)
@@ -500,13 +501,25 @@ class GameCardWidget(QWidget):
             self._grid.removeWidget(t)
         cols = 1 if narrow else 2
         for i, t in enumerate(self._tiles):
-            self._grid.addWidget(t, i // cols, i % cols, Qt.AlignTop)
+            self._grid.addWidget(t, i // cols, i % cols)
         for c in range(2):
             self._grid.setColumnStretch(c, 1 if c < cols else 0)
+
+    def _equalize(self):
+        """Give all six tiles the height of the tallest one, so the grid reads as one even block."""
+        for t in self._tiles:
+            t.setMinimumHeight(0)
+        if self._narrow:                   # one column: each tile keeps its own height
+            return
+        natural = [t.heightForWidth(t.width()) if t.hasHeightForWidth() and t.width() > 0
+                   else t.sizeHint().height() for t in self._tiles]
+        for t in self._tiles:
+            t.setMinimumHeight(max(natural))
 
     def resizeEvent(self, ev):             # noqa: N802
         super().resizeEvent(ev)
         self._reflow(self.width() < 720)
+        self._equalize()
 
     # ── data ────────────────────────────────────────────────────────────────
     def _win(self):
@@ -551,6 +564,7 @@ class GameCardWidget(QWidget):
         self._render_ft(info.get("ft") or {})
         self._render_log(info.get("log") or {})
         self._render_pdb(info.get("pdb") or {})
+        self._equalize()
 
     # ── tiles ───────────────────────────────────────────────────────────────
     def _render_profile(self, *_):
@@ -596,6 +610,7 @@ class GameCardWidget(QWidget):
             if can_write else "No launcher config to write to (custom folder or launcher not found).")
         self._load_btn.setEnabled(bool(prof) and prof in profiles)
         self._unlink_btn.setEnabled(bool(prof))
+        self._equalize()
 
     def _render_runtime(self, rt: dict):
         if rt.get("error"):
@@ -819,6 +834,7 @@ class GameCardWidget(QWidget):
             p["error"] = "; ".join(e for e in res.get("errors", []) if e.startswith("ProtonDB")) or "no data"
         self._info["pdb"] = p
         self._render_pdb(p)
+        self._equalize()
 
     def shutdown(self):
         for t in self._threads:

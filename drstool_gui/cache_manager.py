@@ -1,5 +1,6 @@
 """Shader / driver cache manager."""
 
+import logging
 import os
 import re
 import shutil
@@ -20,6 +21,8 @@ from .tasks import _NAV, TASKS
 from .theme import T
 from .tool_ui import _tool_btn
 from .widgets import _pack2_table_ss, _pack2_title
+
+_log = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------------
@@ -323,6 +326,7 @@ class CacheManagerWidget(QWidget):
         try:
             return dict(w.get_env_dict()) if w is not None else {}
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             return {}
 
     @staticmethod
@@ -333,12 +337,14 @@ class CacheManagerWidget(QWidget):
                 v = [v] if v else []
             return [str(x) for x in (v or [])]
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             return []
 
     def _save_extra(self, lst: List[str]):
         try:
             QSettings(APP_ID, APP_ID).setValue("cache/extra_folders", list(lst))
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
 
     def rescan(self):

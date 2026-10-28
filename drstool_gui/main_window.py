@@ -1,17 +1,20 @@
 """MainWindow."""
 
+import logging
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, QSettings, Qt, QTimer
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMainWindow,
+    QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMainWindow,
     QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSplitter, QStackedWidget,
     QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
+from drstool_core import support_bundle
 from drstool_core.models import GPUArch
 
 from . import base as _base
@@ -60,6 +63,8 @@ from .theme import APPEARANCE, btn_ss, pill_ss, SCROLLABLE_CONTROL_QSS, T
 from .toasts import _install_toasts, toast, ToastStatusBar
 from .tool_ui import ExtraToolsSidebarWidget
 from .widgets import _fmt_drs_value, BrandMark, EmptyState, NavTab
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .recipes import Recipe
@@ -777,7 +782,8 @@ class MainWindow(QMainWindow):
                 ("save", "Save profile", "Ctrl+S"),
                 ("shortcuts", "Keyboard shortcuts", "F1"),
                 ("appearance", "Appearance…", "theme, accent, density, UI scale  Ctrl+,"),
-                ("tasks", "Background tasks", "running and finished downloads / scans")):
+                ("tasks", "Background tasks", "running and finished downloads / scans"),
+                ("support", "Create support bundle…", "system info, debug log and anonymised profiles in one zip")):
             items.append(dict(kind="action", key=key, title=title, sub="Action", desc=desc))
         return items
 
@@ -837,7 +843,7 @@ class MainWindow(QMainWindow):
              "changes": self._show_unsaved_changes, "logging": self._toggle_logging,
              "copy_steam": self._output_bar._copy_steam_env, "save": self._shortcut_save,
              "shortcuts": self.open_shortcuts, "appearance": self.open_appearance,
-             "tasks": self._tasks_menu}[key]()
+             "tasks": self._tasks_menu, "support": self._create_support_bundle}[key]()
 
     def _select_item(self, lw: QListWidget, key: str):
         for i in range(lw.count()):
@@ -1322,6 +1328,7 @@ class MainWindow(QMainWindow):
                         self._sync_tabs.setCurrentIndex(i)
                         break
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
 
     def _install_a11y(self):
@@ -1376,6 +1383,7 @@ class MainWindow(QMainWindow):
             if 0 < tab < len(self._nav_tabs):
                 self._switch_tab(tab)
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             self.resize(1440, 900)
 
     def resizeEvent(self, e):             # noqa: N802
@@ -1409,6 +1417,7 @@ class MainWindow(QMainWindow):
             self._qsettings.setValue("window/tab", self._sidebar_stack.currentIndex())
             self._save_session()
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
         try:
             SYSHUB.shutdown()
@@ -1418,6 +1427,7 @@ class MainWindow(QMainWindow):
             self.hide()                  # downloads may need a moment to notice the cancel
             TASKS.wait_all()
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
         if restart:
             _spawn_restart()
@@ -1632,6 +1642,20 @@ class MainWindow(QMainWindow):
             self._populate_settings(self._search.text() if self._sidebar_stack.currentIndex() == self.TAB_DRS else "",
                                     quiet=True)
         self._refresh_badges()
+
+    def _create_support_bundle(self):
+        """'Sorun bildir': one anonymised zip with system info, DRSTool's debug log and the saved profiles."""
+        default = Path.home() / f"drstool-report-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+        path, _ = QFileDialog.getSaveFileName(self, "Create support bundle", str(default), "Zip archive (*.zip)")
+        if not path:
+            return
+        try:
+            out = support_bundle.build(Path(path), self.settings_manager.get_profiles(),
+                                       support_bundle.system_lines(SYSHUB.info))
+        except Exception as ex:
+            toast(f"Support bundle failed: {ex}", "error")
+            return
+        toast(f"Support bundle saved: {out}", "ok", 6000)
 
     def _toggle_logging(self):
         """One click: off -> ON (verbose); on or custom -> OFF."""

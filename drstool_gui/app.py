@@ -1,5 +1,6 @@
 """Application entry point: main()."""
 
+import logging
 import os
 import sys
 import time
@@ -8,11 +9,15 @@ from typing import Optional
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from drstool_core import applog
+
 from .app_dialogs import UXFilter
 from .base import APP_ID, APP_TITLE, apply_wayland_app_id, ICON_PATH
 from .cli import _cli_parse, _cli_wants, cli_run
 from .main_window import MainWindow
 from .theme import APPEARANCE, apply_theme
+
+_log = logging.getLogger(__name__)
 
 
 _UX_FILTER: Optional[UXFilter] = None
@@ -24,6 +29,7 @@ def main():
     # olduğunca erken çağrılmalı ki Wayland platform eklentisi app_id'yi
     # okurken zaten doğru argv[0]'ı görsün.
     apply_wayland_app_id(APP_ID)
+    applog.setup()
     cli_args, cli_rest = _cli_parse(sys.argv[1:])
     if _cli_wants(cli_args):
         cli_run(cli_args)                     # headless; exits
@@ -52,6 +58,7 @@ def main():
                 "".join(traceback.format_exception_only(exc_type, exc_value)),
             )
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
         finally:
             _err["showing"] = False

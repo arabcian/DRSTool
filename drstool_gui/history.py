@@ -1,5 +1,6 @@
 """Profile history, config backups and profile comparison."""
 
+import logging
 import difflib
 import glob
 import json
@@ -29,6 +30,8 @@ from .theme import T
 from .tool_ui import _tool_btn
 from .widgets import _fmt_drs_value, _LAUNCHER_QSS, _pack2_table_ss, _pack2_title
 
+_log = logging.getLogger(__name__)
+
 
 class ProfileDiffTable(QTableWidget):
     def __init__(self):
@@ -53,6 +56,7 @@ class ProfileDiffTable(QTableWidget):
                 try:
                     return shown_key, f"{_fmt_drs_value(s, val)}  [{val}]" if _fmt_drs_value(s, val) != val else val
                 except Exception:
+                    _log.debug("ignored error", exc_info=True)
                     pass
             return shown_key, val
         return key, val
@@ -199,6 +203,7 @@ class HistoryWidget(QWidget):
                 data = json.loads(p.read_text(encoding="utf-8"))
                 n = f" · {len(data)} profile(s)" if isinstance(data, dict) else " · unreadable"
             except Exception:
+                _log.debug("ignored error", exc_info=True)
                 n = " · unreadable"
             it = QListWidgetItem(f"{self._stamp_of(p)}{n}")
             it.setData(Qt.UserRole, p)
@@ -239,6 +244,7 @@ class HistoryWidget(QWidget):
                 if isinstance(data, dict):
                     self._snap_data = data
             except Exception:
+                _log.debug("ignored error", exc_info=True)
                 pass
         live = self.sm.get_profiles()
         for name in sorted(self._snap_data, key=str.lower):
@@ -463,6 +469,7 @@ class HistoryWidget(QWidget):
             try:
                 lw._on_game_selected(lw._game_combo.currentIndex())
             except Exception:
+                _log.debug("ignored error", exc_info=True)
                 pass
 
     # ── Compare profiles ──────────────────────────────────────────────────

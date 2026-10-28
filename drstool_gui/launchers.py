@@ -1,5 +1,6 @@
 """Steam / Heroic / Bottles backends, launcher sync page and Launch line page."""
 
+import logging
 import json
 import os
 import re
@@ -26,6 +27,8 @@ from .theme import T
 from .toasts import offer_undo
 from .tool_ui import _tool_btn
 from .widgets import _COMBO_QSS, _LAUNCHER_QSS, _LINEEDIT_QSS, _MONO_BOX_QSS
+
+_log = logging.getLogger(__name__)
 
 
 # ── backends ────────────────────────────────────────────────────────────────
@@ -241,6 +244,7 @@ class HeroicBackend(LauncherBackend):
             try:
                 walk(json.loads(f.read_text(errors="replace")))
             except Exception:
+                _log.debug("ignored error", exc_info=True)
                 pass
         return titles
 
@@ -268,6 +272,7 @@ class HeroicBackend(LauncherBackend):
             d = json.loads(e.path.read_text(errors="replace"))
             return d if isinstance(d, dict) else {}
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             return {}
 
     def current(self, e):
@@ -355,6 +360,7 @@ class BottlesBackend(LauncherBackend):
                     try:
                         name = (yaml.load(f.read_text(), Loader=_YAML_LOADER) or {}).get("Name", d.name)
                     except Exception:
+                        _log.debug("ignored error", exc_info=True)
                         pass
                     out.append(LEntry(d.name, f"{name}  [{d.name}]", f))
         return out
@@ -364,6 +370,7 @@ class BottlesBackend(LauncherBackend):
             d = yaml.load(e.path.read_text(), Loader=_YAML_LOADER) or {}
             return d if isinstance(d, dict) else {}
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             return {}
 
     def _plan(self, payload):

@@ -2,6 +2,7 @@
 button/pill styles.
 """
 
+import logging
 import colorsys
 import re
 from typing import Dict
@@ -11,6 +12,8 @@ from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from .base import APP_ID
+
+_log = logging.getLogger(__name__)
 
 
 # Shared style for the scrollable control area added to SettingEditorWidget
@@ -112,6 +115,7 @@ def _load_appearance() -> dict:
         if v not in (None, ""):
             ap["restore"] = str(v).lower() not in ("false", "0", "no")
     except Exception:
+        _log.debug("ignored error", exc_info=True)
         pass
     if ap["theme"] not in ("dark", "light"):
         ap["theme"] = "dark"

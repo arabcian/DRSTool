@@ -1,5 +1,6 @@
 """Lutris game-config sync (reads and writes a game's YAML)."""
 
+import logging
 import glob
 import os
 import shlex
@@ -27,6 +28,8 @@ from .lgtune import lgtune_cmd
 from .lookup import arch_by_code
 from .settings_manager import SettingsManager
 from .toasts import offer_undo
+
+_log = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -427,6 +430,7 @@ class LutrisSyncWidget(QWidget):
                 with open(path, "r", encoding="utf-8") as f:
                     data = yaml.load(f, Loader=_YAML_LOADER) or {}
             except Exception:
+                _log.debug("ignored error", exc_info=True)
                 continue
             if not isinstance(data, dict):
                 continue            # a list/scalar YAML used to crash the whole scan
@@ -553,6 +557,7 @@ class LutrisSyncWidget(QWidget):
         try:
             data = yaml.load(self._current_yaml_text, Loader=_YAML_LOADER) or {}
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             return set()
         sysdict = data.get("system") or {}
         env_sec = (sysdict.get("env") or {}) if isinstance(sysdict, dict) else {}
@@ -917,6 +922,7 @@ class LutrisSyncWidget(QWidget):
                 for k in sorted(env_sec):
                     lines.append(f"    {k}: {env_sec[k]!r}")
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
         self._preview.setPlainText("\n".join(lines))
         self._apply_btn.setEnabled(True)

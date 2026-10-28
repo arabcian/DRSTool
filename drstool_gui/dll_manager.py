@@ -1,6 +1,7 @@
 """DLL Manager: per-game DLSS / Streamline / DXVK / vkd3d-proton / dxvk-nvapi versions and updates.
 """
 
+import logging
 import bisect
 import hashlib as _hashlib
 import json
@@ -41,6 +42,8 @@ from .widgets import (
     _COMBO_QSS, _desc_label, _LINEEDIT_QSS, _MONO_BOX_QSS, _pack2_table_ss, _pack2_title,
     _title_label, ElidedLabel,
 )
+
+_log = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -203,6 +206,7 @@ def detect_installed(prefix: Path, comp: dict) -> dict:
     try:
         manifest = json.loads((prefix / _PD_MANIFEST).read_text()).get(comp["id"], {})
     except Exception:
+        _log.debug("ignored error", exc_info=True)
         pass
     res = {"state": "none", "version": "", "source": "", "files": [r for r, _ in files]}
     if not files:
@@ -335,6 +339,7 @@ def _extract_archive(path: Path, dest: Path):
         except RuntimeError:
             raise
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
         for cmd in (["tar", "--zstd", "-xf", str(path), "-C", str(dest)],
                     ["tar", "--use-compress-program=unzstd", "-xf", str(path), "-C", str(dest)]):
@@ -345,6 +350,7 @@ def _extract_archive(path: Path, dest: Path):
             except RuntimeError:
                 raise
             except Exception:
+                _log.debug("ignored error", exc_info=True)
                 continue
         raise RuntimeError("cannot unpack .tar.zst — install zstd (app-arch/zstd) or use Python ≥ 3.14")
     with tarfile.open(path, "r:*") as tf:
@@ -409,6 +415,7 @@ def apply_component_update(prefix: Path, comp: dict, rel: dict, backup_root: Pat
         try:
             man = json.loads(mpath.read_text())
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             man = {}
         man[comp["id"]] = {"version": rel.get("tag_name", "").lstrip("v"), "files": manifest_files,
                            "updated": datetime.now().isoformat(timespec="seconds")}

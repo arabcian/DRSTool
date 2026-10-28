@@ -2,6 +2,7 @@
 setproctitle), file-write helpers and shared state flags.
 """
 
+import logging
 import glob
 import os
 import platform
@@ -13,6 +14,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
+
+_log = logging.getLogger(__name__)
 
 
 try:
@@ -135,6 +138,7 @@ def apply_wayland_app_id(app_id: str) -> None:
     try:
         setproctitle.setproctitle(app_id)
     except Exception:
+        _log.debug("ignored error", exc_info=True)
         pass
 
 
@@ -144,6 +148,7 @@ def _run(cmd: List[str], timeout: float = 15.0) -> str:
                            env={**os.environ, "LC_ALL": "C"})
         return r.stdout or ""
     except Exception:
+        _log.debug("ignored error", exc_info=True)
         return ""
 
 
