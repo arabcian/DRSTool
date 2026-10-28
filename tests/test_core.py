@@ -10,12 +10,13 @@ import struct
 import sys
 import tempfile
 import unittest
+import zipfile
 from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from drstool_core import catalog, dll_ops, game_scan, pe_version, share_code, steam_shortcuts as ss, validate, winetricks  # noqa: E402
+from drstool_core import catalog, dll_ops, game_scan, pe_version, share_code, steam_shortcuts as ss, support_bundle, validate, winetricks  # noqa: E402
 
 
 def fake_dll(path: Path, ver=(310, 2, 1, 0), filler=b"") -> Path:
@@ -645,6 +646,33 @@ class GameInfoTests(unittest.TestCase):
         tail = self.gi.read_tail(p, 100)
         self.assertEqual(tail[-1], "line 999")
         self.assertTrue(all(ln.startswith("line ") for ln in tail))
+
+
+class SupportBundleTests(unittest.TestCase):
+    def test_redact_hides_home_user_and_host(self):
+        home = str(Path.home())
+        with mock.patch.dict(os.environ, {"USER": "tester_x"}), \
+                mock.patch("drstool_core.support_bundle.socket.gethostname", return_value="mybox"):
+            out = support_bundle.redact(f"{home}/games/x.exe /home/tester_x/a mybox:1 tester_xy")
+        self.assertEqual(out, "~/games/x.exe /home/<user>/a <host>:1 tester_xy")
+
+    def test_bundle_contains_anonymised_log_and_profiles(self):
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": td, "USER": "tester_x"}):
+                (Path(td) / "drstool").mkdir()
+                (Path(td) / "drstool" / "debug.log").write_text("Traceback in /home/tester_x/app.py\n")
+                dest = Path(td) / "report.zip"
+                prof = {"Cool": {"env_vars": {"WINEPREFIX": f"{Path.home()}/pfx"}}}
+                support_bundle.build(dest, prof, ["nvidia driver: 595.58.03"])
+            with zipfile.ZipFile(dest) as zf:
+                self.assertEqual(set(zf.namelist()), {"system.txt", "profiles.json", "log/debug.log"})
+                log = zf.read("log/debug.log").decode()
+                profiles = zf.read("profiles.json").decode()
+                system = zf.read("system.txt").decode()
+        self.assertNotIn("tester_x", log)
+        self.assertIn("/home/<user>/app.py", log)
+        self.assertIn("~/pfx", profiles)
+        self.assertIn("nvidia driver: 595.58.03", system)
 
 
 if __name__ == "__main__":
