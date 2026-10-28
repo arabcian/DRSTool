@@ -12,6 +12,8 @@ import tarfile
 import tempfile
 import threading
 import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path

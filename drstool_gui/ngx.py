@@ -7,6 +7,8 @@ import shutil
 import tempfile
 import threading
 import urllib.error
+import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 from concurrent.futures import ThreadPoolExecutor

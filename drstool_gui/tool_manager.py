@@ -12,6 +12,8 @@ import tempfile
 import threading as _threading
 import time
 import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile as _zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
