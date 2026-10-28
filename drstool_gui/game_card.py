@@ -257,6 +257,13 @@ class GameListWidget(QWidget):
         setup_sidebar_list(self.list)
         self.list.currentItemChanged.connect(self._on_current)
         lay.addWidget(self.list, 1)
+        self._empty = QLabel("No games found.\n\nDRSTool looks in Steam, Lutris, Heroic and Bottles. "
+                             "Add extra folders in Extra Tools › DLL Manager, then press ↻ Rescan.")
+        self._empty.setWordWrap(True)
+        self._empty.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self._empty.setStyleSheet(f"color:{T['muted']}; font-size:12px; padding:28px 18px;")
+        self._empty.hide()
+        lay.addWidget(self._empty, 1)
         LINKS.changed.connect(self.refresh)
         settings_manager.profiles_changed.connect(self.refresh)
         settings_manager.profile_saved.connect(lambda _n: self.refresh())
@@ -294,6 +301,8 @@ class GameListWidget(QWidget):
         tail = f"  ·  {len(res.errors)} launcher error(s)" if res.errors else ""
         self._count.setText(f"{len(self.games)} game(s){tail}")
         self._count.setToolTip("\n".join(res.errors))
+        self._empty.setVisible(not self.games)
+        self.list.setVisible(bool(self.games))
         if self.list.currentItem() is None:
             for i in range(self.list.count()):
                 if self.list.item(i).data(Qt.UserRole):

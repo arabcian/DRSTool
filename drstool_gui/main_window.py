@@ -263,7 +263,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.setSpacing(8)
 
         self._search = QLineEdit()
-        self._search.setPlaceholderText("\u2315  Filter…   Ctrl+F   ·   everything: Ctrl+K")
+        self._search.setPlaceholderText("\u2315  Filter this list…   Ctrl+F")
         self._search.setClearButtonEnabled(True)
         self._search.setStyleSheet(f"""
             QLineEdit {{
@@ -1267,12 +1267,16 @@ class MainWindow(QMainWindow):
             return
         run = [t for t in ts if t["state"] == "running"]
         if run:
-            txt, col = f"\u27f3 {len(run)}", T["accent"]
+            txt, col = f"\u27f3 {len(run)} running", T["accent"]
             tip = "Running: " + ", ".join(t["title"] for t in run)
-        else:
-            bad = ts[-1]["state"] == "failed"
-            txt, col = ("\u2716" if bad else "\u2714"), (T["danger"] if bad else T["muted"])
+        elif ts[-1]["state"] == "failed":
+            txt, col = "\u2716 Task failed", T["danger"]
             tip = "Last task: " + ts[-1]["title"]
+        else:
+            # A bare ✔ next to "Lint ✔" read as a second lint badge; finished
+            # tasks stay reachable from ⚙ › Background tasks.
+            self._tasks_btn.hide()
+            return
         self._tasks_btn.setText(txt)
         self._tasks_btn.setToolTip(tip + "\nClick for the task list")
         self._tasks_btn.setAccessibleName("Background tasks")

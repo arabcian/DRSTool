@@ -154,13 +154,21 @@ class ToastHost(QObject):
             self._layout()
 
     def _layout(self):
+        # Bottom-right, stacked upwards just above the launch-string bar: at the
+        # top they covered the editor's header buttons.
         w = self._win
-        y = 66
-        for t in self._toasts:
+        bar = getattr(w, "_output_bar", None)
+        if bar is not None and bar.isVisible():
+            y = bar.mapTo(w, bar.rect().topLeft()).y() - 12
+        else:
+            sb = w.statusBar() if hasattr(w, "statusBar") else None
+            y = w.height() - (sb.height() if sb and sb.isVisible() else 0) - 12
+        for t in reversed(self._toasts):
             t.adjustSize()
-            t.move(max(8, w.width() - t.width() - 16), y)
+            y -= t.height()
+            t.move(max(8, w.width() - t.width() - 18), max(66, y))
             t.raise_()
-            y += t.height() + 8
+            y -= 8
 
     def eventFilter(self, obj, ev):           # noqa: N802
         if obj is self._win and ev.type() == QEvent.Resize:
@@ -177,9 +185,10 @@ class ToastStatusBar(QStatusBar):
     """Every timed status message also appears as a toast (the bar text is easy to miss)."""
 
     def showMessage(self, text, timeout=0):       # noqa: N802
-        super().showMessage(text, timeout)
         if timeout and text:
             toast(text, _guess_kind(text), min(max(timeout, 2500), 9000))
+            return
+        super().showMessage(text, timeout)
 
 
 def _file_sig(p: Path) -> tuple:

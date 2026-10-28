@@ -234,7 +234,7 @@ QMenu {{
     background:{T['overlay']}; color:{T['text']};
     border:1px solid {T['border_hi']}; padding:5px; border-radius:8px;
 }}
-QMenu::item {{ padding:7px 22px 7px 14px; border-radius:5px; }}
+QMenu::item {{ padding:8px 24px 8px 14px; border-radius:5px; }}
 QMenu::item:selected {{ background:rgba(118,185,0,0.16); color:{T['text']}; }}
 QMenu::item:disabled {{ color:{T['faint']}; }}
 QMenu::separator {{ height:1px; background:{T['border_hi']}; margin:5px 8px; }}
@@ -242,7 +242,7 @@ QMessageBox, QDialog {{ background:{T['surface']}; }}
 QMessageBox QLabel {{ color:{T['text']}; }}
 QPushButton {{
     background:{T['raised']}; border:1px solid {T['border_hi']}; border-radius:6px;
-    color:{T['text']}; padding:5px 14px; min-height:20px;
+    color:{T['text']}; padding:6px 16px; min-height:22px;
 }}
 QPushButton:hover {{ background:{T['overlay']}; border-color:{T['accent_dim']}; }}
 QPushButton:pressed {{ background:{T['hover']}; }}
@@ -251,7 +251,7 @@ QPushButton:disabled {{ color:{T['faint']}; border-color:{T['border']}; backgrou
 QPushButton:default {{ border-color:{T['accent_dim']}; }}
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox {{
     background:{T['sunken']}; border:1px solid {T['border_hi']}; border-radius:6px;
-    color:{T['text']}; padding:4px 8px;
+    color:{T['text']}; padding:6px 10px;
 }}
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
     border-color:{T['accent']};
@@ -328,7 +328,11 @@ def btn_ss(kind: str = "default", size: str = "md") -> str:
                 f"QPushButton:hover,QToolButton:hover{{background:{T['hover']};color:{T['text']};}}"
                 f"QPushButton:checked,QToolButton:checked{{background:{T['accent_bg']};color:{T['accent_hi']};}}"
                 f"QPushButton:disabled,QToolButton:disabled{{color:{T['faint']};}}"
-                "QToolButton::menu-button{width:14px;}")
+                "QToolButton[popupMode=\"1\"]{padding-right:16px;}"
+                "QToolButton::menu-button{width:14px;border:none;background:transparent;"
+                "border-top-right-radius:6px;border-bottom-right-radius:6px;}"
+                f"QToolButton::menu-button:hover{{background:{T['overlay']};}}"
+                "QToolButton::menu-arrow{width:7px;height:7px;}")
     return (f"QPushButton,QToolButton{{background:{T['raised']};border:1px solid {T['border_hi']};"
             f"color:{T['text']};{base}}}"
             f"QPushButton:hover,QToolButton:hover{{background:{T['overlay']};border-color:{T['accent_dim']};}}"

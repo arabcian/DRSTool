@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton,
-    QSizePolicy, QToolButton, QVBoxLayout, QWidget,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from .base import APP_TITLE
@@ -147,24 +147,21 @@ class OutputBarWidget(QWidget):
 
         self._val_labels = []
         grid.addWidget(tag("ARCH", T["info"], "DXVK_NVAPI_GPU_ARCH"), 0, 0)
-        arch_row = QHBoxLayout()
-        arch_row.setSpacing(10)
         self._arch_value = val("not set")
-        self._arch_value.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self._arch_value.setFixedWidth(96)
-        arch_row.addWidget(self._arch_value)
-        arch_row.addWidget(tag("DRS", T["accent"], "DXVK_NVAPI_DRS_SETTINGS"))
+        grid.addWidget(self._arch_value, 0, 1)
+
+        # DRS has its own row: next to ARCH it was squeezed and elided first.
+        grid.addWidget(tag("DRS", T["accent"], "DXVK_NVAPI_DRS_SETTINGS"), 1, 0)
         self._settings_value = val("none")
-        arch_row.addWidget(self._settings_value, 1)
-        grid.addLayout(arch_row, 0, 1)
+        grid.addWidget(self._settings_value, 1, 1)
 
-        grid.addWidget(tag("ENV", "#c792ea", "Environment variables"), 1, 0)
+        grid.addWidget(tag("ENV", "#c792ea", "Environment variables"), 2, 0)
         self._env_value = val("none")
-        grid.addWidget(self._env_value, 1, 1)
+        grid.addWidget(self._env_value, 2, 1)
 
-        grid.addWidget(tag("GAMESCOPE", T["warn"], "gamescope … --"), 2, 0)
+        grid.addWidget(tag("GAMESCOPE", T["warn"], "gamescope … --"), 3, 0)
         self._gamescope_value = val("disabled")
-        grid.addWidget(self._gamescope_value, 2, 1)
+        grid.addWidget(self._gamescope_value, 3, 1)
         grid.setColumnStretch(1, 1)
         self._val_labels = [self._arch_value, self._settings_value, self._env_value, self._gamescope_value]
         root.addWidget(console)

@@ -36,6 +36,7 @@ QPushButton:checked{{
     border:1px solid {T['accent']}; color:{T['accent_hi']};
 }}
 QPushButton:disabled{{ color:{T['faint']}; border-color:{T['border']}; }}
+QPushButton[isDefault="true"]:!checked{{ border-style:dashed; }}
 """
 FLAG_BTN_SS = OPTION_BTN_SS + "QPushButton{ text-align:left; padding:6px 12px; }"
 
@@ -236,7 +237,7 @@ class SettingEditorWidget(QWidget):
             cols = 5
 
         grid = QGridLayout()
-        grid.setSpacing(4)
+        grid.setSpacing(8)
 
         # Enum settings accept exactly one value. Group the buttons so Qt
         # enforces single-selection (checking one unchecks the others) instead
@@ -258,7 +259,9 @@ class SettingEditorWidget(QWidget):
             if val.val == cur:
                 btn.setChecked(True)
             if val.val == s.default:
-                btn.setText(f"* {val.name}")
+                btn.setText(f"{val.name}  ·  default")
+                btn.setProperty("isDefault", True)
+                btn.setToolTip("Driver default — what you get when this setting is not set")
 
             btn.setStyleSheet(OPTION_BTN_SS)
 
@@ -282,7 +285,7 @@ class SettingEditorWidget(QWidget):
 
     def _build_preset_control(self, s: Setting, cur: Optional[str]):
         grid = QGridLayout()
-        grid.setSpacing(4)
+        grid.setSpacing(8)
 
         row, col = 0, 0
         for preset in s.presets:
