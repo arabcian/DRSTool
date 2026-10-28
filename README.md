@@ -43,7 +43,7 @@ Variables that take a fixed set of values are shown as checkboxes or dropdowns; 
 Builds `gamescope` command lines from a flag catalog (upscaling, frame pacing, input, session options).
 
 ### Navigation and everyday helpers
-- **Ctrl+K** searches every DRS setting, environment variable, GPU architecture and tool page; **Ctrl+F** filters the current list; **Ctrl+1…5** switches the top tabs; **Ctrl+D** toggles a favorite; **Ctrl+S** saves the current profile
+- **Ctrl+K** searches every DRS setting, environment variable, GPU architecture and tool page; **Ctrl+F** filters the current list; **Ctrl+1…6** switches the top tabs; **Ctrl+D** toggles a favorite; **Ctrl+S** saves the current profile
 - **F1** (or Ctrl+/) opens the keyboard-shortcut sheet; **Ctrl+,** opens *Appearance*. Ctrl+K also lists the last things you picked first, so the empty palette doubles as "recent"
 - **Toasts**: every status message (saved, copied, applied, undone, errors) also pops up in the top-right corner and waits while the pointer is on it. After a write to a Lutris YAML, Steam, Heroic, Bottles or `dxvk.conf` the toast carries an **Undo** button that puts the backup taken for that write back (it refuses if the file changed again in the meantime)
 - **Background tasks**: the DLL Manager, Upstream drift, Cache scan, Game hints and the ProtonDB download are listed under the *⟳ N* button in the top bar (or ⚙ › Background tasks) with their last progress line; click an entry to jump to its page. Tasks that take a few seconds or fail raise a toast, and a desktop notification (`notify-send`, or `gdbus` as a fallback) when the window is not in front
@@ -68,6 +68,22 @@ Builds `gamescope` command lines from a flag catalog (upscaling, frame pacing, i
 - **History** (Profiles → History): every overwrite or delete of `profiles.json` keeps a snapshot (last 60) in `drstool/history/`. Browse snapshots, diff a profile against its live version, restore one profile or the whole file. A second sub-tab browses the `.bak` files written next to Lutris YAMLs (and Steam / Heroic / Bottles files) with a diff and one-click restore; a third compares any two profiles (or the current editor state)
 - **Import .nip** (Profiles → Import .nip): converts an NVIDIA Profile Inspector export into `DXVK_NVAPI_DRS_SETTINGS` pairs and applies them to the editor (DWORD values only); known settings are recognised by name and their values are stored in the catalog spelling so the editor buttons light up
 - **External changes**: if `profiles.json` or the selected Lutris YAML is modified outside DRSTool (another instance, a script, Lutris itself), a banner offers *Reload / Merge* (profiles) or *Refresh preview / Load into DRSTool* (Lutris). Detection is content-based, so DRSTool's own writes and a plain `touch` never raise it
+
+### Games
+The **Games** tab (Ctrl+6) lists every game DRSTool finds — Steam, Lutris, Heroic, Bottles and the folders added in the DLL Manager — grouped by launcher, with the linked profile on the right (⟳ = the game has an older version of it). The filter box searches names and profile names. Selecting a game opens its **card**, which puts together what is otherwise spread over several pages:
+
+| Tile | Shows |
+|---|---|
+| **Profile** | the linked profile, whether the game is up to date with it, when it was last written and to which file; link / unlink a profile, *Write to game* (loads the profile into the editor and writes it through the game's sync tab, with the usual backup), *Load in editor* |
+| **Proton / Wine** | the build set in the launcher (Steam `CompatToolMapping`, Lutris `wine.version`, Heroic `wineVersion`, the bottle's runner) and, for Proton prefixes, the build that last ran it |
+| **DLSS / DXVK** | DLSS SR / RR / FG and Streamline versions in the game folder, DXVK / vkd3d-proton / dxvk-nvapi in the Wine prefix ("from Proton" when Proton supplies them), an anti-cheat warning |
+| **Last frametime capture** | average FPS, 1% / 0.1% lows, p99 frametime and stutters of the newest MangoHud capture named after one of the game's executables (MangoHud `output_folder`, from `MANGOHUD_CONFIG` or `MangoHud.conf`), or of a file picked for the game; *Open in Frametime* |
+| **Last log errors** | the known problems (same rules as the Logs page) and the last error lines of the newest `steam-<appid>.log` / DXVK / vkd3d log of the game; *Open in Logs* |
+| **ProtonDB** | tier, trending and best-reported tier from the Game hints cache; *Fetch* downloads it. Games that are not on Steam take a Steam appid |
+
+The card only reads files; nothing is downloaded unless you press *Fetch*.
+
+**Profile ↔ game links.** Every write from the Lutris, Steam, Heroic or Bottles sync tab (or from a card) remembers which profile went to which game, together with a fingerprint of what was written. Saving a profile then checks its games: if some of them have an older version, a toast offers **Update N games…**, which lists them (tick the ones to update) and writes the saved profile to each. The same list is in the profile's right-click menu (*Linked games…*), and the profile list shows how many games use each profile. Renaming a profile keeps its links; deleting one unlinks its games (their last write stays recorded). Writes to Steam need Steam to be closed, as in the Steam tab.
 
 ### Launchers and sync
 The sync tabs write the current configuration to wherever the game is started from. Every write keeps a timestamped backup.
@@ -130,12 +146,13 @@ Exit status: 0 ok, 1 lint errors / failed write, 2 bad arguments or not found.
 Lutris writes to its own config as well; if you edit a game in both places, use the external-change banner (above) and *Load from selected game* to bring DRSTool back in sync.
 
 ### Network access
-Most of DRSTool works offline. These features contact the internet only when you press their button: **Upstream drift** (GitHub raw files), **DLL Manager** › *Check for updates* / *Update* (NVIDIA NGX servers and GitHub releases), **Tool Manager** (GitHub / GitLab / Codeberg releases and the tool archives), **Game hints** (ProtonDB summary and PCGamingWiki), **Community tips** (the ProtonDB report dump from GitHub raw files, ~70 MB, only when you press its download button).
+Most of DRSTool works offline. These features contact the internet only when you press their button: **Upstream drift** (GitHub raw files), **DLL Manager** › *Check for updates* / *Update* (NVIDIA NGX servers and GitHub releases), **Tool Manager** (GitHub / GitLab / Codeberg releases and the tool archives), **Game hints** (ProtonDB summary and PCGamingWiki), the **Games** card's *Fetch* (ProtonDB summary), **Community tips** (the ProtonDB report dump from GitHub raw files, ~70 MB, only when you press its download button).
 
 ### Where DRSTool keeps its files
 | Path | Content |
 |---|---|
 | `~/.config/drstool/profiles.json`, `history/` | profiles and their snapshots |
+| `~/.config/drstool/game_links.json` | which profile was written to which game (Games tab) |
 | `~/.config/drstool/dxvk/` | `dxvk.conf` files created in "config dir" mode |
 | `~/.local/share/drstool/launchers/` | scripts created by the Shortcut tab (the `.desktop` files go to `~/.local/share/applications/drstool-*.desktop`) |
 | `~/.cache/drstool/hints/`, `~/.cache/drstool/logs/` | Game hints cache; logs written when "Enable logging vars" is used |
@@ -227,7 +244,7 @@ Note: lutris-game-tune needs a privileged wrapper — setuid root by default, or
 DRSTool.py                 entry script (starts drstool_gui.app.main)
 drstool_gui/               PySide6 GUI, one module per page / feature (see below)
 install.sh / uninstall.sh  interactive installer for any distribution
-drstool_core/              Qt-free code: catalog (models, loader, data/*.json), share codes, Steam shortcuts, game / DLL scan, DLL swap
+drstool_core/              Qt-free code: catalog (models, loader, data/*.json), share codes, Steam shortcuts, game / DLL scan, DLL swap, game info and profile ↔ game links
 tests/                     unit tests (core) and offscreen GUI tests
 assets/drstool.png         application icon
 data/drstool.desktop       desktop entry (pip / Arch)

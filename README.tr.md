@@ -43,7 +43,7 @@ Sabit değer kümesi olan değişkenler onay kutusu veya açılır liste olarak,
 Bayrak kataloğundan (ölçekleme, kare sıralaması, girdi, oturum seçenekleri) `gamescope` komut satırları üretir.
 
 ### Gezinme ve günlük yardımcılar
-- **Ctrl+K** tüm DRS ayarlarında, ortam değişkenlerinde, GPU mimarilerinde ve araç sayfalarında arar; **Ctrl+F** geçerli listeyi filtreler; **Ctrl+1…5** üst sekmeleri değiştirir; **Ctrl+D** favori ekler/çıkarır; **Ctrl+S** geçerli profili kaydeder
+- **Ctrl+K** tüm DRS ayarlarında, ortam değişkenlerinde, GPU mimarilerinde ve araç sayfalarında arar; **Ctrl+F** geçerli listeyi filtreler; **Ctrl+1…6** üst sekmeleri değiştirir; **Ctrl+D** favori ekler/çıkarır; **Ctrl+S** geçerli profili kaydeder
 - **F1** (veya Ctrl+/) klavye kısayolu sayfasını, **Ctrl+,** *Appearance* penceresini açar. Ctrl+K boşken en son seçtiklerini en üstte gösterir ("son kullanılanlar")
 - **Toast bildirimleri**: her durum mesajı (kaydedildi, kopyalandı, uygulandı, geri alındı, hatalar) sağ üstte de belirir; imleç üstündeyken kaybolmaz. Lutris YAML, Steam, Heroic, Bottles veya `dxvk.conf` yazımından sonra toast'ta o yazım için alınan yedeği geri koyan bir **Undo** düğmesi olur (dosya bu arada tekrar değiştiyse reddeder)
 - **Arka plan görevleri**: DLL Manager, Upstream drift, Cache taraması, Game hints ve ProtonDB indirmesi üst çubuktaki *⟳ N* düğmesinde (veya ⚙ › Background tasks) son ilerleme satırıyla listelenir; bir satıra tıklayınca ilgili sayfaya gidilir. Birkaç saniyeden uzun süren veya başarısız olan görevler toast, pencere önde değilse masaüstü bildirimi (`notify-send`, yoksa `gdbus`) üretir
@@ -68,6 +68,22 @@ Bayrak kataloğundan (ölçekleme, kare sıralaması, girdi, oturum seçenekleri
 - **Geçmiş** (Profiller → History): `profiles.json` her üzerine yazıldığında veya silindiğinde `drstool/history/` altına anlık görüntü (son 60) alınır. Anlık görüntülerde gezinebilir, bir profili güncel hâliyle karşılaştırabilir, tek profili ya da dosyanın tamamını geri yükleyebilirsiniz. İkinci alt sekme Lutris YAML'larının (ve Steam / Heroic / Bottles dosyalarının) yanındaki `.bak` yedeklerinde diff ile gezinip tek tıkla geri yükler; üçüncüsü iki profili (veya mevcut editör durumunu) karşılaştırır
 - **.nip içe aktarma** (Profiller → Import .nip): NVIDIA Profile Inspector dışa aktarımını `DXVK_NVAPI_DRS_SETTINGS` çiftlerine çevirir ve editöre uygular (yalnızca DWORD değerler); bilinen ayarlar adıyla tanınır ve değerleri katalogdaki yazımla saklanır, böylece editör düğmeleri doğru yanar
 - **Dış değişiklikler**: `profiles.json` veya seçili Lutris YAML'ı DRSTool dışında değiştirilirse (başka bir örnek, bir betik, Lutris'in kendisi) bir şerit çıkar: *Yeniden yükle / Birleştir* (profiller) ya da *Önizlemeyi yenile / DRSTool'a yükle* (Lutris). Tespit içerik tabanlıdır; DRSTool'un kendi yazmaları ve sade bir `touch` şeridi tetiklemez
+
+### Oyunlar
+**Games** sekmesi (Ctrl+6) DRSTool'un bulduğu tüm oyunları — Steam, Lutris, Heroic, Bottles ve DLL Manager'a eklenen klasörler — başlatıcıya göre gruplanmış olarak listeler; sağda oyuna bağlı profil görünür (⟳ = oyunda profilin eski bir sürümü var). Filtre kutusu oyun ve profil adlarında arar. Bir oyun seçildiğinde, başka sayfalara dağılmış bilgileri bir araya getiren **oyun kartı** açılır:
+
+| Kutucuk | Gösterdiği |
+|---|---|
+| **Profile** | bağlı profil, oyunun bu profille güncel olup olmadığı, en son ne zaman ve hangi dosyaya yazıldığı; profil bağlama / bağı kaldırma, *Write to game* (profili editöre yükler ve oyunun senkronizasyon sekmesi üzerinden, her zamanki yedekle yazar), *Load in editor* |
+| **Proton / Wine** | başlatıcıda seçili sürüm (Steam `CompatToolMapping`, Lutris `wine.version`, Heroic `wineVersion`, bottle runner'ı) ve Proton prefix'lerinde prefix'i en son çalıştıran sürüm |
+| **DLSS / DXVK** | oyun klasöründeki DLSS SR / RR / FG ve Streamline sürümleri, Wine prefix'indeki DXVK / vkd3d-proton / dxvk-nvapi (Proton sağlıyorsa "from Proton"), anti-cheat uyarısı |
+| **Last frametime capture** | oyunun çalıştırılabilir dosyalarından birinin adını taşıyan en yeni MangoHud kaydının (MangoHud `output_folder`, `MANGOHUD_CONFIG` ya da `MangoHud.conf`'tan) veya oyun için seçilen dosyanın ortalama FPS, %1 / %0.1 low, p99 frametime ve takılma değerleri; *Open in Frametime* |
+| **Last log errors** | oyunun en yeni `steam-<appid>.log` / DXVK / vkd3d logundaki bilinen sorunlar (Logs sayfasıyla aynı kurallar) ve son hata satırları; *Open in Logs* |
+| **ProtonDB** | Game hints önbelleğinden tier, trending ve en iyi bildirilen tier; *Fetch* indirir. Steam'de olmayan oyunlar için bir Steam appid girilir |
+
+Kart yalnızca dosya okur; *Fetch*'e basmadıkça hiçbir şey indirilmez.
+
+**Profil–oyun bağlantısı.** Lutris, Steam, Heroic veya Bottles sekmesinden (ya da karttan) yapılan her yazma, hangi profilin hangi oyuna yazıldığını ve yazılanın parmak izini kaydeder. Bir profil kaydedildiğinde oyunları kontrol edilir: bazılarında eski sürüm varsa bir bildirim **Update N games…** önerir; bu, oyunları listeler (güncellenecekleri işaretleyin) ve kaydedilmiş profili her birine yazar. Aynı liste profilin sağ tık menüsünde de vardır (*Linked games…*) ve profil listesi her profili kaç oyunun kullandığını gösterir. Profil yeniden adlandırılınca bağlantılar korunur; silinince oyunların bağı kaldırılır (son yazma kaydı kalır). Steam oyunlarına yazmak için, Steam sekmesinde olduğu gibi Steam kapalı olmalıdır.
 
 ### Başlatıcılar ve senkronizasyon
 Senkronizasyon sekmeleri geçerli yapılandırmayı oyunun başlatıldığı yere yazar. Her yazmada zaman damgalı yedek alınır.
@@ -130,12 +146,13 @@ Seçenek verilmezse `drstool` GUI'yi başlatır. Aşağıdaki seçenekler başs�
 Lutris de kendi yapılandırmasına yazar; bir oyunu iki yerde de düzenlerseniz yukarıdaki dış değişiklik şeridini ve *Seçili oyundan yükle* düğmesini kullanarak DRSTool'u yeniden eşitleyin.
 
 ### Ağ erişimi
-DRSTool'un çoğu çevrimdışı çalışır. Şu özellikler yalnızca düğmelerine bastığınızda internete bağlanır: **Upstream drift** (GitHub raw dosyaları), **DLL Manager** › *Check for updates* / *Update* (NVIDIA NGX sunucuları ve GitHub sürümleri), **Tool Manager** (GitHub / GitLab / Codeberg sürümleri ve araç arşivleri), **Game hints** (ProtonDB özeti ve PCGamingWiki), **Community tips** (GitHub raw üzerinden ProtonDB rapor dökümü, ~70 MB, yalnızca indirme düğmesine bastığınızda).
+DRSTool'un çoğu çevrimdışı çalışır. Şu özellikler yalnızca düğmelerine bastığınızda internete bağlanır: **Upstream drift** (GitHub raw dosyaları), **DLL Manager** › *Check for updates* / *Update* (NVIDIA NGX sunucuları ve GitHub sürümleri), **Tool Manager** (GitHub / GitLab / Codeberg sürümleri ve araç arşivleri), **Game hints** (ProtonDB özeti ve PCGamingWiki), **Games** kartındaki *Fetch* (ProtonDB özeti), **Community tips** (GitHub raw üzerinden ProtonDB rapor dökümü, ~70 MB, yalnızca indirme düğmesine bastığınızda).
 
 ### DRSTool dosyalarını nerede tutar
 | Yol | İçerik |
 |---|---|
 | `~/.config/drstool/profiles.json`, `history/` | profiller ve anlık görüntüleri |
+| `~/.config/drstool/game_links.json` | hangi profilin hangi oyuna yazıldığı (Games sekmesi) |
 | `~/.config/drstool/dxvk/` | "config dir" modunda oluşturulan `dxvk.conf` dosyaları |
 | `~/.local/share/drstool/launchers/` | Shortcut sekmesinin betikleri (`.desktop` dosyaları `~/.local/share/applications/drstool-*.desktop` altına gider) |
 | `~/.cache/drstool/hints/`, `~/.cache/drstool/logs/` | Game hints önbelleği; "Enable logging vars" ile yazılan loglar |
@@ -227,7 +244,7 @@ Not: lutris-game-tune yetkili bir sarmalayıcı gerektirir — varsayılan olara
 DRSTool.py                 giriş betiği (drstool_gui.app.main'i başlatır)
 drstool_gui/               PySide6 arayüzü, her sayfa / özellik için bir modül (aşağıya bakın)
 install.sh / uninstall.sh  her dağıtım için etkileşimli kurulum
-drstool_core/              Qt'siz kod: katalog (modeller, yükleyici, data/*.json), paylaşım kodu, Steam kısayolları, oyun / DLL tarama, DLL değiştirme
+drstool_core/              Qt'siz kod: katalog (modeller, yükleyici, data/*.json), paylaşım kodu, Steam kısayolları, oyun / DLL tarama, DLL değiştirme, oyun bilgisi ve profil–oyun bağlantıları
 tests/                     birim testleri (core) ve ekransız arayüz testleri
 assets/drstool.png         uygulama simgesi
 data/drstool.desktop       masaüstü girdisi (pip / Arch)

@@ -560,5 +560,86 @@ class GuiTests(unittest.TestCase):
             self.assertIn(k, share_code.SENSITIVE_ENV)
 
 
+    # ── Games tab: game card and profile ↔ game links ───────────────────────
+    def test_games_tab_card_and_profile_links(self):
+        m, win, sm = self.m, self.win, self.win.settings_manager
+        (HOME / "steam-42.log").write_text("info: start\nerr:module:import_dll Library MSVCP140.dll not found\n")
+        rows = "".join(f"{60 + i % 3},{16.0 + (i % 5)}\n" for i in range(200))
+        (HOME / "CoolGame_2026-10-01_10-00-00.csv").write_text("fps,frametime\n" + rows)
+        lcf = HOME / ".local/share/Steam/userdata/12345/config/localconfig.vdf"
+        orig = lcf.read_text()
+        self.addCleanup(lcf.write_text, orig)
+        lcf.write_text(orig.replace('"Software"\n\t{\n\t}',
+                                    '"Software"\n\t{\n\t\t"Valve"\n\t\t{\n\t\t\t"Steam"\n\t\t\t{\n'
+                                    '\t\t\t\t"apps"\n\t\t\t\t{\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}'))
+        win._switch_tab(win.TAB_GAMES)
+        gl, card = win._games_list, win._game_card
+        self.wait_for(lambda: gl.game("steam:42") is not None and gl.game("lutris:rpg-1") is not None)
+        self.assertTrue(gl.select_key("steam:42"))
+        self.wait_for(lambda: card.game is not None and card.game.key == "steam:42" and card._info)
+        self.assertEqual(win._right_stack.currentIndex(), win.PAGE_GAMES)
+        self.assertIn("DLSS 310.1.0", card.t_dlls.value.text())
+        self.assertIn("2.7.0", card.t_dlls.detail.text())            # Streamline
+        self.assertEqual(card.t_log.value.text(), "1 known problem")
+        self.assertIn("FPS avg", card.t_ft.value.text())
+        self.assertEqual(card.t_pdb.value.text(), "not fetched")       # no network unless asked
+        self.assertEqual(card.t_profile.value.text(), "No profile")
+
+        # profile → card → write to Steam: the link is recorded with the profile's fingerprint
+        win.load_profile_by_name("GamesLinkP") if "GamesLinkP" in sm.get_profiles() else None
+        win.set_env_var("PROTON_ENABLE_NVAPI", "1")
+        sm.save_profile("GamesLinkP", win._env_widget.get_env_dict())
+        self.pump()
+        card._prof_combo.setCurrentIndex(card._prof_combo.findData("GamesLinkP"))
+        card._assign_from_combo(0)
+        self.assertIn("not written", card.t_profile.detail.text())
+        with patch_name(m, "_proc_running", return_value=False), \
+                mock.patch.object(m.QMessageBox, "question", return_value=m.QMessageBox.Yes):
+            card._write()
+        ln = m.LINKS.get("steam:42")
+        self.assertEqual(ln["profile"], "GamesLinkP")
+        self.assertEqual(ln["fp"], m.profile_fp(sm.get_profiles()["GamesLinkP"]))
+        self.assertEqual(ln["name"], "Cool Game")
+        self.assertIn("PROTON_ENABLE_NVAPI=1", lcf.read_text())
+        self.assertIn("up to date", card.t_profile.detail.text())
+
+        # a write from the Lutris sync tab links that game as well
+        ls = win._lutris_sync_widget
+        i = next(i for i, g in enumerate(ls._games) if g.path.stem == "rpg-1")
+        ls._game_combo.setCurrentIndex(i)
+        self.assertTrue(ls._apply_to_game(confirm=False))
+        self.assertEqual(m.LINKS.get("lutris:rpg-1")["profile"], "GamesLinkP")
+        self.assertEqual(m.LINKS.games_for("GamesLinkP"), ["steam:42", "lutris:rpg-1"])
+        self.assertIn("2 games", win._profiles_widget._profile_list.findItems(
+            "GamesLinkP", m.Qt.MatchExactly)[0].data(m.ROLE_VALUE))
+
+        # changing and saving the profile offers to update both games
+        win.set_env_var("DXVK_ASYNC", "1")
+        with mock.patch("drstool_gui.main_window.toast") as t:
+            sm.save_profile("GamesLinkP", win._env_widget.get_env_dict())
+        offers = [c for c in t.call_args_list if len(c.args) > 3 and c.args[3]]
+        self.assertTrue(offers and "2 games" in offers[-1].args[0], t.call_args_list)
+        dlg = m.LinkedGamesDialog("GamesLinkP", sm.get_profiles(), win)
+        self.assertEqual(len(dlg._checked()), 2)
+        dlg._accept()
+        with patch_name(m, "_proc_running", return_value=False):
+            res = win.write_profile_to_games("GamesLinkP", dlg.chosen, confirm=False)
+        self.assertTrue(all(ok for _n, ok, _m in res), res)
+        fp = m.profile_fp(sm.get_profiles()["GamesLinkP"])
+        self.assertEqual(m.LINKS.outdated("GamesLinkP", fp), [])
+        self.assertIn("DXVK_ASYNC", (HOME / ".local/share/lutris/games/rpg-1.yml").read_text())
+
+        # rename keeps the links, delete drops them (the last write stays known)
+        self.assertTrue(sm.rename_profile("GamesLinkP", "GamesLinkQ"))
+        self.assertEqual(len(m.LINKS.games_for("GamesLinkQ")), 2)
+        sm.delete_profile("GamesLinkQ")
+        self.assertEqual(m.LINKS.games_for("GamesLinkQ"), [])
+        self.assertIsNone(m.LINKS.get("steam:42")["profile"])
+        self.assertIn("without a profile", card.t_profile.detail.text())
+        for k in ("PROTON_ENABLE_NVAPI", "DXVK_ASYNC"):
+            win.set_env_var(k, "")
+        win._switch_tab(win.TAB_DRS)
+
+
 if __name__ == "__main__":
     unittest.main()
