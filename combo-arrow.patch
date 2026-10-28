@@ -1,0 +1,38 @@
+--- a/drstool_gui/theme.py	2026-10-28 21:51:31.121668423 +0300
++++ b/drstool_gui/theme.py	2026-10-28 21:51:31.123368136 +0300
+@@ -376,6 +376,7 @@
+         d = os.path.join(tempfile.gettempdir(), f"{APP_ID}-ui")
+         os.makedirs(d, exist_ok=True)
+         base = os.path.join(d, "check-" + _tc("#0a0f02").lstrip("#"))
++        chev = os.path.join(d, "chevron-" + T["muted"].lstrip("#"))
+         for scale, suffix in ((1, ""), (2, "@2x")):
+             img = QImage(13 * scale, 13 * scale, QImage.Format_ARGB32)
+             img.fill(Qt.transparent)
+@@ -389,8 +390,26 @@
+             p.drawPath(path)
+             p.end()
+             img.save(base + suffix + ".png")
++            # Combo chevron: replaces the native grey drop-down block
++            img = QImage(10 * scale, 10 * scale, QImage.Format_ARGB32)
++            img.fill(Qt.transparent)
++            p = QPainter(img)
++            p.setRenderHint(QPainter.Antialiasing)
++            p.scale(scale, scale)
++            p.setPen(QPen(QColor(T["muted"]), 1.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
++            path = QPainterPath(QPointF(1.5, 3.5))
++            path.lineTo(5.0, 7.0)
++            path.lineTo(8.5, 3.5)
++            p.drawPath(path)
++            p.end()
++            img.save(chev + suffix + ".png")
+         url = (base + ".png").replace("\\", "/")
+-        return f"\nQCheckBox::indicator:checked {{ image:url({url}); }}\n"
++        curl = (chev + ".png").replace("\\", "/")
++        return (f"\nQCheckBox::indicator:checked {{ image:url({url}); }}\n"
++                "QComboBox::drop-down { subcontrol-origin:padding; subcontrol-position:center right;"
++                " width:24px; border:none; background:transparent; }\n"
++                f"QComboBox::down-arrow {{ image:url({curl}); width:10px; height:10px; }}\n"
++                "QComboBox::down-arrow:on { top:1px; }\n")
+     except Exception:
+         _log.debug("checkbox tick not rendered", exc_info=True)
+         return ""

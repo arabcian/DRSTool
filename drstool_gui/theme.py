@@ -166,6 +166,8 @@ if _NEEDS_RESTYLE:
     ACCENT_RGB = tuple(round(c * 255) for c in _acc_rgb)
     T["accent_bg"] = "rgba(%d,%d,%d,%s)" % (*ACCENT_RGB, "0.12" if _LIGHT else "0.10")
 
+T["accent_top"] = QColor(T["accent"]).lighter(112).name()
+
 # Colours that are already themed (T values) must not be mapped a second time.
 _THEMED_HEX = {v.lower() for v in T.values() if isinstance(v, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", v)}
 _HEX6_RE = re.compile(r"#[0-9a-fA-F]{6}\b")
@@ -253,6 +255,9 @@ QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox {{
     background:{T['sunken']}; border:1px solid {T['border_hi']}; border-radius:6px;
     color:{T['text']}; padding:6px 10px;
 }}
+QLineEdit:hover, QPlainTextEdit:hover, QTextEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover {{
+    border-color:#3c4555;
+}}
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
     border-color:{T['accent']};
 }}
@@ -310,7 +315,8 @@ def btn_ss(kind: str = "default", size: str = "md") -> str:
     pad = {"sm": "3px 10px", "md": "5px 14px", "lg": "7px 20px"}[size]
     base = (f"border-radius:6px; padding:{pad}; font-weight:600; font-size:12px;")
     if kind == "primary":
-        return (f"QPushButton,QToolButton{{background:{T['accent']};border:1px solid {T['accent']};"
+        return (f"QPushButton,QToolButton{{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+                f"stop:0 {T['accent_top']},stop:1 {T['accent']});border:1px solid {T['accent']};"
                 f"color:#0a0f02;{base}}}"
                 f"QPushButton:hover,QToolButton:hover{{background:{T['accent_hi']};border-color:{T['accent_hi']};}}"
                 f"QPushButton:pressed,QToolButton:pressed{{background:#68a300;}}"
@@ -360,6 +366,55 @@ def pill_ss(col: str) -> str:
             f"QPushButton:hover {{ background:rgba({rgb},0.20); border-color:{col}; }}")
 
 
+def _check_qss() -> str:
+    """Render the checkbox tick (1x + @2x PNG, no SVG plugin needed) and return the QSS using it."""
+    import os
+    import tempfile
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QImage, QPainter, QPainterPath, QPen
+    try:
+        d = os.path.join(tempfile.gettempdir(), f"{APP_ID}-ui")
+        os.makedirs(d, exist_ok=True)
+        base = os.path.join(d, "check-" + _tc("#0a0f02").lstrip("#"))
+        chev = os.path.join(d, "chevron-" + T["muted"].lstrip("#"))
+        for scale, suffix in ((1, ""), (2, "@2x")):
+            img = QImage(13 * scale, 13 * scale, QImage.Format_ARGB32)
+            img.fill(Qt.transparent)
+            p = QPainter(img)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.scale(scale, scale)
+            p.setPen(QPen(QColor(_tc("#0a0f02")), 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            path = QPainterPath(QPointF(3.0, 6.8))
+            path.lineTo(5.5, 9.2)
+            path.lineTo(10.2, 3.9)
+            p.drawPath(path)
+            p.end()
+            img.save(base + suffix + ".png")
+            # Combo chevron: replaces the native grey drop-down block
+            img = QImage(10 * scale, 10 * scale, QImage.Format_ARGB32)
+            img.fill(Qt.transparent)
+            p = QPainter(img)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.scale(scale, scale)
+            p.setPen(QPen(QColor(T["muted"]), 1.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            path = QPainterPath(QPointF(1.5, 3.5))
+            path.lineTo(5.0, 7.0)
+            path.lineTo(8.5, 3.5)
+            p.drawPath(path)
+            p.end()
+            img.save(chev + suffix + ".png")
+        url = (base + ".png").replace("\\", "/")
+        curl = (chev + ".png").replace("\\", "/")
+        return (f"\nQCheckBox::indicator:checked {{ image:url({url}); }}\n"
+                "QComboBox::drop-down { subcontrol-origin:padding; subcontrol-position:center right;"
+                " width:24px; border:none; background:transparent; }\n"
+                f"QComboBox::down-arrow {{ image:url({curl}); width:10px; height:10px; }}\n"
+                "QComboBox::down-arrow:on { top:1px; }\n")
+    except Exception:
+        _log.debug("checkbox tick not rendered", exc_info=True)
+        return ""
+
+
 def apply_theme(app: "QApplication") -> None:
     """Palette + app-wide QSS + UI font. Called once from main()."""
     from PySide6.QtGui import QFontDatabase
@@ -386,4 +441,4 @@ def apply_theme(app: "QApplication") -> None:
     pal.setColor(QPalette.PlaceholderText, QColor(T["faint"]))
     pal.setColor(QPalette.Link, QColor(T["accent"]))
     app.setPalette(pal)
-    app.setStyleSheet(APP_QSS)
+    app.setStyleSheet(APP_QSS + _check_qss())

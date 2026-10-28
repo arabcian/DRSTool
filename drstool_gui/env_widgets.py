@@ -763,7 +763,7 @@ QLineEdit:hover{ background:#1f2430; }
 
         if param_options:
             hint = QLabel("Also available (type manually, comma-separated): " + ", ".join(param_options))
-            hint.setStyleSheet("color:#3a4a5a; font-size:10px; font-family:monospace;")
+            hint.setStyleSheet(f"color:{T['muted']}; font-size:11px; font-family:{T['mono']}; padding-top:2px;")
             hint.setWordWrap(True)
             self._control_layout.addWidget(hint)
 
