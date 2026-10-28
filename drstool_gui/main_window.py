@@ -72,7 +72,7 @@ if TYPE_CHECKING:
 
 class MainWindow(QMainWindow):
     # Tab indices (sidebar stack pages). Nav order on screen matches.
-    TAB_DRS, TAB_ARCH, TAB_ENV, TAB_TOOLS, TAB_PROFILES, TAB_GAMES = range(6)
+    TAB_DRS, TAB_ARCH, TAB_ENV, TAB_GAMES, TAB_PROFILES, TAB_TOOLS = range(6)
     # Right-stack pages
     PAGE_EMPTY, PAGE_SETTING, PAGE_ARCH, PAGE_ENV, PAGE_GAMESCOPE, PAGE_TOOLS, PAGE_LUTRIS, PAGE_GAMES = range(8)
 
@@ -81,7 +81,7 @@ class MainWindow(QMainWindow):
         1: "Pick a GPU generation to spoof\nSets DXVK_NVAPI_GPU_ARCH — leave it unset to report the real card.",
         2: "Pick an environment variable\nDXVK, VKD3D-Proton, Proton, Wine, NVIDIA, Gamescope and more — set ones carry a green dot.",
         4: "",
-        5: "Pick a game\nOne card per game: linked profile, Proton build, DLSS / DXVK versions, "
+        3: "Pick a game\nOne card per game: linked profile, Proton build, DLSS / DXVK versions, "
            "the last frametime capture, log errors and the ProtonDB tier.",
     }
 
@@ -156,7 +156,7 @@ class MainWindow(QMainWindow):
         self._games_tab.setToolTip("Every installed game with its profile, Proton, DLSS / DXVK, "
                                    "frametime, log errors and ProtonDB tier")
         self._nav_tabs = [self._settings_tab, self._arch_tab, self._env_tab,
-                          self._flm_tab, self._profiles_tab, self._games_tab]
+                          self._games_tab, self._profiles_tab, self._flm_tab]
         for idx, btn in enumerate(self._nav_tabs):
             btn.clicked.connect(lambda _c=False, i=idx: self._switch_tab(i))
             btn.setToolTip((btn.toolTip() + "\n" if btn.toolTip() else "") + f"Ctrl+{idx + 1}")
@@ -328,9 +328,9 @@ class MainWindow(QMainWindow):
         self._update_log_btn()
         self._sidebar_stack.addWidget(self._env_widget)
 
-        # Page 3: Extra Tools sidebar (orientation text for both sub-tools)
-        self._flm_sidebar = ExtraToolsSidebarWidget()
-        self._sidebar_stack.addWidget(self._flm_sidebar)
+        # Page 3: Games (one card per game on the right)
+        self._games_list = GameListWidget(self.settings_manager)
+        self._sidebar_stack.addWidget(self._games_list)
 
         # Page 4: Saved profiles (sidebar) — Lutris Sync lives on the right
         # now; it used to be a sub-tab squeezed into this narrow column while
@@ -343,9 +343,9 @@ class MainWindow(QMainWindow):
         profiles_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
         self._sidebar_stack.addWidget(profiles_scroll)
 
-        # Page 5: Games (one card per game on the right)
-        self._games_list = GameListWidget(self.settings_manager)
-        self._sidebar_stack.addWidget(self._games_list)
+        # Page 5: Extra Tools sidebar (orientation text for both sub-tools)
+        self._flm_sidebar = ExtraToolsSidebarWidget()
+        self._sidebar_stack.addWidget(self._flm_sidebar)
 
         self._lutris_sync_widget = LutrisSyncWidget(self.settings_manager)
         self._env_widget.env_changed.connect(self._lutris_sync_widget._update_preview)
