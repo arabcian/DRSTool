@@ -4790,7 +4790,7 @@ VKD3D_CONFIG_DESCS: Dict[str, str] = {
     # ── Raytracing ────────────────────────────────────────────────────────────
     "nodxr":                                "Disable DXR (raytracing) support entirely.",
     "dxr":                                  "Force-enable DXR even when considered unsafe (auto-enabled since v2.11).",
-    "dxr12":                                "Experimental DXR 1.2 support (requires VK_EXT_opacity_micromap).",
+    "dxr12":                                "Experimental DXR 1.2 support (vkd3d-proton 3.1+: requires VK_KHR_opacity_micromap; the old VK_EXT path was removed). Also needed by dxvk-nvapi 0.9.3 Opacity Micromaps (NVIDIA R615+).",
     "allow_sbt_collection":                "Allow shader-binding-table collection for DXR pipelines. Required for Cyberpunk 2077 DXR to function correctly.",
     # ── Performance / ReBAR / Memory ─────────────────────────────────────────
     "force_static_cbv":                     "Speed hack on NVIDIA — may give performance uplift or cause issues. Unsafe.",
@@ -4807,7 +4807,7 @@ VKD3D_CONFIG_DESCS: Dict[str, str] = {
     "pipeline_library_ignore_mismatch_driver": "Ignore driver-version mismatch when loading the pipeline library cache. Useful after driver updates to avoid cold compiles. Auto-applied for Elden Ring.",
     "retain_psos":                          "Keep PSOs (pipeline state objects) alive instead of freeing them immediately. Prevents use-after-free crashes in FFVII Rebirth, Ark Ascended, and REANIMAL.",
     # ── Descriptor Heap (2026) ────────────────────────────────────────────────
-    "descriptor_heap":                      "Enable the new VK_EXT_descriptor_heap code path (merged May 2026). Requires Mesa ≥ 26.1 or NVIDIA driver with descriptor heap support. Fixes Xid 109 crashes and Crimson Desert hang on Blackwell.",
+    "descriptor_heap":                      "Enable the VK_EXT_descriptor_heap code path. Opt-in and OFF by default in vkd3d-proton 3.1 because of driver-quality concerns (planned to become default on master). Requires Mesa ≥ 26.1 or NVIDIA driver with descriptor heap support. Fixes Xid 109 crashes and Crimson Desert hang on Blackwell.",
     # ── CBV / SRV Binding Workarounds ────────────────────────────────────────
     "force_raw_va_cbv":                    "Force constant-buffer views to use raw GPU virtual addresses instead of descriptor-based binding. Fixes GPU hangs or corruption in Halo Infinite, Eve Online, Guardians of the Galaxy.",
     "preallocate_srv_mip_clamps":          "Pre-allocate mip-clamp descriptors for all SRVs at resource creation time. Workaround for a descriptor aliasing bug. Auto-applied for Halo Infinite.",
@@ -4865,8 +4865,142 @@ VKD3D_CONFIG_DESCS: Dict[str, str] = {
     "damage_not_zeroed_allocations":       "Fill D3D12_HEAP_FLAG_CREATE_NOT_ZEROED buffers with 0xFF on creation to expose games that wrongly assume zeroed memory. Debug only.",
     "debug_wave64_simulation":             "Report a wave size of 64 to the game (WaveLaneCountMin forced up) to test wave64-dependent shader paths on wave32 GPUs. Debug only.",
     "fail_unsupported_state_template":     "Fail loudly instead of silently ignoring when a command-list state template is unsupported. Debug only.",
+    "descriptor_heap_robustness":          "Added in vkd3d-proton 3.x: robustness handling for the VK_EXT_descriptor_heap path (use together with descriptor_heap). Try if descriptor_heap gives GPU faults or out-of-bounds access crashes; may cost a little performance.",
     "adreno_7xx_extra_compat":             "Qualcomm Adreno 7xx only: use slower, more spec-compliant paths to isolate whether a game hits them. Irrelevant on NVIDIA/AMD.",
 }
+
+
+# ── Grouping for the VKD3D_CONFIG / DXVK_CONFIG pages ─────────────────────
+# Presentation only: (section title, [names]). Anything not listed lands in
+# "Other" so a newly added flag/key is never hidden.
+VKD3D_FLAG_GROUPS = [
+    ("⚡ Performance & frame pacing", ["force_static_cbv", "no_clear_uav_sync", "prefer_thin_uav_tiling",
+        "no_staggered_submit", "memory_allocator_skip_clear", "memory_allocator_skip_image_heap_clear",
+        "recycle_command_pools", "allow_image_heap_suballocation"]),
+    ("🧠 Memory & VRAM", ["no_upload_hvv", "no_gpu_upload_heap", "small_vram_rebar", "host_import_fallback",
+        "disallow_committed_texture_suballocation", "avoid_image_buffer_aliasing",
+        "defer_resource_destruction", "retain_psos"]),
+    ("🔦 Raytracing (DXR)", ["nodxr", "dxr", "dxr12", "allow_sbt_collection", "extra_rtas_sync",
+        "rtas_allow_blas_rebuild_sizes", "zero_fill_blp"]),
+    ("💾 Pipeline & shader cache", ["pipeline_library_ignore_mismatch_driver", "pipeline_library_app_cache",
+        "pipeline_library_no_serialize_spirv", "pipeline_library_ignore_spirv",
+        "pipeline_library_sanitize_spirv", "pipeline_library_log", "global_pipeline_cache",
+        "shader_cache_sync"]),
+    ("🧩 Descriptors & binding", ["descriptor_heap", "descriptor_heap_robustness", "mutable_single_set",
+        "force_raw_va_cbv", "preallocate_srv_mip_clamps"]),
+    ("🛠 Troubleshooting: rendering & corruption", ["no_invariant_position", "disable_uav_compression",
+        "disable_simultaneous_uav_compression", "disable_color_compression", "disable_depth_compression",
+        "skip_null_sparse_tiles", "force_dynamic_msaa", "reject_padded_small_resource_alignment",
+        "force_initial_transition"]),
+    ("🛠 Troubleshooting: crashes, hangs & sync", ["single_queue", "one_time_submit", "ignore_shared_fence"]),
+    ("🖥 GPU / driver specific", ["no_nvx", "enable_experimental_features", "adreno_7xx_extra_compat"]),
+    ("🐞 Debugging & diagnostics", ["breadcrumbs", "breadcrumbs_sync", "breadcrumbs_trace", "fault",
+        "log_memory_budget", "vk_debug", "debug_utils", "app_debug_marker_only", "queue_profile_extra",
+        "descriptor_qa_checks", "instruction_qa_checks", "damage_not_zeroed_allocations",
+        "debug_wave64_simulation", "fail_unsupported_state_template", "skip_application_workarounds",
+        "skip_driver_workarounds", "force_host_cached"]),
+]
+
+DXVK_KEY_GROUPS = [
+    ("⚡ Performance", ["dxvk.enableGraphicsPipelineLibrary", "dxvk.numCompilerThreads", "d3d11.maxTessFactor",
+        "d3d11.relaxedBarriers", "d3d11.relaxedGraphicsBarriers", "d3d11.disableMsaa",
+        "d3d11.cachedDynamicResources", "d3d9.cachedWriteOnlyBuffers", "d3d9.deviceLocalConstantBuffers",
+        "d3d9.useFP16"]),
+    ("⏱ Frame pacing & latency", ["dxvk.latencySleep", "dxvk.latencyTolerance", "dxvk.disableNvLowLatency2",
+        "dxvk.maxFrameRate", "dxgi.maxFrameRate", "d3d9.maxFrameRate", "dxgi.maxFrameLatency",
+        "d3d9.maxFrameLatency", "dxgi.syncInterval", "d3d9.presentInterval", "dxvk.tearFree",
+        "dxvk.enablePresentTiming"]),
+    ("🖥 Display & HDR", ["dxgi.forceRefreshRate", "d3d9.forceRefreshRate", "dxgi.enableHDR",
+        "d3d9.forceAspectRatio"]),
+    ("🎞 Texture filtering", ["d3d11.samplerAnisotropy", "d3d9.samplerAnisotropy", "d3d11.samplerLodBias",
+        "d3d9.samplerLodBias", "d3d11.clampNegativeLodBias", "d3d9.clampNegativeLodBias"]),
+    ("🧠 Memory & VRAM", ["dxgi.maxDeviceMemory", "dxgi.maxSharedMemory", "dxvk.maxMemoryBudget",
+        "d3d9.maxAvailableMemory", "dxvk.zeroMappedMemory", "dxvk.enableMemoryDefrag"]),
+    ("🎭 GPU identification & spoofing", ["dxgi.hideNvidiaGpu", "dxgi.hideAmdGpu", "dxgi.hideIntelGpu",
+        "dxgi.hideNvkGpu", "dxvk.hideIntegratedGraphics", "dxvk.enableNvCudaInterop", "dxgi.customVendorId",
+        "dxgi.customDeviceId", "dxgi.customDeviceDesc", "dxvk.deviceFilter", "dxgi.enableUe4Workarounds"]),
+    ("🧩 Vulkan backend & descriptors", ["dxvk.enableDescriptorHeap", "dxvk.enableDescriptorBuffer",
+        "dxvk.useRawSsbo", "dxvk.enableNvRawAccessChains", "dxvk.enableImplicitResolves",
+        "dxvk.enableUnifiedImageLayouts", "dxvk.lowerSinCos", "dxvk.tilerMode"]),
+    ("🛠 Troubleshooting: Direct3D 11", ["d3d11.maxFeatureLevel", "d3d11.forceComputeLdsBarriers",
+        "d3d11.forceComputeUavBarriers", "d3d11.forceSampleRateShading", "d3d11.disableDirectImageMapping",
+        "d3d11.exposeDriverCommandLists", "d3d11.enableContextLock"]),
+    ("🛠 Troubleshooting: Direct3D 9", ["d3d9.forceSampleRateShading", "d3d9.floatEmulation",
+        "d3d9.lenientClear", "d3d9.seamlessCubes"]),
+    ("🐞 Debugging", ["dxvk.enableDebugUtils", "dxvk.trackPipelineLifetime"]),
+]
+
+
+class _LazyCombo(QComboBox):
+    """Combo that only holds its current text until the popup is first opened
+    (items are filled in then). A page with ~45 of these used to spend most of
+    its build time in addItem()."""
+
+    def __init__(self, options, current=""):
+        super().__init__()
+        self._opts = list(options)
+        self._filled = False
+        self.addItem(current)
+
+    def _fill(self):
+        if self._filled:
+            return
+        self._filled = True
+        cur = self.currentText()
+        self.blockSignals(True)
+        self.clear()
+        self.addItems([""] + self._opts)
+        for i in range(self.count()):
+            if self.itemText(i).lower() == cur.lower():
+                self.setCurrentIndex(i)
+                break
+        else:
+            self.addItem(cur)
+            self.setCurrentText(cur)
+        self.blockSignals(False)
+
+    def showPopup(self):
+        self._fill()
+        super().showPopup()
+
+    def keyPressEvent(self, e):
+        self._fill()
+        super().keyPressEvent(e)
+
+
+def grouped_names(groups, names):
+    """[(title, [name,...])] following `groups`, keeping only names that exist;
+    unlisted names go to a trailing "Other" section."""
+    have = list(names)
+    seen = set()
+    out = []
+    for title, lst in groups:
+        sel = [n for n in lst if n in have and n not in seen]
+        seen.update(sel)
+        if sel:
+            out.append((title, sel))
+    rest = [n for n in have if n not in seen]
+    if rest:
+        out.append(("Other", rest))
+    return out
+
+
+# One stylesheet per config page (set on the page's container) instead of one
+# setStyleSheet() per label/button/combo — dozens of per-widget style
+# recalculations were what made the page build slowly and visibly re-flow.
+_CFG_PAGE_QSS = (FLAG_BTN_SS + """
+QLabel#cfgHdr{ color:#7b8496; font-size:10px; font-weight:600; }
+QLabel#cfgGroup{ color:#76b900; font-size:12px; font-weight:800; padding-top:10px;
+    border-bottom:1px solid #1d222c; }
+QLabel#cfgDesc{ color:#b3bac7; font-size:11px; }
+QLabel#cfgKey{ color:#dfe3ea; font-family:monospace; font-size:11px; }
+QComboBox{ background:#181c24; border:1px solid #2a313d; border-radius:6px; color:#dfe3ea;
+    padding:3px 8px; font-size:11px; }
+QComboBox:hover{ border:1px solid #76b900; }
+QLineEdit{ background:#181c24; border:1px solid #2a313d; border-radius:6px; color:#dfe3ea;
+    font-family:monospace; font-size:12px; padding:5px 10px; }
+QLineEdit:focus{ border:1px solid #76b900; }
+""")
 
 VKD3D_ENV_VARS: List[EnvVarDef] = [
     # ── Config Flags ─────────────────────────────────────────────────────────
@@ -4910,6 +5044,7 @@ VKD3D_ENV_VARS: List[EnvVarDef] = [
                   "retain_psos",
                   # Descriptor Heap
                   "descriptor_heap",
+                  "descriptor_heap_robustness",
                   "mutable_single_set",
                   # CBV / SRV Binding
                   "force_raw_va_cbv",
@@ -6151,7 +6286,9 @@ DXVK_NVAPI_ENV_VARS: List[EnvVarDef] = [
               "Enables DXVK-NVAPI's own Vulkan Reflex compatibility layer, for Reflex support "
               "in native-Vulkan titles (Portal RTX, Path of Exile 1/2, DOOM: The Dark Ages). "
               "Disabled by default even when installed, since it can interfere with other "
-              "Vulkan apps that don't use Reflex. Formerly named PROTON_VKREFLEX.",
+              "Vulkan apps that don't use Reflex. Formerly named PROTON_VKREFLEX. "
+              "dxvk-nvapi 0.9.3+: with NVIDIA driver R615+ Reflex works through "
+              "VK_NV_low_latency rev. 2 (winevulkan 1.4.357+) without this layer, now the preferred method — the layer is only needed on older drivers or for apps that do not enable the extension themselves (e.g. RDR2).",
               options=["0", "1"]),
     EnvVarDef("DISABLE_DXVK_NVAPI_VKREFLEX", "DXVK-NVAPI", "enum", "",
               "Any non-empty value forcibly disables the Vulkan Reflex layer, overriding "
@@ -7258,6 +7395,8 @@ QLineEdit:hover{ background:#1f2430; }
             return
 
         cur = self._list_widget.get_value(ev.name) if self._list_widget else ""
+        # cancel any still-pending staged DXVK_CONFIG row building
+        self._dxvkcfg_gen = getattr(self, "_dxvkcfg_gen", 0) + 1
 
         self._name_label.setText(ev.name)
         self._cat_label.setText(ev.cat)
@@ -7380,66 +7519,61 @@ QLineEdit:hover{ background:#1f2430; }
         # We keep a local dict so toggle logic can read state without re-querying widgets
         self._vkd3d_btns: Dict[str, QPushButton] = {}
 
-        grid = QGridLayout()
+        host = QWidget()
+        host.setUpdatesEnabled(False)          # build off-screen, paint once
+        host.setStyleSheet(_CFG_PAGE_QSS)
+        grid = QGridLayout(host)
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(6)
-        # Flag column sized to its longest button, description takes the rest.
-        # The old 1:2 stretch split made buttons ~500px wide on a wide panel
-        # and squeezed the word-wrapped descriptions into tall narrow columns
-        # on a narrow one.
         grid.setColumnStretch(0, 0)
         grid.setColumnStretch(1, 1)
 
-        # Column headers
-        hdr_flag = QLabel("Flag")
-        hdr_flag.setStyleSheet("color:#7b8496; font-size:10px; font-weight:600;")
-        hdr_desc = QLabel("Description")
-        hdr_desc.setStyleSheet("color:#7b8496; font-size:10px; font-weight:600;")
-        grid.addWidget(hdr_flag, 0, 0)
-        grid.addWidget(hdr_desc, 0, 1)
+        def _hdr(text, col):
+            h = QLabel(text)
+            h.setObjectName("cfgHdr")
+            grid.addWidget(h, 0, col)
+        _hdr("Flag", 0)
+        _hdr("Description", 1)
 
-        # Separator line
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("border: none; border-top: 1px solid #1d222c;")
-        sep.setFixedHeight(1)
-        grid.addWidget(sep, 1, 0, 1, 2)
+        row = 1
+        for title, flags in grouped_names(VKD3D_FLAG_GROUPS, ev.options):
+            gl = QLabel(f"{title}  ·  {len(flags)}")
+            gl.setObjectName("cfgGroup")
+            grid.addWidget(gl, row, 0, 1, 2)
+            row += 1
+            for flag in flags:
+                btn = QPushButton(flag)
+                btn.setCheckable(True)
+                btn.setChecked(flag in active)
+                _fw = vkd3d_flag_unavailable(flag)
+                if _fw and flag not in active:
+                    btn.setEnabled(False)
+                    btn.setToolTip("Not supported here: " + _fw)
+                btn.setFixedHeight(30)
+                btn.toggled.connect(lambda checked, f=flag: self._on_vkd3d_flag_toggled())
+                self._vkd3d_btns[flag] = btn
 
-        for r_idx, flag in enumerate(ev.options):
-            btn = QPushButton(flag)
-            btn.setCheckable(True)
-            btn.setChecked(flag in active)
-            _fw = vkd3d_flag_unavailable(flag)
-            if _fw and flag not in active:
-                btn.setEnabled(False)
-                btn.setToolTip("Not supported here: " + _fw)
-            btn.setFixedHeight(30)
-            self._apply_flag_btn_style(btn)
-            btn.toggled.connect(lambda checked, f=flag: self._on_vkd3d_flag_toggled())
-            self._vkd3d_btns[flag] = btn
+                desc_lbl = QLabel(VKD3D_CONFIG_DESCS.get(flag, ""))
+                desc_lbl.setObjectName("cfgDesc")
+                desc_lbl.setWordWrap(True)
+                desc_lbl.setMinimumWidth(120)
+                desc_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+                grid.addWidget(btn,      row, 0, Qt.AlignTop)
+                grid.addWidget(desc_lbl, row, 1, Qt.AlignVCenter)
+                row += 1
 
-            desc_text = VKD3D_CONFIG_DESCS.get(flag, "")
-            desc_lbl = QLabel(desc_text)
-            desc_lbl.setWordWrap(True)
-            desc_lbl.setStyleSheet("color:#b3bac7; font-size:11px;")
-            desc_lbl.setMinimumWidth(120)
-            desc_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-
-            # Top-aligned so a 3-line description doesn't leave the button
-            # floating in the middle of a tall row.
-            grid.addWidget(btn,      r_idx + 2, 0, Qt.AlignTop)
-            grid.addWidget(desc_lbl, r_idx + 2, 1, Qt.AlignVCenter)
-
-        # Uniform button width = widest flag name, so the column lines up and
-        # never grows past what the text needs.
+        # Uniform button width = widest flag. Polish only the widest button
+        # (stylesheet padding must count) instead of all of them.
         if self._vkd3d_btns:
-            for b in self._vkd3d_btns.values():
-                b.ensurePolished()      # stylesheet padding must count
-            bw = max(b.sizeHint().width() for b in self._vkd3d_btns.values())
+            widest = max(self._vkd3d_btns.values(), key=lambda x: len(x.text()))
+            widest.ensurePolished()
+            bw = widest.sizeHint().width()
             for b in self._vkd3d_btns.values():
                 b.setFixedWidth(bw)
+        host.setUpdatesEnabled(True)
 
-        self._control_layout.addLayout(grid)
+        self._control_layout.addWidget(host)
         if self._vkd3d_extra:
             note = QLabel("Kept as-is (not a current upstream flag — no effect unless your "
                           "vkd3d-proton build/fork knows it): " + ", ".join(self._vkd3d_extra))
@@ -7477,58 +7611,83 @@ QLineEdit:hover{ background:#1f2430; }
                   if not (k in DXVK_CONFIG_KEY_NAMES and v is not None)]
 
         self._dxvkcfg_widgets: Dict[str, QWidget] = {}
-        grid = QGridLayout()
+        host = QWidget()
+        host.setUpdatesEnabled(False)          # build off-screen, paint once
+        host.setStyleSheet(_CFG_PAGE_QSS)
+        grid = QGridLayout(host)
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(6)
         grid.setColumnStretch(2, 1)
         for c, t in enumerate(("Key", "Value", "Description")):
             h = QLabel(t)
-            h.setStyleSheet("color:#7b8496; font-size:10px; font-weight:600;")
+            h.setObjectName("cfgHdr")
             grid.addWidget(h, 0, c)
 
-        combo_ss = ("QComboBox{background:#181c24;border:1px solid #2a313d;border-radius:6px;"
-                    "color:#dfe3ea;padding:3px 8px;font-size:11px;}"
-                    "QComboBox:hover{border:1px solid #76b900;}")
-        for r, (key, kind, opt, desc) in enumerate(DXVK_CONFIG_KEYS, start=1):
-            lbl = QLabel(key)
-            lbl.setStyleSheet("color:#dfe3ea; font-family:monospace; font-size:11px;")
-            val = known.get(key, "")
-            if kind == "enum":
-                w = QComboBox()
-                w.addItem("")
-                w.addItems(opt)
-                # case-insensitive match (dxvk accepts true/True)
-                for i in range(w.count()):
-                    if w.itemText(i).lower() == val.lower():
-                        w.setCurrentIndex(i)
-                        break
+        by_key = {k[0]: k for k in DXVK_CONFIG_KEYS}
+        # Keys whose rows are not built yet keep their known value, so an early
+        # edit never drops them from the combined value.
+        self._dxvkcfg_known = dict(known)
+        self._dxvkcfg_gen = getattr(self, "_dxvkcfg_gen", 0) + 1
+        gen = self._dxvkcfg_gen
+        state = {"r": 1}
+
+        def add_group(title, keys):
+            r = state["r"]
+            gl = QLabel(f"{title}  ·  {len(keys)}")
+            gl.setObjectName("cfgGroup")
+            grid.addWidget(gl, r, 0, 1, 3)
+            r += 1
+            for key in keys:
+                _k, kind, opt, desc = by_key[key]
+                lbl = QLabel(key)
+                lbl.setObjectName("cfgKey")
+                val = known.get(key, "")
+                if kind == "enum":
+                    w = _LazyCombo(opt, val)
+                    w.setFixedHeight(28)
+                    w.setMinimumWidth(90)
+                    w.installEventFilter(_NO_SCROLL_FILTER)
+                    w.currentIndexChanged.connect(lambda _i: self._set_value(self._dxvkcfg_value()))
                 else:
-                    if val:
-                        w.addItem(val)
-                        w.setCurrentText(val)
-                w.setStyleSheet(combo_ss)
-                w.setFixedHeight(28)
-                w.setMinimumWidth(90)
-                w.installEventFilter(_NO_SCROLL_FILTER)
-                w.currentIndexChanged.connect(lambda _i: self._set_value(self._dxvkcfg_value()))
-            else:
-                w = QLineEdit(val)
-                w.setStyleSheet(self._EDIT_SS)
-                w.setPlaceholderText(opt)
-                w.setFixedHeight(28)
-                w.setMinimumWidth(90)
-                w.textChanged.connect(lambda _t: self._on_dxvkcfg_text())
-            self._dxvkcfg_widgets[key] = w
-            _kw = dxvk_cfg_unavailable(key)
-            if _kw and not val:
-                w.setEnabled(False)
-                w.setToolTip("Not supported here: " + _kw)
-            d = QLabel(desc)
-            d.setWordWrap(True)
-            d.setStyleSheet("color:#b3bac7; font-size:11px;")
-            grid.addWidget(lbl, r, 0)
-            grid.addWidget(w, r, 1)
-            grid.addWidget(d, r, 2)
-        self._control_layout.addLayout(grid)
+                    w = QLineEdit(val)
+                    w.setPlaceholderText(opt)
+                    w.setFixedHeight(28)
+                    w.setMinimumWidth(90)
+                    w.textChanged.connect(lambda _t: self._on_dxvkcfg_text())
+                self._dxvkcfg_widgets[key] = w
+                _kw = dxvk_cfg_unavailable(key)
+                if _kw and not val:
+                    w.setEnabled(False)
+                    w.setToolTip("Not supported here: " + _kw)
+                d = QLabel(desc)
+                d.setObjectName("cfgDesc")
+                d.setWordWrap(True)
+                grid.addWidget(lbl, r, 0)
+                grid.addWidget(w, r, 1)
+                grid.addWidget(d, r, 2)
+                r += 1
+            state["r"] = r
+
+        pending = grouped_names(DXVK_KEY_GROUPS, DXVK_CONFIG_KEY_NAMES)
+
+        def build_next():
+            if gen != self._dxvkcfg_gen or not pending:
+                return
+            host.setUpdatesEnabled(False)
+            add_group(*pending.pop(0))
+            host.setUpdatesEnabled(True)
+            if pending:
+                QTimer.singleShot(0, build_next)
+
+        # First two sections right away, the rest one section per event-loop turn
+        # so the page appears immediately instead of after the whole build.
+        for _ in range(2):
+            if pending:
+                add_group(*pending.pop(0))
+        host.setUpdatesEnabled(True)
+        self._control_layout.addWidget(host)
+        if pending:
+            QTimer.singleShot(0, build_next)
 
         hint = QLabel("Other entries (any other dxvk.conf key, ; separated):")
         hint.setStyleSheet("color:#7b8496; font-size:10px; font-weight:600;")
@@ -7544,7 +7703,10 @@ QLineEdit:hover{ background:#1f2430; }
         parts = []
         for key in DXVK_CONFIG_KEY_NAMES:
             w = self._dxvkcfg_widgets.get(key)
-            v = (w.currentText() if isinstance(w, QComboBox) else w.text()).strip() if w else ""
+            if w is None:
+                v = getattr(self, "_dxvkcfg_known", {}).get(key, "").strip()
+            else:
+                v = (w.currentText() if isinstance(w, QComboBox) else w.text()).strip()
             if v:
                 parts.append(f"{key} = {v}")
         extra = self._dxvkcfg_extra.text().strip() if hasattr(self, "_dxvkcfg_extra") else ""
