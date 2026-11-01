@@ -18487,6 +18487,8 @@ class CacheManagerWidget(QWidget):
 # Upstream drift check
 # ----------------------------------------------------------------------------
 
+import fnmatch
+
 _DRIFT_RAW = "https://raw.githubusercontent.com"
 _DRIFT_UA = "DRSTool/upstream-drift (+https://github.com/arabcian/DRSTool)"
 _DRIFT_MAX_BYTES = 4 * 1024 * 1024
@@ -18521,6 +18523,44 @@ DRIFT_SOURCES: List[dict] = [
      "gs_flags": "src/main.cpp"},
     {"key": "nvapi-hdr", "title": "NVAPI header", "repo": "NVIDIA/nvapi", "ref": "main",
      "files": ["NvApiDriverSettings.h"], "drs_header": "NvApiDriverSettings.h"},
+    {"key": "proton", "title": "Proton", "repo": "ValveSoftware/Proton", "ref": None,
+     "ref_fallback": "proton_11.0", "files": ["README.md", "proton"], "optional": True,
+     "env": {"prefixes": ("PROTON_",), "exclude": (), "cats": ("Proton",)}},
+]
+
+
+def _drift_fork_source(base: str, key: str, title: str, host: str, repo: str, ref_fallback: str,
+                       fork_cat: str, discover=(), files=(), optional: bool = False,
+                       ref: Optional[str] = None) -> dict:
+    """A fork scans like its base source but is compared against it (status "fork").
+    ref=None → the default branch is resolved at scan time (ref_fallback if that fails)."""
+    b = next(s for s in DRIFT_SOURCES if s["key"] == base)
+    s = {k: v for k, v in b.items() if k in ("env", "conf_keys", "vkd3d_flags", "gs_flags")}
+    s.update(key=key, title=title, host=host, repo=repo, ref=ref, ref_fallback=ref_fallback, kind="fork",
+             base=base, files=list(b["files"]) + [f for f in files if f not in b["files"]],
+             discover=list(discover), fork_cat=fork_cat, fork_tag=title, optional=optional)
+    return s
+
+
+DRIFT_SOURCES += [
+    _drift_fork_source("dxvk", "dxvk-ll", "dxvk-low-latency", "github", "netborg-afps/dxvk-low-latency",
+                       "low-latency-framepacing", "DXVK Forks", discover=["src/dxvk/framepacer/*"]),
+    _drift_fork_source("dxvk", "dxvk-gplall", "dxvk-gplasync-lowlatency", "github",
+                       "Digger1955/dxvk-gplasync-lowlatency", "GPLALL-master-2.6.9", "DXVK Forks",
+                       discover=["src/dxvk/framepacer/*"], files=["src/dxvk/dxvk_state_cache.cpp"]),
+    _drift_fork_source("dxvk", "dxvk-sarek", "DXVK-Sarek", "github", "pythonlover02/DXVK-Sarek", "main",
+                       "DXVK Forks", discover=["src/dxvk/framepacer/*"],
+                       files=["src/ddraw/ddraw_options.cpp", "src/dxvk/dxvk_state_cache.cpp"]),
+    _drift_fork_source("dxvk", "d7vk", "d7vk", "github", "WinterSnowfall/d7vk", "devel", "DXVK Forks",
+                       files=["src/ddraw/ddraw_options.cpp"]),
+    _drift_fork_source("vkd3d", "vkd3d-ll", "vkd3d-low-latency", "github", "netborg-afps/vkd3d-low-latency",
+                       "master", "VKD3D Forks", discover=["*pacer*.[ch]", "*latency*.[ch]"]),
+    _drift_fork_source("dxvk", "dxvk-gplasync", "dxvk-gplasync", "gitlab", "Ph42oN/dxvk-gplasync", "master",
+                       "DXVK Forks", discover=["patches/*.patch"]),
+    _drift_fork_source("proton", "proton-ge", "Proton-GE", "github", "GloriousEggroll/proton-ge-custom",
+                       "master", "Proton", optional=True),
+    _drift_fork_source("proton", "proton-cachyos", "Proton-CachyOS", "github", "CachyOS/proton-cachyos",
+                       "cachyos_main", "Proton", discover=["**/proton"], optional=True),
 ]
 
 
@@ -18536,6 +18576,7 @@ def _drift_catalog() -> dict:
         # DRS_SETTINGS / GPU_ARCH are generated from the DRS and Arch tabs, not catalogued as env vars
         "env_all": {ev.name for ev in ALL_ENV_VARS} | {"DXVK_NVAPI_DRS_SETTINGS", "DXVK_NVAPI_GPU_ARCH"},
         "env_by_cat": env_by_cat,
+        "env_desc": {ev.name: (ev.cat, ev.desc) for ev in ALL_ENV_VARS},
         "conf_keys": set(DXVK_CONFIG_KEY_NAMES),
         "vkd3d_flags": vk_flags,
         "gs_flags": {g.flag.lstrip("-") for g in GAMESCOPE_FLAGS},
@@ -18555,6 +18596,92 @@ def _drift_fetch(url: str, timeout: float = 25.0) -> Optional[str]:
     if len(data) > _DRIFT_MAX_BYTES:
         data = data[:_DRIFT_MAX_BYTES]
     return data.decode("utf-8", errors="replace")
+
+
+def _drift_raw_url(src: dict, ref: str, rel: str) -> str:
+    """Upstream sources keep the plain `{repo}/{ref}/{rel}` form; sources with a resolved ref use
+    refs/heads/ so branch names containing "/" work."""
+    if src.get("host") == "gitlab":
+        return f'https://gitlab.com/{src["repo"]}/-/raw/{ref}/{rel}'
+    mid = f"refs/heads/{ref}" if src.get("ref") is None else ref
+    return f'{_DRIFT_RAW}/{src["repo"]}/{mid}/{rel}'
+
+
+def _drift_fetch_json(url: str, timeout: float = 25.0):
+    """-> (data, note, headers). data is None on 403/429 (rate limit), HTTP errors and network errors."""
+    hdr = {"User-Agent": _DRIFT_UA, "Accept": "application/vnd.github+json"}
+    tok = os.environ.get("GITHUB_TOKEN")
+    if tok and url.startswith("https://api.github.com/"):
+        hdr["Authorization"] = f"Bearer {tok}"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=hdr), timeout=timeout) as r:
+            return json.loads(r.read(16 * 1024 * 1024).decode("utf-8", errors="replace")), "", r.headers
+    except urllib.error.HTTPError as e:
+        return None, ("API rate limit" if e.code in (403, 429) else "API error") + f" (HTTP {e.code})", None
+    except Exception as e:                                     # network / TLS / timeout / bad JSON
+        return None, f"{type(e).__name__}: {e}", None
+
+
+def _drift_resolve_ref(src: dict):
+    """-> (ref, note). A fixed ref is used as is; ref=None → default branch via the host API,
+    cached 24 h in QSettings (drift/ref/<key>); ref_fallback when that fails."""
+    if src.get("ref"):
+        return src["ref"], ""
+    fb = src.get("ref_fallback") or "master"
+    ck = f'drift/ref/{src["key"]}'
+    qs = QSettings(APP_ID, APP_ID)
+    try:
+        repo, ref, ts = str(qs.value(ck, "")).split("|")
+        if repo == src["repo"] and time.time() - float(ts) < 86400:
+            return ref, ""
+    except ValueError:
+        pass
+    if src.get("host") == "gitlab":
+        url = f'https://gitlab.com/api/v4/projects/{urllib.parse.quote(src["repo"], safe="")}'
+    else:
+        url = f'https://api.github.com/repos/{src["repo"]}'
+    data, note, _h = _drift_fetch_json(url)
+    ref = data.get("default_branch") if isinstance(data, dict) else None
+    if not ref:
+        return fb, note or "no default branch in the API answer"
+    try:
+        qs.setValue(ck, f'{src["repo"]}|{ref}|{int(time.time())}')
+    except Exception:
+        pass
+    return ref, ""
+
+
+def _drift_discover(src: dict, ref: str):
+    """-> (paths, note): repo files matching src["discover"] (fnmatch patterns, max 40)."""
+    pats = src.get("discover") or []
+    if not pats:
+        return [], ""
+    paths: List[str] = []
+    note = ""
+    q = urllib.parse.quote
+    if src.get("host") == "gitlab":
+        page = "1"
+        for _ in range(5):
+            data, note, hdr = _drift_fetch_json(
+                f'https://gitlab.com/api/v4/projects/{q(src["repo"], safe="")}/repository/tree'
+                f'?recursive=true&per_page=100&ref={q(ref, safe="")}&page={page}')
+            if not isinstance(data, list):
+                break
+            paths += [t["path"] for t in data if t.get("type") == "blob"]
+            page = (hdr.get("x-next-page") if hdr else "") or ""
+            if not page:
+                break
+    else:
+        data, note, _h = _drift_fetch_json(
+            f'https://api.github.com/repos/{src["repo"]}/git/trees/{q(ref)}?recursive=1')
+        if isinstance(data, dict):
+            paths = [t["path"] for t in data.get("tree", []) if t.get("type") == "blob"]
+    return sorted(p for p in paths if any(fnmatch.fnmatchcase(p, pt) for pt in pats))[:40], note
+
+
+def _drift_patch_added_lines(text: str) -> str:
+    """Only what a patch adds (`+` lines, not `+++`), without the leading `+`."""
+    return "\n".join(l[1:] for l in text.splitlines() if l.startswith("+") and not l.startswith("+++"))
 
 
 def _line_of(text: str, pos: int) -> int:
@@ -18604,7 +18731,7 @@ def _drift_analyse(src: dict, files: Dict[str, str], cat: dict) -> List[dict]:
     if src.get("conf_keys"):
         keys: Dict[str, str] = {}
         conf_rx = re.compile(r'^\s*#?\s*([A-Za-z0-9_]+\.[A-Za-z0-9_.]+)\s*=', re.M)
-        opt_rx = re.compile(r'"((?:dxvk|dxgi|d3d8|d3d9|d3d10|d3d11)\.[A-Za-z0-9_.]+)"')
+        opt_rx = re.compile(r'"((?:dxvk|dxgi|ddraw|d3d8|d3d9|d3d10|d3d11)\.[A-Za-z0-9_.]+)"')
         for rel, txt in files.items():
             rx = conf_rx if rel.endswith(".conf") else opt_rx
             for m in rx.finditer(txt):
@@ -18612,7 +18739,7 @@ def _drift_analyse(src: dict, files: Dict[str, str], cat: dict) -> List[dict]:
         # config.cpp holds per-game blocks → ignore it for 'gone' detection, only options files count
         for k, where in sorted(keys.items()):
             if k not in cat["conf_keys"] and not k.endswith(".conf") \
-                    and k.startswith(("dxvk.", "dxgi.", "d3d9.", "d3d11.", "d3d8.")):
+                    and k.startswith(("dxvk.", "dxgi.", "ddraw.", "d3d9.", "d3d11.", "d3d8.")):
                 row("dxvk.conf key", k, "new", where)
         for k in sorted(cat["conf_keys"] - set(keys)):
             row("dxvk.conf key", k, "gone", note=gone_note)
@@ -18670,6 +18797,43 @@ def _drift_analyse(src: dict, files: Dict[str, str], cat: dict) -> List[dict]:
     return rows
 
 
+def _drift_fork_delta(src: dict, files: Dict[str, str], fork_rows: List[dict], base_rows: List[dict],
+                      cat: dict) -> List[dict]:
+    """Fork rows: what the fork has that neither its base upstream nor the catalog has (status "fork").
+    "gone" only for catalog entries tagged for this fork (fork_cat + fork_tag in the description);
+    never relative to upstream (Sarek is 1.10-based, that would be hundreds of false hits)."""
+    upstream = {(r["kind"], r["name"]) for r in base_rows if r["status"] == "new"}
+    out = [dict(r, status="fork", base=src["base"]) for r in fork_rows
+           if r["status"] == "new" and (r["kind"], r["name"]) not in upstream]
+    spec = src.get("env")
+    if spec and src.get("fork_cat") and src.get("fork_tag"):
+        found = _drift_env_names(files, spec["prefixes"], spec["exclude"])
+        for name, (c, d) in sorted(cat["env_desc"].items()):
+            if c == src["fork_cat"] and src["fork_tag"] in d and name.startswith(spec["prefixes"]) \
+                    and name not in found:
+                out.append({"src": src["title"], "kind": "env var", "name": name, "status": "gone",
+                            "where": "", "note": "catalogued for this fork, no longer found in it"})
+    return out
+
+
+def _drift_attach_ctx(rows: List[dict], files: Dict[str, str], src: dict, ref: str) -> None:
+    """new/fork rows get `ctx` (±6 source lines around the sighting) and `blob_url` for the add dialog."""
+    for r in rows:
+        if r["status"] not in ("new", "fork"):
+            continue
+        r["fork_cat"] = src.get("fork_cat", "")
+        m = re.match(r"(.+?):(\d+)", r.get("where") or "")
+        if not m or m.group(1) not in files:
+            continue
+        rel, line = m.group(1), int(m.group(2))
+        lo = max(0, line - 7)
+        r["ctx"] = {"rel": rel, "line": line, "text": "\n".join(files[rel].splitlines()[lo:line + 6])}
+        if not rel.lower().endswith((".patch", ".diff")):        # patch lines are renumbered, no valid link
+            site = "gitlab.com" if src.get("host") == "gitlab" else "github.com"
+            sep = "/-/blob/" if src.get("host") == "gitlab" else "/blob/"
+            r["blob_url"] = f'https://{site}/{src["repo"]}{sep}{ref}/{rel}#L{line}'
+
+
 class _DriftWorker(QThread):
     progress = Signal(str)
     done = Signal(list, list)
@@ -18678,42 +18842,75 @@ class _DriftWorker(QThread):
         super().__init__()
         self._sources, self._cat = sources, cat
 
+    def _load(self, src: dict, notes: List[str]):
+        """-> (files, ref, total, net_err) for one source; ref/discovery are resolved first."""
+        ref, note = _drift_resolve_ref(src)
+        if note:
+            notes.append(f'{src["title"]}: {note} — using {ref}')
+        found, note = _drift_discover(src, ref)
+        if note:
+            notes.append(f'{src["title"]}: file discovery failed ({note}) — static file list only')
+        rels = list(src["files"]) + [p for p in found if p not in src["files"]]
+        files: Dict[str, str] = {}
+        net_err = ""
+        total = len(rels)
+        # fetched in parallel (each file was a separate sequential TLS round trip),
+        # consumed in the original order so results and the first-error rule stay the same
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futs = [(rel, pool.submit(_drift_fetch, _drift_raw_url(src, ref, rel))) for rel in rels]
+            for i, (rel, fut) in enumerate(futs, 1):
+                if self.isInterruptionRequested():
+                    break
+                self.progress.emit(f'{src["title"]}: {rel}  ({i}/{total})')
+                try:
+                    txt = fut.result()
+                except Exception as e:                     # network / TLS / timeout
+                    net_err = f"{type(e).__name__}: {e}"
+                    break
+                if txt is not None:
+                    files[rel] = _drift_patch_added_lines(txt) if rel.lower().endswith((".patch", ".diff")) else txt
+            for _rel, fut in futs:
+                fut.cancel()                               # drop what has not started yet
+        return files, ref, total, net_err
+
     def run(self):
         rows: List[dict] = []
         notes: List[str] = []
+        by_key = {s["key"]: s for s in DRIFT_SOURCES}
+        base_rows: Dict[str, List[dict]] = {}              # base key -> its rows: a base is fetched once
         for src in self._sources:
             if self.isInterruptionRequested():
                 break
-            files: Dict[str, str] = {}
-            net_err = ""
-            total = len(src["files"])
-            # fetched in parallel (each file was a separate sequential TLS round trip),
-            # consumed in the original order so results and the first-error rule stay the same
-            with ThreadPoolExecutor(max_workers=6) as pool:
-                futs = [(rel, pool.submit(_drift_fetch, f'{_DRIFT_RAW}/{src["repo"]}/{src["ref"]}/{rel}'))
-                        for rel in src["files"]]
-                for i, (rel, fut) in enumerate(futs, 1):
-                    if self.isInterruptionRequested():
-                        break
-                    self.progress.emit(f'{src["title"]}: {rel}  ({i}/{total})')
-                    try:
-                        txt = fut.result()
-                    except Exception as e:                     # network / TLS / timeout
-                        net_err = f"{type(e).__name__}: {e}"
-                        break
-                    if txt is not None:
-                        files[rel] = txt
-                for _rel, fut in futs:
-                    fut.cancel()                               # drop what has not started yet
+            files, ref, total, net_err = self._load(src, notes)
             if net_err:
                 notes.append(f'{src["title"]}: network error — {net_err}')
                 continue
             if not files:
-                notes.append(f'{src["title"]}: none of the {total} source files exist at {src["repo"]}@{src["ref"]}')
+                notes.append(f'{src["title"]}: none of the {total} source files exist at {src["repo"]}@{ref}')
                 continue
-            rows += _drift_analyse(src, files, self._cat)
+            src_rows = _drift_analyse(src, files, self._cat)
+            if src.get("kind") == "fork":
+                base = by_key.get(src.get("base"))
+                if base is None:
+                    notes.append(f'{src["title"]}: unknown base source "{src.get("base")}"')
+                    continue
+                if base["key"] not in base_rows:           # compare only: its own rows are not shown
+                    bfiles, _bref, _bt, berr = self._load(base, notes)
+                    if berr or not bfiles:
+                        notes.append(f'{src["title"]}: network error — {berr or "no"} base files '
+                                     f'({base["title"]}) to compare with')
+                        continue
+                    base_rows[base["key"]] = _drift_analyse(base, bfiles, self._cat)
+                src_rows = _drift_fork_delta(src, files, src_rows, base_rows[base["key"]], self._cat)
+            else:
+                base_rows[src["key"]] = src_rows
+            _drift_attach_ctx(src_rows, files, src, ref)
+            rows += src_rows
             notes.append(f'{src["title"]}: scanned {len(files)}/{total} files')
         self.done.emit(rows, notes)
+
+
+_DRIFT_LABEL = {"new": "NEW", "fork": "FORK", "gone": "gone"}
 
 
 class UpstreamDriftWidget(QWidget):
@@ -18729,24 +18926,30 @@ class UpstreamDriftWidget(QWidget):
             "Downloads the current DXVK, vkd3d-proton, dxvk-nvapi, gamescope sources and NVIDIA's "
             "NvApiDriverSettings.h and compares them with DRSTool's catalog: env vars, dxvk.conf keys, "
             "VKD3D_CONFIG flags, gamescope CLI flags and DRS setting IDs. “New” = upstream has it, the "
-            "catalog does not. “Gone” = the catalog has it, upstream no longer mentions it. Mark rows "
-            "as reviewed to hide them next time."))
-        srow = QHBoxLayout()
+            "catalog does not. “Gone” = the catalog has it, upstream no longer mentions it. Forks "
+            "(unchecked by default) add “Fork-only” = a fork has it, its upstream and the catalog do not. "
+            "Select rows and add them to the catalog, or mark them reviewed to hide them next time."))
+        srow, frow2 = QHBoxLayout(), QHBoxLayout()
+        self._src_rows = {False: srow, True: frow2}
+        self._src_pos = {False: 1, True: 1}
         self._src_checks: Dict[str, QCheckBox] = {}
-        for s in DRIFT_SOURCES:
-            c = QCheckBox(s["title"])
-            c.setChecked(True)
-            c.setStyleSheet(f"color:{T['text2']};")
-            self._src_checks[s["key"]] = c
-            srow.addWidget(c)
+        srow.addWidget(QLabel("Upstream"))
+        frow2.addWidget(QLabel("Forks"))
         srow.addStretch(1)
+        frow2.addStretch(1)
+        for s in DRIFT_SOURCES:
+            self._add_src_check(s)
         self._btn_check = _tool_btn("Check now", bold=True)
         self._btn_check.clicked.connect(self._start)
         srow.addWidget(self._btn_check)
+        b_src = _tool_btn("Sources…")
+        b_src.clicked.connect(self._add_source)
+        frow2.addWidget(b_src)
         lay.addLayout(srow)
+        lay.addLayout(frow2)
         frow = QHBoxLayout()
         self._filter = QComboBox()
-        self._filter.addItems(["New upstream", "Gone upstream", "All"])
+        self._filter.addItems(["New upstream", "Fork-only", "Gone", "All"])
         self._filter.currentIndexChanged.connect(self._refill)
         self._hide_ack = QCheckBox("Hide reviewed")
         self._hide_ack.setChecked(True)
@@ -18772,6 +18975,8 @@ class UpstreamDriftWidget(QWidget):
         hh.setSectionResizeMode(2, QHeaderView.Stretch)
         hh.setSectionResizeMode(4, QHeaderView.Stretch)
         self._table.setStyleSheet(_pack2_table_ss())
+        self._table.itemSelectionChanged.connect(self._sel_changed)
+        self._table.cellDoubleClicked.connect(lambda *_: self._add_selected())
         lay.addWidget(self._table, 1)
         brow = QHBoxLayout()
         b1 = _tool_btn("Mark selected reviewed")
@@ -18782,10 +18987,24 @@ class UpstreamDriftWidget(QWidget):
         b3.clicked.connect(self._copy_report)
         b4 = _tool_btn("Forget reviewed")
         b4.clicked.connect(self._forget)
-        for b in (b1, b2, b3, b4):
+        self._btn_add = _tool_btn("Add selected to catalog…", bold=True)
+        self._btn_add.setEnabled(False)
+        self._btn_add.clicked.connect(self._add_selected)
+        b5 = _tool_btn("Manage user catalog…")
+        b5.clicked.connect(lambda: UserCatalogDialog(self).exec())
+        for b in (self._btn_add, b1, b2, b3, b4, b5):
             brow.addWidget(b)
         brow.addStretch(1)
         lay.addLayout(brow)
+
+    def _add_src_check(self, s: dict):
+        c = QCheckBox(s["title"])
+        c.setChecked(s.get("kind") != "fork" and not s.get("optional"))
+        c.setStyleSheet(f"color:{T['text2']};")
+        self._src_checks[s["key"]] = c
+        fork = s.get("kind") == "fork"
+        self._src_rows[fork].insertWidget(self._src_pos[fork], c)    # after the label, before the stretch
+        self._src_pos[fork] += 1
 
     # reviewed set (QSettings) ------------------------------------------------
     @staticmethod
@@ -18827,7 +19046,8 @@ class UpstreamDriftWidget(QWidget):
         self._btn_check.setEnabled(True)
         n_new = sum(1 for r in rows if r["status"] == "new")
         n_gone = sum(1 for r in rows if r["status"] == "gone")
-        self._status.setText(f"{n_new} new · {n_gone} gone")
+        n_fork = sum(1 for r in rows if r["status"] == "fork")
+        self._status.setText(f"{n_new} new · {n_fork} fork-only · {n_gone} gone")
         self._status.setToolTip("\n".join(notes))
         if any("error" in n or "none of" in n for n in notes):
             QMessageBox.warning(self, "Upstream drift", "\n".join(notes))
@@ -18838,9 +19058,7 @@ class UpstreamDriftWidget(QWidget):
         acks = self._acks() if self._hide_ack.isChecked() else set()
         out = []
         for r in self._rows:
-            if mode == 0 and r["status"] != "new":
-                continue
-            if mode == 1 and r["status"] != "gone":
+            if mode < 3 and r["status"] != ("new", "fork", "gone")[mode]:
                 continue
             if self._row_key(r) in acks:
                 continue
@@ -18853,8 +19071,8 @@ class UpstreamDriftWidget(QWidget):
         t.setRowCount(0)
         for i, r in enumerate(rows):
             t.insertRow(i)
-            col = T["accent"] if r["status"] == "new" else T["warn"]
-            vals = [r["src"], r["kind"], r["name"], "NEW" if r["status"] == "new" else "gone",
+            col = {"new": T["accent"], "fork": T["info"]}.get(r["status"], T["warn"])
+            vals = [r["src"], r["kind"], r["name"], _DRIFT_LABEL[r["status"]],
                     r["where"] or r["note"]]
             for c, v in enumerate(vals):
                 it = QTableWidgetItem(v)
@@ -18865,6 +19083,52 @@ class UpstreamDriftWidget(QWidget):
                 if c == 0:
                     it.setData(Qt.UserRole, r)
                 t.setItem(i, c, it)
+
+    def _sel_rows(self) -> List[dict]:
+        return [self._table.item(r, 0).data(Qt.UserRole)
+                for r in sorted({i.row() for i in self._table.selectedItems()})]
+
+    def _sel_changed(self):
+        self._btn_add.setEnabled(any(r["status"] in ("new", "fork") for r in self._sel_rows()))
+
+    def _add_selected(self):
+        rows = [r for r in self._sel_rows() if r["status"] in ("new", "fork")]
+        if not rows:
+            return
+        forms = [dict(_drift_guess(r), rk=self._row_key(r)) for r in rows]
+        dlg = DriftAddDialog(forms, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        data = load_user_catalog()
+        for f in dlg.result_forms:
+            _uc_add(data, f["target"], _uc_record(f))
+        try:
+            save_user_catalog(data)
+        except OSError as e:
+            QMessageBox.warning(self, "User catalog", f"Could not write {user_catalog_path()}:\n{e}")
+            return
+        self._save_acks(self._acks() | {f["rk"] for f in dlg.result_forms})
+        self._refill()
+        self._status.setText(f"{len(dlg.result_forms)} entries saved — restart DRSTool to apply")
+
+    def _add_source(self):
+        dlg = DriftSourceDialog(self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        rec = dlg.record
+        if any(s["key"] == rec["key"] or s["repo"].lower() == rec["repo"].lower() for s in DRIFT_SOURCES):
+            QMessageBox.information(self, "Add drift source", f'{rec["repo"]} is already a source.')
+            return
+        data = load_user_catalog()
+        data["sources"].append(rec)
+        try:
+            save_user_catalog(data)
+        except OSError as e:
+            QMessageBox.warning(self, "User catalog", f"Could not write {user_catalog_path()}:\n{e}")
+            return
+        src = _drift_source_from_record(rec)
+        DRIFT_SOURCES.append(src)
+        self._add_src_check(src)
 
     def _ack(self, selected_only: bool):
         if selected_only:
@@ -18891,10 +19155,643 @@ class UpstreamDriftWidget(QWidget):
             if (r["src"], r["kind"]) != cur:
                 cur = (r["src"], r["kind"])
                 lines += ["", f'## {r["src"]} — {r["kind"]}']
-            lines.append(f'- {"NEW" if r["status"] == "new" else "gone"}: `{r["name"]}`'
+            lines.append(f'- {_DRIFT_LABEL[r["status"]]}: `{r["name"]}`'
                          + (f' ({r["where"]})' if r["where"] else ""))
         QApplication.clipboard().setText("\n".join(lines))
         self._status.setText(f"Copied report ({len(rows)} rows)")
+
+
+# ----------------------------------------------------------------------------
+# User catalog: entries added from the drift table. Kept in ~/.config/drstool/user_catalog.json and
+# merged into the built-in lists once at start-up (apply_user_catalog); built-in entries always win.
+# ----------------------------------------------------------------------------
+
+USER_CATALOG_KEYS: set = set()      # "env:NAME", "vkd3d:flag", "conf:key", "gs:--flag", "drs:0xID", "src:key"
+_UC_LISTS = {"env": ("env_vars", "name"), "vkd3d": ("vkd3d_flags", "name"),
+             "conf": ("dxvk_conf_keys", "key"), "gs": ("gamescope_flags", "flag"),
+             "drs": ("drs_settings", "id"), "src": ("sources", "key")}
+_UC_LABEL = {"env": "Env var", "vkd3d": "VKD3D_CONFIG flag", "conf": "dxvk.conf key",
+             "gs": "Gamescope flag", "drs": "DRS setting", "src": "Drift source"}
+
+
+def user_catalog_path() -> Path:
+    return _xdg("XDG_CONFIG_HOME", ".config") / "drstool" / "user_catalog.json"
+
+
+def load_user_catalog() -> dict:
+    """Never raises: a missing/corrupt file is an empty catalog; non-dict entries are dropped."""
+    try:
+        raw = json.loads(user_catalog_path().read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raw = {}
+    except (OSError, ValueError) as e:
+        print(f"DRSTool: user catalog ignored ({e})", file=sys.stderr)
+        raw = {}
+    raw = raw if isinstance(raw, dict) else {}
+    data: dict = {"version": 1}
+    for lst, _kf in _UC_LISTS.values():
+        v = raw.get(lst)
+        data[lst] = [x for x in v if isinstance(x, dict)] if isinstance(v, list) else []
+    return data
+
+
+def save_user_catalog(data: dict) -> None:
+    p = user_catalog_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def _uc_group(groups: list, group: str, name: str) -> None:
+    """Add `name` to the presentation group titled `group` (created if new); ''/'Other' → left to 'Other'."""
+    if group and group != "Other":
+        for title, lst in groups:
+            if title == group:
+                lst.append(name)
+                return
+        groups.append((group, [name]))
+
+
+def _drift_source_from_record(rec: dict) -> dict:
+    base = str(rec.get("base") or "dxvk")
+    cat = rec.get("fork_cat") or {"dxvk": "DXVK Forks", "vkd3d": "VKD3D Forks"}.get(base, "Proton")
+    ref = rec.get("ref") or None
+    return _drift_fork_source(base, str(rec["key"]), str(rec.get("title") or rec["key"]),
+                              str(rec.get("host") or "github"), str(rec["repo"]), ref or "master", cat,
+                              discover=rec.get("discover") or [], files=rec.get("files") or [], ref=ref)
+
+
+def _uc_apply_one(target: str, key: str, rec: dict, vk_env) -> bool:
+    """Merge one record. False = already present (nothing changed)."""
+    desc = str(rec.get("desc", ""))
+    opts = [str(o) for o in rec["options"]] if isinstance(rec.get("options"), list) else []
+    group = str(rec.get("group", ""))
+    if target == "env":
+        if key in _ENV_BY_NAME:
+            return False
+        ev = EnvVarDef(key, str(rec.get("cat") or "Other"), str(rec.get("vtype") or "string"),
+                       str(rec.get("default", "")), desc, options=opts,
+                       placeholder=str(rec.get("placeholder", "")))
+        ALL_ENV_VARS.append(ev)
+        _ENV_BY_NAME[key] = ev
+    elif target == "vkd3d":
+        if vk_env is None or key in vk_env.options or key in VKD3D_CONFIG_DESCS:
+            return False
+        vk_env.options.append(key)
+        VKD3D_CONFIG_DESCS[key] = desc
+        _uc_group(VKD3D_FLAG_GROUPS, group, key)
+    elif target == "conf":
+        if key in DXVK_CONFIG_KEY_NAMES:
+            return False
+        kind = str(rec.get("kind") or "text")
+        opt = rec.get("opt", [])
+        if kind == "enum" and not (isinstance(opt, list) and opt):
+            raise ValueError("enum needs an option list")
+        DXVK_CONFIG_KEYS.append((key, kind, [str(o) for o in opt] if kind == "enum" else str(opt or ""), desc))
+        DXVK_CONFIG_KEY_NAMES.append(key)
+        _uc_group(DXVK_KEY_GROUPS, group, key)
+    elif target == "gs":
+        if key in {g.flag for g in GAMESCOPE_FLAGS}:
+            return False
+        GAMESCOPE_FLAGS.append(GamescopeFlagDef(
+            str(rec.get("name") or key), key, str(rec.get("cat") or "Session"), str(rec.get("kind") or "toggle"),
+            desc, short=str(rec.get("short", "")), options=opts))
+    elif target == "drs":
+        if not re.fullmatch(r"0[xX][0-9A-Fa-f]{8}", key):
+            raise ValueError("DRS id must be 0x + 8 hex digits")
+        sid = "0x" + key[2:].upper()
+        if sid.upper() in _SETTING_BY_ID:
+            return False
+        st = Setting(sid, str(rec.get("name") or sid), str(rec.get("cat") or "Misc"), str(rec.get("type") or "hex"),
+                     str(rec.get("default") or "0x0"), desc,
+                     values=[SettingValue(str(v[0]), str(v[1])) for v in rec.get("values", [])])
+        ALL_SETTINGS.append(st)
+        _SETTING_BY_ID[sid.upper()] = st
+        _SETTING_BY_INT[int(sid, 16)] = st
+    else:                                                   # "src"
+        if key in {s["key"] for s in DRIFT_SOURCES}:
+            return False
+        DRIFT_SOURCES.append(_drift_source_from_record(rec))
+    return True
+
+
+def apply_user_catalog(data: dict) -> List[str]:
+    """Merge the user catalog into the built-in lists, in place. Returns notes for skipped entries."""
+    notes: List[str] = []
+    vk_env = next((e for e in VKD3D_ENV_VARS if e.name == "VKD3D_CONFIG"), None)
+    for target, (lst, kf) in _UC_LISTS.items():
+        for rec in data.get(lst, []):
+            try:
+                key = str(rec[kf]).strip()
+                if not key:
+                    raise ValueError("empty name")
+                if _uc_apply_one(target, key, rec, vk_env):
+                    USER_CATALOG_KEYS.add(f"{target}:{key}")
+                else:
+                    notes.append(f"{_UC_LABEL[target]} {key}: already in the catalog — skipped")
+            except Exception as e:                          # one bad record must not stop the others
+                notes.append(f"{_UC_LABEL[target]} entry skipped ({type(e).__name__}: {e})")
+    return notes
+
+
+def _uc_add(data: dict, target: str, rec: dict) -> bool:
+    """Insert, or replace the record with the same key. True = new."""
+    lst, kf = _UC_LISTS[target]
+    items = data.setdefault(lst, [])
+    for i, x in enumerate(items):
+        if str(x.get(kf, "")).lower() == str(rec[kf]).lower():
+            items[i] = rec
+            return False
+    items.append(rec)
+    return True
+
+
+def _uc_merge(data: dict, other: dict) -> int:
+    """Import: add records of `other` whose key is not in `data` yet. Returns how many were added."""
+    n = 0
+    for target, (lst, kf) in _UC_LISTS.items():
+        have = {str(x.get(kf, "")).lower() for x in data.setdefault(lst, [])}
+        for rec in other.get(lst, []) if isinstance(other.get(lst), list) else []:
+            if isinstance(rec, dict) and str(rec.get(kf, "")).strip() and str(rec[kf]).lower() not in have:
+                data[lst].append(rec)
+                have.add(str(rec[kf]).lower())
+                n += 1
+    return n
+
+
+def _uc_in_catalog(target: str, name: str, cat: dict) -> bool:
+    return {"env": name in cat["env_all"], "vkd3d": name in cat["vkd3d_flags"],
+            "conf": name in cat["conf_keys"], "gs": name.lstrip("-") in cat["gs_flags"],
+            "drs": ("0X" + name[2:].upper()) in cat["drs_ids"]}.get(target, False)
+
+
+def _uc_validate(f: dict, cat: Optional[dict] = None) -> str:
+    """'' when the form is fine, else why not. `cat` (from _drift_catalog) enables the duplicate check."""
+    t, n = f["target"], f["name"].strip()
+    if not n:
+        return "name is empty"
+    if t == "drs" and not re.fullmatch(r"0[xX][0-9A-Fa-f]{8}", n):
+        return "DRS id must be 0x followed by 8 hex digits"
+    if t != "vkd3d" and f["type"] == "enum" and not f["options"]:
+        return "an enum needs at least one option"
+    if t == "drs" and f["type"] == "enum" and any("=" not in o for o in f["options"]):
+        return "DRS values must look like Label=0x0"
+    if cat is not None and _uc_in_catalog(t, n, cat):
+        return "already in the catalog (built-in entries win)"
+    return ""
+
+
+def _uc_record(f: dict) -> dict:
+    """Form dict → JSON record (see _drift_guess for the form shape)."""
+    t, n = f["target"], f["name"].strip()
+    rec: dict
+    if t == "env":
+        rec = {"name": n, "cat": f["cat"], "vtype": f["type"], "default": f["default"], "desc": f["desc"],
+               "options": list(f["options"]), "placeholder": f["placeholder"]}
+    elif t == "vkd3d":
+        rec = {"name": n, "desc": f["desc"], "group": f["group"]}
+    elif t == "conf":
+        rec = {"key": n, "kind": f["type"],
+               "opt": list(f["options"]) if f["type"] == "enum" else f["placeholder"],
+               "desc": f["desc"], "group": f["group"]}
+    elif t == "gs":
+        rec = {"name": f.get("label") or n.lstrip("-").replace("-", " ").title(), "flag": n, "cat": f["cat"],
+               "kind": f["type"], "desc": f["desc"], "short": f.get("short", ""), "options": list(f["options"])}
+    else:
+        rec = {"id": "0x" + n[2:].upper(), "name": f.get("label") or n, "cat": f["cat"], "type": f["type"],
+               "default": f["default"] or "0x0", "desc": f["desc"],
+               "values": [[a.strip(), b.strip()] for a, _, b in (o.partition("=") for o in f["options"])]}
+    rec["source"] = f.get("src", "")
+    rec["added"] = f.get("added") or datetime.now().strftime("%Y-%m-%d")
+    return rec
+
+
+def _uc_form(target: str, rec: dict) -> dict:
+    """JSON record → form dict (for editing)."""
+    f = {"target": target, "cat": rec.get("cat", ""), "type": "", "options": [], "default": "",
+         "placeholder": "", "group": rec.get("group", ""), "desc": rec.get("desc", ""),
+         "src": rec.get("source", ""), "added": rec.get("added", ""), "ctx": "", "url": ""}
+    if target == "env":
+        f.update(name=rec["name"], type=rec.get("vtype", "string"), default=rec.get("default", ""),
+                 options=list(rec.get("options", [])), placeholder=rec.get("placeholder", ""))
+    elif target == "vkd3d":
+        f.update(name=rec["name"])
+    elif target == "conf":
+        opt = rec.get("opt", "")
+        f.update(name=rec["key"], type=rec.get("kind", "text"), options=list(opt) if isinstance(opt, list) else [],
+                 placeholder="" if isinstance(opt, list) else str(opt))
+    elif target == "gs":
+        f.update(name=rec["flag"], label=rec.get("name", ""), type=rec.get("kind", "toggle"),
+                 options=list(rec.get("options", [])), short=rec.get("short", ""))
+    else:
+        f.update(name=rec["id"], label=rec.get("name", ""), type=rec.get("type", "hex"),
+                 default=rec.get("default", ""), options=[f"{a}={b}" for a, b in rec.get("values", [])])
+    return f
+
+
+def _uc_as_python(target: str, rec: dict) -> str:
+    """Source text to paste into DRSTool.py to make a user-catalog record a built-in one."""
+    r = repr
+    if target == "env":
+        return (f'EnvVarDef({r(rec["name"])}, {r(rec.get("cat", ""))}, {r(rec.get("vtype", "string"))}, '
+                f'{r(rec.get("default", ""))}, {r(rec.get("desc", ""))}, options={r(rec.get("options", []))}, '
+                f'placeholder={r(rec.get("placeholder", ""))}),')
+    if target == "vkd3d":
+        return f'{r(rec["name"])}: {r(rec.get("desc", ""))},'
+    if target == "conf":
+        return f'({r(rec["key"])}, {r(rec.get("kind", "text"))}, {r(rec.get("opt", ""))}, {r(rec.get("desc", ""))}),'
+    if target == "gs":
+        return (f'GamescopeFlagDef({r(rec.get("name", ""))}, {r(rec["flag"])}, {r(rec.get("cat", ""))}, '
+                f'{r(rec.get("kind", "toggle"))}, {r(rec.get("desc", ""))}, short={r(rec.get("short", ""))}, '
+                f'options={r(rec.get("options", []))}),')
+    if target == "drs":
+        vals = ", ".join(f"SettingValue({r(a)}, {r(b)})" for a, b in rec.get("values", []))
+        return (f'Setting({r(rec["id"])}, {r(rec.get("name", ""))}, {r(rec.get("cat", ""))}, '
+                f'{r(rec.get("type", "hex"))}, {r(rec.get("default", "0x0"))}, {r(rec.get("desc", ""))}, '
+                f'values=[{vals}]),')
+    return f"# {rec.get('key', '')}: user-defined drift source, JSON only"
+
+
+# ── drift row → form defaults ─────────────────────────────────────────────────
+
+_DRIFT_TARGET = {"env var": "env", "VKD3D_CONFIG flag": "vkd3d", "dxvk.conf key": "conf",
+                 "CLI flag": "gs", "DRS setting": "drs"}
+_DRIFT_ENV_CAT = {"DXVK": "DXVK", "vkd3d-proton": "VKD3D-Proton", "dxvk-nvapi": "DXVK-NVAPI",
+                  "gamescope": "Gamescope", "Proton": "Proton"}
+
+
+def _drift_group_guess(target: str, name: str) -> str:
+    n = name.lower()
+    if target == "conf" and n.startswith("ddraw."):
+        return "🗿 DirectDraw (d7vk/Sarek)"
+    if any(w in n for w in ("latency", "frame", "pace")):
+        return "⚡ Performance & frame pacing" if target == "vkd3d" else "⏱ Frame pacing & latency"
+    return "Other"
+
+
+def _drift_guess(row: dict) -> dict:
+    """Form defaults for a drift row, read from the ±6 source lines in row["ctx"]. Pure."""
+    target = _DRIFT_TARGET.get(row["kind"], "env")
+    name = row["name"]
+    ctx = row.get("ctx") or {}
+    text, rel = ctx.get("text", ""), ctx.get("rel", "")
+    lines = text.splitlines()
+    fork = row.get("status") == "fork"
+    f = {"target": target, "name": name, "cat": "", "type": "", "options": [], "default": "", "placeholder": "",
+         "group": "", "desc": "", "src": row["src"], "ctx": text, "url": row.get("blob_url", "")}
+    if target == "env":
+        f["cat"] = row.get("fork_cat") if fork and row.get("fork_cat") else _DRIFT_ENV_CAT.get(row["src"], "Other")
+        f["type"] = "string"
+        if rel.endswith(".md"):
+            f["desc"] = re.sub(r"^[\s>*+-]+", "", next((l for l in lines if name in l), "")).replace("`", "").strip()
+        elif '== "1"' in text:
+            f["type"], f["options"] = "enum", ["1"]
+    elif target == "vkd3d":
+        m = re.search(r"`%s`\s*[:\-–]\s*(.+)" % re.escape(name), text)
+        f["desc"] = m.group(1).strip() if m else ""
+        f["group"] = _drift_group_guess(target, name)
+    elif target == "conf":
+        f["type"], f["group"] = "text", _drift_group_guess(target, name)
+        idx = next((i for i, l in enumerate(lines) if name in l), None)
+        if rel.endswith(".conf") and idx is not None:
+            block, j = [], idx - 1
+            key_rx = re.compile(r"^\s*#?\s*[A-Za-z0-9_]+\.[\w.]+\s*=")
+            while j >= 0 and lines[j].lstrip().startswith("#") and not key_rx.match(lines[j]):
+                block.insert(0, lines[j].lstrip("# ").strip())
+                j -= 1
+            f["desc"] = " ".join(block)
+            m = re.search(r"Supported values:\s*(.+?)(?:\.\s|\.$|$)", f["desc"])
+            opts = [o for o in re.split(r"[,\s|/]+", m.group(1)) if o] if m else []
+            m = re.search(re.escape(name) + r"\s*=\s*(\S.*)", lines[idx])
+            f["placeholder"] = m.group(1).strip() if m else ""
+            if opts and {o.lower() for o in opts} <= {"true", "false", "auto"}:
+                f["type"], f["options"] = "enum", opts
+                f["default"] = f["placeholder"] if f["placeholder"] in opts else ""
+        else:
+            if "getOption<bool>" in text:
+                f["type"], f["options"] = "enum", ["True", "False"]
+            m = re.search(r'"%s"\s*,\s*([^),]+)' % re.escape(name), text)
+            d = m.group(1).strip() if m else ""
+            f["default"] = d.capitalize() if f["type"] == "enum" and d.lower() in ("true", "false") else d
+            f["placeholder"] = "" if f["type"] == "enum" else d
+    elif target == "gs":
+        ln = next((l for l in lines if '"%s"' % name.lstrip("-") in l), "")
+        f.update(cat="Session", type="toggle" if "no_argument" in ln else "string",
+                 label=name.lstrip("-").replace("-", " ").title())
+    else:
+        m = re.match(r"(0x[0-9A-Fa-f]{8})\s+(.*)", name)
+        f.update(name=m.group(1) if m else name, label=m.group(2) if m else name, cat="Misc",
+                 type="hex", default="0x0")
+    if fork and f["desc"] is not None:
+        f["desc"] = f"[{row['src']}] " + f["desc"]
+    return f
+
+
+class DriftAddDialog(QDialog):
+    """Edit one or more catalog entries (prefilled by _drift_guess, or from user-catalog records).
+    On accept `result_forms` holds the checked, validated forms."""
+    TARGETS = [("env", "Env var"), ("vkd3d", "VKD3D_CONFIG flag"), ("conf", "dxvk.conf key"),
+               ("gs", "Gamescope flag"), ("drs", "DRS setting")]
+    TYPES = {"env": ["enum", "int", "string", "bool", "flags"], "vkd3d": [], "conf": ["enum", "text"],
+             "gs": ["toggle", "int", "enum", "string"], "drs": ["hex", "enum", "numeric"]}
+
+    def __init__(self, forms: List[dict], parent=None, edit: bool = False):
+        super().__init__(parent)
+        self.setWindowTitle("Edit catalog entry" if edit else "Add to catalog")
+        self.resize(1000, 660)
+        self._forms = [dict(f) for f in forms]
+        self._edit, self._cur, self._loading = edit, -1, False
+        self.result_forms: List[dict] = []
+        lay = QHBoxLayout(self)
+        left = QVBoxLayout()
+        left.addWidget(QLabel("Entries (checked = saved)"))
+        self._list = QListWidget()
+        self._list.setFixedWidth(250)
+        for f in self._forms:
+            it = QListWidgetItem(f["name"])
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked)
+            self._list.addItem(it)
+        left.addWidget(self._list, 1)
+        lay.addLayout(left)
+        right = QVBoxLayout()
+        lay.addLayout(right, 1)
+        form = QFormLayout()
+        self._target = QComboBox()
+        for k, label in self.TARGETS:
+            self._target.addItem(label, k)
+        self._name = QLineEdit()
+        self._name.setReadOnly(True)
+        self._cat = QComboBox()
+        self._cat.setEditable(True)
+        self._type = QComboBox()
+        self._opts = QLineEdit()
+        self._opts.setPlaceholderText("comma separated; DRS: Label=0x0, Label2=0x1")
+        self._default = QLineEdit()
+        self._ph = QLineEdit()
+        self._group = QComboBox()
+        self._group.setEditable(True)
+        self._desc = QPlainTextEdit()
+        self._desc.setFixedHeight(90)
+        self._ctx = QPlainTextEdit()
+        self._ctx.setReadOnly(True)
+        self._ctx.setStyleSheet(f"font-family:{T['mono']};font-size:12px;")
+        for le in (self._name, self._opts, self._default, self._ph):
+            le.setStyleSheet(_LINEEDIT_QSS)
+        for cb in (self._target, self._cat, self._type, self._group):
+            cb.setStyleSheet(_COMBO_QSS)
+        for label, w in (("Add as", self._target), ("Name", self._name), ("Category", self._cat),
+                         ("Type", self._type), ("Options", self._opts), ("Default", self._default),
+                         ("Placeholder", self._ph), ("Group", self._group), ("Description", self._desc)):
+            form.addRow(label, w)
+        right.addLayout(form)
+        crow = QHBoxLayout()
+        crow.addWidget(QLabel("Source context"))
+        crow.addStretch(1)
+        self._open = _tool_btn("Open on GitHub")
+        self._open.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(self._forms[self._cur]["url"])))
+        crow.addWidget(self._open)
+        right.addLayout(crow)
+        right.addWidget(self._ctx, 1)
+        brow = QHBoxLayout()
+        brow.addStretch(1)
+        cancel, save = _tool_btn("Cancel"), _tool_btn("Save", bold=True)
+        cancel.clicked.connect(self.reject)
+        save.clicked.connect(self._accept)
+        brow.addWidget(cancel)
+        brow.addWidget(save)
+        right.addLayout(brow)
+        self._target.currentIndexChanged.connect(self._on_target)
+        self._list.currentRowChanged.connect(self._switch)
+        self._list.setCurrentRow(0)
+        if self._cur < 0:
+            self._switch(0)
+
+    def _fill_combos(self, t: str):
+        """Type / category / group choices for target `t`."""
+        self._type.clear()
+        self._type.addItems(self.TYPES[t])
+        cats = {"env": sorted({e.cat for e in ALL_ENV_VARS} | {"DXVK Forks", "VKD3D Forks"}),
+                "gs": sorted({g.cat for g in GAMESCOPE_FLAGS}),
+                "drs": sorted({s.cat for s in ALL_SETTINGS})}.get(t, [])
+        self._cat.clear()
+        self._cat.addItems(cats)
+        groups = {"vkd3d": VKD3D_FLAG_GROUPS, "conf": DXVK_KEY_GROUPS}.get(t, [])
+        extra = ["🗿 DirectDraw (d7vk/Sarek)"] if t == "conf" else []
+        self._group.clear()
+        self._group.addItems([g[0] for g in groups] + extra + (["Other"] if groups else []))
+        used = {"env": (1, 1, 1, 1, 1, 0, 0, 0), "vkd3d": (0, 0, 0, 0, 0, 0, 0, 1),
+                "conf": (0, 1, 1, 0, 1, 1, 1, 1), "gs": (1, 1, 1, 0, 0, 0, 0, 0),
+                "drs": (1, 1, 1, 1, 0, 0, 0, 0)}[t]
+        for w, on in zip((self._cat, self._type, self._opts, self._default, self._ph, self._group), used):
+            w.setEnabled(bool(on))
+
+    def _on_target(self, *_):
+        if not self._loading:
+            self._fill_combos(self._target.currentData())
+
+    def _store(self):
+        if self._cur < 0:
+            return
+        self._forms[self._cur].update(
+            target=self._target.currentData(), cat=self._cat.currentText().strip(),
+            type=self._type.currentText(), options=[o.strip() for o in self._opts.text().split(",") if o.strip()],
+            default=self._default.text().strip(), placeholder=self._ph.text().strip(),
+            group=self._group.currentText().strip(), desc=self._desc.toPlainText().strip())
+
+    def _switch(self, i: int):
+        self._store()
+        self._cur = i
+        if i < 0:
+            return
+        f = self._forms[i]
+        self._loading = True
+        self._target.setCurrentIndex(self._target.findData(f["target"]))
+        self._fill_combos(f["target"])
+        self._loading = False
+        self._name.setText(f["name"] + (f"   {f['label']}" if f.get("label") else ""))
+        self._cat.setCurrentText(f["cat"])
+        self._type.setCurrentText(f["type"])
+        self._opts.setText(", ".join(f["options"]))
+        self._default.setText(f["default"])
+        self._ph.setText(f["placeholder"])
+        self._group.setCurrentText(f["group"])
+        self._desc.setPlainText(f["desc"])
+        self._ctx.setPlainText(f["ctx"] or "(no source context)")
+        self._open.setVisible(bool(f["url"]))
+
+    def _accept(self):
+        self._store()
+        cat = None if self._edit else _drift_catalog()
+        errs, out = [], []
+        for i, f in enumerate(self._forms):
+            if self._list.item(i).checkState() != Qt.Checked:
+                continue
+            e = _uc_validate(f, cat)
+            if e:
+                errs.append(f'{f["name"]}: {e}')
+            else:
+                out.append(f)
+        if errs or not out:
+            QMessageBox.warning(self, self.windowTitle(), "\n".join(errs) or "Nothing is checked.")
+            return
+        self.result_forms = out
+        self.accept()
+
+
+class UserCatalogDialog(QDialog):
+    """List / edit / delete / import / export the user catalog; 'Copy as Python' for pasting into DRSTool.py."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("User catalog")
+        self.resize(860, 480)
+        self._data = load_user_catalog()
+        lay = QVBoxLayout(self)
+        self._info = QLabel(f"{user_catalog_path()}  —  changes apply after restarting DRSTool.")
+        self._info.setStyleSheet(f"color:{T['muted']};font-size:12px;")
+        lay.addWidget(self._info)
+        self._table = QTableWidget(0, 5)
+        self._table.setHorizontalHeaderLabels(["Type", "Name", "Category", "Source", "Added"])
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._table.setSelectionMode(QTableWidget.ExtendedSelection)
+        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self._table.setStyleSheet(_pack2_table_ss())
+        lay.addWidget(self._table, 1)
+        brow = QHBoxLayout()
+        for label, fn in (("Edit…", self._edit), ("Delete", self._delete), ("Export JSON…", self._export),
+                          ("Import JSON…", self._import), ("Copy as Python", self._copy_py)):
+            b = _tool_btn(label)
+            b.clicked.connect(fn)
+            brow.addWidget(b)
+        brow.addStretch(1)
+        close = _tool_btn("Close")
+        close.clicked.connect(self.accept)
+        brow.addWidget(close)
+        lay.addLayout(brow)
+        self._refill()
+
+    def _refill(self):
+        t = self._table
+        t.setRowCount(0)
+        for target, (lst, kf) in _UC_LISTS.items():
+            for rec in self._data.get(lst, []):
+                i = t.rowCount()
+                t.insertRow(i)
+                vals = [_UC_LABEL[target], str(rec.get(kf, "")),
+                        str(rec.get("cat") or rec.get("group") or rec.get("base") or ""),
+                        str(rec.get("source") or rec.get("repo") or ""), str(rec.get("added", ""))]
+                for c, v in enumerate(vals):
+                    it = QTableWidgetItem(v)
+                    if c == 0:
+                        it.setData(Qt.UserRole, (target, rec))
+                    t.setItem(i, c, it)
+
+    def _selected(self) -> List[tuple]:
+        return [self._table.item(r, 0).data(Qt.UserRole)
+                for r in sorted({i.row() for i in self._table.selectedItems()})]
+
+    def _save(self):
+        try:
+            save_user_catalog(self._data)
+        except OSError as e:
+            QMessageBox.warning(self, "User catalog", f"Could not write {user_catalog_path()}:\n{e}")
+        self._refill()
+
+    def _edit(self):
+        sel = self._selected()
+        if len(sel) != 1 or sel[0][0] == "src":
+            QMessageBox.information(self, "User catalog", "Select one catalog entry (sources can only be deleted).")
+            return
+        target, rec = sel[0]
+        dlg = DriftAddDialog([_uc_form(target, rec)], self, edit=True)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        f = dlg.result_forms[0]
+        self._data[_UC_LISTS[target][0]].remove(rec)
+        _uc_add(self._data, f["target"], _uc_record(f))
+        self._save()
+
+    def _delete(self):
+        sel = self._selected()
+        if sel and QMessageBox.question(self, "User catalog", f"Delete {len(sel)} entr{'y' if len(sel) == 1 else 'ies'}?") \
+                == QMessageBox.Yes:
+            for target, rec in sel:
+                self._data[_UC_LISTS[target][0]].remove(rec)
+            self._save()
+
+    def _export(self):
+        path, _f = QFileDialog.getSaveFileName(self, "Export user catalog", "user_catalog.json", "JSON (*.json)")
+        if path:
+            Path(path).write_text(json.dumps(self._data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def _import(self):
+        path, _f = QFileDialog.getOpenFileName(self, "Import user catalog", "", "JSON (*.json)")
+        if not path:
+            return
+        try:
+            other = json.loads(Path(path).read_text(encoding="utf-8"))
+            n = _uc_merge(self._data, other if isinstance(other, dict) else {})
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Import", f"Could not read {path}:\n{e}")
+            return
+        self._save()
+        QMessageBox.information(self, "Import", f"{n} entries added (existing names were kept).")
+
+    def _copy_py(self):
+        sel = self._selected() or [(t, r) for t, (lst, _k) in _UC_LISTS.items() for r in self._data.get(lst, [])]
+        QApplication.clipboard().setText("\n".join(f"{_UC_LABEL[t]}:  {_uc_as_python(t, r)}" for t, r in sel))
+
+
+class DriftSourceDialog(QDialog):
+    """Add a fork (any GitHub/GitLab repo) to scan against one of the upstream sources."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add drift source")
+        self.record: Optional[dict] = None
+        lay = QVBoxLayout(self)
+        form = QFormLayout()
+        self._host = QComboBox()
+        self._host.addItems(["github", "gitlab"])
+        self._repo = QLineEdit()
+        self._repo.setPlaceholderText("owner/repo")
+        self._ref = QLineEdit()
+        self._ref.setPlaceholderText("empty = default branch")
+        self._base = QComboBox()
+        self._base.addItems(["dxvk", "vkd3d", "proton"])
+        self._cat = QComboBox()
+        self._cat.setEditable(True)
+        self._cat.addItems(["DXVK Forks", "VKD3D Forks", "Proton"])
+        self._title = QLineEdit()
+        self._title.setPlaceholderText("empty = repo name")
+        for label, w in (("Host", self._host), ("Repository", self._repo), ("Branch / ref", self._ref),
+                         ("Base (compared with)", self._base), ("Category", self._cat), ("Title", self._title)):
+            form.addRow(label, w)
+        lay.addLayout(form)
+        brow = QHBoxLayout()
+        brow.addStretch(1)
+        cancel, ok = _tool_btn("Cancel"), _tool_btn("Add", bold=True)
+        cancel.clicked.connect(self.reject)
+        ok.clicked.connect(self._accept)
+        brow.addWidget(cancel)
+        brow.addWidget(ok)
+        lay.addLayout(brow)
+
+    def _accept(self):
+        repo = self._repo.text().strip().strip("/")
+        if not re.fullmatch(r"[\w.-]+(/[\w.-]+)+", repo):
+            QMessageBox.warning(self, "Add drift source", "Repository must look like owner/repo.")
+            return
+        title = self._title.text().strip() or repo.rsplit("/", 1)[-1]
+        self.record = {"key": "user-" + _slugify(repo), "title": title, "host": self._host.currentText(),
+                       "repo": repo, "ref": self._ref.text().strip(), "base": self._base.currentText(),
+                       "files": [], "discover": [], "kind": "fork", "fork_cat": self._cat.currentText().strip(),
+                       "added": datetime.now().strftime("%Y-%m-%d")}
+        self.accept()
 
 
 # ============================================================================
@@ -26222,6 +27119,8 @@ def main():
     # olduğunca erken çağrılmalı ki Wayland platform eklentisi app_id'yi
     # okurken zaten doğru argv[0]'ı görsün.
     apply_wayland_app_id(APP_ID)
+    for note in apply_user_catalog(load_user_catalog()):    # before any page/CLI path reads the catalog lists
+        print(f"DRSTool: user catalog: {note}", file=sys.stderr)
     cli_args, cli_rest = _cli_parse(sys.argv[1:])
     if _cli_wants(cli_args):
         cli_run(cli_args)                     # headless; exits

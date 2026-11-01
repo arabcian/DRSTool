@@ -8,6 +8,7 @@ Skipped automatically when PySide6 is not installed.
 
 import importlib.util
 import io
+import json
 import os
 import struct
 import sys
@@ -103,6 +104,270 @@ def build_fake_home():
                 tf.addfile(ti, io.BytesIO(data))
     (pdc / "dxvk-2.6.tar.gz").write_bytes(buf.getvalue())
     return pfx, exe
+
+
+@unittest.skipUnless(HAVE_QT, "PySide6 not installed")
+class DriftCatalogTests(unittest.TestCase):
+    """User catalog, fork analysis and drift worker. No network: fetches are mocked."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        cls._old_mod = sys.modules.get("DRSTool")
+        cls._tmp = tempfile.TemporaryDirectory(prefix="drstool-uc-")
+        cls._env = {k: os.environ.get(k) for k in ("HOME", "XDG_CONFIG_HOME")}
+        os.environ["HOME"] = cls._tmp.name
+        os.environ["XDG_CONFIG_HOME"] = str(Path(cls._tmp.name) / "cfg")
+        spec = importlib.util.spec_from_file_location("DRSTool", ROOT / "DRSTool.py")
+        cls.m = importlib.util.module_from_spec(spec)
+        sys.modules["DRSTool"] = cls.m
+        spec.loader.exec_module(cls.m)
+
+    @classmethod
+    def tearDownClass(cls):
+        for k, v in cls._env.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        if cls._old_mod is not None:
+            sys.modules["DRSTool"] = cls._old_mod
+        cls._tmp.cleanup()
+
+    def cat_file(self):
+        return self.m.user_catalog_path()
+
+    # ── load / apply ────────────────────────────────────────────────────────
+    def test_load_missing_and_corrupt(self):
+        m, p = self.m, self.cat_file()
+        self.assertFalse(p.exists())
+        self.assertEqual(m.load_user_catalog()["env_vars"], [])
+        p.parent.mkdir(parents=True, exist_ok=True)
+        for junk in ("{not json", "[1, 2]", '{"env_vars": "x", "vkd3d_flags": [1, {"name": "a"}]}'):
+            p.write_text(junk)
+            d = m.load_user_catalog()
+            self.assertEqual(d["env_vars"], [])
+        self.assertEqual(d["vkd3d_flags"], [{"name": "a"}])
+        p.unlink()
+
+    def test_save_roundtrip(self):
+        m = self.m
+        d = m.load_user_catalog()
+        d["env_vars"].append({"name": "X_ROUNDTRIP"})
+        m.save_user_catalog(d)
+        self.assertEqual(m.load_user_catalog()["env_vars"], [{"name": "X_ROUNDTRIP"}])
+        self.cat_file().unlink()
+
+    def test_apply_all_targets(self):
+        m = self.m
+        vk = next(e for e in m.VKD3D_ENV_VARS if e.name == "VKD3D_CONFIG")
+        data = {
+            "env_vars": [{"name": "UC_TEST_ENV", "cat": "DXVK Forks", "vtype": "enum", "options": ["1"], "desc": "d"},
+                         {"name": "DXVK_HUD"}],                              # built-in → skipped
+            "vkd3d_flags": [{"name": "uc_flag", "desc": "vk desc", "group": "🔦 Raytracing (DXR)"}],
+            "dxvk_conf_keys": [{"key": "ddraw.ucKey", "kind": "enum", "opt": ["True", "False"], "desc": "k",
+                                "group": "🗿 DirectDraw (d7vk/Sarek)"},
+                               {"key": "ddraw.bad", "kind": "enum", "opt": []}],  # invalid → skipped
+            "gamescope_flags": [{"name": "Uc Flag", "flag": "--uc-flag", "cat": "Debug", "kind": "toggle", "desc": "g"}],
+            "drs_settings": [{"id": "0xDEAD0001", "name": "UC SETTING", "cat": "Misc", "type": "enum", "default": "0x0",
+                              "desc": "s", "values": [["Off", "0x0"], ["On", "0x1"]]},
+                             {"id": "nope"}],
+            "sources": [{"key": "uc-src", "title": "UcFork", "host": "gitlab", "repo": "a/b", "base": "vkd3d"}],
+        }
+        notes = m.apply_user_catalog(data)
+        self.assertEqual(len(notes), 3, notes)                                # DXVK_HUD, bad conf, bad drs id
+        ev = m._ENV_BY_NAME["UC_TEST_ENV"]
+        self.assertIn(ev, m.ALL_ENV_VARS)
+        self.assertEqual(ev.options, ["1"])
+        self.assertIn("uc_flag", vk.options)
+        self.assertEqual(m.VKD3D_CONFIG_DESCS["uc_flag"], "vk desc")
+        groups = dict(m.grouped_names(m.VKD3D_FLAG_GROUPS, vk.options))
+        self.assertIn("uc_flag", groups["🔦 Raytracing (DXR)"])
+        self.assertIn("ddraw.ucKey", m.DXVK_CONFIG_KEY_NAMES)
+        self.assertNotIn("ddraw.bad", m.DXVK_CONFIG_KEY_NAMES)
+        self.assertIn("ddraw.ucKey", dict(m.grouped_names(m.DXVK_KEY_GROUPS, m.DXVK_CONFIG_KEY_NAMES))["🗿 DirectDraw (d7vk/Sarek)"])
+        self.assertTrue(any(g.flag == "--uc-flag" for g in m.GAMESCOPE_FLAGS))
+        st = m._SETTING_BY_ID["0XDEAD0001"]
+        self.assertIs(m._SETTING_BY_INT[0xDEAD0001], st)
+        self.assertIn(st, m.ALL_SETTINGS)
+        self.assertEqual([v.val for v in st.values], ["0x0", "0x1"])
+        self.assertEqual(next(s for s in m.DRIFT_SOURCES if s["key"] == "uc-src")["base"], "vkd3d")
+        # the next drift scan sees them as catalogued
+        cat = m._drift_catalog()
+        self.assertIn("UC_TEST_ENV", cat["env_all"])
+        self.assertIn("uc_flag", cat["vkd3d_flags"])
+        self.assertIn("ddraw.ucKey", cat["conf_keys"])
+        self.assertIn("uc-flag", cat["gs_flags"])
+        self.assertIn("0XDEAD0001", cat["drs_ids"])
+        self.assertIn("env:UC_TEST_ENV", m.USER_CATALOG_KEYS)
+
+    def test_form_record_roundtrip_and_validate(self):
+        m = self.m
+        f = m._uc_form("drs", {"id": "0xAB", "name": "N", "type": "enum", "values": [["A", "0x1"]]})
+        f["name"] = "0x0000ABCD"
+        rec = m._uc_record(f)
+        self.assertEqual((rec["id"], rec["values"]), ("0x0000ABCD", [["A", "0x1"]]))
+        self.assertEqual(m._uc_validate(f), "")
+        self.assertIn("8 hex", m._uc_validate(dict(f, name="0x12")))
+        self.assertIn("option", m._uc_validate(dict(f, options=[])))
+        self.assertIn("Label=", m._uc_validate(dict(f, options=["x"])))
+        self.assertIn("empty", m._uc_validate(dict(f, name=" ")))
+        self.assertIn("already", m._uc_validate({"target": "env", "name": "DXVK_HUD", "type": "string", "options": []},
+                                                 m._drift_catalog()))
+        self.assertIn("Setting('0x0000ABCD'", m._uc_as_python("drs", rec))
+        d = {}
+        self.assertTrue(m._uc_add(d, "env", {"name": "A"}))
+        self.assertFalse(m._uc_add(d, "env", {"name": "a", "desc": "x"}))      # same key → replaced
+        self.assertEqual(d["env_vars"], [{"name": "a", "desc": "x"}])
+        self.assertEqual(m._uc_merge(d, {"env_vars": [{"name": "A"}, {"name": "B"}, "junk"]}), 1)
+
+    # ── sources / urls ──────────────────────────────────────────────────────
+    def test_raw_url_and_patch_lines(self):
+        m = self.m
+        up = {"repo": "o/r", "ref": "master"}
+        self.assertEqual(m._drift_raw_url(up, "master", "a/b"), "https://raw.githubusercontent.com/o/r/master/a/b")
+        fork = {"repo": "o/r", "ref": None}
+        self.assertEqual(m._drift_raw_url(fork, "feat/x", "a"), "https://raw.githubusercontent.com/o/r/refs/heads/feat/x/a")
+        gl = {"repo": "Ph/dx", "host": "gitlab", "ref": None}
+        self.assertEqual(m._drift_raw_url(gl, "main", "p/a.patch"), "https://gitlab.com/Ph/dx/-/raw/main/p/a.patch")
+        self.assertEqual(m._drift_patch_added_lines("--- a\n+++ b\n+x\n y\n-z\n+\"DXVK_ASYNC\"\n"), 'x\n"DXVK_ASYNC"')
+
+    def test_builtin_fork_sources(self):
+        srcs = {s["key"]: s for s in self.m.DRIFT_SOURCES}
+        for k in ("dxvk-ll", "dxvk-gplall", "dxvk-sarek", "d7vk", "vkd3d-ll", "dxvk-gplasync", "proton-ge", "proton-cachyos"):
+            self.assertEqual(srcs[k]["kind"], "fork")
+            self.assertIsNone(srcs[k]["ref"])                                   # never a pinned branch
+            self.assertIn(srcs[k]["base"], srcs)
+        self.assertEqual(srcs["dxvk"]["ref"], "master")                         # upstream untouched
+
+    def test_resolve_ref_and_discover(self):
+        m = self.m
+        store = {}
+
+        class QS:
+            def __init__(self, *a): pass
+            def value(self, k, d=None): return store.get(k, d)
+            def setValue(self, k, v): store[k] = v
+
+        src = dict(next(s for s in m.DRIFT_SOURCES if s["key"] == "dxvk-sarek"), discover=["src/dxvk/framepacer/*"])
+        with mock.patch.object(m, "QSettings", QS), \
+                mock.patch.object(m, "_drift_fetch_json", return_value=({"default_branch": "feat/x"}, "", None)) as fj:
+            self.assertEqual(m._drift_resolve_ref(src), ("feat/x", ""))
+            self.assertEqual(m._drift_resolve_ref(src), ("feat/x", ""))        # cached: one API call only
+            self.assertEqual(fj.call_count, 1)
+        store.clear()
+        with mock.patch.object(m, "QSettings", QS), \
+                mock.patch.object(m, "_drift_fetch_json", return_value=(None, "API rate limit (HTTP 403)", None)):
+            ref, note = m._drift_resolve_ref(src)
+            self.assertEqual(ref, "main")                                       # ref_fallback
+            self.assertIn("403", note)
+        tree = {"tree": [{"path": "src/dxvk/framepacer/a.cpp", "type": "blob"},
+                         {"path": "src/dxvk/other.cpp", "type": "blob"},
+                         {"path": "src/dxvk/framepacer", "type": "tree"}]}
+        with mock.patch.object(m, "_drift_fetch_json", return_value=(tree, "", None)):
+            self.assertEqual(m._drift_discover(src, "main")[0], ["src/dxvk/framepacer/a.cpp"])
+        with mock.patch.object(m, "_drift_fetch_json", return_value=(None, "API rate limit (HTTP 403)", None)):
+            self.assertEqual(m._drift_discover(src, "main"), ([], "API rate limit (HTTP 403)"))
+
+    def test_fetch_json_rate_limit(self):
+        m = self.m
+        err = m.urllib.error.HTTPError("u", 403, "rate", {}, None)
+        with mock.patch.object(m.urllib.request, "urlopen", side_effect=err):
+            data, note, _h = m._drift_fetch_json("https://api.github.com/x")
+        self.assertIsNone(data)
+        self.assertIn("rate limit", note)
+
+    # ── fork analysis ───────────────────────────────────────────────────────
+    def test_fork_delta_sarek_like(self):
+        m = self.m
+        sarek = next(s for s in m.DRIFT_SOURCES if s["key"] == "dxvk-sarek")
+        base = next(s for s in m.DRIFT_SOURCES if s["key"] == "dxvk")
+        cat = m._drift_catalog()
+        base_files = {"src/dxvk/dxvk_options.cpp": 'x("dxvk.upstreamNew")\n'}
+        fork_files = {"src/dxvk/dxvk_options.cpp": 'x("dxvk.upstreamNew")\nx("dxvk.forkOnlyKey")\n',
+                      "src/ddraw/ddraw_options.cpp": '\nx("ddraw.forkDd")\n',
+                      "README.md": "`DXVK_FORK_ONLY_ENV` and DXVK_HUD\n"}
+        brows = m._drift_analyse(base, base_files, cat)
+        frows = m._drift_analyse(sarek, fork_files, cat)
+        rows = m._drift_fork_delta(sarek, fork_files, frows, brows, cat)
+        fork = {(r["kind"], r["name"]) for r in rows if r["status"] == "fork"}
+        self.assertEqual(fork, {("dxvk.conf key", "dxvk.forkOnlyKey"), ("dxvk.conf key", "ddraw.forkDd"),
+                                ("env var", "DXVK_FORK_ONLY_ENV")})
+        self.assertTrue(all(r["base"] == "dxvk" for r in rows if r["status"] == "fork"))
+        gone = {(r["kind"], r["name"]) for r in rows if r["status"] == "gone"}
+        self.assertIn(("env var", "DXVK_FRAME_PACE"), gone)                     # tagged for DXVK-Sarek, absent here
+        self.assertFalse([g for g in gone if g[0] != "env var"])               # never "gone" relative to upstream
+        m._drift_attach_ctx(rows, fork_files, sarek, "main")
+        r = next(r for r in rows if r["name"] == "ddraw.forkDd")
+        self.assertIn("ddraw.forkDd", r["ctx"]["text"])
+        self.assertEqual(r["blob_url"], "https://github.com/pythonlover02/DXVK-Sarek/blob/main/src/ddraw/ddraw_options.cpp#L2")
+
+    def test_worker_urls_fallback_and_patches(self):
+        m = self.m
+        gp = dict(next(s for s in m.DRIFT_SOURCES if s["key"] == "dxvk-gplasync"))
+        urls = []
+
+        def fetch(url, timeout=25.0):
+            urls.append(url)
+            if url.endswith("/dxvk.conf"):
+                return "# dxvk.baseKey = 1\n"
+            if url.endswith("a.patch"):
+                return '--- a\n+++ b\n+  "DXVK_PATCH_ONLY_ENV"\n+  x("dxvk.enableAsyncPatch")\n'
+            return None
+
+        got = {}
+        w = m._DriftWorker([gp], m._drift_catalog())
+        w.done.connect(lambda rows, notes: got.update(rows=rows, notes=notes))
+        tree = [{"path": "patches/a.patch", "type": "blob"}]
+        calls = iter([({"default_branch": "feat/x"}, "", None), (tree, "", {})])
+        with mock.patch.object(m, "_drift_fetch", fetch), \
+                mock.patch.object(m, "_drift_fetch_json", lambda *a, **k: next(calls)), \
+                mock.patch.object(m, "QSettings", type("QS", (), {"__init__": lambda s, *a: None,
+                                                                  "value": lambda s, k, d=None: d,
+                                                                  "setValue": lambda s, k, v: None})):
+            w.run()
+        self.assertIn("https://gitlab.com/Ph42oN/dxvk-gplasync/-/raw/feat/x/patches/a.patch", urls)
+        self.assertIn("https://gitlab.com/Ph42oN/dxvk-gplasync/-/raw/feat/x/dxvk.conf", urls)
+        names = {r["name"]: r["status"] for r in got["rows"]}
+        self.assertEqual(names.get("dxvk.enableAsyncPatch"), "fork")
+        self.assertEqual(names.get("DXVK_PATCH_ONLY_ENV"), "fork")
+        self.assertNotIn("DXVK_ASYNC", names)                                  # catalogued already
+        self.assertNotIn("dxvk.baseKey", names)                                 # base-only: upstream's job
+
+    def test_worker_network_error_is_a_note(self):
+        m = self.m
+        gp = next(s for s in m.DRIFT_SOURCES if s["key"] == "d7vk")
+        got = {}
+        w = m._DriftWorker([gp], m._drift_catalog())
+        w.done.connect(lambda rows, notes: got.update(rows=rows, notes=notes))
+        with mock.patch.object(m, "_drift_fetch", side_effect=OSError("boom")), \
+                mock.patch.object(m, "_drift_fetch_json", return_value=(None, "API rate limit (HTTP 403)", None)):
+            w.run()
+        self.assertEqual(got["rows"], [])
+        self.assertTrue(any("network error" in n for n in got["notes"]))
+
+    def test_guess(self):
+        m = self.m
+        conf = {"src": "DXVK", "kind": "dxvk.conf key", "name": "dxvk.latencySleep", "status": "new",
+                "ctx": {"rel": "dxvk.conf", "line": 4, "text":
+                        "\n# Enables foo.\n# Supported values: True, False, Auto\n# dxvk.latencySleep = Auto\n\n"}}
+        g = m._drift_guess(conf)
+        self.assertEqual((g["target"], g["type"], g["options"], g["default"]), ("conf", "enum", ["True", "False", "Auto"], "Auto"))
+        self.assertEqual(g["desc"], "Enables foo. Supported values: True, False, Auto")
+        self.assertEqual(g["group"], "⏱ Frame pacing & latency")
+        cpp = {"src": "DXVK-Sarek", "kind": "dxvk.conf key", "name": "ddraw.forceProxy", "status": "fork", "fork_cat": "DXVK Forks",
+               "ctx": {"rel": "src/ddraw/ddraw_options.cpp", "line": 9,
+                       "text": 'this->x = config.getOption<bool>("ddraw.forceProxy", false);'}}
+        g = m._drift_guess(cpp)
+        self.assertEqual((g["type"], g["options"], g["default"], g["group"]), ("enum", ["True", "False"], "False", "🗿 DirectDraw (d7vk/Sarek)"))
+        self.assertTrue(g["desc"].startswith("[DXVK-Sarek] "))
+        env = {"src": "Proton-GE", "kind": "env var", "name": "PROTON_USE_HDR", "status": "fork", "fork_cat": "Proton",
+               "ctx": {"rel": "README.md", "line": 3, "text": "- `PROTON_USE_HDR` - Enable HDR.\n"}}
+        g = m._drift_guess(env)
+        self.assertEqual((g["cat"], g["desc"]), ("Proton", "[Proton-GE] PROTON_USE_HDR - Enable HDR."))
+        vk = {"src": "vkd3d-proton", "kind": "VKD3D_CONFIG flag", "name": "pacer_debug", "status": "new",
+              "ctx": {"rel": "README.md", "line": 1, "text": "- `pacer_debug`: Log pacing.\n"}}
+        self.assertEqual(m._drift_guess(vk)["desc"], "Log pacing.")
+        drs = {"src": "NVAPI header", "kind": "DRS setting", "name": "0x1234ABCD  FOO_BAR", "status": "new"}
+        g = m._drift_guess(drs)
+        self.assertEqual((g["name"], g["label"], g["type"]), ("0x1234ABCD", "FOO_BAR", "hex"))
 
 
 @unittest.skipUnless(HAVE_QT, "PySide6 not installed")
@@ -526,6 +791,64 @@ class GuiTests(unittest.TestCase):
             self.pump()
             self.assertEqual(r.call_count, 1)
         lv.deleteLater()
+
+    def test_drift_add_to_user_catalog(self):
+        m = self.m
+        w = m.UpstreamDriftWidget()
+        self.assertEqual(w._filter.itemText(1), "Fork-only")
+        self.assertFalse(w._src_checks["dxvk-sarek"].isChecked())            # forks are opt-in
+        self.assertTrue(w._src_checks["dxvk"].isChecked())
+        row = {"src": "DXVK-Sarek", "kind": "dxvk.conf key", "name": "ddraw.guiKey", "status": "fork",
+               "where": "src/ddraw/ddraw_options.cpp:3", "note": "", "base": "dxvk", "fork_cat": "DXVK Forks",
+               "blob_url": "https://github.com/pythonlover02/DXVK-Sarek/blob/main/x#L3",
+               "ctx": {"rel": "src/ddraw/ddraw_options.cpp", "line": 3,
+                       "text": 'x = config.getOption<bool>("ddraw.guiKey", true);'}}
+        w._rows = [row]
+        w._filter.setCurrentIndex(1)
+        self.assertEqual(w._table.rowCount(), 1)
+        self.assertEqual(w._table.item(0, 3).text(), "FORK")
+        self.assertFalse(w._btn_add.isEnabled())
+        w._table.selectRow(0)
+        self.pump()
+        self.assertTrue(w._btn_add.isEnabled())
+        seen = {}
+
+        def run(dlg):                                    # what the user does: check the prefilled form, press Save
+            seen.update(name=dlg._forms[0]["name"], type=dlg._type.currentText(), opts=dlg._opts.text(),
+                        group=dlg._group.currentText(), desc=dlg._desc.toPlainText())
+            dlg._desc.setPlainText("[DXVK-Sarek] edited")
+            dlg._accept()
+            return dlg.result()
+
+        with mock.patch.object(m.DriftAddDialog, "exec", run):
+            w._add_selected()
+        self.assertEqual((seen["type"], seen["opts"], seen["group"]),
+                         ("enum", "True, False", "🗿 DirectDraw (d7vk/Sarek)"))
+        path = m.user_catalog_path()
+        self.assertEqual(path, HOME / ".config/drstool/user_catalog.json")
+        rec = json.loads(path.read_text())["dxvk_conf_keys"][0]
+        self.assertEqual((rec["key"], rec["kind"], rec["opt"], rec["desc"]),
+                         ("ddraw.guiKey", "enum", ["True", "False"], "[DXVK-Sarek] edited"))
+        self.assertEqual(w._table.rowCount(), 0)                             # saved rows count as reviewed
+        self.assertIn("restart", w._status.text())
+        # manage dialog: lists it, 'Copy as Python' works, delete removes it
+        dlg = m.UserCatalogDialog()
+        self.assertEqual(dlg._table.item(0, 1).text(), "ddraw.guiKey")
+        dlg._table.selectRow(0)
+        dlg._copy_py()
+        self.assertIn("('ddraw.guiKey', 'enum', ['True', 'False']", m.QApplication.clipboard().text())
+        with mock.patch.object(m.QMessageBox, "question", return_value=m.QMessageBox.Yes):
+            dlg._delete()
+        self.assertEqual(json.loads(path.read_text())["dxvk_conf_keys"], [])
+        # user-defined source: checkbox appears in the Forks row and the source is scannable
+        with mock.patch.object(m.DriftSourceDialog, "exec", lambda self: (self._repo.setText("me/my-dxvk"),
+                                                                           self._accept(), self.result())[2]):
+            w._add_source()
+        self.assertIn("user-me-my-dxvk", w._src_checks)
+        self.assertEqual(json.loads(path.read_text())["sources"][0]["repo"], "me/my-dxvk")
+        self.assertEqual(next(s for s in m.DRIFT_SOURCES if s["key"] == "user-me-my-dxvk")["base"], "dxvk")
+        dlg.deleteLater()
+        w.deleteLater()
 
     def test_share_code_flags_shell_env(self):
         from drstool_core import share_code
