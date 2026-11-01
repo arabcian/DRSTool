@@ -18487,7 +18487,12 @@ class CacheManagerWidget(QWidget):
 # Upstream drift check
 # ----------------------------------------------------------------------------
 
+import base64
 import fnmatch
+import gzip
+import http.client
+import io
+import threading
 
 _DRIFT_RAW = "https://raw.githubusercontent.com"
 _DRIFT_UA = "DRSTool/upstream-drift (+https://github.com/arabcian/DRSTool)"
@@ -18584,18 +18589,54 @@ def _drift_catalog() -> dict:
     }
 
 
+_drift_tls = threading.local()          # one keep-alive connection per host and worker thread
+
+
+def _drift_conn(u, timeout: float):
+    """HTTPS connection to u.netloc, through the system https proxy when there is one."""
+    px = None if urllib.request.proxy_bypass(u.hostname) else urllib.request.getproxies().get("https")
+    if not px:
+        return http.client.HTTPSConnection(u.netloc, timeout=timeout)
+    pu = urllib.parse.urlsplit(px if "//" in px else "//" + px)
+    conn = http.client.HTTPSConnection(pu.hostname, pu.port or 8080, timeout=timeout)
+    auth = {}
+    if pu.username:
+        cred = f"{urllib.parse.unquote(pu.username)}:{urllib.parse.unquote(pu.password or '')}"
+        auth["Proxy-Authorization"] = "Basic " + base64.b64encode(cred.encode()).decode()
+    conn.set_tunnel(u.hostname, u.port or 443, headers=auth)
+    return conn
+
+
 def _drift_fetch(url: str, timeout: float = 25.0) -> Optional[str]:
-    req = urllib.request.Request(url, headers={"User-Agent": _DRIFT_UA})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = r.read(_DRIFT_MAX_BYTES + 1)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
+    """GET as text, None on 404. Connections are kept alive per thread (one TLS handshake per host
+    instead of per file) and gzip is accepted; up to 3 redirects (renamed repos) are followed."""
+    conns = _drift_tls.__dict__.setdefault("conns", {})
+    for _redirect in range(4):
+        u = urllib.parse.urlsplit(url)
+        path = u.path + (f"?{u.query}" if u.query else "")
+        for attempt in (0, 1):                          # a stale kept-alive socket → retry once on a fresh one
+            conn = conns.get(u.netloc) or conns.setdefault(u.netloc, _drift_conn(u, timeout))
+            try:
+                conn.request("GET", path, headers={"User-Agent": _DRIFT_UA, "Accept-Encoding": "gzip"})
+                r = conn.getresponse()
+                data = r.read(_DRIFT_MAX_BYTES + 1)
+                break
+            except (http.client.HTTPException, OSError):
+                conn.close()
+                conns.pop(u.netloc, None)
+                if attempt:
+                    raise
+        if r.status in (301, 302, 307, 308) and r.getheader("Location"):
+            url = urllib.parse.urljoin(url, r.getheader("Location"))
+            continue
+        if r.status == 404:
             return None
-        raise
-    if len(data) > _DRIFT_MAX_BYTES:
-        data = data[:_DRIFT_MAX_BYTES]
-    return data.decode("utf-8", errors="replace")
+        if r.status != 200:
+            raise OSError(f"HTTP {r.status} for {url}")
+        if r.getheader("Content-Encoding") == "gzip":
+            data = gzip.GzipFile(fileobj=io.BytesIO(data)).read(_DRIFT_MAX_BYTES + 1)
+        return data[:_DRIFT_MAX_BYTES].decode("utf-8", errors="replace")
+    raise OSError(f"too many redirects: {url}")
 
 
 def _drift_raw_url(src: dict, ref: str, rel: str) -> str:
@@ -18842,8 +18883,9 @@ class _DriftWorker(QThread):
         super().__init__()
         self._sources, self._cat = sources, cat
 
-    def _load(self, src: dict, notes: List[str]):
-        """-> (files, ref, total, net_err) for one source; ref/discovery are resolved first."""
+    def _load(self, src: dict):
+        """-> (files, ref, total, net_err, notes) for one source; ref/discovery are resolved first."""
+        notes: List[str] = []
         ref, note = _drift_resolve_ref(src)
         if note:
             notes.append(f'{src["title"]}: {note} — using {ref}')
@@ -18856,7 +18898,7 @@ class _DriftWorker(QThread):
         total = len(rels)
         # fetched in parallel (each file was a separate sequential TLS round trip),
         # consumed in the original order so results and the first-error rule stay the same
-        with ThreadPoolExecutor(max_workers=6) as pool:
+        with ThreadPoolExecutor(max_workers=8) as pool:
             futs = [(rel, pool.submit(_drift_fetch, _drift_raw_url(src, ref, rel))) for rel in rels]
             for i, (rel, fut) in enumerate(futs, 1):
                 if self.isInterruptionRequested():
@@ -18871,42 +18913,57 @@ class _DriftWorker(QThread):
                     files[rel] = _drift_patch_added_lines(txt) if rel.lower().endswith((".patch", ".diff")) else txt
             for _rel, fut in futs:
                 fut.cancel()                               # drop what has not started yet
-        return files, ref, total, net_err
+        return files, ref, total, net_err, notes
 
     def run(self):
         rows: List[dict] = []
         notes: List[str] = []
         by_key = {s["key"]: s for s in DRIFT_SOURCES}
-        base_rows: Dict[str, List[dict]] = {}              # base key -> its rows: a base is fetched once
-        for src in self._sources:
-            if self.isInterruptionRequested():
-                break
-            files, ref, total, net_err = self._load(src, notes)
-            if net_err:
-                notes.append(f'{src["title"]}: network error — {net_err}')
-                continue
-            if not files:
-                notes.append(f'{src["title"]}: none of the {total} source files exist at {src["repo"]}@{ref}')
-                continue
-            src_rows = _drift_analyse(src, files, self._cat)
-            if src.get("kind") == "fork":
-                base = by_key.get(src.get("base"))
-                if base is None:
-                    notes.append(f'{src["title"]}: unknown base source "{src.get("base")}"')
-                    continue
-                if base["key"] not in base_rows:           # compare only: its own rows are not shown
-                    bfiles, _bref, _bt, berr = self._load(base, notes)
-                    if berr or not bfiles:
-                        notes.append(f'{src["title"]}: network error — {berr or "no"} base files '
-                                     f'({base["title"]}) to compare with')
+        wanted = {s["key"]: s for s in self._sources}         # + the bases forks are compared with
+        for s in self._sources:
+            if s.get("kind") == "fork" and s.get("base") in by_key:
+                wanted.setdefault(s["base"], by_key[s["base"]])
+        base_rows: Dict[str, List[dict]] = {}                 # base key -> its rows
+        # sources download side by side (each also fetches its files in parallel); a base shared by
+        # several forks, or selected itself, is downloaded once. Results are consumed in order.
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futs = {k: pool.submit(self._load, s) for k, s in wanted.items()}
+            try:
+                for src in self._sources:
+                    if self.isInterruptionRequested():
+                        break
+                    files, ref, total, net_err, snotes = futs[src["key"]].result()
+                    notes += snotes
+                    if net_err:
+                        notes.append(f'{src["title"]}: network error — {net_err}')
                         continue
-                    base_rows[base["key"]] = _drift_analyse(base, bfiles, self._cat)
-                src_rows = _drift_fork_delta(src, files, src_rows, base_rows[base["key"]], self._cat)
-            else:
-                base_rows[src["key"]] = src_rows
-            _drift_attach_ctx(src_rows, files, src, ref)
-            rows += src_rows
-            notes.append(f'{src["title"]}: scanned {len(files)}/{total} files')
+                    if not files:
+                        notes.append(f'{src["title"]}: none of the {total} source files exist at {src["repo"]}@{ref}')
+                        continue
+                    src_rows = _drift_analyse(src, files, self._cat)
+                    if src.get("kind") == "fork":
+                        base = by_key.get(src.get("base"))
+                        if base is None:
+                            notes.append(f'{src["title"]}: unknown base source "{src.get("base")}"')
+                            continue
+                        if base["key"] not in base_rows:      # compare only: its own rows are not shown
+                            bfiles, _bref, _bt, berr, bnotes = futs[base["key"]].result()
+                            if base["key"] not in {s["key"] for s in self._sources}:
+                                notes += bnotes
+                            if berr or not bfiles:
+                                notes.append(f'{src["title"]}: network error — {berr or "no"} base files '
+                                             f'({base["title"]}) to compare with')
+                                continue
+                            base_rows[base["key"]] = _drift_analyse(base, bfiles, self._cat)
+                        src_rows = _drift_fork_delta(src, files, src_rows, base_rows[base["key"]], self._cat)
+                    else:
+                        base_rows[src["key"]] = src_rows
+                    _drift_attach_ctx(src_rows, files, src, ref)
+                    rows += src_rows
+                    notes.append(f'{src["title"]}: scanned {len(files)}/{total} files')
+            finally:
+                for f in futs.values():
+                    f.cancel()                                # interrupted: drop what has not started
         self.done.emit(rows, notes)
 
 
