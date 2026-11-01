@@ -343,6 +343,25 @@ class DriftCatalogTests(unittest.TestCase):
         self.assertEqual(got["rows"], [])
         self.assertTrue(any("network error" in n for n in got["notes"]))
 
+    def test_vkd3d_plain_flags_are_internal(self):
+        m = self.m
+        src = next(s for s in m.DRIFT_SOURCES if s["key"] == "vkd3d")
+        decl = ('VKD3D_DECL_CONFIG("uc_public", UC_PUBLIC)\nVKD3D_DECL_CONFIG_PLAIN(UC_INTERNAL)\n'
+                'VKD3D_DECL_CONFIG_PLAIN(UC_HAND_LISTED)\n')
+        dev = ('static const struct o t[] = {\n#include "config_flag_decl.h"\n'
+               '    {"uc_hand_listed", VKD3D_CONFIG_FLAG_INIT_STATIC(.UC_HAND_LISTED = 1)},\n};\n')
+        rel = "include/private/config_flag_decl.h"
+
+        def new_flags(files):
+            rows = m._drift_analyse(src, files, m._drift_catalog())
+            return {r["name"]: r["where"] for r in rows if r["kind"] == "VKD3D_CONFIG flag" and r["status"] == "new"}
+
+        got = new_flags({rel: decl, "libs/vkd3d/device.c": dev})
+        self.assertEqual(sorted(got), ["uc_hand_listed", "uc_public"])          # uc_internal: no config string
+        self.assertNotIn("internal", got["uc_hand_listed"])
+        got = new_flags({rel: decl})                                             # device.c missing: cannot tell
+        self.assertIn("may be internal", got["uc_internal"])
+
     def test_guess(self):
         m = self.m
         conf = {"src": "DXVK", "kind": "dxvk.conf key", "name": "dxvk.latencySleep", "status": "new",

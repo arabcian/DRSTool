@@ -18790,9 +18790,17 @@ def _drift_analyse(src: dict, files: Dict[str, str], cat: dict) -> List[dict]:
         up: Dict[str, str] = {}
         for m in re.finditer(r'VKD3D_DECL_CONFIG\(\s*"([a-z0-9_]+)"', txt):
             up.setdefault(m.group(1), f"{rel}:{_line_of(txt, m.start())}")
+        # PLAIN flags have no VKD3D_CONFIG string (the macro expands to nothing in device.c's option table),
+        # so they are internal — unless device.c lists them by hand after the include (breadcrumbs_*).
+        dev = files.get("libs/vkd3d/device.c")
+        manual = {m.group(1): _line_of(dev, m.start()) for m in re.finditer(
+            r'\{\s*"([a-z0-9_]+)"\s*,\s*VKD3D_CONFIG_FLAG_INIT_STATIC', dev)} if dev else None
+        for name, line in (manual or {}).items():
+            up.setdefault(name, f"libs/vkd3d/device.c:{line}")
         for m in re.finditer(r'VKD3D_DECL_CONFIG_PLAIN\(\s*([A-Z0-9_]+)\s*\)', txt):
-            up.setdefault(m.group(1).lower(),
-                          f"{rel}:{_line_of(txt, m.start())}  (declared without a config string — may be internal)")
+            if manual is None:                  # device.c not scanned: cannot tell
+                up.setdefault(m.group(1).lower(), f"{rel}:{_line_of(txt, m.start())}  "
+                              "(declared without a config string — may be internal)")
         for k, where in sorted(up.items()):
             if k not in cat["vkd3d_flags"]:
                 row("VKD3D_CONFIG flag", k, "new", where)
