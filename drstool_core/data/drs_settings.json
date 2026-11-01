@@ -1,0 +1,3324 @@
+[
+ {
+  "id": "0x2089BF6C",
+  "name": "OGL AA Line Gamma",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x10",
+  "desc": "Antialiasing - Line gamma",
+  "detailed_desc": "Applies gamma correction to the edges of antialiased lines in OpenGL. When enabled, line edges are blended in linear light space before being converted back to gamma-corrected output, which produces smoother and more visually accurate results on non-linear (sRGB) displays. Most users can leave this at its default (Disabled). Enable it if you notice harsh or jagged line edges in OpenGL content.",
+  "values": [
+   {
+    "name": "Disabled",
+    "val": "0x10"
+   },
+   {
+    "name": "Enabled",
+    "val": "0x23"
+   }
+  ]
+ },
+ {
+  "id": "0x2072C5A3",
+  "name": "OGL GDI Compatibility",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x2",
+  "desc": "OpenGL GDI compatibility",
+  "detailed_desc": "Controls how the OpenGL driver interacts with the Windows GDI (Graphics Device Interface) subsystem. GDI compatibility is required by legacy applications that mix OpenGL rendering with GDI calls (e.g. drawing text or UI elements on top of an OpenGL window). 'Auto' lets the driver decide per application; 'Prefer Enabled' forces GDI compatibility mode which may reduce performance slightly; 'Prefer Disabled' maximises performance but can break apps that rely on GDI/OpenGL interop.",
+  "values": [
+   {
+    "name": "Prefer Disabled",
+    "val": "0x0"
+   },
+   {
+    "name": "Prefer Enabled",
+    "val": "0x1"
+   },
+   {
+    "name": "Auto",
+    "val": "0x2"
+   }
+  ]
+ },
+ {
+  "id": "0x20D690F8",
+  "name": "OGL Present Method",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x2",
+  "desc": "Vulkan/OpenGL present method",
+  "detailed_desc": "Selects the method used to present rendered frames to the display for Vulkan and OpenGL. 'Auto' allows the driver to choose the best path. 'Prefer Enabled' forces direct present (lower latency, better VRR compatibility). 'Prefer Disabled' uses a blit/copy path which can help with capture tools or older display configurations but adds latency. On Linux/Proton leave at 'Auto' unless you encounter tearing or sync issues.",
+  "values": [
+   {
+    "name": "Prefer Disabled",
+    "val": "0x0"
+   },
+   {
+    "name": "Prefer Enabled",
+    "val": "0x1"
+   },
+   {
+    "name": "Auto",
+    "val": "0x2"
+   }
+  ]
+ },
+ {
+  "id": "0x2097C2F6",
+  "name": "OGL Deep Color",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "Deep color for 3D applications",
+  "detailed_desc": "Enables 10-bit (Deep Color) framebuffer output for OpenGL applications. When enabled, the driver allocates a 10-bpc render target, allowing up to 1024 discrete values per color channel instead of 256. Requires a display connected via DisplayPort or HDMI 2.0+ that supports 10-bit color. Has no visual effect on 8-bit displays. Disable if you see color banding artifacts or driver-level compatibility issues.",
+  "values": [
+   {
+    "name": "Disable",
+    "val": "0x0"
+   },
+   {
+    "name": "Enable",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x206A6582",
+  "name": "OGL Swap Interval",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "OpenGL default swap interval",
+  "detailed_desc": "Sets the default vertical sync (VSync) interval for OpenGL applications that do not explicitly request one. 'VSync 1x' caps frame rate to the monitor refresh and eliminates tearing. 'Tear' (0) presents frames immediately, enabling max FPS with potential tearing. 'Force Off' overrides any per-app VSync request and disables sync entirely. 'Force On' overrides per-app requests and always enables sync. 'App Controlled' respects the application's own wglSwapIntervalEXT() call. 'Disable' (0xFFFFFFFF) is a special sentinel that prevents the driver from applying any default — the app must set its own interval.",
+  "values": [
+   {
+    "name": "Tear",
+    "val": "0x0"
+   },
+   {
+    "name": "VSync 1x",
+    "val": "0x1"
+   },
+   {
+    "name": "Force Off",
+    "val": "0xf0000000"
+   },
+   {
+    "name": "Force On",
+    "val": "0x10000000"
+   },
+   {
+    "name": "App Controlled",
+    "val": "0x0"
+   },
+   {
+    "name": "Disable",
+    "val": "0xffffffff"
+   }
+  ]
+ },
+ {
+  "id": "0x206C4581",
+  "name": "OGL Swap Interval Frac",
+  "cat": "OpenGL",
+  "type": "numeric",
+  "default": "0",
+  "desc": "OpenGL swap interval fraction",
+  "detailed_desc": "Fractional swap interval for VSync tuning.",
+  "max": 100
+ },
+ {
+  "id": "0x20655CFA",
+  "name": "OGL Swap Interval Sign",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "OpenGL swap interval sign",
+  "detailed_desc": "Controls swap interval sign.",
+  "values": [
+   {
+    "name": "Positive",
+    "val": "0x0"
+   },
+   {
+    "name": "Negative",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x201F619F",
+  "name": "OGL Force Blit",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Buffer-flipping mode",
+  "detailed_desc": "Controls frame presentation mode.",
+  "values": [
+   {
+    "name": "Off (flip)",
+    "val": "0x0"
+   },
+   {
+    "name": "On (blit)",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x204D9A0C",
+  "name": "OGL Force Stereo",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Force Stereo shuttering",
+  "detailed_desc": "Forces stereo shutter glasses support.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x208E55E3",
+  "name": "OGL Max Frames",
+  "cat": "OpenGL",
+  "type": "numeric",
+  "default": "0",
+  "desc": "Maximum frames allowed",
+  "detailed_desc": "Limits maximum frames rendered ahead.",
+  "max": 255
+ },
+ {
+  "id": "0x20C1221E",
+  "name": "OGL Threaded Opt",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Threaded optimization",
+  "detailed_desc": "Enables multi-threaded OpenGL command submission, allowing the driver to process OpenGL calls on a separate background thread. This can improve CPU-side performance in single-threaded games by overlapping CPU work with GPU command processing. However, it introduces a small amount of latency and may cause glitches in poorly written apps. 'Driver Default' lets the driver decide per application. 'Enable' forces it on; 'Disable' forces it off.",
+  "values": [
+   {
+    "name": "Driver Default",
+    "val": "0x0"
+   },
+   {
+    "name": "Enable",
+    "val": "0x1"
+   },
+   {
+    "name": "Disable",
+    "val": "0x2"
+   }
+  ]
+ },
+ {
+  "id": "0x20FDD1F9",
+  "name": "OGL Triple Buffer",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Triple buffering",
+  "detailed_desc": "Enables triple-buffering for OpenGL applications. With double-buffering and VSync, the GPU stalls waiting for vblank. Triple-buffering adds a third buffer so the GPU can keep rendering while the front buffer is being displayed, reducing stuttering and improving smoothness. Most useful in VSync-on scenarios. With VSync off, triple buffering has minimal benefit and wastes VRAM.",
+  "values": [
+   {
+    "name": "Disabled",
+    "val": "0x0"
+   },
+   {
+    "name": "Enabled",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x209DF23E",
+  "name": "OGL Event Log Severity",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x4",
+  "desc": "Event Log Severity Threshold",
+  "detailed_desc": "Sets the minimum severity level for OpenGL event log messages.",
+  "values": [
+   {
+    "name": "Disable",
+    "val": "0x0"
+   },
+   {
+    "name": "Critical",
+    "val": "0x1"
+   },
+   {
+    "name": "Warning",
+    "val": "0x2"
+   },
+   {
+    "name": "Information",
+    "val": "0x3"
+   },
+   {
+    "name": "All",
+    "val": "0x4"
+   }
+  ]
+ },
+ {
+  "id": "0x209AE66F",
+  "name": "OGL Overlay Pixel Type",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "Exported Overlay pixel types",
+  "detailed_desc": "Specifies which pixel types are supported for overlay.",
+  "values": [
+   {
+    "name": "None",
+    "val": "0x0"
+   },
+   {
+    "name": "CI",
+    "val": "0x1"
+   },
+   {
+    "name": "RGBA",
+    "val": "0x2"
+   },
+   {
+    "name": "CI and RGBA",
+    "val": "0x3"
+   }
+  ]
+ },
+ {
+  "id": "0x206C28C4",
+  "name": "OGL Overlay Support",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Enable overlay",
+  "detailed_desc": "Controls overlay support in OpenGL.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   },
+   {
+    "name": "Force SW",
+    "val": "0x2"
+   }
+  ]
+ },
+ {
+  "id": "0x20797D6C",
+  "name": "OGL Quality Enhancements",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "OpenGL quality enhancements",
+  "detailed_desc": "High level control of rendering quality in OpenGL.",
+  "values": [
+   {
+    "name": "High Quality",
+    "val": "0xfffffff6"
+   },
+   {
+    "name": "Quality",
+    "val": "0x0"
+   },
+   {
+    "name": "Performance",
+    "val": "0xa"
+   },
+   {
+    "name": "High Performance",
+    "val": "0x14"
+   }
+  ]
+ },
+ {
+  "id": "0x20A29055",
+  "name": "OGL Single Backdepth",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Unified back/depth buffer",
+  "detailed_desc": "Controls unified back/depth buffer usage.",
+  "values": [
+   {
+    "name": "Disable",
+    "val": "0x0"
+   },
+   {
+    "name": "Enable",
+    "val": "0x1"
+   },
+   {
+    "name": "Use HW Default",
+    "val": "0xffffffff"
+   }
+  ]
+ },
+ {
+  "id": "0x2092D3BE",
+  "name": "OGL SLI Multicast",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Enable NV_gpu_multicast",
+  "detailed_desc": "Enables the NV_gpu_multicast extension for OpenGL.",
+  "values": [
+   {
+    "name": "Disable",
+    "val": "0x0"
+   },
+   {
+    "name": "Enable",
+    "val": "0x1"
+   },
+   {
+    "name": "Force Disable",
+    "val": "0x2"
+   },
+   {
+    "name": "Allow Mosaic",
+    "val": "0x4"
+   }
+  ]
+ },
+ {
+  "id": "0x202888C1",
+  "name": "OGL TMON Level",
+  "cat": "OpenGL",
+  "type": "enum",
+  "default": "0x4",
+  "desc": "Event Log Tmon Severity",
+  "detailed_desc": "Sets the severity level for TMON events in OpenGL.",
+  "values": [
+   {
+    "name": "Disable",
+    "val": "0x0"
+   },
+   {
+    "name": "Critical",
+    "val": "0x1"
+   },
+   {
+    "name": "Warning",
+    "val": "0x2"
+   },
+   {
+    "name": "Information",
+    "val": "0x3"
+   },
+   {
+    "name": "Most",
+    "val": "0x4"
+   },
+   {
+    "name": "Verbose",
+    "val": "0x5"
+   }
+  ]
+ },
+ {
+  "id": "0x10ECDB82",
+  "name": "AA Behavior Flags",
+  "cat": "Anti-Aliasing",
+  "type": "bitfield",
+  "default": "0x0",
+  "desc": "AA behavior flags",
+  "detailed_desc": "Bitfield that controls how the global AA override and enhancement modes interact with per-application settings. Individual bits select transition behaviors: e.g. whether 'Override' mode can revert to 'App Controlled', whether SLI-AA is disabled, whether CPLAA (Coverage Programmable Line AA) is suppressed, etc. Leave at 0x0 (all bits off) unless you are troubleshooting AA conflicts with a specific application.",
+  "bits": [
+   {
+    "name": "Override→App Ctrl",
+    "val": 1,
+    "mask": 3
+   },
+   {
+    "name": "Override→Enhance",
+    "val": 2,
+    "mask": 3
+   },
+   {
+    "name": "Disable Override",
+    "val": 3,
+    "mask": 3
+   },
+   {
+    "name": "Enhance→App Ctrl",
+    "val": 4,
+    "mask": 12
+   },
+   {
+    "name": "Enhance→Override",
+    "val": 8,
+    "mask": 12
+   },
+   {
+    "name": "Disable Enhance",
+    "val": 12,
+    "mask": 12
+   },
+   {
+    "name": "VCAA→Multisample",
+    "val": 65536
+   },
+   {
+    "name": "SLI Disable TSS",
+    "val": 131072
+   },
+   {
+    "name": "Disable CPLAA",
+    "val": 262144
+   },
+   {
+    "name": "Skip RT Dim",
+    "val": 524288
+   },
+   {
+    "name": "Disable SLIAA",
+    "val": 1048576
+   }
+  ]
+ },
+ {
+  "id": "0x10FC2D9C",
+  "name": "AA Transparency MS",
+  "cat": "Anti-Aliasing",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "AA - Transparency Multisampling",
+  "detailed_desc": "Enables alpha-to-coverage (A2C) multisampling for transparent geometry. Alpha-to-coverage uses the MSAA sample mask to approximate transparency without alpha blending, which is more compatible with depth buffering. Useful in vegetation-heavy scenes (grass, foliage, fences) where alpha clipping with standard MSAA produces harsh edges. Only effective when MSAA is enabled.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x4"
+   }
+  ]
+ },
+ {
+  "id": "0x107D639D",
+  "name": "AA Gamma Correction",
+  "cat": "Anti-Aliasing",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "AA - Gamma correction",
+  "detailed_desc": "Applies gamma correction to antialiased geometry edges. Without correction, AA is computed in gamma space which can produce slightly darker edges. 'Off' — standard behavior. 'On if FOS' — correction only when Full Order Supersampling is active. 'On always' — always correct to linear space before resolving. Most modern games handle this internally; this override is mainly useful for older OpenGL/DX9 titles.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On if FOS",
+    "val": "0x1"
+   },
+   {
+    "name": "On always",
+    "val": "0x2"
+   }
+  ]
+ },
+ {
+  "id": "0x10D773D2",
+  "name": "AA Method",
+  "cat": "Anti-Aliasing",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "AA - Setting",
+  "detailed_desc": "Selects the anti-aliasing sample pattern and method applied by the driver. Supersampling (SSAA) renders at a higher internal resolution and downscales — highest quality but very expensive. Multisampling (MSAA) only resolves edges of geometry — good quality/performance balance. VCAA and Mixedsample modes use coverage data from rasterisation combined with color samples for very high effective AA at lower cost. Values prefixed with 'Free' are unlabelled slots in the driver header. Only effective when AA Mode is set to 'Override' or 'Enhance'.",
+  "values": [
+   {
+    "name": "None",
+    "val": "0x0"
+   },
+   {
+    "name": "Supersample 2x H",
+    "val": "0x1"
+   },
+   {
+    "name": "Supersample 2x V",
+    "val": "0x2"
+   },
+   {
+    "name": "Supersample 1.5x1.5",
+    "val": "0x2"
+   },
+   {
+    "name": "Free 0x03",
+    "val": "0x3"
+   },
+   {
+    "name": "Free 0x04",
+    "val": "0x4"
+   },
+   {
+    "name": "Supersample 4x",
+    "val": "0x5"
+   },
+   {
+    "name": "Supersample 4x Bias",
+    "val": "0x6"
+   },
+   {
+    "name": "Supersample 4x Gaussian",
+    "val": "0x7"
+   },
+   {
+    "name": "Free 0x08",
+    "val": "0x8"
+   },
+   {
+    "name": "Free 0x09",
+    "val": "0x9"
+   },
+   {
+    "name": "Supersample 9x",
+    "val": "0xa"
+   },
+   {
+    "name": "Supersample 9x Bias",
+    "val": "0xb"
+   },
+   {
+    "name": "Supersample 16x",
+    "val": "0xc"
+   },
+   {
+    "name": "Supersample 16x Bias",
+    "val": "0xd"
+   },
+   {
+    "name": "Multisample 2x Diagonal",
+    "val": "0xe"
+   },
+   {
+    "name": "Multisample 2x Quincunx",
+    "val": "0xf"
+   },
+   {
+    "name": "Multisample 4x",
+    "val": "0x10"
+   },
+   {
+    "name": "Free 0x11",
+    "val": "0x11"
+   },
+   {
+    "name": "Multisample 4x Gaussian",
+    "val": "0x12"
+   },
+   {
+    "name": "Mixedsample 4x Skewed",
+    "val": "0x13"
+   },
+   {
+    "name": "Free 0x14",
+    "val": "0x14"
+   },
+   {
+    "name": "Free 0x15",
+    "val": "0x15"
+   },
+   {
+    "name": "Mixedsample 6x",
+    "val": "0x16"
+   },
+   {
+    "name": "Mixedsample 6x Skewed",
+    "val": "0x17"
+   },
+   {
+    "name": "Mixedsample 8x",
+    "val": "0x18"
+   },
+   {
+    "name": "Mixedsample 8x Skewed",
+    "val": "0x19"
+   },
+   {
+    "name": "Mixedsample 16x",
+    "val": "0x1a"
+   },
+   {
+    "name": "Multisample 4x Gamma",
+    "val": "0x1b"
+   },
+   {
+    "name": "Multisample 16x",
+    "val": "0x1c"
+   },
+   {
+    "name": "VCAA 32x (8v24)",
+    "val": "0x1d"
+   },
+   {
+    "name": "Corruption Check",
+    "val": "0x1e"
+   },
+   {
+    "name": "6x CT",
+    "val": "0x1f"
+   },
+   {
+    "name": "Multisample 2x Diag Gamma",
+    "val": "0x20"
+   },
+   {
+    "name": "Supersample 4x Gamma",
+    "val": "0x21"
+   },
+   {
+    "name": "Multisample 4x FOSGamma",
+    "val": "0x22"
+   },
+   {
+    "name": "Multisample 2x Diag FOSGamma",
+    "val": "0x23"
+   },
+   {
+    "name": "Supersample 4x FOSGamma",
+    "val": "0x24"
+   },
+   {
+    "name": "Multisample 8x",
+    "val": "0x25"
+   },
+   {
+    "name": "VCAA 8x (4v4)",
+    "val": "0x26"
+   },
+   {
+    "name": "VCAA 16x (4v12)",
+    "val": "0x27"
+   },
+   {
+    "name": "VCAA 16x (8v8)",
+    "val": "0x28"
+   },
+   {
+    "name": "Mixedsample 32x",
+    "val": "0x29"
+   },
+   {
+    "name": "SuperVCAA 64x (4v12)",
+    "val": "0x2a"
+   },
+   {
+    "name": "SuperVCAA 64x (8v8)",
+    "val": "0x2b"
+   },
+   {
+    "name": "Mixedsample 64x",
+    "val": "0x2c"
+   },
+   {
+    "name": "Mixedsample 128x",
+    "val": "0x2d"
+   }
+  ]
+ },
+ {
+  "id": "0x10D48A85",
+  "name": "AA Transp. SS",
+  "cat": "Anti-Aliasing",
+  "type": "bitfield",
+  "default": "0x0",
+  "desc": "AA - Transparency Supersampling",
+  "detailed_desc": "Enables supersampling for transparent (alpha-tested) geometry. Unlike alpha-to-coverage which approximates transparency, supersampling fully renders transparent surfaces at a higher sample count. 'Alpha Test' — only supersample alpha-test geometry. 'Pixel Kill' — use pixel kill optimization. 'Dynamic Branch' — supersample via shader dynamic branching. 'All' — apply to all transparency types. Most performance-intensive of the transparency AA options.",
+  "bits": [
+   {
+    "name": "Mode: Off",
+    "val": 0,
+    "mask": 15
+   },
+   {
+    "name": "Mode: Alpha Test",
+    "val": 1,
+    "mask": 15
+   },
+   {
+    "name": "Mode: Pixel Kill",
+    "val": 2,
+    "mask": 15
+   },
+   {
+    "name": "Mode: Dynamic Branch",
+    "val": 4,
+    "mask": 15
+   },
+   {
+    "name": "Mode: All",
+    "val": 8,
+    "mask": 15
+   },
+   {
+    "name": "Samples: One",
+    "val": 0,
+    "mask": 112
+   },
+   {
+    "name": "Samples: Two",
+    "val": 16,
+    "mask": 112
+   },
+   {
+    "name": "Samples: Four",
+    "val": 32,
+    "mask": 112
+   },
+   {
+    "name": "Samples: Eight",
+    "val": 48,
+    "mask": 112
+   },
+   {
+    "name": "Disallow TRAA",
+    "val": 256
+   }
+  ]
+ },
+ {
+  "id": "0x107EFC5B",
+  "name": "AA Mode Selector",
+  "cat": "Anti-Aliasing",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "AA - Mode",
+  "detailed_desc": "Global anti-aliasing mode selector. 'App Controlled' (default) — the game decides its own AA method. 'Override' — the driver replaces whatever the app requests with the AA Method setting above. 'Enhance' — adds driver AA on top of the application's own AA. Use 'Override' with MSAA 4x or 8x for older DX9/OpenGL titles that lack built-in AA options. Modern titles with TAA/DLSS should stay at 'App Controlled'.",
+  "values": [
+   {
+    "name": "App Controlled",
+    "val": "0x0"
+   },
+   {
+    "name": "Override",
+    "val": "0x1"
+   },
+   {
+    "name": "Enhance",
+    "val": "0x2"
+   }
+  ]
+ },
+ {
+  "id": "0x107AFC5B",
+  "name": "AA Mode SLIAA",
+  "cat": "Anti-Aliasing",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "AA - SLI AA",
+  "detailed_desc": "Enables SLI-optimized anti-aliasing.",
+  "values": [
+   {
+    "name": "Disabled",
+    "val": "0x0"
+   },
+   {
+    "name": "Enabled",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x101E61A9",
+  "name": "Aniso Level",
+  "cat": "Texture Filtering",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "Anisotropic filtering level",
+  "detailed_desc": "Sets the anisotropic filtering (AF) sample level. AF corrects texture blur on surfaces viewed at an oblique angle. Higher values sharpen textures at steep angles but increase GPU texture unit load. 2x is nearly free on modern hardware; 8x–16x has a small cost. Only effective when Aniso Mode is set to 'User Override'. Recommended: 16x for modern NVIDIA GPUs with negligible performance cost.",
+  "values": [
+   {
+    "name": "None/Point",
+    "val": "0x0"
+   },
+   {
+    "name": "Linear",
+    "val": "0x1"
+   },
+   {
+    "name": "2x",
+    "val": "0x2"
+   },
+   {
+    "name": "4x",
+    "val": "0x4"
+   },
+   {
+    "name": "8x",
+    "val": "0x8"
+   },
+   {
+    "name": "16x",
+    "val": "0x10"
+   }
+  ]
+ },
+ {
+  "id": "0x10D2BB16",
+  "name": "Aniso Mode",
+  "cat": "Texture Filtering",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Anisotropic filtering mode",
+  "detailed_desc": "Controls when anisotropic filtering is applied. 'App Controlled' — the game decides its own AF level (recommended for most modern titles). 'User Override' — forces the driver AF level set in Aniso Level above. 'Conditional' — applies driver AF only when the app requests a lower level.",
+  "values": [
+   {
+    "name": "App Controlled",
+    "val": "0x0"
+   },
+   {
+    "name": "User Override",
+    "val": "0x1"
+   },
+   {
+    "name": "Conditional",
+    "val": "0x2"
+   }
+  ]
+ },
+ {
+  "id": "0x00CE2691",
+  "name": "Tex Filter Quality",
+  "cat": "Texture Filtering",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Texture filtering quality",
+  "detailed_desc": "High-level quality/performance trade-off for all texture filtering operations. 'High Quality' applies the most accurate filtering algorithms and may enable negative LOD bias correction for sharper results. 'Quality' is the balanced default. 'Performance' and 'High Performance' use faster but less accurate filter implementations to save GPU texture unit bandwidth. Most users should leave this at 'Quality'.",
+  "values": [
+   {
+    "name": "High Quality",
+    "val": "0xfffffff6"
+   },
+   {
+    "name": "Quality",
+    "val": "0x0"
+   },
+   {
+    "name": "Performance",
+    "val": "0xa"
+   },
+   {
+    "name": "High Performance",
+    "val": "0x14"
+   }
+  ]
+ },
+ {
+  "id": "0x00E73211",
+  "name": "Aniso Optimize",
+  "cat": "Texture Filtering",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Anisotropic optimization",
+  "detailed_desc": "When enabled, the driver may reduce the effective AF sample count on surfaces that are less oblique, where full AF would be wasted. This optimization is nearly invisible in practice and saves GPU bandwidth. Disable only if you notice unexpected texture blurring on surfaces that should be filtered more sharply.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x0084CD70",
+  "name": "Bilinear in Aniso",
+  "cat": "Texture Filtering",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Bilinear in Aniso",
+  "detailed_desc": "Controls bilinear filtering within AF.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x002ECAF2",
+  "name": "Trilinear Slope Opt",
+  "cat": "Texture Filtering",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Trilinear optimization",
+  "detailed_desc": "Optimizes trilinear filtering.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x0019BB68",
+  "name": "No Neg LOD Bias",
+  "cat": "Texture Filtering",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Negative LOD bias",
+  "detailed_desc": "Controls whether shaders can use negative LOD (Level of Detail) bias to sharpen textures beyond their native resolution. 'Allow negative' — permits shaders to specify negative bias values, which can over-sharpen textures and introduce aliasing or shimmer. 'Clamp' (recommended with DLSS/TAA) — prevents negative bias, which avoids the shimmering artifact that occurs when temporal upscalers combine negative bias with reconstructed sub-pixel data.",
+  "values": [
+   {
+    "name": "Allow negative",
+    "val": "0x0"
+   },
+   {
+    "name": "Clamp",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x00638E8F",
+  "name": "Driver LOD Adjust",
+  "cat": "Texture Filtering",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "Driver LOD Bias",
+  "detailed_desc": "Allows driver to adjust LOD bias.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x00738E8F",
+  "name": "LOD Bias Adjust",
+  "cat": "Texture Filtering",
+  "type": "hex",
+  "default": "0x0",
+  "desc": "LOD Bias Adjust",
+  "detailed_desc": "Manual LOD bias adjustment."
+ },
+ {
+  "id": "0x00CE2692",
+  "name": "Quality Substitution",
+  "cat": "Texture Filtering",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Quality Substitution",
+  "detailed_desc": "Controls quality setting substitutions.",
+  "values": [
+   {
+    "name": "No Substitution",
+    "val": "0x0"
+   },
+   {
+    "name": "HQ→Quality",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x10E41E01",
+  "name": "DLSS-SR Override",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "DLSS-SR override",
+  "detailed_desc": "Master override switch for DLSS Super Resolution (DLSS-SR). When set to 'On', DXVK-NVAPI allows the driver-level SR settings below (mode, preset, scaling) to take effect, overriding whatever the game engine has configured. Required before any DLSS-SR sub-setting takes effect. Set via env var: DXVK_NVAPI_DRS_NGX_DLSS_SR_OVERRIDE=on",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x10E41E02",
+  "name": "DLSS-RR Override",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "DLSS-RR override",
+  "detailed_desc": "Master override switch for DLSS Ray Reconstruction (DLSS-RR, formerly DLSS 3.5 Denoiser). When 'On', driver-level RR settings override the in-game configuration. DLSS-RR replaces traditional denoising in path-traced games (e.g. Cyberpunk 2077 with RT Overdrive) with an AI denoiser that recovers more detail and reduces noise. Set via env var: DXVK_NVAPI_DRS_NGX_DLSS_RR_OVERRIDE=on",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x10E41E03",
+  "name": "DLSS-FG Override",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "DLSS-FG override",
+  "detailed_desc": "Master override switch for DLSS Frame Generation (DLSS-FG / DLSSG). When 'On', allows the driver to control FG behavior independent of in-game settings. Frame Generation uses AI to synthesize intermediate frames between rendered frames, multiplying perceived frame rate. Requires RTX 40+ (Ada) or newer. On Turing/Ampere GPUs, DXVK_NVAPI_GPU_ARCH spoofing to GB200 is required to enable the FG code path. Set via env var: DXVK_NVAPI_DRS_NGX_DLSS_FG_OVERRIDE=on",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x10E41DF1",
+  "name": "DLSS-FG Preset",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "DLSS-FG Preset",
+  "detailed_desc": "Forces a specific neural network preset for DLSS Frame Generation. FG presets control the motion interpolation model behavior, trading artifact reduction vs. motion clarity at high speeds. The preset alphabet is the same as DLSS-SR but the internal models differ. Presets K–O require DLSS 4.5+. Recommended: 'Latest' (0xFFFFFF) to use NVIDIA's current recommended FG model.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "A",
+    "val": "0x1"
+   },
+   {
+    "name": "B",
+    "val": "0x2"
+   },
+   {
+    "name": "C",
+    "val": "0x3"
+   },
+   {
+    "name": "D",
+    "val": "0x4"
+   },
+   {
+    "name": "E",
+    "val": "0x5"
+   },
+   {
+    "name": "F",
+    "val": "0x6"
+   },
+   {
+    "name": "G",
+    "val": "0x7"
+   },
+   {
+    "name": "H",
+    "val": "0x8"
+   },
+   {
+    "name": "I",
+    "val": "0x9"
+   },
+   {
+    "name": "J",
+    "val": "0xa"
+   },
+   {
+    "name": "K",
+    "val": "0xb"
+   },
+   {
+    "name": "L",
+    "val": "0xc"
+   },
+   {
+    "name": "M",
+    "val": "0xd"
+   },
+   {
+    "name": "N",
+    "val": "0xe"
+   },
+   {
+    "name": "O",
+    "val": "0xf"
+   },
+   {
+    "name": "P",
+    "val": "0x10"
+   },
+   {
+    "name": "Q",
+    "val": "0x11"
+   },
+   {
+    "name": "R",
+    "val": "0x12"
+   },
+   {
+    "name": "S",
+    "val": "0x13"
+   },
+   {
+    "name": "T",
+    "val": "0x14"
+   },
+   {
+    "name": "U",
+    "val": "0x15"
+   },
+   {
+    "name": "V",
+    "val": "0x16"
+   },
+   {
+    "name": "W",
+    "val": "0x17"
+   },
+   {
+    "name": "X",
+    "val": "0x18"
+   },
+   {
+    "name": "Y",
+    "val": "0x19"
+   },
+   {
+    "name": "Z",
+    "val": "0x1a"
+   },
+   {
+    "name": "Default",
+    "val": "0xfffffe"
+   },
+   {
+    "name": "Latest",
+    "val": "0xffffff"
+   }
+  ]
+ },
+ {
+  "id": "0x10E41DF3",
+  "name": "DLSS-SR Preset",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "DLSS-SR Preset",
+  "detailed_desc": "Forces a specific DLSS Super Resolution neural network preset. Presets are purpose-built variants of the DLSS model that trade off temporal stability, sharpness, and ghosting differently:\n  A — Legacy default for Perf/Balanced/Quality. Good anti-ghosting for games missing motion vectors.\n  B — Legacy default for Ultra Performance mode.\n  C — Prefers current-frame data; less ghosting but less stable.\n  D — Favors temporal stability; was the modern default before E.\n  E — Current recommended default for Perf/Balanced/Quality (DLSS 3.7+). Better detail, sharpness, and reduced smearing vs D.\n  F — Current recommended default for Ultra Performance and DLAA (DLSS 3.7+).\n  'Latest' (0xFFFFFF) — always use the recommended preset for each mode.\nPresets K–O require DLSS 4.5+. When in doubt use 'Latest'.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "A",
+    "val": "0x1"
+   },
+   {
+    "name": "B",
+    "val": "0x2"
+   },
+   {
+    "name": "C",
+    "val": "0x3"
+   },
+   {
+    "name": "D",
+    "val": "0x4"
+   },
+   {
+    "name": "E",
+    "val": "0x5"
+   },
+   {
+    "name": "F",
+    "val": "0x6"
+   },
+   {
+    "name": "G",
+    "val": "0x7"
+   },
+   {
+    "name": "H",
+    "val": "0x8"
+   },
+   {
+    "name": "I",
+    "val": "0x9"
+   },
+   {
+    "name": "J",
+    "val": "0xa"
+   },
+   {
+    "name": "K",
+    "val": "0xb"
+   },
+   {
+    "name": "L",
+    "val": "0xc"
+   },
+   {
+    "name": "M",
+    "val": "0xd"
+   },
+   {
+    "name": "N",
+    "val": "0xe"
+   },
+   {
+    "name": "O",
+    "val": "0xf"
+   },
+   {
+    "name": "Latest",
+    "val": "0xffffff"
+   }
+  ]
+ },
+ {
+  "id": "0x10E41DF7",
+  "name": "DLSS-RR Preset",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "DLSS-RR Preset",
+  "detailed_desc": "Forces a specific neural network preset for DLSS Ray Reconstruction. Same preset alphabet as DLSS-SR (see DLSS-SR Preset). RR presets control how aggressively the denoiser reconstructs ray-traced detail — higher letter presets generally prioritize temporal stability and reduced flickering in complex RT lighting. Recommended: 'Latest' (0xFFFFFF) to always get NVIDIA's current best model for RR.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "A",
+    "val": "0x1"
+   },
+   {
+    "name": "B",
+    "val": "0x2"
+   },
+   {
+    "name": "C",
+    "val": "0x3"
+   },
+   {
+    "name": "D",
+    "val": "0x4"
+   },
+   {
+    "name": "E",
+    "val": "0x5"
+   },
+   {
+    "name": "F",
+    "val": "0x6"
+   },
+   {
+    "name": "G",
+    "val": "0x7"
+   },
+   {
+    "name": "H",
+    "val": "0x8"
+   },
+   {
+    "name": "I",
+    "val": "0x9"
+   },
+   {
+    "name": "J",
+    "val": "0xa"
+   },
+   {
+    "name": "K",
+    "val": "0xb"
+   },
+   {
+    "name": "L",
+    "val": "0xc"
+   },
+   {
+    "name": "M",
+    "val": "0xd"
+   },
+   {
+    "name": "N",
+    "val": "0xe"
+   },
+   {
+    "name": "O",
+    "val": "0xf"
+   },
+   {
+    "name": "Latest",
+    "val": "0xffffff"
+   }
+  ]
+ },
+ {
+  "id": "0x10AFB768",
+  "name": "DLSS-SR Mode",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x3",
+  "desc": "DLSS-SR Mode",
+  "detailed_desc": "Forces the DLSS Super Resolution quality tier, overriding the in-game setting. 'Performance' — renders at ~50% of output resolution (e.g. 1080p→2160p). Highest FPS boost, some quality loss.\n'Balanced' — renders at ~58% resolution. Good all-round choice.\n'Quality' — renders at ~67% resolution. Closest to native with DLSS.\n'DLAA' — renders at full native resolution and only applies anti-aliasing. Best quality, no performance gain.\n'Ultra Perf' — renders at ~33% resolution. Extreme FPS boost, soft image.\n'Custom' — uses the ratio set in DLSS-SR Scaling below.\n'Snippet Ctrl' (0x3) — leave game in control (default, no override).\nOnly active when DLSS-SR Override is On.",
+  "values": [
+   {
+    "name": "Performance",
+    "val": "0x0"
+   },
+   {
+    "name": "Balanced",
+    "val": "0x1"
+   },
+   {
+    "name": "Quality",
+    "val": "0x2"
+   },
+   {
+    "name": "Snippet Ctrl",
+    "val": "0x3"
+   },
+   {
+    "name": "DLAA",
+    "val": "0x4"
+   },
+   {
+    "name": "Ultra Perf",
+    "val": "0x5"
+   },
+   {
+    "name": "Custom",
+    "val": "0x6"
+   },
+   {
+    "name": "Reserved",
+    "val": "0x7"
+   }
+  ]
+ },
+ {
+  "id": "0x10BD9423",
+  "name": "DLSS-RR Mode",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x3",
+  "desc": "DLSS-RR Mode",
+  "detailed_desc": "Forces the DLSS Ray Reconstruction quality tier. Options are identical in name to DLSS-SR modes but map to different internal render ratios tuned for denoising rather than upscaling. Most users running RT Overdrive or other path-traced titles should leave this at 'Snippet Ctrl' and only change it if RR image quality is unsatisfactory. Only active when DLSS-RR Override is On.",
+  "values": [
+   {
+    "name": "Performance",
+    "val": "0x0"
+   },
+   {
+    "name": "Balanced",
+    "val": "0x1"
+   },
+   {
+    "name": "Quality",
+    "val": "0x2"
+   },
+   {
+    "name": "Snippet Ctrl",
+    "val": "0x3"
+   },
+   {
+    "name": "DLAA",
+    "val": "0x4"
+   },
+   {
+    "name": "Ultra Perf",
+    "val": "0x5"
+   },
+   {
+    "name": "Custom",
+    "val": "0x6"
+   }
+  ]
+ },
+ {
+  "id": "0x10E41DF4",
+  "name": "DLAA Override",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "DLAA Override",
+  "detailed_desc": "Forces DLSS to operate in DLAA (Deep Learning Anti-Aliasing) mode regardless of the quality mode the game sets. DLAA runs at full native resolution and uses the DLSS neural network solely for anti-aliasing — it does not upscale. Provides the highest image quality of all DLSS modes at the cost of not boosting frame rate. Only meaningful when DLSS-SR Override is On.",
+  "values": [
+   {
+    "name": "Default",
+    "val": "0x0"
+   },
+   {
+    "name": "Force DLAA",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x10E41DF5",
+  "name": "DLSS-SR Scaling",
+  "cat": "DLSS / NGX",
+  "type": "numeric",
+  "default": "0",
+  "desc": "DLSS-SR Scaling",
+  "detailed_desc": "Custom render resolution ratio for DLSS Super Resolution, expressed as an integer percentage (33–100). For example, 75 means the game renders at 75% of the output resolution before DLSS upscales to full output. Only active when DLSS-SR Mode is set to 'Custom'. Example: for 4K output at 75%, the internal render resolution is 2880×1620. Values below 50 are generally not recommended due to visible quality loss.",
+  "min": 33,
+  "max": 100
+ },
+ {
+  "id": "0x10C7D4A2",
+  "name": "DLSS-RR Scaling",
+  "cat": "DLSS / NGX",
+  "type": "numeric",
+  "default": "0",
+  "desc": "DLSS-RR Scaling",
+  "detailed_desc": "Custom render resolution ratio for DLSS Ray Reconstruction, expressed as an integer percentage (33–100). Analogous to DLSS-SR Scaling but applies only to the RR denoising pass. Only active when DLSS-RR Mode is set to 'Custom'. Requires DLSS-RR Override to be On.",
+  "min": 33,
+  "max": 100
+ },
+ {
+  "id": "0x104D6667",
+  "name": "DLSS-G Multi-Frame",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "DLSS-G Multi-Frame",
+  "detailed_desc": "Controls how many interpolated frames DLSS Frame Generation inserts between each rendered frame (Multi-Frame Generation / MFG). 'Off / App' (0) — no override; the game's own FG setting applies. '2x'–'6x' (1–5) — 1 to 5 generated frames per rendered frame. The header allows up to 15 (16x) but dxvk-nvapi documents 5 (6x) as the highest currently supported value, so larger values are not offered. Higher multipliers amplify latency proportionally; NVIDIA Reflex is strongly recommended to compensate. RTX 50 (Blackwell) supports MFG natively; earlier cards require DXVK_NVAPI_GPU_ARCH=GB200 spoofing.",
+  "values": [
+   {
+    "name": "Off / App",
+    "val": "0x0"
+   },
+   {
+    "name": "2x",
+    "val": "0x1"
+   },
+   {
+    "name": "3x",
+    "val": "0x2"
+   },
+   {
+    "name": "4x",
+    "val": "0x3"
+   },
+   {
+    "name": "5x",
+    "val": "0x4"
+   },
+   {
+    "name": "6x",
+    "val": "0x5"
+   }
+  ]
+ },
+ {
+  "id": "0x10308298",
+  "name": "DLSSG Mode",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "DLSSG Mode",
+  "detailed_desc": "Controls the activation state of DLSS Frame Generation (DLSSG). 'Disabled' (0x0) — the DLSSG runtime is not initialized at all. 'Off' (0x1) — runtime initializes but FG is inactive. 'On' (0x2) — FG is active; generates frames between rendered frames. 'Auto' (0x3) — driver decides based on frame rate and system load. 'Dynamic' (0x4) — DLSSG dynamically adjusts the multiplier based on target FPS set in DLSSG Target FPS. Requires DLSS-FG Override to be On.",
+  "values": [
+   {
+    "name": "Disabled",
+    "val": "0x0"
+   },
+   {
+    "name": "Off",
+    "val": "0x1"
+   },
+   {
+    "name": "On",
+    "val": "0x2"
+   },
+   {
+    "name": "Auto",
+    "val": "0x3"
+   },
+   {
+    "name": "Dynamic",
+    "val": "0x4"
+   }
+  ]
+ },
+ {
+  "id": "0x10562D0F",
+  "name": "DLSSG Dynamic Max",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "DLSSG Dynamic Max",
+  "detailed_desc": "Maximum number of generated frames DLSS Frame Generation can insert per rendered frame when operating in Dynamic mode. Acts as a ceiling to prevent excessive latency even if the dynamic algorithm would otherwise go higher. Values per the dxvk-nvapi wiki: 0 = off, 1 = up to 2x ... 5 = up to 6x. Only relevant when DLSSG Mode is 'Dynamic'.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "Up to 2x",
+    "val": "0x1"
+   },
+   {
+    "name": "Up to 3x",
+    "val": "0x2"
+   },
+   {
+    "name": "Up to 4x",
+    "val": "0x3"
+   },
+   {
+    "name": "Up to 5x",
+    "val": "0x4"
+   },
+   {
+    "name": "Up to 6x",
+    "val": "0x5"
+   }
+  ]
+ },
+ {
+  "id": "0x10CF4125",
+  "name": "DLSSG Target FPS",
+  "cat": "DLSS / NGX",
+  "type": "numeric",
+  "default": "0x0",
+  "desc": "DLSSG Target FPS",
+  "detailed_desc": "Sets the target output frame rate for DLSS Frame Generation in Dynamic mode. The driver adjusts the MFG multiplier in real time to try to hit this FPS. 0 disables it. Specify in frames per second as a decimal integer: 60 = 0x3C, 120 = 0x78, 144 = 0x90, 240 = 0xF0. Special value 0x1000000 = automatic (driver picks the target). Only meaningful when DLSSG Mode is set to 'Dynamic'.",
+  "presets": [
+   {
+    "name": "Disabled",
+    "val": "0x0"
+   },
+   {
+    "name": "60",
+    "val": "0x3C"
+   },
+   {
+    "name": "120",
+    "val": "0x78"
+   },
+   {
+    "name": "144",
+    "val": "0x90"
+   },
+   {
+    "name": "165",
+    "val": "0xA5"
+   },
+   {
+    "name": "240",
+    "val": "0xF0"
+   },
+   {
+    "name": "Auto",
+    "val": "0x1000000"
+   }
+  ],
+  "max": 16777216
+ },
+ {
+  "id": "0x10AFB76C",
+  "name": "DLSS Ultra-Perf",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "DLSS Ultra-Performance",
+  "detailed_desc": "Forces DLSS Super Resolution into Ultra Performance mode at the driver level, bypassing the in-game preset menu. Ultra Performance renders at ~33% of output resolution — the most aggressive upscaling ratio — providing the largest frame rate boost at the cost of image quality. Useful on lower-end RTX cards at 4K output when DLAA/Quality would be too slow. 'None' leaves mode selection to the game.",
+  "values": [
+   {
+    "name": "None",
+    "val": "0x0"
+   },
+   {
+    "name": "Force Ultra Perf",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x10444444",
+  "name": "NVIDIA Upscaling",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "NVIDIA Upscaling",
+  "detailed_desc": "Enables NVIDIA Image Scaling (NIS), NVIDIA's older spatial upscaler that does not require Tensor cores. NIS uses an adaptive sharpening + upscaling algorithm and works on all Turing and later GPUs. It is less accurate than DLSS Super Resolution but has near-zero latency overhead. Note: on Linux/Proton, NIS is typically configured per-game inside NVIDIA Control Panel or via game settings rather than this DRS flag.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x10E41E04",
+  "name": "DLSS-NR Override",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "DLSS-NR override",
+  "detailed_desc": "Master override switch for DLSS Noise Reduction (DLSS-NR), an AI-based denoiser primarily aimed at ray-traced effects in titles that expose the NGX NR interface. When 'On', preset and mode settings for NR take effect. This is a newer NGX feature; availability depends on game and driver version.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x10E41DF8",
+  "name": "DLSS-NR Preset",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "DLSS-NR Preset",
+  "detailed_desc": "Selects the neural network preset for DLSS Noise Reduction. NVIDIA's header only defines presets A through D plus Latest for NR (unlike SR/RR, which go up to O). See DLSS-SR Preset for descriptions of preset characteristics. Recommended: 'Latest' to always use NVIDIA's current best NR model.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "A",
+    "val": "0x1"
+   },
+   {
+    "name": "B",
+    "val": "0x2"
+   },
+   {
+    "name": "C",
+    "val": "0x3"
+   },
+   {
+    "name": "D",
+    "val": "0x4"
+   },
+   {
+    "name": "Latest",
+    "val": "0xffffff"
+   }
+  ]
+ },
+ {
+  "id": "0x10E41E05",
+  "name": "DLSS-NR SL Override",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "DLSS-NR SL override",
+  "detailed_desc": "Enables override for DLSS Noise Reduction Super Lens.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x10E41E06",
+  "name": "Streamline Override",
+  "cat": "DLSS / NGX",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Enable Streamline override",
+  "detailed_desc": "SL_DLSS_OVERRIDE (0x10E41E06). Enables the driver's override path for games that integrate DLSS through NVIDIA Streamline rather than calling NGX directly. Named key in dxvk-nvapi: DXVK_NVAPI_DRS_SL_DLSS_OVERRIDE=on. Pair with the SR/RR/FG override switches and PROTON_ENABLE_NGX_UPDATER=1 when forcing newer presets in Streamline titles.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x1057EB71",
+  "name": "GPU Power Mode",
+  "cat": "Power",
+  "type": "enum",
+  "default": "0x5",
+  "desc": "GPU Power Mode",
+  "detailed_desc": "Controls the GPU power management policy. 'Adaptive' — clocks scale with workload; best balance of performance and power. 'Prefer Max' — boosts clocks as high as possible; maximum performance but higher power draw and temperatures. 'Driver Ctrl' — driver manages power state autonomously. 'Consistent Perf' — minimizes clock variation for repeatable benchmarks. 'Prefer Min' — aggressively clocks down; minimum power, lowest performance. 'Optimal Power' (default, 0x5) — NVIDIA's recommended mode; efficient performance scaling. On the Alienware M16 R1, 'Prefer Max' paired with a custom Curve Optimizer may improve 1% lows under sustained load.",
+  "values": [
+   {
+    "name": "Adaptive",
+    "val": "0x0"
+   },
+   {
+    "name": "Prefer Max",
+    "val": "0x1"
+   },
+   {
+    "name": "Driver Ctrl",
+    "val": "0x2"
+   },
+   {
+    "name": "Consistent Perf",
+    "val": "0x3"
+   },
+   {
+    "name": "Prefer Min",
+    "val": "0x4"
+   },
+   {
+    "name": "Optimal Power",
+    "val": "0x5"
+   }
+  ]
+ },
+ {
+  "id": "0x10D1EF29",
+  "name": "GPU Max Power",
+  "cat": "Power",
+  "type": "numeric",
+  "default": "0x0",
+  "desc": "GPU Max Power",
+  "detailed_desc": "Sets the maximum GPU power limit in watts at the driver level. Range 0–175 W. 0 = use the GPU's built-in default TDP. Lowering this value can reduce temperatures and fan noise on thermally constrained systems (e.g. laptops). For the RTX 4080 Mobile the factory TGP is typically 60–150 W depending on the OEM configuration; setting a value below the base TGP will throttle GPU clocks. Pair with Ryzenadj for coordinated CPU+GPU power budgeting.",
+  "max": 175
+ },
+ {
+  "id": "0x00AE785C",
+  "name": "Power Throttle",
+  "cat": "Power",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Power Throttle",
+  "detailed_desc": "Controls whether the GPU throttles its power draw to comply with the PCIe slot power specification (typically 75 W for standard slots). 'Off' — no PCIe slot throttling; the GPU may exceed slot limits, relying on supplemental PCIe power connectors. Normal for desktop GPUs. 'On' — enforces slot power compliance; relevant for small-form-factor or riser-connected configurations.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x007BA09E",
+  "name": "Pre-Render Limit",
+  "cat": "Frame Rate",
+  "type": "numeric",
+  "default": "0",
+  "desc": "Pre-Rendered Frames",
+  "detailed_desc": "Maximum number of frames the CPU is allowed to queue ahead of the GPU. Lower values (1–2) reduce input latency because the CPU cannot race too far ahead of the GPU. Higher values (3+) can smooth out frame time variance at the cost of increased latency. 0 = driver default (typically 3). NVIDIA Reflex supersedes this setting for latency reduction in supported games; if using Reflex, leave Pre-Render Limit at its default.",
+  "max": 255
+ },
+ {
+  "id": "0x10835002",
+  "name": "FPS Limiter",
+  "cat": "Frame Rate",
+  "type": "numeric",
+  "default": "0x0",
+  "desc": "FPS Limiter",
+  "detailed_desc": "Hard frame rate cap applied at the driver's flip queue level. The limiter fires before the frame is queued for presentation, so it removes idle GPU spinning and reduces power/heat. Common values: 30=0x1E, 60=0x3C, 120=0x78, 144=0x90, 165=0xA5, 240=0xF0. 0 = no limit. Prefer an in-game limiter or NVIDIA Reflex's built-in cap for the most latency-friendly implementation; use this DRS limiter as a fallback.",
+  "presets": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "60",
+    "val": "0x3C"
+   },
+   {
+    "name": "120",
+    "val": "0x78"
+   },
+   {
+    "name": "144",
+    "val": "0x90"
+   },
+   {
+    "name": "165",
+    "val": "0xA5"
+   },
+   {
+    "name": "240",
+    "val": "0xF0"
+   }
+  ],
+  "max": 1023
+ },
+ {
+  "id": "0x10835016",
+  "name": "Idle FPS Limit",
+  "cat": "Frame Rate",
+  "type": "numeric",
+  "default": "0x14",
+  "desc": "Idle FPS Limit",
+  "detailed_desc": "Frame rate cap applied when the application loses focus (e.g. alt-tabbed or minimized). Prevents the GPU from running at full speed while the game window is not visible, saving power and thermal headroom. Default is 20 FPS (0x14). Common values: 20=0x14, 30=0x1E, 60=0x3C. Set to a low value like 20–30 FPS for laptops on battery to conserve energy.",
+  "max": 1023
+ },
+ {
+  "id": "0x10835017",
+  "name": "Idle Threshold",
+  "cat": "Frame Rate",
+  "type": "numeric",
+  "default": "3",
+  "desc": "Idle Threshold",
+  "detailed_desc": "Number of seconds the application must be in the background (unfocused) before the Idle FPS Limit kicks in. Default is 3 seconds. Increase if you use alt-tab frequently and find the FPS drop too jarring when quickly switching back.",
+  "max": 3600
+ },
+ {
+  "id": "0x10111133",
+  "name": "VR Pre-Render",
+  "cat": "Frame Rate",
+  "type": "numeric",
+  "default": "1",
+  "desc": "VR Pre-Rendered Frames",
+  "detailed_desc": "Pre-rendered frames for VR applications.",
+  "max": 255
+ },
+ {
+  "id": "0x1095F170",
+  "name": "Latency Autoalign",
+  "cat": "Frame Rate",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "Latency Autoalign",
+  "detailed_desc": "When enabled, the driver automatically aligns the NVIDIA FrameView / Reflex latency flash trigger to the correct render event. Leave Enabled unless you are manually calibrating a latency measurement setup and need precise manual alignment.",
+  "values": [
+   {
+    "name": "Disabled",
+    "val": "0x0"
+   },
+   {
+    "name": "Enabled",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x1194F158",
+  "name": "G-Sync/VRR Mode",
+  "cat": "VRR / G-Sync",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "G-Sync/VRR Mode",
+  "detailed_desc": "Global G-SYNC / VRR enable switch that applies to all applications. 'Disabled' — VRR is completely off; monitor runs at fixed refresh rate. 'Fullscreen' — VRR only active when the application is in exclusive fullscreen mode. Most compatible and lowest overhead. 'Full+Window' — extends VRR to borderless/windowed applications. Requires a G-SYNC compatible or native G-SYNC display. On Wayland/Proton, VRR state is also influenced by the compositor (KDE Plasma → Force fullscreen repaint or allow VRR per-window).",
+  "values": [
+   {
+    "name": "Disabled",
+    "val": "0x0"
+   },
+   {
+    "name": "Fullscreen",
+    "val": "0x1"
+   },
+   {
+    "name": "Full+Window",
+    "val": "0x2"
+   }
+  ]
+ },
+ {
+  "id": "0x1094F1F7",
+  "name": "VRR Request",
+  "cat": "VRR / G-Sync",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "VRR Request State",
+  "detailed_desc": "Specifies which VRR modes an application is permitted to request from the driver. This is the capability advertisement; the actual behavior also depends on G-Sync/VRR Mode above. 'Fullscreen' — apps can only activate VRR in exclusive fullscreen. 'Full+Window' — apps can request VRR in borderless/windowed modes too. In most cases this should match the global G-Sync/VRR Mode setting.",
+  "values": [
+   {
+    "name": "Disabled",
+    "val": "0x0"
+   },
+   {
+    "name": "Fullscreen",
+    "val": "0x1"
+   },
+   {
+    "name": "Full+Window",
+    "val": "0x2"
+   }
+  ]
+ },
+ {
+  "id": "0x10A879CE",
+  "name": "VRR Control",
+  "cat": "VRR / G-Sync",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "VRR Control",
+  "detailed_desc": "Per-application VRR enable/disable switch. 'Enable' — allows this application to use VRR when the global setting and monitor capability permit it. 'Disable' — forces fixed refresh rate for this application even if VRR is globally on (useful for locked-framerate competitive titles). 'Not Supported' — marks the app as VRR-incompatible at the API level.",
+  "values": [
+   {
+    "name": "Disable",
+    "val": "0x0"
+   },
+   {
+    "name": "Enable",
+    "val": "0x1"
+   },
+   {
+    "name": "Not Supported",
+    "val": "0x9f95128e"
+   }
+  ]
+ },
+ {
+  "id": "0x00A879CF",
+  "name": "VSync Mode",
+  "cat": "VRR / G-Sync",
+  "type": "hex-preset",
+  "default": "0x60925292",
+  "desc": "VSync Mode",
+  "detailed_desc": "Advanced VSync presentation mode control that interacts with VRR. 'Passive' (0x60925292) — standard behavior; VSync state controlled by application and global settings. 'Force Off' — disables VSync regardless of app request (max FPS, tearing possible). 'Force On' — always enables VSync (capped to refresh rate, no tearing). 'Flip 2/3/4' — controls flip queue depth (number of queued frames). Deeper queues smooth out CPU/GPU spikes at the cost of extra latency. 'Virtual' (0x18888888) — virtual VSync mode for special presentation paths.",
+  "presets": [
+   {
+    "name": "Passive",
+    "val": "0x60925292"
+   },
+   {
+    "name": "Force Off",
+    "val": "0x08416747"
+   },
+   {
+    "name": "Force On",
+    "val": "0x47814940"
+   },
+   {
+    "name": "Flip 2",
+    "val": "0x32610244"
+   },
+   {
+    "name": "Flip 3",
+    "val": "0x71271021"
+   },
+   {
+    "name": "Flip 4",
+    "val": "0x13245256"
+   },
+   {
+    "name": "Virtual",
+    "val": "0x18888888"
+   }
+  ]
+ },
+ {
+  "id": "0x10A879CF",
+  "name": "G-Sync Override",
+  "cat": "VRR / G-Sync",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "G-Sync Override",
+  "detailed_desc": "Per-application G-SYNC mode override. 'Allow' (default) — G-SYNC operates according to global settings. 'Force Off' — disables G-SYNC for this app. 'Disallow' — prevents the app from requesting G-SYNC. 'ULMB' — Ultra Low Motion Blur mode (strobed backlight, incompatible with VRR). 'Fixed Ref' — fixed refresh rate reference mode. ULMB requires a G-SYNC native (not compatible) monitor.",
+  "values": [
+   {
+    "name": "Allow",
+    "val": "0x0"
+   },
+   {
+    "name": "Force Off",
+    "val": "0x1"
+   },
+   {
+    "name": "Disallow",
+    "val": "0x2"
+   },
+   {
+    "name": "ULMB",
+    "val": "0x3"
+   },
+   {
+    "name": "Fixed Ref",
+    "val": "0x4"
+   }
+  ]
+ },
+ {
+  "id": "0x10A879AC",
+  "name": "VRR App Override",
+  "cat": "VRR / G-Sync",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "VRR App Override",
+  "detailed_desc": "Request state for G-SYNC per application.",
+  "values": [
+   {
+    "name": "Allow",
+    "val": "0x0"
+   },
+   {
+    "name": "Force Off",
+    "val": "0x1"
+   },
+   {
+    "name": "Disallow",
+    "val": "0x2"
+   },
+   {
+    "name": "ULMB",
+    "val": "0x3"
+   },
+   {
+    "name": "Fixed Ref",
+    "val": "0x4"
+   }
+  ]
+ },
+ {
+  "id": "0x1094F157",
+  "name": "VRR Feature",
+  "cat": "VRR / G-Sync",
+  "type": "hex-preset",
+  "default": "0x1",
+  "desc": "VRR Feature",
+  "detailed_desc": "Toggle VRR global feature indicator.",
+  "presets": [
+   {
+    "name": "Disabled",
+    "val": "0x0"
+   },
+   {
+    "name": "Enabled",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x1095F16F",
+  "name": "VRR Overlay",
+  "cat": "VRR / G-Sync",
+  "type": "hex-preset",
+  "default": "0x1",
+  "desc": "VRR Overlay",
+  "detailed_desc": "Display VRR overlay indicator.",
+  "presets": [
+   {
+    "name": "Disabled",
+    "val": "0x0"
+   },
+   {
+    "name": "Enabled",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x005A375C",
+  "name": "Tear Control",
+  "cat": "VSync / Flip",
+  "type": "hex-preset",
+  "default": "0x96861077",
+  "desc": "Tear Control",
+  "detailed_desc": "Top-level control for screen tearing behavior. 'Disable tearing' (0x96861077) — enables VSync/flip synchronisation to prevent torn frames. Default for most applications. 'Enable tearing' (0x99941284) — forces immediate presentation with no synchronisation, allowing the display to show partial frames from different render cycles. Minimizes latency but produces visible tearing. Override this at the per-app level alongside G-Sync settings for latency-critical titles.",
+  "presets": [
+   {
+    "name": "Disable tearing",
+    "val": "0x96861077"
+   },
+   {
+    "name": "Enable tearing",
+    "val": "0x99941284"
+   }
+  ]
+ },
+ {
+  "id": "0x101AE763",
+  "name": "Smooth AFR",
+  "cat": "VSync / Flip",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Smooth AFR",
+  "detailed_desc": "Controls smooth Alternate Frame Rendering.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x10FDEC23",
+  "name": "VSync Flags",
+  "cat": "VSync / Flip",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "VSync Flags",
+  "detailed_desc": "Additional VSync behavior controls.",
+  "values": [
+   {
+    "name": "Default",
+    "val": "0x0"
+   },
+   {
+    "name": "Ignore Flip Interval",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x00198FFF",
+  "name": "Shader Cache",
+  "cat": "Shader",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "Shader Cache",
+  "detailed_desc": "Enables the driver's on-disk shader cache. When enabled, compiled GPU shader programs are stored to disk so they can be reused on subsequent launches without recompilation. Disabling this forces the driver to recompile shaders from scratch every launch, causing stuttering the first time each shader is used. Leave Enabled unless diagnosing a shader cache corruption or disk space issue.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x00AC8497",
+  "name": "Cache Max Size",
+  "cat": "Shader",
+  "type": "enum",
+  "default": "0x4000",
+  "desc": "Cache Max Size",
+  "detailed_desc": "Maximum size of the driver shader disk cache in megabytes. Once the cache reaches this size, older entries are evicted. The default is 16384 MB (16 GB). For heavy workloads (multiple large games, content creation), 32768 MB (32 GB) prevents premature eviction. If disk space is limited, reduce to 4096 MB. The cache is typically stored under %LOCALAPPDATA%/NVIDIA/DXCache or ~/.nv/ComputeCache on Linux.",
+  "values": [
+   {
+    "name": "Default",
+    "val": "0x0"
+   },
+   {
+    "name": "4096 MB",
+    "val": "0x1000"
+   },
+   {
+    "name": "8192 MB",
+    "val": "0x2000"
+   },
+   {
+    "name": "16384 MB",
+    "val": "0x4000"
+   },
+   {
+    "name": "32768 MB",
+    "val": "0x8000"
+   }
+  ]
+ },
+ {
+  "id": "0x00D74EF6",
+  "name": "Offline Compiler",
+  "cat": "Shader",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "Offline Compiler",
+  "detailed_desc": "Enables offline shader compilation.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x07184358"
+   },
+   {
+    "name": "On",
+    "val": "0x64318112"
+   }
+  ]
+ },
+ {
+  "id": "0x00667329",
+  "name": "AO Mode",
+  "cat": "AO",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "AO Mode",
+  "detailed_desc": "Controls the quality of NVIDIA's driver-injected Ambient Occlusion. AO darkens crevices, corners, and surfaces near occluders to add contact shadows and depth. The driver AO is a post-process approximation. 'Off' — no driver AO (use the game's built-in AO instead). 'Low/Medium/High' — increasing quality at increasing cost. For modern titles with HBAO+ or RTAO built-in, set to 'Off' to avoid double-AO artifacts.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "Low",
+    "val": "0x1"
+   },
+   {
+    "name": "Medium",
+    "val": "0x2"
+   },
+   {
+    "name": "High",
+    "val": "0x3"
+   }
+  ]
+ },
+ {
+  "id": "0x00664339",
+  "name": "AO Usage",
+  "cat": "AO",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "AO Usage",
+  "detailed_desc": "Per-application enable switch for driver-level Ambient Occlusion. When Disabled, the AO Mode setting above is ignored for this application. Enable only for older DX9/DX10/OpenGL games that lack built-in AO.",
+  "values": [
+   {
+    "name": "Disabled",
+    "val": "0x0"
+   },
+   {
+    "name": "Enabled",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x1034CB89",
+  "name": "FXAA Allow",
+  "cat": "FXAA",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "FXAA Allow",
+  "detailed_desc": "Controls whether FXAA (Fast Approximate Anti-Aliasing) is permitted to activate for this application. 'Allowed' means FXAA can be enabled by the FXAA Enable setting below; 'Disallowed' prevents FXAA even if globally requested. Use 'Disallowed' for games that have their own temporal AA or DLSS where FXAA would add unwanted blur.",
+  "values": [
+   {
+    "name": "Disallowed",
+    "val": "0x0"
+   },
+   {
+    "name": "Allowed",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x1074C972",
+  "name": "FXAA Enable",
+  "cat": "FXAA",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "FXAA Enable",
+  "detailed_desc": "Enables or disables NVIDIA FXAA post-process anti-aliasing. FXAA is a screen-space, single-pass AA technique with very low performance cost. It smooths jagged edges by blending neighboring pixels along contrast boundaries. Quality is lower than MSAA or DLSS but it works on any game regardless of engine support. On modern titles with temporal AA or DLSS, FXAA often adds unwanted softness — disable it in those cases.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x1068FB9C",
+  "name": "FXAA Indicator",
+  "cat": "FXAA",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "FXAA Indicator",
+  "detailed_desc": "Shows FXAA on-screen indicator.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x1035DB89",
+  "name": "Ansel Allow",
+  "cat": "Ansel",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "Ansel Allow",
+  "detailed_desc": "Controls whether NVIDIA Ansel (the driver-level screenshot tool) is permitted to activate in this application. 'Allowed' lets Ansel intercept the Alt+F2 shortcut to enter free-camera screenshot mode. 'Disallowed' prevents Ansel from loading into the process entirely. Disallow if you experience game crashes or anti-cheat conflicts related to Ansel's injection.",
+  "values": [
+   {
+    "name": "Disallowed",
+    "val": "0x0"
+   },
+   {
+    "name": "Allowed",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x1085DA8A",
+  "name": "Ansel Allowlisted",
+  "cat": "Ansel",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Ansel Allowlisted",
+  "detailed_desc": "Marks applications as Ansel-enabled.",
+  "values": [
+   {
+    "name": "Not allowlisted",
+    "val": "0x0"
+   },
+   {
+    "name": "Allowlisted",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x1075D972",
+  "name": "Ansel Enable",
+  "cat": "Ansel",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "Ansel Enable",
+  "detailed_desc": "Globally enables or disables NVIDIA Ansel. When off, the Ansel overlay is not loaded regardless of the 'Ansel Allow' setting. Disable system-wide if you use a different screenshot tool (e.g. Fraps, OBS, Reshade) and don't want Ansel to interfere.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x11AE435C",
+  "name": "Stereo Eyes Exchange",
+  "cat": "Stereo",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Stereo - Eyes Exchange",
+  "detailed_desc": "Swaps left and right eye in stereo 3D.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x11E91A61",
+  "name": "Stereo Display Mode",
+  "cat": "Stereo",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Stereo - Display Mode",
+  "detailed_desc": "Selects stereo 3D display method.",
+  "values": [
+   {
+    "name": "Shutter Glasses",
+    "val": "0x0"
+   },
+   {
+    "name": "Vertical Interlaced",
+    "val": "0x1"
+   },
+   {
+    "name": "TwinView",
+    "val": "0x2"
+   },
+   {
+    "name": "NV17 Auto",
+    "val": "0x3"
+   },
+   {
+    "name": "NV17 DAC0",
+    "val": "0x4"
+   },
+   {
+    "name": "NV17 DAC1",
+    "val": "0x5"
+   },
+   {
+    "name": "Color Line",
+    "val": "0x6"
+   },
+   {
+    "name": "Color Interleaved",
+    "val": "0x7"
+   },
+   {
+    "name": "Anaglyph",
+    "val": "0x8"
+   },
+   {
+    "name": "Horizontal Interlaced",
+    "val": "0x9"
+   },
+   {
+    "name": "Side Field",
+    "val": "0xa"
+   },
+   {
+    "name": "Sub Field",
+    "val": "0xb"
+   },
+   {
+    "name": "Checkerboard",
+    "val": "0xc"
+   },
+   {
+    "name": "Inverse Checkerboard",
+    "val": "0xd"
+   },
+   {
+    "name": "Tridelity SL",
+    "val": "0xe"
+   },
+   {
+    "name": "Tridelity MV",
+    "val": "0xf"
+   },
+   {
+    "name": "SeeFront",
+    "val": "0x10"
+   },
+   {
+    "name": "Stereo Mirror",
+    "val": "0x11"
+   },
+   {
+    "name": "Frame Sequential",
+    "val": "0x12"
+   },
+   {
+    "name": "Autodetect Passive",
+    "val": "0x13"
+   },
+   {
+    "name": "AEGIS DT",
+    "val": "0x14"
+   },
+   {
+    "name": "OEM Emitter",
+    "val": "0x15"
+   },
+   {
+    "name": "DP Inband",
+    "val": "0x16"
+   },
+   {
+    "name": "HW Default",
+    "val": "0xffffffff"
+   }
+  ]
+ },
+ {
+  "id": "0x112493BD",
+  "name": "Stereo Dongle",
+  "cat": "Stereo",
+  "type": "enum",
+  "default": "0x1",
+  "desc": "Stereo - Dongle Support",
+  "detailed_desc": "Configures stereo dongle support.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "DAC",
+    "val": "0x1"
+   },
+   {
+    "name": "DLP",
+    "val": "0x2"
+   }
+  ]
+ },
+ {
+  "id": "0x11AA9E99",
+  "name": "Stereo Support",
+  "cat": "Stereo",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Stereo - Support",
+  "detailed_desc": "Enables/disables stereo 3D rendering.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x11333333",
+  "name": "Stereo Swap Mode",
+  "cat": "Stereo",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Stereo - Swap Mode",
+  "detailed_desc": "Controls stereo swap behavior.",
+  "values": [
+   {
+    "name": "App Control",
+    "val": "0x0"
+   },
+   {
+    "name": "Per Eye",
+    "val": "0x1"
+   },
+   {
+    "name": "Per Eye Pair",
+    "val": "0x2"
+   },
+   {
+    "name": "Legacy",
+    "val": "0x3"
+   },
+   {
+    "name": "Per Eye Swap",
+    "val": "0x4"
+   }
+  ]
+ },
+ {
+  "id": "0x108F0841",
+  "name": "Export Perf Counters",
+  "cat": "Misc",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Export Performance Counters",
+  "detailed_desc": "Allows applications (profilers, benchmark tools) to read GPU hardware performance counters via NVAPI. When enabled, counters such as shader utilization, memory bandwidth, and occupancy are accessible to user-space profiling tools. Has no effect on rendering; disable if you want to prevent third-party tools from reading detailed GPU metrics.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x10115C8D",
+  "name": "XQM Mode",
+  "cat": "Misc",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "XQM Mode",
+  "detailed_desc": "External Quiet Mode for reduced noise.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x10287051",
+  "name": "SLI Indicator",
+  "cat": "Misc",
+  "type": "hex-preset",
+  "default": "0x34534064",
+  "desc": "SLI Indicator",
+  "detailed_desc": "Shows on-screen SLI status indicator.",
+  "presets": [
+   {
+    "name": "Disabled",
+    "val": "0x34534064"
+   },
+   {
+    "name": "Enabled",
+    "val": "0x24545582"
+   }
+  ]
+ },
+ {
+  "id": "0x1094F16F",
+  "name": "PhysX Indicator",
+  "cat": "Misc",
+  "type": "hex-preset",
+  "default": "0x34534064",
+  "desc": "PhysX Indicator",
+  "detailed_desc": "Shows on-screen PhysX status indicator.",
+  "presets": [
+   {
+    "name": "Disabled",
+    "val": "0x34534064"
+   },
+   {
+    "name": "Enabled",
+    "val": "0x24545582"
+   }
+  ]
+ },
+ {
+  "id": "0x10115C8C",
+  "name": "Battery Boost",
+  "cat": "Misc",
+  "type": "numeric",
+  "default": "0",
+  "desc": "Battery Boost",
+  "detailed_desc": "Target FPS for Battery Boost mode.",
+  "max": 1023
+ },
+ {
+  "id": "0x104554B6",
+  "name": "Profile Timeout",
+  "cat": "Misc",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Profile Timeout",
+  "detailed_desc": "Application profile notification timeout.",
+  "values": [
+   {
+    "name": "Disabled",
+    "val": "0x0"
+   },
+   {
+    "name": "9 Sec",
+    "val": "0x9"
+   },
+   {
+    "name": "15 Sec",
+    "val": "0xf"
+   },
+   {
+    "name": "30 Sec",
+    "val": "0x1e"
+   },
+   {
+    "name": "1 Min",
+    "val": "0x3c"
+   },
+   {
+    "name": "2 Min",
+    "val": "0x78"
+   }
+  ]
+ },
+ {
+  "id": "0x107CDDBC",
+  "name": "Steam ID",
+  "cat": "Misc",
+  "type": "hex",
+  "default": "0x0",
+  "desc": "Steam ID",
+  "detailed_desc": "Associates this driver profile with a specific Steam application ID. The value corresponds to the numeric Steam App ID (appid) found in the game's Steam store URL. When set, NVAPI will match the profile to the correct game even if the executable name is ambiguous. Example: Cyberpunk 2077 = 0x00124B6D (1203220 decimal). Leave at 0x0 for non-Steam titles or when matching by executable name."
+ },
+ {
+  "id": "0x106D5CFF",
+  "name": "CPL Hidden",
+  "cat": "Misc",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "CPL Hidden",
+  "detailed_desc": "Hides profile from NVIDIA Control Panel.",
+  "values": [
+   {
+    "name": "Disabled",
+    "val": "0x0"
+   },
+   {
+    "name": "Enabled",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x10354FF8",
+  "name": "CUDA Excluded",
+  "cat": "Misc",
+  "type": "hex",
+  "default": "0x0",
+  "desc": "CUDA Excluded",
+  "detailed_desc": "Excludes specific GPUs from CUDA."
+ },
+ {
+  "id": "0x10F9DC83",
+  "name": "Optimus Max AA",
+  "cat": "Misc",
+  "type": "numeric",
+  "default": "0",
+  "desc": "Optimus Max AA",
+  "detailed_desc": "Maximum AA samples for Optimus.",
+  "max": 16
+ },
+ {
+  "id": "0x103BCCB5",
+  "name": "Prevent UI AF",
+  "cat": "Misc",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Prevent UI AF",
+  "detailed_desc": "Prevents AF override in UI elements.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x00AB8687",
+  "name": "Set VAB Data",
+  "cat": "Misc",
+  "type": "enum",
+  "default": "0xffffffff",
+  "desc": "Set VAB Data",
+  "detailed_desc": "VAB Default Data values.",
+  "values": [
+   {
+    "name": "Zero",
+    "val": "0x0"
+   },
+   {
+    "name": "UINT One",
+    "val": "0x1"
+   },
+   {
+    "name": "Float One",
+    "val": "0x3f800000"
+   },
+   {
+    "name": "Float Inf",
+    "val": "0x7f800000"
+   },
+   {
+    "name": "Float NaN",
+    "val": "0x7fc00000"
+   },
+   {
+    "name": "API Defaults",
+    "val": "0xffffffff"
+   }
+  ]
+ },
+ {
+  "id": "0x0098C1AC",
+  "name": "MFAA",
+  "cat": "Misc",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "MFAA",
+  "detailed_desc": "Enables MFAA (Multi-Frame Anti-Aliasing), an NVIDIA technique that distributes MSAA sample positions temporally across frames. MFAA provides similar visual quality to 4x MSAA at roughly 2x MSAA cost. Only effective in DX11 and OpenGL; has no effect in DX12/Vulkan titles. Combine with AA Mode 'Override' or 'Enhance' and an MSAA level for best results.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x0064B541",
+  "name": "Refresh Rate",
+  "cat": "Misc",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Refresh Rate",
+  "detailed_desc": "Preferred display refresh rate.",
+  "values": [
+   {
+    "name": "App Controlled",
+    "val": "0x0"
+   },
+   {
+    "name": "Highest Available",
+    "val": "0x1"
+   },
+   {
+    "name": "LL RR Mask",
+    "val": "0x00000FF0"
+   }
+  ]
+ },
+ {
+  "id": "0x00B65E72",
+  "name": "Perf Counters DX9",
+  "cat": "Misc",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "Perf Counters DX9",
+  "detailed_desc": "Performance counters for DX9 only.",
+  "values": [
+   {
+    "name": "Off",
+    "val": "0x0"
+   },
+   {
+    "name": "On",
+    "val": "0x1"
+   }
+  ]
+ },
+ {
+  "id": "0x1033DCD1",
+  "name": "SLI GPU Count",
+  "cat": "SLI",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "SLI GPU Count",
+  "detailed_desc": "Number of GPUs to use in SLI.",
+  "values": [
+   {
+    "name": "Autoselect",
+    "val": "0x0"
+   },
+   {
+    "name": "1",
+    "val": "0x1"
+   },
+   {
+    "name": "2",
+    "val": "0x2"
+   },
+   {
+    "name": "3",
+    "val": "0x3"
+   },
+   {
+    "name": "4",
+    "val": "0x4"
+   }
+  ]
+ },
+ {
+  "id": "0x1033DCD2",
+  "name": "SLI Predefined Count",
+  "cat": "SLI",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "SLI Predefined Count",
+  "detailed_desc": "Predefined SLI GPU count.",
+  "values": [
+   {
+    "name": "Autoselect",
+    "val": "0x0"
+   },
+   {
+    "name": "1",
+    "val": "0x1"
+   },
+   {
+    "name": "2",
+    "val": "0x2"
+   },
+   {
+    "name": "3",
+    "val": "0x3"
+   },
+   {
+    "name": "4",
+    "val": "0x4"
+   }
+  ]
+ },
+ {
+  "id": "0x1033DCD3",
+  "name": "SLI Predefined Count DX10",
+  "cat": "SLI",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "SLI Predefined Count DX10",
+  "detailed_desc": "Predefined SLI GPU count for DX10.",
+  "values": [
+   {
+    "name": "Autoselect",
+    "val": "0x0"
+   },
+   {
+    "name": "1",
+    "val": "0x1"
+   },
+   {
+    "name": "2",
+    "val": "0x2"
+   },
+   {
+    "name": "3",
+    "val": "0x3"
+   },
+   {
+    "name": "4",
+    "val": "0x4"
+   }
+  ]
+ },
+ {
+  "id": "0x1033CEC1",
+  "name": "SLI Predefined Mode",
+  "cat": "SLI",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "SLI Predefined Mode",
+  "detailed_desc": "Predefined SLI rendering mode.",
+  "values": [
+   {
+    "name": "Autoselect",
+    "val": "0x0"
+   },
+   {
+    "name": "Force Single",
+    "val": "0x1"
+   },
+   {
+    "name": "Force AFR",
+    "val": "0x2"
+   },
+   {
+    "name": "Force AFR2",
+    "val": "0x3"
+   },
+   {
+    "name": "Force SFR",
+    "val": "0x4"
+   },
+   {
+    "name": "AFR of SFR",
+    "val": "0x5"
+   }
+  ]
+ },
+ {
+  "id": "0x1033CEC2",
+  "name": "SLI Predefined Mode DX10",
+  "cat": "SLI",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "SLI Predefined Mode DX10",
+  "detailed_desc": "Predefined SLI mode for DX10.",
+  "values": [
+   {
+    "name": "Autoselect",
+    "val": "0x0"
+   },
+   {
+    "name": "Force Single",
+    "val": "0x1"
+   },
+   {
+    "name": "Force AFR",
+    "val": "0x2"
+   },
+   {
+    "name": "Force AFR2",
+    "val": "0x3"
+   },
+   {
+    "name": "Force SFR",
+    "val": "0x4"
+   },
+   {
+    "name": "AFR of SFR",
+    "val": "0x5"
+   }
+  ]
+ },
+ {
+  "id": "0x1033CED1",
+  "name": "SLI Rendering Mode",
+  "cat": "SLI",
+  "type": "enum",
+  "default": "0x0",
+  "desc": "SLI Rendering Mode",
+  "detailed_desc": "Sets the SLI (multi-GPU) rendering mode for the application. 'Autoselect' — driver picks the best SLI mode. 'Force Single' — disables SLI, uses only the primary GPU. 'Force AFR' — Alternate Frame Rendering: GPUs alternate rendering complete frames. 'Force AFR2' — AFR with 2-frame offset for better overlap. 'Force SFR' — Split Frame Rendering: each GPU renders a horizontal band. 'AFR of SFR' — AFR applied to SFR pairs. Note: SLI is deprecated on RTX 30/40 series; these settings are only relevant on legacy Maxwell/Pascal/Turing multi-GPU configurations.",
+  "values": [
+   {
+    "name": "Autoselect",
+    "val": "0x0"
+   },
+   {
+    "name": "Force Single",
+    "val": "0x1"
+   },
+   {
+    "name": "Force AFR",
+    "val": "0x2"
+   },
+   {
+    "name": "Force AFR2",
+    "val": "0x3"
+   },
+   {
+    "name": "Force SFR",
+    "val": "0x4"
+   },
+   {
+    "name": "AFR of SFR",
+    "val": "0x5"
+   }
+  ]
+ },
+ {
+  "id": "0x10F9DC80",
+  "name": "Shim MCCompat",
+  "cat": "Optimus",
+  "type": "enum",
+  "default": "0x10",
+  "desc": "Shim MCCompat",
+  "detailed_desc": "Optimus multi-compatibility mode.",
+  "values": [
+   {
+    "name": "Integrated",
+    "val": "0x0"
+   },
+   {
+    "name": "Enable",
+    "val": "0x1"
+   },
+   {
+    "name": "User Editable",
+    "val": "0x2"
+   },
+   {
+    "name": "Video",
+    "val": "0x4"
+   },
+   {
+    "name": "Varying",
+    "val": "0x8"
+   },
+   {
+    "name": "Auto Select",
+    "val": "0x10"
+   },
+   {
+    "name": "Override",
+    "val": "0x80000000"
+   }
+  ]
+ },
+ {
+  "id": "0x10F9DC81",
+  "name": "Shim Rendering Mode",
+  "cat": "Optimus",
+  "type": "enum",
+  "default": "0x10",
+  "desc": "Shim Rendering Mode",
+  "detailed_desc": "Selects which GPU handles rendering on NVIDIA Optimus (hybrid graphics) laptops. 'Integrated' — force iGPU rendering (power saving). 'Enable' — use the discrete NVIDIA GPU. 'Auto Select' (default) — driver decides based on application workload. 'Override' (0x80000000) — allow user-level profile override. On the Alienware M16 R1 AMD, the AMD iGPU handles display output while the RTX 4080 Mobile renders; this setting has limited effect on that platform compared to AMD-specific MUX/switchable graphics controls.",
+  "values": [
+   {
+    "name": "Integrated",
+    "val": "0x0"
+   },
+   {
+    "name": "Enable",
+    "val": "0x1"
+   },
+   {
+    "name": "User Editable",
+    "val": "0x2"
+   },
+   {
+    "name": "Video",
+    "val": "0x4"
+   },
+   {
+    "name": "Varying",
+    "val": "0x8"
+   },
+   {
+    "name": "Auto Select",
+    "val": "0x10"
+   },
+   {
+    "name": "Override",
+    "val": "0x80000000"
+   }
+  ]
+ },
+ {
+  "id": "0x10F9DC82",
+  "name": "Shim Max Res",
+  "cat": "Optimus",
+  "type": "hex",
+  "default": "0x0",
+  "desc": "Shim Max Res",
+  "detailed_desc": "Maximum resolution for Optimus."
+ },
+ {
+  "id": "0x10F9DC84",
+  "name": "Shim Rendering Options",
+  "cat": "Optimus",
+  "type": "bitfield",
+  "default": "0x0",
+  "desc": "Shim Rendering Options",
+  "detailed_desc": "Advanced bitfield controlling Optimus rendering pipeline options. Individual bits enable/disable specific behaviors: 'Disable Async Present' — prevents asynchronous frame presentation (fixes some tearing issues on Optimus). 'Enable DWM Async' — allows async presentation through DWM compositor. 'Disable DXGI Wrappers' — bypasses DXGI interop wrappers (can help compatibility with custom D3D12 present paths). 'Prune Unsupported' — removes unsupported resource formats from the list. 'iGPU Transcoding' — uses the iGPU to transcode Optimus blit operations. Leave at 0 (default) unless you are diagnosing a specific Optimus issue.",
+  "bits": [
+   {
+    "name": "Default Rendering Mode",
+    "val": 0
+   },
+   {
+    "name": "Disable Async Present",
+    "val": 1
+   },
+   {
+    "name": "EHSHELL Detect",
+    "val": 2
+   },
+   {
+    "name": "FlashPlayer Host Detect",
+    "val": 4
+   },
+   {
+    "name": "Video DRM App Detect",
+    "val": 8
+   },
+   {
+    "name": "Ignore Overrides",
+    "val": 16
+   },
+   {
+    "name": "Enable DWM Async Present",
+    "val": 64
+   },
+   {
+    "name": "Allow Inheritance",
+    "val": 256
+   },
+   {
+    "name": "Disable Wrappers",
+    "val": 512
+   },
+   {
+    "name": "Disable DXGI Wrappers",
+    "val": 1024
+   },
+   {
+    "name": "Prune Unsupported Formats",
+    "val": 2048
+   },
+   {
+    "name": "Enable Alpha Format",
+    "val": 4096
+   },
+   {
+    "name": "iGPU Transcoding",
+    "val": 8192
+   },
+   {
+    "name": "Disable CUDA",
+    "val": 16384
+   },
+   {
+    "name": "Allow CP Caps For Video",
+    "val": 32768
+   },
+   {
+    "name": "iGPU Transcoding Fwd Optimus",
+    "val": 65536
+   },
+   {
+    "name": "Disable During Secure Boot",
+    "val": 131072
+   },
+   {
+    "name": "Invert For Quadro",
+    "val": 262144
+   },
+   {
+    "name": "Invert For MSHybrid",
+    "val": 524288
+   },
+   {
+    "name": "Register Process Enable Gold",
+    "val": 1048576
+   },
+   {
+    "name": "Handle Windowed Mode Perf Opt",
+    "val": 2097152
+   },
+   {
+    "name": "Handle Win7 Async Runtime Bug",
+    "val": 4194304
+   },
+   {
+    "name": "Explicit Adapter Opted By App",
+    "val": 8388608
+   },
+   {
+    "name": "Allow Dynamic Display Mux Switch",
+    "val": 16777216
+   },
+   {
+    "name": "Disallow Dynamic Display Mux Switch",
+    "val": 33554432
+   },
+   {
+    "name": "Disable Turing Power Policy",
+    "val": 67108864
+   },
+   {
+    "name": "Allow Dynamic Display Mux Switch MDM",
+    "val": 134217728
+   },
+   {
+    "name": "Disallow Dynamic Display Mux Switch MDM",
+    "val": 268435456
+   }
+  ]
+ }
+]

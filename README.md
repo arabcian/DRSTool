@@ -12,8 +12,8 @@ Turkish version: [README.tr.md](README.tr.md)
 
 | Component | Path | Description |
 |---|---|---|
-| DRSTool GUI | `DRSTool.py` | Main application: DRS settings, environment variables, Gamescope flags, profiles, launcher sync, diagnostics |
-| drstool_core | `drstool_core/` | Qt-free helpers used by the GUI and the CLI: share codes, Steam `shortcuts.vdf`, game / DLL discovery, DLL swapping with backups (unit-tested in `tests/`) |
+| DRSTool GUI | `DRSTool.py`, `drstool_gui/` | Main application (entry script + PySide6 package, one module per page / feature): DRS settings, environment variables, Gamescope flags, profiles, launcher sync, diagnostics |
+| drstool_core | `drstool_core/` | Qt-free code used by the GUI and the CLI: the catalog (DRS settings, env vars, gamescope flags … as JSON in `drstool_core/data/`), share codes, Steam `shortcuts.vdf`, game / DLL discovery, DLL swapping with backups (unit-tested in `tests/`) |
 | vk_flip_meter (FLM) | `vk-flip-meter-main/` | Vulkan implicit layer for frame pacing on VRR panels and a precise FPS limiter. See its [README](vk-flip-meter-main/README.md) |
 | lutris-game-tune | `lutris-game-tune-main/` | Pre/post-game system tuning for Lutris, CCD/CCX core isolation, and lower-nice game startup (C wrapper — setuid or polkit, see below — + Bash) |
 | Packaging | `drstool-9999.ebuild`, `packaging/arch/PKGBUILD`, `pyproject.toml` | Gentoo live ebuild (`games-util/drstool`), Arch `drstool-git` PKGBUILD, pip / pipx install |
@@ -43,7 +43,7 @@ Variables that take a fixed set of values are shown as checkboxes or dropdowns; 
 Builds `gamescope` command lines from a flag catalog (upscaling, frame pacing, input, session options).
 
 ### Navigation and everyday helpers
-- **Ctrl+K** searches every DRS setting, environment variable, GPU architecture and tool page; **Ctrl+F** filters the current list; **Ctrl+1…5** switches the top tabs; **Ctrl+D** toggles a favorite; **Ctrl+S** saves the current profile
+- **Ctrl+K** searches every DRS setting, environment variable, GPU architecture and tool page; **Ctrl+F** filters the current list; **Ctrl+1…6** switches the top tabs; **Ctrl+D** toggles a favorite; **Ctrl+S** saves the current profile
 - **F1** (or Ctrl+/) opens the keyboard-shortcut sheet; **Ctrl+,** opens *Appearance*. Ctrl+K also lists the last things you picked first, so the empty palette doubles as "recent"
 - **Toasts**: every status message (saved, copied, applied, undone, errors) also pops up in the top-right corner and waits while the pointer is on it. After a write to a Lutris YAML, Steam, Heroic, Bottles or `dxvk.conf` the toast carries an **Undo** button that puts the backup taken for that write back (it refuses if the file changed again in the meantime)
 - **Background tasks**: the DLL Manager, Upstream drift, Cache scan, Game hints and the ProtonDB download are listed under the *⟳ N* button in the top bar (or ⚙ › Background tasks) with their last progress line; click an entry to jump to its page. Tasks that take a few seconds or fail raise a toast, and a desktop notification (`notify-send`, or `gdbus` as a fallback) when the window is not in front
@@ -69,6 +69,22 @@ Builds `gamescope` command lines from a flag catalog (upscaling, frame pacing, i
 - **Import .nip** (Profiles → Import .nip): converts an NVIDIA Profile Inspector export into `DXVK_NVAPI_DRS_SETTINGS` pairs and applies them to the editor (DWORD values only); known settings are recognised by name and their values are stored in the catalog spelling so the editor buttons light up
 - **External changes**: if `profiles.json` or the selected Lutris YAML is modified outside DRSTool (another instance, a script, Lutris itself), a banner offers *Reload / Merge* (profiles) or *Refresh preview / Load into DRSTool* (Lutris). Detection is content-based, so DRSTool's own writes and a plain `touch` never raise it
 
+### Games
+The **Games** tab (Ctrl+6) lists every game DRSTool finds — Steam, Lutris, Heroic, Bottles and the folders added in the DLL Manager — grouped by launcher, with the linked profile on the right (⟳ = the game has an older version of it). The filter box searches names and profile names. Selecting a game opens its **card**, which puts together what is otherwise spread over several pages:
+
+| Tile | Shows |
+|---|---|
+| **Profile** | the linked profile, whether the game is up to date with it, when it was last written and to which file; link / unlink a profile, *Write to game* (writes through the game's sync tab, with the usual backup; when the editor holds something other than the game's linked profile it asks — *write the editor as it is* or *load the linked profile and write it* — so work in the editor is never replaced silently), *Load in editor* |
+| **Proton / Wine** | the build set in the launcher (Steam `CompatToolMapping`, Lutris `wine.version`, Heroic `wineVersion`, the bottle's runner) and, for Proton prefixes, the build that last ran it |
+| **DLSS / DXVK** | DLSS SR / RR / FG and Streamline versions in the game folder, DXVK / vkd3d-proton / dxvk-nvapi in the Wine prefix ("from Proton" when Proton supplies them), an anti-cheat warning |
+| **Last frametime capture** | average FPS, 1% / 0.1% lows, p99 frametime and stutters of the newest MangoHud capture named after one of the game's executables (MangoHud `output_folder`, from `MANGOHUD_CONFIG` or `MangoHud.conf`), or of a file picked for the game; *Open in Frametime* |
+| **Last log errors** | the known problems (same rules as the Logs page) and the last error lines of the newest `steam-<appid>.log` / DXVK / vkd3d log of the game; *Open in Logs* |
+| **ProtonDB** | tier, trending and best-reported tier, looked up when the game is opened (cached for a week). A game that is not on Steam is searched by name; a clear match is taken and remembered, otherwise the tile asks you to type the appid. *Fetch* always works; Enter in the appid box fetches the typed appid |
+
+The card only reads files; nothing is downloaded unless you press *Fetch*.
+
+**Profile ↔ game links.** Every write from the Lutris, Steam, Heroic or Bottles sync tab (or from a card) remembers which profile went to which game, together with a fingerprint of what was written. Saving a profile then checks its games: if some of them have an older version, a toast offers **Update N games…**, which lists them (tick the ones to update) and writes the saved profile to each. The same list is in the profile's right-click menu (*Linked games…*), and the profile list shows how many games use each profile. Renaming a profile keeps its links; deleting one unlinks its games (their last write stays recorded). Writes to Steam need Steam to be closed, as in the Steam tab.
+
 ### Launchers and sync
 The sync tabs write the current configuration to wherever the game is started from. Every write keeps a timestamped backup.
 
@@ -87,7 +103,7 @@ The sync tabs write the current configuration to wherever the game is started fr
 **Build and tune**
 - **vk_flip_meter**: edit FLM settings, live tuning (writes `FLM_CONFIG` and sends `SIGUSR1`)
 - **lutris-game-tune**: edit the tuner config and the per-game Lutris settings
-- **DLL Manager** (replaces the former DLSS Updater and Prefix Doctor): finds the games on this system — Steam, Lutris, Heroic (Epic / GOG / Amazon / side-loaded), Bottles and folders you add — and shows, per game, the DLSS SR / RR / FG and Streamline versions it ships and the DXVK / vkd3d-proton / dxvk-nvapi versions in its Wine prefix. *Check for updates* lists every build on NVIDIA's NGX servers (staged drops included, SHA-256 checked) and the newest GitHub releases; pick a target version per component, tick games (or *select games with updates*) and *Update selected*. Only files a game already has are replaced (a Streamline install is updated as a set), symlinks are never written through, each file is swapped atomically and backed up under `~/.local/share/drstool/dll-backups/`; *Restore…* puts the originals back unless the game has replaced them since. Proton prefixes are left to Proton; games with anti-cheat are never selected automatically. *Download only…* saves the chosen DLSS / Streamline versions into a folder
+- **DLL Manager** (replaces the former DLSS Updater and Prefix Doctor): finds the games on this system — Steam, Lutris, Heroic (Epic / GOG / Amazon / side-loaded), Bottles and folders you add — and shows, per game, the DLSS SR / RR / FG and Streamline versions it ships and the DXVK / vkd3d-proton / dxvk-nvapi versions in its Wine prefix. *Check for updates* lists every build on NVIDIA's NGX servers (staged drops included, SHA-256 checked) and the newest GitHub releases; pick a target version per component, tick games (or *select games with updates*) and *Update selected*. Only files a game already has are replaced (a Streamline install is updated as a set), symlinks are never written through, each file is swapped atomically and backed up under `~/.local/share/drstool/dll-backups/`; *Restore…* puts the originals back unless the game has replaced them since. Proton prefixes are left to Proton; games with anti-cheat are never selected automatically. *Download only…* saves the chosen DLSS / Streamline versions into a folder The **⊞ Windows libraries…** button on the top row installs **all 326 libraries of winetricks' *dlls* category** into the selected game's Wine prefix (winetricks, or protontricks for Steam/Proton games): Visual C++, DirectX / D3DX, .NET, codecs …; searchable and grouped, with the ones already in the prefix marked (from `winetricks.log`), the ★ ones games ask for most on top, and the command shown before it runs. The same window opens from the Games card (*Windows libraries…*); when the game's log says `MSVCP140.dll not found` or similar, the card offers *Fix: install vcrun2022…* with the right library already ticked. *Restore…* also removes DLLs that “install missing” added to a prefix.
 - **MangoHud** and **vkBasalt**: option builders for the overlay / post-processing config
 - **Tool Manager** (Extra Tools › Build & install): downloads Proton forks (GE-Proton, Proton-CachyOS, Proton-EM, dwproton, Proton-Tkg, Luxtorpeda, Boxtron, Roberta, Steam-Play-None, SteamTinkerLaunch), Wine builds (Lutris-Wine, Kron4ek, Wine-Tkg), DXVK (release / Async / nightly) and vkd3d (proton / lutris) into Steam's `compatibilitytools.d`, Lutris, Heroic, Bottles, the umu folder or any folder you pick — the same catalogue and folder layout as [protondl](https://davidotek.github.io/protondl/), so tools installed by either program are recognised by both. Archives are SHA-512-verified where the project publishes a checksum, unpacked into a staging folder first (a failed or cancelled install leaves nothing behind) and can be updated (optionally removing the old version), removed, or set as Steam's global default Proton. Proton-CachyOS picks the best x86-64 level your CPU supports. Set `GITHUB_TOKEN` before starting DRSTool to lift GitHub's 60 requests/hour API limit
 
@@ -99,7 +115,7 @@ The sync tabs write the current configuration to wherever the game is started fr
 - **Frametime**: MangoHud CSV logs and `FLM_CSV` dumps: average FPS, 1% / 0.1% lows, percentiles, stutter and hitch counts and a frametime graph. Load a second run to compare two configurations side by side (B vs A in %)
 - **Live process**: pick the running game and compare the environment DRSTool is configured to set with what the process really received (`/proc/<pid>/environ`: ✔ match / ≠ differs / ✗ missing). Also lists the DXVK, vkd3d-proton, dxvk-nvapi, NGX / Streamline DLLs and Vulkan layers mapped into it and warns when DRS settings are configured but no NVAPI DLL is loaded
 - **Logs**: Proton (`steam-<appid>.log`), DXVK and vkd3d-proton log viewer with severity filters, search and follow mode. Recognises common failures (NVAPI missing, nvcuda, GPU device lost, out of memory, ntsync, esync file-descriptor limit, Vulkan device/extension errors, NGX, missing DLL imports) with a hint and, where it is safe, a one-click fix. "Enable logging vars" sets `PROTON_LOG`, `PROTON_LOG_DIR` and `DXVK_LOG_PATH`
-- **Game hints**: look up a Steam appid and get suggestions from three sources, each labelled in the *Source* column:
+- **Game hints**: pick your game from the list (Steam, Lutris, Heroic, Bottles …; type to search) — its Steam appid is found automatically (non-Steam games are searched by name; a clear winner is taken, an ambiguous match is left to you, and the appid is remembered for that game) — and you get ProtonDB's verdict, “what to try” notes and settings you tick and apply to the Environment tab. A game that is not in the list: type its appid or name into the box. Suggestions come from three sources, each labelled in the *Source* column:
   1. *heuristic*: simple rules on the game's graphics API (e.g. `PROTON_ENABLE_NVAPI=1` for Direct3D 11/12 on NVIDIA)
   2. *system*: derived from this machine (ntsync device present, hybrid NVIDIA + iGPU → PRIME offload variables, Wayland session)
   3. engine and **ProtonDB tier** notes: Unreal / Unity / native-Vulkan / D3D9-era remarks, and which Proton build to try (stock Proton for gold/platinum, Experimental or GE-Proton for silver, GE-Proton / Proton-CachyOS or an older Valve build for bronze/borked, regression and improvement hints from the trending tier, plus the builds you already have installed)
@@ -130,12 +146,13 @@ Exit status: 0 ok, 1 lint errors / failed write, 2 bad arguments or not found.
 Lutris writes to its own config as well; if you edit a game in both places, use the external-change banner (above) and *Load from selected game* to bring DRSTool back in sync.
 
 ### Network access
-Most of DRSTool works offline. These features contact the internet only when you press their button: **Upstream drift** (GitHub raw files), **DLL Manager** › *Check for updates* / *Update* (NVIDIA NGX servers and GitHub releases), **Tool Manager** (GitHub / GitLab / Codeberg releases and the tool archives), **Game hints** (ProtonDB summary and PCGamingWiki), **Community tips** (the ProtonDB report dump from GitHub raw files, ~70 MB, only when you press its download button).
+Most of DRSTool works offline. These features contact the internet only when you press their button: **Upstream drift** (GitHub raw files), **DLL Manager** › *Check for updates* / *Update* (NVIDIA NGX servers and GitHub releases), **Tool Manager** (GitHub / GitLab / Codeberg releases and the tool archives), **Game hints** (ProtonDB summary and PCGamingWiki), the **Games** card's *Fetch* (ProtonDB summary), **Community tips** (the ProtonDB report dump from GitHub raw files, ~70 MB, only when you press its download button).
 
 ### Where DRSTool keeps its files
 | Path | Content |
 |---|---|
 | `~/.config/drstool/profiles.json`, `history/` | profiles and their snapshots |
+| `~/.config/drstool/game_links.json` | which profile was written to which game (Games tab) |
 | `~/.config/drstool/dxvk/` | `dxvk.conf` files created in "config dir" mode |
 | `~/.local/share/drstool/launchers/` | scripts created by the Shortcut tab (the `.desktop` files go to `~/.local/share/applications/drstool-*.desktop`) |
 | `~/.cache/drstool/hints/`, `~/.cache/drstool/logs/` | Game hints cache; logs written when "Enable logging vars" is used |
@@ -168,7 +185,7 @@ pip install PySide6 pyyaml
 python3 DRSTool.py
 ```
 
-Keep `drstool_core/` next to `DRSTool.py` — the share codes, Add to Steam and DLL Manager need it.
+Keep `drstool_gui/` and `drstool_core/` next to `DRSTool.py` — the GUI package and the catalog data live there.
 
 ## Installing with pip / pipx
 
@@ -224,9 +241,10 @@ Note: lutris-game-tune needs a privileged wrapper — setuid root by default, or
 ## Project layout
 
 ```
-DRSTool.py                 main GUI
+DRSTool.py                 entry script (starts drstool_gui.app.main)
+drstool_gui/               PySide6 GUI, one module per page / feature (see below)
 install.sh / uninstall.sh  interactive installer for any distribution
-drstool_core/              Qt-free helpers (share codes, Steam shortcuts, game / DLL scan, DLL swap)
+drstool_core/              Qt-free code: catalog (models, loader, data/*.json), share codes, Steam shortcuts, game / DLL scan, DLL swap, game info and profile ↔ game links
 tests/                     unit tests (core) and offscreen GUI tests
 assets/drstool.png         application icon
 data/drstool.desktop       desktop entry (pip / Arch)
@@ -238,6 +256,14 @@ lutris-game-tune-main/     Lutris tuner (Bash + C wrapper: setuid or polkit)
 DISCLAIMER.md              risk notice
 LICENSE                    MIT
 ```
+
+### Catalog data
+
+DRS settings, GPU architectures, environment variables, Gamescope flags, `dxvk.conf` keys and `VKD3D_CONFIG` flags are data, not code: `drstool_core/data/*.json` (dataclasses in `drstool_core/models.py`, loader in `drstool_core/catalog.py`). Adding a variable or a DRS setting is a JSON entry; fields that equal their default (empty description, no options …) can be left out. `CatalogTests` in `tests/test_core.py` catches duplicates and enums without options.
+
+### GUI package layout
+
+`drstool_gui/` has one module per page or feature, and modules only import downwards: `base`, `theme` and `widgets` at the bottom; then what the app knows about (`catalog_data`, `lookup`, `sysinfo`, `state`, `lint`, `launch_import`); then the pages (`settings_manager`, `setting_editor`, `env_widgets`, `profiles`, `launchers`, the Extra Tools pages …); `main_window`, `cli` and `app` on top. Each module starts with a docstring saying what it holds. A few functions (`lookup.env_def`, `state._gs_flag_name`, `launch_import.parse_launch_text` / `op_label`, `steam_utils.steam_compat_tools` / `steam_install_dirs`) import a page class inside the function body, where a top-level import would be circular.
 
 ## License
 

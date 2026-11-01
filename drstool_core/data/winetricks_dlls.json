@@ -1,0 +1,1825 @@
+{
+ "source": "Winetricks/winetricks files/verbs/dlls.txt @ f3890f6 (LGPL-2.1)",
+ "categories": [
+  {
+   "id": "vcpp",
+   "title": "Visual C++ runtimes"
+  },
+  {
+   "id": "directx",
+   "title": "DirectX, audio & input"
+  },
+  {
+   "id": "dotnet",
+   "title": ".NET & PowerShell"
+  },
+  {
+   "id": "media",
+   "title": "Video, audio codecs"
+  },
+  {
+   "id": "layers",
+   "title": "Translation layers (advanced)"
+  },
+  {
+   "id": "web",
+   "title": "Web, IE, crypto"
+  },
+  {
+   "id": "legacy",
+   "title": "Legacy & Visual Basic"
+  },
+  {
+   "id": "system",
+   "title": "Other system libraries"
+  }
+ ],
+ "verbs": [
+  {
+   "verb": "allcodecs",
+   "desc": "All codecs (dirac, ffdshow, icodecs, cinepak, l3codecx, xvid) except wmp (various, 1995-2009)",
+   "cat": "media",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "amstream",
+   "desc": "MS amstream.dll (Microsoft, 2011)",
+   "cat": "media"
+  },
+  {
+   "verb": "art2k7min",
+   "desc": "MS Access 2007 runtime (Microsoft, 2007)",
+   "cat": "legacy",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "art2kmin",
+   "desc": "MS Access 2000 runtime (Microsoft, 2000)",
+   "cat": "legacy",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "atmlib",
+   "desc": "Adobe Type Manager (Adobe, 2009)",
+   "cat": "system"
+  },
+  {
+   "verb": "avifil32",
+   "desc": "MS avifil32 (Microsoft, 2004)",
+   "cat": "media"
+  },
+  {
+   "verb": "binkw32",
+   "desc": "RAD Game Tools binkw32.dll (RAD Game Tools, Inc., 2000)",
+   "cat": "media"
+  },
+  {
+   "verb": "cabinet",
+   "desc": "Microsoft cabinet.dll (Microsoft, 2002)",
+   "cat": "system"
+  },
+  {
+   "verb": "cinepak",
+   "desc": "Cinepak Codec (Radius, 1995)",
+   "cat": "media"
+  },
+  {
+   "verb": "cmd",
+   "desc": "MS cmd.exe (Microsoft, 2004)",
+   "cat": "system"
+  },
+  {
+   "verb": "cnc_ddraw",
+   "desc": "Reimplentation of ddraw for CnC games (CnCNet, 2021)",
+   "cat": "layers"
+  },
+  {
+   "verb": "comctl32",
+   "desc": "MS common controls 5.80 (Microsoft, 2001)",
+   "cat": "system"
+  },
+  {
+   "verb": "comctl32ocx",
+   "desc": "MS comctl32.ocx and mscomctl.ocx, comctl32 wrappers for VB6 (Microsoft, 2012)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "comdlg32ocx",
+   "desc": "Common Dialog ActiveX Control for VB6 (Microsoft, 2012)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "crypt32",
+   "desc": "MS crypt32 (Microsoft, 2011)",
+   "cat": "web"
+  },
+  {
+   "verb": "crypt32_winxp",
+   "desc": "MS crypt32 (Microsoft, 2004)",
+   "cat": "web"
+  },
+  {
+   "verb": "d2gl",
+   "desc": "Diablo 2 LoD Glide to OpenGL Wrapper (Bayaraa, 2023)",
+   "cat": "layers"
+  },
+  {
+   "verb": "d3dcompiler_42",
+   "desc": "MS d3dcompiler_42.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dcompiler_43",
+   "desc": "MS d3dcompiler_43.dll (Microsoft, 2010)",
+   "cat": "directx",
+   "pop": "Shader compiler 43: older DX10/11 games"
+  },
+  {
+   "verb": "d3dcompiler_46",
+   "desc": "MS d3dcompiler_46.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dcompiler_47",
+   "desc": "MS d3dcompiler_47.dll (Microsoft, FIXME)",
+   "cat": "directx",
+   "pop": "Shader compiler 47: missing D3DCOMPILER_47.dll, launchers, Unreal/Unity games"
+  },
+  {
+   "verb": "d3drm",
+   "desc": "MS d3drm.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx10",
+   "desc": "MS d3dx10_??.dll from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx",
+   "pop": "All D3DX10 DLLs: older DX10 games"
+  },
+  {
+   "verb": "d3dx10_43",
+   "desc": "MS d3dx10_43.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx11_42",
+   "desc": "MS d3dx11_42.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx11_43",
+   "desc": "MS d3dx11_43.dll (Microsoft, 2010)",
+   "cat": "directx",
+   "pop": "D3DX11 43: DX11 games asking for d3dx11_43.dll"
+  },
+  {
+   "verb": "d3dx9",
+   "desc": "MS d3dx9_??.dll from DirectX 9 redistributable (Microsoft, 2010)",
+   "cat": "directx",
+   "pop": "All D3DX9 DLLs: older DX9 games (d3dx9_xx.dll not found)"
+  },
+  {
+   "verb": "d3dx9_24",
+   "desc": "MS d3dx9_24.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_25",
+   "desc": "MS d3dx9_25.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_26",
+   "desc": "MS d3dx9_26.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_27",
+   "desc": "MS d3dx9_27.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_28",
+   "desc": "MS d3dx9_28.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_29",
+   "desc": "MS d3dx9_29.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_30",
+   "desc": "MS d3dx9_30.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_31",
+   "desc": "MS d3dx9_31.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_32",
+   "desc": "MS d3dx9_32.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_33",
+   "desc": "MS d3dx9_33.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_34",
+   "desc": "MS d3dx9_34.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_35",
+   "desc": "MS d3dx9_35.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_36",
+   "desc": "MS d3dx9_36.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_37",
+   "desc": "MS d3dx9_37.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_38",
+   "desc": "MS d3dx9_38.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_39",
+   "desc": "MS d3dx9_39.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_40",
+   "desc": "MS d3dx9_40.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_41",
+   "desc": "MS d3dx9_41.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_42",
+   "desc": "MS d3dx9_42.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dx9_43",
+   "desc": "MS d3dx9_43.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "d3dxof",
+   "desc": "MS d3dxof.dll from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dbghelp",
+   "desc": "MS dbghelp (Microsoft, 2008)",
+   "cat": "system"
+  },
+  {
+   "verb": "devenum",
+   "desc": "MS devenum.dll from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dinput",
+   "desc": "MS dinput.dll; breaks mouse, use only on Rayman 2 etc. (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dinput8",
+   "desc": "MS DirectInput 8 from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dinputto8",
+   "desc": "A dll module that is designed to improve compatibility in games using DirectInput 1-7 by converting all API calls to their equivalent DirectInput 8 (1.0.92.0) (Elisha Riedlinger, 2018)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dirac",
+   "desc": "The Dirac directshow filter v1.0.2 (Dirac, 2009)",
+   "cat": "media"
+  },
+  {
+   "verb": "directmusic",
+   "desc": "MS DirectMusic from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "directplay",
+   "desc": "MS DirectPlay from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "directshow",
+   "desc": "DirectShow runtime DLLs (amstream, qasf, qcap, qdvd, qedit, quartz) (Microsoft, 2011)",
+   "cat": "directx"
+  },
+  {
+   "verb": "directx9",
+   "desc": "MS DirectX 9 (Deprecated, no-op) (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dmband",
+   "desc": "MS dmband.dll from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dmcompos",
+   "desc": "MS dmcompos.dll from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dmime",
+   "desc": "MS dmime.dll from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dmloader",
+   "desc": "MS dmloader.dll from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dmscript",
+   "desc": "MS dmscript.dll from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dmstyle",
+   "desc": "MS dmstyle.dll from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dmsynth",
+   "desc": "MS dmsynth.dll from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dmusic",
+   "desc": "MS dmusic.dll from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dmusic32",
+   "desc": "MS dmusic32.dll from DirectX user redistributable (Microsoft, 2006)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dotnet11",
+   "desc": "MS .NET 1.1 (Microsoft, 2003)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet11sp1",
+   "desc": "MS .NET 1.1 SP1 (Microsoft, 2004)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet20",
+   "desc": "MS .NET 2.0 (Microsoft, 2006)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet20sp1",
+   "desc": "MS .NET 2.0 SP1 (Microsoft, 2008)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet20sp2",
+   "desc": "MS .NET 2.0 SP2 (Microsoft, 2009)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet30",
+   "desc": "MS .NET 3.0 (Microsoft, 2006)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet30sp1",
+   "desc": "MS .NET 3.0 SP1 (Microsoft, 2007)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet35",
+   "desc": "MS .NET 3.5 (Microsoft, 2007)",
+   "cat": "dotnet",
+   "pop": ".NET Framework 3.5: older games (slow)",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet35sp1",
+   "desc": "MS .NET 3.5 SP1 (Microsoft, 2008)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet40",
+   "desc": "MS .NET 4.0 (Microsoft, 2011)",
+   "cat": "dotnet",
+   "pop": ".NET Framework 4.0: older tools and launchers (slow)",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet40_kb2468871",
+   "desc": "MS .NET 4.0 KB2468871 (Microsoft, 2011)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet45",
+   "desc": "MS .NET 4.5 (Microsoft, 2012)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet452",
+   "desc": "MS .NET 4.5.2 (Microsoft, 2012)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet46",
+   "desc": "MS .NET 4.6 (Microsoft, 2015)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet461",
+   "desc": "MS .NET 4.6.1 (Microsoft, 2015)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet462",
+   "desc": "MS .NET 4.6.2 (Microsoft, 2016)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet471",
+   "desc": "MS .NET 4.7.1 (Microsoft, 2017)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet472",
+   "desc": "MS .NET 4.7.2 (Microsoft, 2018)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet48",
+   "desc": "MS .NET 4.8 (Microsoft, 2019)",
+   "cat": "dotnet",
+   "pop": ".NET Framework 4.8: launchers and tools (slow, may prompt)",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet6",
+   "desc": "MS .NET Runtime 6.0 LTS (Microsoft, 2023)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet7",
+   "desc": "MS .NET Runtime 7.0 LTS (Microsoft, 2023)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet8",
+   "desc": "MS .NET Runtime 8.0 LTS (Microsoft, 2024)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet9",
+   "desc": "MS .NET Runtime 9.0 LTS (Microsoft, 2024)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet10",
+   "desc": "MS .NET Runtime 10.0 LTS (Microsoft, 2025)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnet_verifier",
+   "desc": "MS .NET Verifier (Microsoft, 2016)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnetcore2",
+   "desc": "MS .NET Core Runtime 2.1 LTS (Microsoft, 2020)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnetcore3",
+   "desc": "MS .NET Core Runtime 3.1 LTS (Microsoft, 2020)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnetcoredesktop3",
+   "desc": "MS .NET Core Desktop Runtime 3.1 LTS (Microsoft, 2020)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnetdesktop6",
+   "desc": "MS .NET Desktop Runtime 6.0 LTS (Microsoft, 2023)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnetdesktop7",
+   "desc": "MS .NET Desktop Runtime 7.0 LTS (Microsoft, 2023)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnetdesktop8",
+   "desc": "MS .NET Desktop Runtime 8.0 LTS (Microsoft, 2024)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnetdesktop9",
+   "desc": "MS .NET Desktop Runtime 9.0 LTS (Microsoft, 2024)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dotnetdesktop10",
+   "desc": "MS .NET Desktop Runtime 10.0 LTS (Microsoft, 2025)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "dpvoice",
+   "desc": "Microsoft dpvoice dpvvox dpvacm Audio dlls (Microsoft, 2002)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dsdmo",
+   "desc": "MS dsdmo.dll (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dsoal",
+   "desc": "A DirectSound DLL replacer that enables surround sound, HRTF, and EAX support via OpenAL Soft (kcat, 2019)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dsound",
+   "desc": "MS DirectSound from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dswave",
+   "desc": "MS dswave.dll from DirectX user redistributable (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dx8vb",
+   "desc": "MS dx8vb.dll from DirectX 8.1 runtime (Microsoft, 2001)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dxdiag",
+   "desc": "DirectX Diagnostic Tool (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dxdiagn",
+   "desc": "DirectX Diagnostic Library (Microsoft, 2011)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dxdiagn_feb2010",
+   "desc": "DirectX Diagnostic Library (February 2010) (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dxtrans",
+   "desc": "MS dxtrans.dll (Microsoft, 2002)",
+   "cat": "directx"
+  },
+  {
+   "verb": "dxvk",
+   "desc": "Vulkan-based D3D8/D3D9/D3D10/D3D11 implementation for Linux / Wine (latest) (Philip Rebohle, 2024)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1000",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.0) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1001",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.0.1) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1002",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.0.2) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1003",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.0.3) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1011",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.1.1) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1020",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.2) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1021",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.2.1) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1022",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.2.2) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1023",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.2.3) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1030",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.3) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1031",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.3.1) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1032",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.3.2) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1033",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.3.3) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1034",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.3.4) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1040",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.4) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1041",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.4.1) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1042",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.4.2) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1043",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.4.3) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1044",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.4.4) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1045",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.4.5) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1046",
+   "desc": "Vulkan-based D3D10/D3D11 implementation for Linux / Wine (1.4.6) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1050",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.5) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1051",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.5.1) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1052",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.5.2) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1053",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.5.3) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1054",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.5.4) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1055",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.5.5) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1060",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.6) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1061",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.6.1) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1070",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.7) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1071",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.7.1) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1072",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.7.2) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1073",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.7.3) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1080",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.8) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1081",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.8.1) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1090",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.9) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1091",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.9.1) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1092",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.9.2) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1093",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.9.3) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1094",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.9.4) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1100",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.10) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1101",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.10.1) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1102",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.10.2) (Philip Rebohle, 2017)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk1103",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (1.10.3) (Philip Rebohle, 2022)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2000",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (2.0) (Philip Rebohle, 2022)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2010",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (2.1) (Philip Rebohle, 2023)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2020",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (2.2) (Philip Rebohle, 2023)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2030",
+   "desc": "Vulkan-based D3D9/D3D10/D3D11 implementation for Linux / Wine (2.3) (Philip Rebohle, 2023)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2040",
+   "desc": "Vulkan-based D3D8/D3D9/D3D10/D3D11 implementation for Linux / Wine (2.4) (Philip Rebohle, 2024)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2041",
+   "desc": "Vulkan-based D3D8/D3D9/D3D10/D3D11 implementation for Linux / Wine (2.4.1) (Philip Rebohle, 2024)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2050",
+   "desc": "Vulkan-based D3D8/D3D9/D3D10/D3D11 implementation for Linux / Wine (2.5) (Philip Rebohle, 2024)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2051",
+   "desc": "Vulkan-based D3D8/D3D9/D3D10/D3D11 implementation for Linux / Wine (2.5.1) (Philip Rebohle, 2024)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2052",
+   "desc": "Vulkan-based D3D8/D3D9/D3D10/D3D11 implementation for Linux / Wine (2.5.2) (Philip Rebohle, 2024)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2053",
+   "desc": "Vulkan-based D3D8/D3D9/D3D10/D3D11 implementation for Linux / Wine (2.5.3) (Philip Rebohle, 2025)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2060",
+   "desc": "Vulkan-based D3D8/D3D9/D3D10/D3D11 implementation for Linux / Wine (2.6) (Philip Rebohle, 2025)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2061",
+   "desc": "Vulkan-based D3D8/D3D9/D3D10/D3D11 implementation for Linux / Wine (2.6.1) (Philip Rebohle, 2025)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2062",
+   "desc": "Vulkan-based D3D8/D3D9/D3D10/D3D11 implementation for Linux / Wine (2.6.2) (Philip Rebohle, 2025)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2070",
+   "desc": "Vulkan-based D3D8/D3D9/D3D10/D3D11 implementation for Linux / Wine (2.7) (Philip Rebohle, 2025)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk2071",
+   "desc": "Vulkan-based D3D8/D3D9/D3D10/D3D11 implementation for Linux / Wine (2.7.1) (Philip Rebohle, 2025)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk_async",
+   "desc": "DXVK with Async and GPL patches [USE AT OWN RISK IN GAMES WITH ANTICHEAT] (latest) (Ph42oN, 2025)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk_nvapi",
+   "desc": "Alternative NVAPI Vulkan implementation on top of DXVK for Linux / Wine (latest) (Jens Peters, 2025)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk_nvapi0061",
+   "desc": "Alternative NVAPI Vulkan implementation on top of DXVK for Linux / Wine (0.6.1) (Jens Peters, 2023)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "dxvk_nvapi009",
+   "desc": "Alternative NVAPI Vulkan implementation on top of DXVK for Linux / Wine (0.9.0) (Jens Peters, 2025)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "esent",
+   "desc": "MS Extensible Storage Engine (Microsoft, 2011)",
+   "cat": "system"
+  },
+  {
+   "verb": "faudio",
+   "desc": "FAudio (xaudio reimplementation, with xna support) builds for win32 (20.07) (Kron4ek, 2019)",
+   "cat": "directx"
+  },
+  {
+   "verb": "faudio1901",
+   "desc": "FAudio (xaudio reimplementation, with xna support) builds for win32 (19.01) (Kron4ek, 2019)",
+   "cat": "directx"
+  },
+  {
+   "verb": "faudio1902",
+   "desc": "FAudio (xaudio reimplementation, with xna support) builds for win32 (19.02) (Kron4ek, 2019)",
+   "cat": "directx"
+  },
+  {
+   "verb": "faudio1903",
+   "desc": "FAudio (xaudio reimplementation, with xna support) builds for win32 (19.03) (Kron4ek, 2019)",
+   "cat": "directx"
+  },
+  {
+   "verb": "faudio1904",
+   "desc": "FAudio (xaudio reimplementation, with xna support) builds for win32 (19.04) (Kron4ek, 2019)",
+   "cat": "directx"
+  },
+  {
+   "verb": "faudio1905",
+   "desc": "FAudio (xaudio reimplementation, with xna support) builds for win32 (19.05) (Kron4ek, 2019)",
+   "cat": "directx"
+  },
+  {
+   "verb": "faudio1906",
+   "desc": "FAudio (xaudio reimplementation, with xna support) builds for win32 (19.06) (Kron4ek, 2019)",
+   "cat": "directx"
+  },
+  {
+   "verb": "faudio190607",
+   "desc": "FAudio (xaudio reimplementation, with xna support) builds for win32 (19.06.07) (Kron4ek, 2019)",
+   "cat": "directx"
+  },
+  {
+   "verb": "ffdshow",
+   "desc": "ffdshow video codecs (doom9 folks, 2010)",
+   "cat": "media"
+  },
+  {
+   "verb": "filever",
+   "desc": "Microsoft's filever, for dumping file version info (Microsoft, 20??)",
+   "cat": "system"
+  },
+  {
+   "verb": "galliumnine",
+   "desc": "Gallium Nine Standalone (latest) (Gallium Nine Team, 2024)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "galliumnine010",
+   "desc": "Gallium Nine Standalone (v0.10) (Gallium Nine Team, 2024)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "galliumnine02",
+   "desc": "Gallium Nine Standalone (v0.2) (Gallium Nine Team, 2019)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "galliumnine03",
+   "desc": "Gallium Nine Standalone (v0.3) (Gallium Nine Team, 2019)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "galliumnine04",
+   "desc": "Gallium Nine Standalone (v0.4) (Gallium Nine Team, 2019)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "galliumnine05",
+   "desc": "Gallium Nine Standalone (v0.5) (Gallium Nine Team, 2019)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "galliumnine06",
+   "desc": "Gallium Nine Standalone (v0.6) (Gallium Nine Team, 2020)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "galliumnine07",
+   "desc": "Gallium Nine Standalone (v0.7) (Gallium Nine Team, 2020)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "galliumnine08",
+   "desc": "Gallium Nine Standalone (v0.8) (Gallium Nine Team, 2021)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "galliumnine09",
+   "desc": "Gallium Nine Standalone (v0.9) (Gallium Nine Team, 2023)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "gdiplus",
+   "desc": "MS GDI+ (Microsoft, 2011)",
+   "cat": "system",
+   "pop": "GDI+: launchers with broken UI"
+  },
+  {
+   "verb": "gdiplus_winxp",
+   "desc": "MS GDI+ (Microsoft, 2009)",
+   "cat": "system"
+  },
+  {
+   "verb": "gfw",
+   "desc": "MS Games For Windows Live (xlive.dll) (Microsoft, 2008)",
+   "cat": "web"
+  },
+  {
+   "verb": "glidewrapper",
+   "desc": "GlideWrapper (Rolf Neuberger, 2005)",
+   "cat": "layers"
+  },
+  {
+   "verb": "glut",
+   "desc": "The glut utility library for OpenGL (Mark J. Kilgard, 2001)",
+   "cat": "directx"
+  },
+  {
+   "verb": "gmdls",
+   "desc": "General MIDI DLS Collection (Microsoft / Roland, 1999)",
+   "cat": "directx"
+  },
+  {
+   "verb": "hid",
+   "desc": "MS hid (Microsoft, 2003)",
+   "cat": "system"
+  },
+  {
+   "verb": "icodecs",
+   "desc": "Indeo codecs (Intel, 1998)",
+   "cat": "media"
+  },
+  {
+   "verb": "ie6",
+   "desc": "Internet Explorer 6 (Microsoft, 2002)",
+   "cat": "web",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "ie7",
+   "desc": "Internet Explorer 7 (Microsoft, 2008)",
+   "cat": "web",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "ie8",
+   "desc": "Internet Explorer 8 (Microsoft, 2009)",
+   "cat": "web",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "ie8_kb2936068",
+   "desc": "Cumulative Security Update for Internet Explorer 8 (Microsoft, 2014)",
+   "cat": "web",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "ie8_tls12",
+   "desc": "TLS 1.1 and 1.2 for Internet Explorer 8 (Microsoft, 2017)",
+   "cat": "web",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "iertutil",
+   "desc": "MS Runtime Utility (Microsoft, 2011)",
+   "cat": "web"
+  },
+  {
+   "verb": "itircl",
+   "desc": "MS itircl.dll (Microsoft, 1999)",
+   "cat": "media"
+  },
+  {
+   "verb": "itss",
+   "desc": "MS itss.dll (Microsoft, 1999)",
+   "cat": "media"
+  },
+  {
+   "verb": "jet40",
+   "desc": "MS Jet 4.0 Service Pack 8 (Microsoft, 2003)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "l3codecx",
+   "desc": "MPEG Layer-3 Audio Codec for Microsoft DirectShow (Microsoft, 2010)",
+   "cat": "media"
+  },
+  {
+   "verb": "lavfilters",
+   "desc": "LAV Filters (Hendrik Leppkes, 2019)",
+   "cat": "media",
+   "pop": "LAV Filters: video playback in older games"
+  },
+  {
+   "verb": "lavfilters702",
+   "desc": "LAV Filters 0.70.2 (Hendrik Leppkes, 2017)",
+   "cat": "media"
+  },
+  {
+   "verb": "mdac27",
+   "desc": "Microsoft Data Access Components 2.7 sp1 (Microsoft, 2006)",
+   "cat": "legacy",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "mdac28",
+   "desc": "Microsoft Data Access Components 2.8 sp1 (Microsoft, 2005)",
+   "cat": "legacy",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "mdx",
+   "desc": "Managed DirectX (Microsoft, 2006)",
+   "cat": "directx"
+  },
+  {
+   "verb": "mf",
+   "desc": "MS Media Foundation (Microsoft, 2011)",
+   "cat": "media",
+   "pop": "Media Foundation: cutscenes / videos that are black or crash"
+  },
+  {
+   "verb": "mfc100",
+   "desc": "Visual C++ 2010 mfc100 library; part of vcrun2010 (Microsoft, 2010)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "mfc110",
+   "desc": "Visual C++ 2012 mfc110 library; part of vcrun2012 (Microsoft, 2012)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "mfc120",
+   "desc": "Visual C++ 2013 mfc120 library; part of vcrun2013 (Microsoft, 2013)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "mfc140",
+   "desc": "Visual C++ 2015 mfc140 library; part of vcrun2015 (Microsoft, 2015)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "mfc40",
+   "desc": "MS mfc40 (Microsoft Foundation Classes from win7sp1) (Microsoft, 1999)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "mfc42",
+   "desc": "Visual C++ 6 SP4 mfc42 library; part of vcrun6 (Microsoft, 2000)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "mfc70",
+   "desc": "Visual Studio (.NET) 2002 mfc70 library (Microsoft, 2006)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "mfc71",
+   "desc": "Visual C++ 2003 mfc71 library; part of vcrun2003 (Microsoft, 2003)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "mfc80",
+   "desc": "Visual C++ 2005 mfc80 library; part of vcrun2005 (Microsoft, 2011)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "mfc90",
+   "desc": "Visual C++ 2008 mfc90 library; part of vcrun2008 (Microsoft, 2011)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "msaa",
+   "desc": "MS Active Accessibility (oleacc.dll, oleaccrc.dll, msaatext.dll) (Microsoft, 2003)",
+   "cat": "system"
+  },
+  {
+   "verb": "msacm32",
+   "desc": "MS ACM32 (Microsoft, 2003)",
+   "cat": "media"
+  },
+  {
+   "verb": "msasn1",
+   "desc": "MS ASN1 (Microsoft, 2003)",
+   "cat": "web"
+  },
+  {
+   "verb": "msctf",
+   "desc": "MS Text Service Module (Microsoft, 2003)",
+   "cat": "system"
+  },
+  {
+   "verb": "msdelta",
+   "desc": "MSDelta differential compression library (Microsoft, 2011)",
+   "cat": "system"
+  },
+  {
+   "verb": "msdxmocx",
+   "desc": "MS Windows Media Player 2 ActiveX control for VB6 (Microsoft, 1999)",
+   "cat": "directx"
+  },
+  {
+   "verb": "msflxgrd",
+   "desc": "MS FlexGrid Control (msflxgrd.ocx) (Microsoft, 2012)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "msftedit",
+   "desc": "Microsoft RichEdit Control (Microsoft, 2011)",
+   "cat": "system"
+  },
+  {
+   "verb": "mshflxgd",
+   "desc": "MS Hierarchical FlexGrid Control (mshflxgd.ocx) (Microsoft, 2012)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "msls31",
+   "desc": "MS Line Services (Microsoft, 2001)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "msmask",
+   "desc": "MS Masked Edit Control (Microsoft, 2009)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "mspatcha",
+   "desc": "MS mspatcha (Microsoft, 2004)",
+   "cat": "system"
+  },
+  {
+   "verb": "msscript",
+   "desc": "MS Windows Script Control (Microsoft, 2004)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "msvcirt",
+   "desc": "Visual C++ 6 SP4 msvcirt library; part of vcrun6 (Microsoft, 2000)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "msvcrt40",
+   "desc": "MS Visual C++ Runtime Library Version 4.0 (Microsoft, 2011)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "msxml3",
+   "desc": "MS XML Core Services 3.0 (Microsoft, 2005)",
+   "cat": "web"
+  },
+  {
+   "verb": "msxml4",
+   "desc": "MS XML Core Services 4.0 (Microsoft, 2009)",
+   "cat": "web"
+  },
+  {
+   "verb": "msxml6",
+   "desc": "MS XML Core Services 6.0 sp2 (Microsoft, 2014)",
+   "cat": "web",
+   "pop": "MSXML 6: installers and launchers"
+  },
+  {
+   "verb": "nuget",
+   "desc": "NuGet Package manager (Outercurve Foundation, 2013)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "ogg",
+   "desc": "OpenCodecs 0.85: FLAC, Speex, Theora, Vorbis, WebM (Xiph.Org Foundation, 2011)",
+   "cat": "media"
+  },
+  {
+   "verb": "ole32",
+   "desc": "MS ole32 Module (ole32.dll) (Microsoft, 2004)",
+   "cat": "system"
+  },
+  {
+   "verb": "oleaut32",
+   "desc": "MS oleaut32.dll (Microsoft, 2011)",
+   "cat": "system"
+  },
+  {
+   "verb": "openal",
+   "desc": "OpenAL Runtime (Creative, 2023)",
+   "cat": "directx",
+   "pop": "OpenAL: openal32.dll missing, no sound"
+  },
+  {
+   "verb": "otvdm",
+   "desc": "Otvdm - A modified version of winevdm as Win16 emulator (otya128, 2024)",
+   "cat": "system"
+  },
+  {
+   "verb": "otvdm090",
+   "desc": "Otvdm - A modified version of winevdm as Win16 emulator (otya128, 2024)",
+   "cat": "system"
+  },
+  {
+   "verb": "pdh",
+   "desc": "MS pdh.dll (Performance Data Helper) (Microsoft, 2011)",
+   "cat": "system"
+  },
+  {
+   "verb": "pdh_nt4",
+   "desc": "MS pdh.dll (Performance Data Helper); WinNT 4.0 Version (Microsoft, 1997)",
+   "cat": "system"
+  },
+  {
+   "verb": "peverify",
+   "desc": "MS peverify (from .NET 2.0 SDK) (Microsoft, 2006)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "physx",
+   "desc": "PhysX (Nvidia, 2024)",
+   "cat": "directx",
+   "pop": "NVIDIA PhysX legacy runtime: PhysX*.dll missing"
+  },
+  {
+   "verb": "pngfilt",
+   "desc": "pngfilt.dll (from winxp) (Microsoft, 2004)",
+   "cat": "system"
+  },
+  {
+   "verb": "powershell",
+   "desc": "PowerShell Wrapper For Wine (ProjectSynchro, 2024)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "powershell_core",
+   "desc": "PowerShell Core (Microsoft, 2024)",
+   "cat": "dotnet",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "prntvpt",
+   "desc": "prntvpt.dll (Microsoft, 2011)",
+   "cat": "system"
+  },
+  {
+   "verb": "python26",
+   "desc": "Python interpreter 2.6.2 (Python Software Foundaton, 2009)",
+   "cat": "legacy",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "python27",
+   "desc": "Python interpreter 2.7.16 (Python Software Foundaton, 2019)",
+   "cat": "legacy",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "qasf",
+   "desc": "qasf.dll (Microsoft, 2011)",
+   "cat": "media"
+  },
+  {
+   "verb": "qcap",
+   "desc": "qcap.dll (Microsoft, 2011)",
+   "cat": "media"
+  },
+  {
+   "verb": "qdvd",
+   "desc": "qdvd.dll (Microsoft, 2011)",
+   "cat": "media"
+  },
+  {
+   "verb": "qedit",
+   "desc": "qedit.dll (Microsoft, 2011)",
+   "cat": "media"
+  },
+  {
+   "verb": "quartz",
+   "desc": "quartz.dll (Microsoft, 2011)",
+   "cat": "media",
+   "pop": "DirectShow quartz: video playback"
+  },
+  {
+   "verb": "quartz_feb2010",
+   "desc": "quartz.dll (February 2010) (Microsoft, 2010)",
+   "cat": "media"
+  },
+  {
+   "verb": "quicktime72",
+   "desc": "Apple QuickTime 7.2 (Apple, 2010)",
+   "cat": "media",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "quicktime76",
+   "desc": "Apple QuickTime 7.6 (Apple, 2010)",
+   "cat": "media",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "riched20",
+   "desc": "MS RichEdit Control 2.0 (riched20.dll) (Microsoft, 2004)",
+   "cat": "system"
+  },
+  {
+   "verb": "riched30",
+   "desc": "MS RichEdit Control 3.0 (riched20.dll, msls31.dll) (Microsoft, 2001)",
+   "cat": "system"
+  },
+  {
+   "verb": "richtx32",
+   "desc": "MS Rich TextBox Control 6.0 (Microsoft, 2012)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "sapi",
+   "desc": "MS Speech API (Microsoft, 2011)",
+   "cat": "media"
+  },
+  {
+   "verb": "sdl",
+   "desc": "Simple DirectMedia Layer (Sam Lantinga, 2012)",
+   "cat": "directx"
+  },
+  {
+   "verb": "secur32",
+   "desc": "MS Security Support Provider Interface (Microsoft, 2011)",
+   "cat": "web"
+  },
+  {
+   "verb": "setupapi",
+   "desc": "MS Setup API (Microsoft, 2004)",
+   "cat": "system"
+  },
+  {
+   "verb": "shockwave",
+   "desc": "Shockwave (Adobe, 2018)",
+   "cat": "media",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "speechsdk",
+   "desc": "MS Speech SDK 5.1 (Microsoft, 2009)",
+   "cat": "media"
+  },
+  {
+   "verb": "tabctl32",
+   "desc": "Microsoft Tabbed Dialog Control 6.0 (tabctl32.ocx) (Microsoft, 2012)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "ucrtbase2019",
+   "desc": "Visual C++ 2019 library (ucrtbase.dll) (Microsoft, 2019)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "uiribbon",
+   "desc": "Windows UIRibbon (Microsoft, 2011)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "updspapi",
+   "desc": "Windows Update Service API (Microsoft, 2004)",
+   "cat": "system"
+  },
+  {
+   "verb": "urlmon",
+   "desc": "MS urlmon (Microsoft, 2011)",
+   "cat": "web"
+  },
+  {
+   "verb": "usp10",
+   "desc": "Uniscribe (Microsoft, 2011)",
+   "cat": "system"
+  },
+  {
+   "verb": "vb2run",
+   "desc": "MS Visual Basic 2 runtime (Microsoft, 1993)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "vb3run",
+   "desc": "MS Visual Basic 3 runtime (Microsoft, 1998)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "vb4run",
+   "desc": "MS Visual Basic 4 runtime (Microsoft, 1998)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "vb5run",
+   "desc": "MS Visual Basic 5 runtime (Microsoft, 2001)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "vb6run",
+   "desc": "MS Visual Basic 6 runtime sp6 (Microsoft, 2004)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "vcrun2003",
+   "desc": "Visual C++ 2003 libraries (mfc71,msvcp71,msvcr71) (Microsoft, 2003)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "vcrun2005",
+   "desc": "Visual C++ 2005 libraries (mfc80,msvcp80,msvcr80) (Microsoft, 2011)",
+   "cat": "vcpp",
+   "pop": "Visual C++ 2005: MSVCR80 / MSVCP80 not found"
+  },
+  {
+   "verb": "vcrun2008",
+   "desc": "Visual C++ 2008 libraries (mfc90,msvcp90,msvcr90) (Microsoft, 2011)",
+   "cat": "vcpp",
+   "pop": "Visual C++ 2008: MSVCR90 / MSVCP90 not found"
+  },
+  {
+   "verb": "vcrun2010",
+   "desc": "Visual C++ 2010 libraries (mfc100,msvcp100,msvcr100) (Microsoft, 2010)",
+   "cat": "vcpp",
+   "pop": "Visual C++ 2010: MSVCR100 / MSVCP100 not found"
+  },
+  {
+   "verb": "vcrun2012",
+   "desc": "Visual C++ 2012 libraries (atl110,mfc110,mfc110u,msvcp110,msvcr110,vcomp110) (Microsoft, 2012)",
+   "cat": "vcpp",
+   "pop": "Visual C++ 2012: MSVCR110 / MSVCP110 not found"
+  },
+  {
+   "verb": "vcrun2013",
+   "desc": "Visual C++ 2013 libraries (mfc120,mfc120u,msvcp120,msvcr120,vcomp120) (Microsoft, 2013)",
+   "cat": "vcpp",
+   "pop": "Visual C++ 2013: MSVCR120 / MSVCP120 not found"
+  },
+  {
+   "verb": "vcrun2015",
+   "desc": "Visual C++ 2015 libraries (concrt140.dll,mfc140.dll,mfc140u.dll,mfcm140.dll,mfcm140u.dll,msvcp140.dll,msvcp140_1.dll,msvcp140_atomic_wait.dll,vcamp140.dll,vccorlib140.dll,vcomp140.dll,vcruntime140.dll,vcruntime140_1.dll) (Microsoft, 2015)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "vcrun2017",
+   "desc": "Visual C++ 2017 libraries (concrt140.dll,mfc140.dll,mfc140u.dll,mfcm140.dll,mfcm140u.dll,msvcp140.dll,msvcp140_1.dll,msvcp140_2.dll,msvcp140_atomic_wait.dll,vcamp140.dll,vccorlib140.dll,vcomp140.dll,vcruntime140.dll,vcruntime140_1.dll) (Microsoft, 2017)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "vcrun2019",
+   "desc": "Visual C++ 2015-2019 libraries (concrt140.dll,mfc140.dll,mfc140u.dll,mfcm140.dll,mfcm140u.dll,msvcp140.dll,msvcp140_1.dll,msvcp140_2.dll,msvcp140_atomic_wait.dll,msvcp140_codecvt_ids.dll,vcamp140.dll,vccorlib140.dll,vcomp140.dll,vcruntime140.dll,vcruntime140_1.dll (Microsoft, 2019)",
+   "cat": "vcpp",
+   "pop": "Visual C++ 2015-2019 (older installers ask for this one)"
+  },
+  {
+   "verb": "vcrun2022",
+   "desc": "Visual C++ 2015-2022 libraries (concrt140.dll,mfc140.dll,mfc140chs.dll,mfc140cht.dll,mfc140deu.dll,mfc140enu.dll,mfc140esn.dll,mfc140fra.dll,mfc140ita.dll,mfc140jpn.dll,mfc140kor.dll,mfc140rus.dll,mfc140u.dll,mfcm140.dll,mfcm140u.dll,msvcp140.dll,msvcp140_1.dll,msvcp140_2.dll,msvcp140_atomic_wait.dll,msvcp140_codecvt_ids.dll,vcamp140.dll,vccorlib140.dll,vcomp140.dll,vcruntime140.dll,vcruntime140_1.dll) (Microsoft, 2022)",
+   "cat": "vcpp",
+   "pop": "Visual C++ 2015-2022: MSVCP140 / VCRUNTIME140 not found; most modern games"
+  },
+  {
+   "verb": "vcrun2026",
+   "desc": "Visual C++ 2017-2026 libraries (concrt140.dll,mfc140.dll,mfc140chs.dll,mfc140cht.dll,mfc140deu.dll,mfc140enu.dll,mfc140esn.dll,mfc140fra.dll,mfc140ita.dll,mfc140jpn.dll,mfc140kor.dll,mfc140rus.dll,mfc140u.dll,mfcm140.dll,mfcm140u.dll,msvcp140.dll,msvcp140_1.dll,msvcp140_2.dll,msvcp140_atomic_wait.dll,msvcp140_codecvt_ids.dll,vcamp140.dll,vccorlib140.dll,vcomp140.dll,vcruntime140.dll,vcruntime140_1.dll) (Microsoft, 2026)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "vcrun6",
+   "desc": "Visual C++ 6 SP4 libraries (mfc42, msvcp60, msvcirt) (Microsoft, 2000)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "vcrun6sp6",
+   "desc": "Visual C++ 6 SP6 libraries (with fixes in ATL and MFC) (Microsoft, 2004)",
+   "cat": "vcpp"
+  },
+  {
+   "verb": "vjrun20",
+   "desc": "MS Visual J# 2.0 SE libraries (requires dotnet20) (Microsoft, 2007)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "vkd3d",
+   "desc": "Vulkan-based D3D12 implementation for Linux / Wine (latest) (Hans-Kristian Arntzen , 2020)",
+   "cat": "layers",
+   "warn": "Replaces the layer your launcher or Proton provides. Prefer DRSTool's own DLL Manager / Proton for DXVK, vkd3d-proton and dxvk-nvapi."
+  },
+  {
+   "verb": "webio",
+   "desc": "MS Windows Web I/O (Microsoft, 2011)",
+   "cat": "web"
+  },
+  {
+   "verb": "windowscodecs",
+   "desc": "MS Windows Imaging Component (Microsoft, 2006)",
+   "cat": "media"
+  },
+  {
+   "verb": "winhttp",
+   "desc": "MS Windows HTTP Services (Microsoft, 2005)",
+   "cat": "web"
+  },
+  {
+   "verb": "wininet",
+   "desc": "MS Windows Internet API (Microsoft, 2011)",
+   "cat": "web"
+  },
+  {
+   "verb": "wininet_win2k",
+   "desc": "MS Windows Internet API (Microsoft, 2008)",
+   "cat": "web"
+  },
+  {
+   "verb": "wmi",
+   "desc": "Windows Management Instrumentation (aka WBEM) Core 1.5 (Microsoft, 2000)",
+   "cat": "system"
+  },
+  {
+   "verb": "wmp10",
+   "desc": "Windows Media Player 10 (Microsoft, 2006)",
+   "cat": "media",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "wmp11",
+   "desc": "Windows Media Player 11 (Microsoft, 2007)",
+   "cat": "media",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "wmp9",
+   "desc": "Windows Media Player 9 (Microsoft, 2003)",
+   "cat": "media",
+   "warn": "Large download and slow install; the installer may open windows."
+  },
+  {
+   "verb": "wmv9vcm",
+   "desc": "MS Windows Media Video 9 Video Compression Manager (Microsoft, 2013)",
+   "cat": "media"
+  },
+  {
+   "verb": "wsh57",
+   "desc": "MS Windows Script Host 5.7 (Microsoft, 2007)",
+   "cat": "legacy"
+  },
+  {
+   "verb": "xact",
+   "desc": "MS XACT Engine (32-bit only) (Microsoft, 2010)",
+   "cat": "directx",
+   "pop": "XACT audio (x86): xactengine*.dll / X3DAudio missing, no sound"
+  },
+  {
+   "verb": "xact_x64",
+   "desc": "MS XACT Engine (64-bit only) (Microsoft, 2010)",
+   "cat": "directx",
+   "pop": "XACT audio (x64): 64-bit games with xactengine / X3DAudio errors"
+  },
+  {
+   "verb": "xaudio29",
+   "desc": "MS XAudio Redistributable 2.9 (Microsoft, 2023)",
+   "cat": "directx",
+   "pop": "XAudio 2.9: games that use xaudio2_9.dll"
+  },
+  {
+   "verb": "xinput",
+   "desc": "Microsoft XInput (Xbox controller support) (Microsoft, 2010)",
+   "cat": "directx",
+   "pop": "XInput: controller not detected in older games"
+  },
+  {
+   "verb": "xmllite",
+   "desc": "MS xmllite dll (Microsoft, 2011)",
+   "cat": "system"
+  },
+  {
+   "verb": "xna31",
+   "desc": "MS XNA Framework Redistributable 3.1 (Microsoft, 2009)",
+   "cat": "directx"
+  },
+  {
+   "verb": "xna40",
+   "desc": "MS XNA Framework Redistributable 4.0 (Microsoft, 2010)",
+   "cat": "directx"
+  },
+  {
+   "verb": "xvid",
+   "desc": "Xvid Video Codec (xvid.org, 2019)",
+   "cat": "media"
+  }
+ ]
+}

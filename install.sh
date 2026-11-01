@@ -226,9 +226,9 @@ pm_install() {
 # ── banner ───────────────────────────────────────────────────────────────────
 say "${B}DRSTool$(L " installer" " kurulumu")${N}  ${D}($SRC)${N}"
 say "$(L "System" "Sistem"):  $OS_NAME${PM:+  ·  $PM}  ·  Python $PY_VER"
-[[ -f "$SRC/DRSTool.py" && -f "$SRC/drstool_launch.py" && -d "$SRC/drstool_core" ]] \
-    || die "$(L "run this script from the DRSTool folder (DRSTool.py / drstool_core missing)" \
-                "bu betiği DRSTool klasöründen çalıştırın (DRSTool.py / drstool_core yok)")"
+[[ -f "$SRC/DRSTool.py" && -f "$SRC/drstool_launch.py" && -d "$SRC/drstool_core" && -d "$SRC/drstool_gui" ]] \
+    || die "$(L "run this script from the DRSTool folder (DRSTool.py / drstool_core / drstool_gui missing)" \
+                "bu betiği DRSTool klasöründen çalıştırın (DRSTool.py / drstool_core / drstool_gui yok)")"
 if [[ "$OS_ID" == gentoo || " $OS_LIKE " == *" gentoo "* ]]; then
     warn "$(L "Gentoo: the ebuild (drstool-9999.ebuild) is the cleaner way; continuing anyway." \
               "Gentoo: ebuild (drstool-9999.ebuild) daha temiz bir yol; yine de devam ediliyor.")"
@@ -471,7 +471,7 @@ for old in "$LIB"/*; do
     [[ "$old" == "$VENV" ]] && continue
     "${RUN[@]}" rm -rf "$old"
 done
-"${RUN[@]}" cp -r "$SRC/DRSTool.py" "$SRC/drstool_launch.py" "$SRC/drstool_core" "$SRC/assets" \
+"${RUN[@]}" cp -r "$SRC/DRSTool.py" "$SRC/drstool_launch.py" "$SRC/drstool_core" "$SRC/drstool_gui" "$SRC/assets" \
     "$SRC/vk-flip-meter-main" "$SRC/lutris-game-tune-main" "$LIB/"
 [[ -f "$SRC/LICENSE" ]] && "${RUN[@]}" cp "$SRC/LICENSE" "$LIB/"
 "${RUN[@]}" find "$LIB" -name __pycache__ -prune -exec rm -rf {} +
@@ -485,7 +485,7 @@ else
 fi
 
 # Bytecode must be written now: $LIB is root-owned, so a normal user's first run could not cache it.
-"${RUN[@]}" "$RUNPY" -m compileall -q "$LIB/DRSTool.py" "$LIB/drstool_core" >/dev/null 2>&1 || true
+"${RUN[@]}" "$RUNPY" -m compileall -q "$LIB/DRSTool.py" "$LIB/drstool_core" "$LIB/drstool_gui" >/dev/null 2>&1 || true
 
 tmpf="$(mktemp)"
 cat >"$tmpf" <<EOF

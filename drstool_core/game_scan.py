@@ -14,6 +14,7 @@ problem is reported in ScanResult.errors instead.
 
 from __future__ import annotations
 
+import logging
 import json
 import os
 import re
@@ -32,6 +33,8 @@ except ImportError:          # PyYAML is optional; a regex fallback covers the k
 _YAML_LOADER = getattr(yaml, "CSafeLoader", getattr(yaml, "SafeLoader", None))
 
 from . import pe_version
+
+_log = logging.getLogger(__name__)
 
 # NGX feature id -> DLL file name the game ships (Streamline is a group of sl.*.dll)
 DLSS_FILES = {"dlss": "nvngx_dlss.dll", "dlssd": "nvngx_dlssd.dll", "dlssg": "nvngx_dlssg.dll"}
@@ -197,6 +200,7 @@ def _yaml_game_section(text: str) -> Dict[str, str]:
             g = d.get("game") if isinstance(d, dict) else None
             return {str(k): str(v) for k, v in g.items()} if isinstance(g, dict) else {}
         except Exception:
+            _log.debug("ignored error", exc_info=True)
             pass
     out, inside = {}, False
     for line in text.splitlines():
@@ -405,6 +409,7 @@ def scan_bottles(home: Optional[Path] = None) -> List[GameEntry]:
                 try:
                     data = yaml.load(text, Loader=_YAML_LOADER)
                 except Exception:
+                    _log.debug("ignored error", exc_info=True)
                     data = None
             if isinstance(data, dict):
                 name = str(data.get("Name") or name)

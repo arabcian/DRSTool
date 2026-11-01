@@ -205,12 +205,12 @@ src_test() {
 
 src_install() {
 	# ── Python GUI ───────────────────────────────────────────────────────────
-	# DRSTool.py is installed as a module (and byte-compiled by python_optimize below);
-	# the script is only a thin launcher, so the 25k-line file is not recompiled on every start.
-	python_domodule DRSTool.py
+	# DRSTool.py (thin entry module) and the drstool_gui package are installed as modules
+	# and byte-compiled by python_optimize below, so nothing is recompiled on every start.
+	python_domodule DRSTool.py drstool_gui
 	python_newscript drstool_launch.py drstool
-	# Qt-free helper package imported by DRSTool.py (share codes, Steam
-	# shortcuts, game / DLL scanning). Must be importable next to the script.
+	# Qt-free helper package imported by the GUI (catalog data in drstool_core/data/*.json,
+	# share codes, Steam shortcuts, game / DLL scanning).
 	python_domodule drstool_core
 	python_optimize
 

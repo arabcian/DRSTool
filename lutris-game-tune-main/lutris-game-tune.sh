@@ -334,6 +334,13 @@ SET_WIFI_POWERSAVE=1
 SET_NVME_SCHED=1
 NVME_IO_SCHEDULER="none"
 
+# --- sched_ext (scx) scheduler -----------------------------------------------
+# Starts one scx_* user-space scheduler while games run (kernels built with
+# sched_ext; CachyOS ships it). Skipped when another sched_ext scheduler is
+# already active. Stopped again on POST. Opt-in.
+SET_SCX_SCHED=0
+SCX_SCHEDULER="scx_lavd"
+
 # --- Dry run / profile (runtime state, not config keys) -----------------------
 DRY_RUN=0
 
@@ -517,6 +524,16 @@ load_config_file() {
             SET_AMDGPU_PERF_LEVEL) SET_AMDGPU_PERF_LEVEL="${val}" ;;
             SET_WIFI_POWERSAVE)    SET_WIFI_POWERSAVE="${val}" ;;
             SET_NVME_SCHED)        SET_NVME_SCHED="${val}" ;;
+            SET_SCX_SCHED)
+                case "${val}" in
+                    0|1) SET_SCX_SCHED="${val}" ;;
+                    *) warn "Invalid SET_SCX_SCHED '${val}' (0|1), using default ${SET_SCX_SCHED}" ;;
+                esac ;;
+            SCX_SCHEDULER)
+                case "${val}" in
+                    scx_lavd|scx_bpfland|scx_rusty|scx_flash) SCX_SCHEDULER="${val}" ;;
+                    *) warn "Invalid SCX_SCHEDULER '${val}' (scx_lavd|scx_bpfland|scx_rusty|scx_flash), using default ${SCX_SCHEDULER}" ;;
+                esac ;;
             VM_MAX_MAP_COUNT)
                 if [[ "${val}" =~ ^[0-9]+$ ]] && (( 10#${val} <= 2147483647 )); then
                     VM_MAX_MAP_COUNT="$(( 10#${val} ))"
@@ -1567,6 +1584,72 @@ restore_nvme_sched() {
         dev="${f#/sys/block/}"; dev="${dev%%/*}"
         restore_param "${f}" "iosched.${dev}"
     done
+}
+
+readonly SCX_PID_FILE_NAME=".scx_pid"
+readonly SCX_STATE_FILE="/sys/kernel/sched_ext/state"
+readonly SCX_OPS_FILE="/sys/kernel/sched_ext/root/ops"
+
+# Starts SCX_SCHEDULER and records its pid in STATE_DIR. Only when sched_ext is
+# present, no other sched_ext scheduler is active, and the binary is installed.
+tune_scx_sched() {
+    [[ "${SET_SCX_SCHED}" == "1" ]] || return 0
+    local exe active pid i
+    if [[ ! -r "${SCX_STATE_FILE}" ]]; then
+        log_debug "scx: sched_ext not available in this kernel, skipped"
+        return 0
+    fi
+    active="$(cat "${SCX_OPS_FILE}" 2>/dev/null || true)"
+    if [[ -n "${active}" ]]; then
+        warn "scx: '${active}' is already active, leaving it alone"
+        return 0
+    fi
+    if ! exe="$(command -v "${SCX_SCHEDULER}")"; then
+        warn "scx: ${SCX_SCHEDULER} is not installed, skipped"
+        return 0
+    fi
+    if (( DRY_RUN )); then
+        dry "would start ${SCX_SCHEDULER}"
+        return 0
+    fi
+    "${exe}" >/dev/null 2>&1 </dev/null &
+    pid=$!
+    for i in 1 2 3 4 5 6; do
+        sleep 0.5
+        [[ "$(cat "${SCX_STATE_FILE}" 2>/dev/null || true)" == "enabled" ]] && break
+    done
+    if [[ "$(cat "${SCX_STATE_FILE}" 2>/dev/null || true)" == "enabled" ]] && kill -0 "${pid}" 2>/dev/null; then
+        _state_write "${STATE_DIR}/${SCX_PID_FILE_NAME}" "${pid}" || true
+        log "scx: ${SCX_SCHEDULER} active (pid ${pid})"
+    else
+        kill "${pid}" 2>/dev/null || true
+        warn "scx: ${SCX_SCHEDULER} did not take over the scheduler, left as is"
+    fi
+}
+
+# Stops the scheduler started by tune_scx_sched (SIGINT; the kernel then falls
+# back to the default scheduler). Only touches a pid whose name is scx_*.
+restore_scx_sched() {
+    local pidf="${STATE_DIR}/${SCX_PID_FILE_NAME}" pid comm i
+    [[ -f "${pidf}" ]] || return 0
+    pid="$(cat "${pidf}" 2>/dev/null || true)"
+    if [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null; then
+        comm="$(cat "/proc/${pid}/comm" 2>/dev/null || true)"
+        if [[ "${comm}" == scx_* ]]; then
+            kill -INT "${pid}" 2>/dev/null || true
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+                kill -0 "${pid}" 2>/dev/null || break
+                sleep 0.5
+            done
+            if kill -0 "${pid}" 2>/dev/null; then
+                kill -KILL "${pid}" 2>/dev/null || true
+            fi
+            log "scx: stopped ${comm} (pid ${pid})"
+        else
+            warn "scx: pid ${pid} is not a scx scheduler any more, not touched"
+        fi
+    fi
+    rm -f "${pidf}"
 }
 
 # --- CCD/CCX core isolation ----------------------------------------------------
@@ -2771,6 +2854,9 @@ _apply_all() {
     tune_wifi_powersave
     tune_nvme_sched
 
+    log "--- sched_ext (scx) ---"
+    tune_scx_sched
+
     apply_ccd_isolation
 
     log "--- IRQ affinity ---"
@@ -2895,6 +2981,9 @@ _restore_all() {
 
     log "--- PCI Latency Timer ---"
     restore_pci_latency
+
+    log "--- sched_ext (scx) ---"
+    restore_scx_sched
 
     log "--- GPU / Network / Storage / IRQ ---"
     restore_gpu

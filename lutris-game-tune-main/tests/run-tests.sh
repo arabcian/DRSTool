@@ -108,6 +108,17 @@ eq "conf: bad class list rejected" "gpu net" "${IRQ_AFFINITY_CLASSES}"
 eq "conf: dirty bytes lower bound" 268435456 "${VM_DIRTY_BYTES}"
 eq "conf: max_map_count upper bound" 2147483642 "${VM_MAX_MAP_COUNT}"
 eq "conf: amdgpu level whitelist" high "${AMDGPU_PERF_LEVEL}"
+newconf "SET_SCX_SCHED=1" "SCX_SCHEDULER=scx_bpfland"
+load_config_file "${TMP}/c.conf" >/dev/null 2>&1
+eq "conf: scx enabled"           1 "${SET_SCX_SCHED}"
+eq "conf: scx scheduler"  scx_bpfland "${SCX_SCHEDULER}"
+SET_SCX_SCHED=0; SCX_SCHEDULER="scx_lavd"
+newconf "SET_SCX_SCHED=yes" "SCX_SCHEDULER=scx_evil;rm"
+load_config_file "${TMP}/c.conf" >/dev/null 2>&1
+eq "conf: scx flag whitelist"    0 "${SET_SCX_SCHED}"
+eq "conf: scx name whitelist" scx_lavd "${SCX_SCHEDULER}"
+restore_scx_sched >/dev/null 2>&1
+eq "scx: restore without pid is a no-op" 0 $?
 newconf "VM_SWAPPINESS=44 # trailing comment"
 load_config_file "${TMP}/c.conf" >/dev/null 2>&1
 eq "conf: trailing comment line is rejected as a whole" 33 "${VM_SWAPPINESS}"

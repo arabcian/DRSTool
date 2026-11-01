@@ -1,0 +1,580 @@
+[
+ [
+  "dxvk.latencySleep",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "Latency sleep / Reflex. Auto: Reflex only in D3D11 games that use it, with VK_NV_low_latency2 + dxvk-nvapi. True: DXVK's built-in latency reduction for every game (no effect with in-game/external limiters). False: disable both."
+ ],
+ [
+  "dxvk.latencyTolerance",
+  "num",
+  "1000",
+  "Latency-sleep heuristic tolerance in µs. Higher = more latency, maybe smoother pacing. No effect when VK_NV_low_latency2 is used."
+ ],
+ [
+  "dxvk.disableNvLowLatency2",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "Don't use VK_NV_low_latency2 (Reflex unavailable; latencySleep=True then uses the custom algorithm). Auto disables it for 32-bit games only."
+ ],
+ [
+  "dxvk.maxFrameRate",
+  "num",
+  "0",
+  "Frame rate limit (0 = off). DXVK 3.x replacement for DXVK_FRAME_RATE."
+ ],
+ [
+  "dxgi.maxFrameLatency",
+  "num",
+  "0",
+  "Enforce stricter max frame latency (0 = app value, 1-16)."
+ ],
+ [
+  "dxgi.syncInterval",
+  "num",
+  "-1",
+  "Override Vsync for D3D10/11/12: 0 = off, n = on (every n-th vblank), -1 = app."
+ ],
+ [
+  "d3d9.presentInterval",
+  "num",
+  "-1",
+  "Override Vsync for D3D9: 0 = off, n = on, -1 = app."
+ ],
+ [
+  "dxvk.tearFree",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "True: mailbox when in-game Vsync is off (no tearing). False: FIFO_RELAXED when Vsync is on (tears instead of stuttering below refresh)."
+ ],
+ [
+  "dxvk.enablePresentTiming",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Present-timing features (non-native refresh emulation, frame limiter). Default True; disable only for debugging."
+ ],
+ [
+  "dxgi.forceRefreshRate",
+  "num",
+  "0",
+  "Only expose display modes with this refresh rate (0 = off). Use with caution."
+ ],
+ [
+  "dxvk.enableGraphicsPipelineLibrary",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "Auto: GPL + optimized pipelines in background. True: GPL only. False: off (more stutter). Debug option."
+ ],
+ [
+  "dxvk.enableDescriptorHeap",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "VK_EXT_descriptor_heap. Auto: known-good drivers only. True: force if supported."
+ ],
+ [
+  "dxvk.enableDescriptorBuffer",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "VK_EXT_descriptor_buffer (descriptor heap takes precedence when both are on)."
+ ],
+ [
+  "dxvk.numCompilerThreads",
+  "num",
+  "0",
+  "Pipeline compiler threads (0 = all cores). Lower it to cut compile-time CPU contention on high-core CPUs."
+ ],
+ [
+  "dxvk.enableMemoryDefrag",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "Video-memory defragmentation. Debug option."
+ ],
+ [
+  "dxgi.hideNvidiaGpu",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "Report NVIDIA GPUs as AMD. Auto hides unless NVAPI is enabled in Proton — set False when you need DLSS/Reflex via dxvk-nvapi."
+ ],
+ [
+  "dxvk.enableNvCudaInterop",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "VK_NVX_* CUDA-interop extensions required for DLSS (default True on 64-bit NVIDIA)."
+ ],
+ [
+  "dxvk.hideIntegratedGraphics",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Hide the iGPU when a dGPU exists. Prefer DXVK_FILTER_DEVICE_NAME if possible."
+ ],
+ [
+  "dxgi.maxDeviceMemory",
+  "num",
+  "0",
+  "Override reported VRAM in MB (0 = off). Fixes texture streaming in games that mis-handle large VRAM. Not a hard cap."
+ ],
+ [
+  "dxgi.enableHDR",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Expose the HDR10 colour space (defaults to DXVK_HDR)."
+ ],
+ [
+  "d3d11.samplerAnisotropy",
+  "num",
+  "-1",
+  "Force AF for all D3D11 samplers (0-16, -1 = app). Can break bilinear-dependent passes."
+ ],
+ [
+  "d3d9.samplerAnisotropy",
+  "num",
+  "-1",
+  "Force AF for all D3D9 samplers (0-16, -1 = app)."
+ ],
+ [
+  "d3d11.samplerLodBias",
+  "num",
+  "0.0",
+  "Add to the app's mip LOD bias (-2.0 .. 1.0). Negative = sharper + shimmer."
+ ],
+ [
+  "d3d11.clampNegativeLodBias",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Clamp negative LOD bias to 0 (after samplerLodBias)."
+ ],
+ [
+  "dxgi.maxFrameRate",
+  "num",
+  "0",
+  "Legacy per-API D3D10/11 frame limiter (0 = off). Prefer dxvk.maxFrameRate, or MangoHud / Gamescope limiters, which pace better."
+ ],
+ [
+  "d3d9.maxFrameRate",
+  "num",
+  "0",
+  "Legacy per-API D3D9 frame limiter (0 = off). Prefer dxvk.maxFrameRate or an external limiter."
+ ],
+ [
+  "d3d9.maxFrameLatency",
+  "num",
+  "0",
+  "Enforce stricter max frame latency for D3D9 (0 = app value)."
+ ],
+ [
+  "dxgi.hideAmdGpu",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "Report AMD GPUs as NVIDIA GPUs (workaround for AMDAGS / AMD-specific code paths). Auto = only for known-affected games."
+ ],
+ [
+  "dxgi.hideIntelGpu",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "Report Intel GPUs as AMD GPUs (workaround for Intel-specific libraries such as XeSS). Auto = known-affected games; defaults to True for D3D8/9."
+ ],
+ [
+  "dxgi.hideNvkGpu",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "Report NVIDIA GPUs running on NVK (Mesa) as AMD GPUs. Irrelevant with the proprietary NVIDIA driver."
+ ],
+ [
+  "dxgi.customVendorId",
+  "str",
+  "e.g. 10de",
+  "Report this PCI vendor ID (hex) instead of the real one. 10de = NVIDIA, 1002 = AMD, 8086 = Intel."
+ ],
+ [
+  "dxgi.customDeviceId",
+  "str",
+  "e.g. 2704",
+  "Report this PCI device ID (hex) instead of the real one."
+ ],
+ [
+  "dxgi.customDeviceDesc",
+  "str",
+  "e.g. NVIDIA GeForce RTX 4080",
+  "Report this adapter description string instead of the real GPU name."
+ ],
+ [
+  "dxgi.maxSharedMemory",
+  "num",
+  "0",
+  "Override reported shared system memory in MB (0 = off). Companion of dxgi.maxDeviceMemory; not a hard cap."
+ ],
+ [
+  "dxvk.deviceFilter",
+  "str",
+  "e.g. RTX 5080",
+  "Only expose Vulkan devices whose name contains this string. Config-file equivalent of DXVK_FILTER_DEVICE_NAME."
+ ],
+ [
+  "dxgi.enableUe4Workarounds",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Unreal Engine 4 HDR workarounds for games not named *-Win64-Shipping.exe (avoids AMDAGS crashes in D3D11 on HDR systems)."
+ ],
+ [
+  "d3d11.maxFeatureLevel",
+  "enum",
+  [
+   "9_1",
+   "9_2",
+   "9_3",
+   "10_0",
+   "10_1",
+   "11_0",
+   "11_1",
+   "12_0",
+   "12_1"
+  ],
+  "Cap the D3D11 feature level a device can be created with (default 12_1). Raising it can unblock apps that fail device creation."
+ ],
+ [
+  "d3d11.maxTessFactor",
+  "num",
+  "0",
+  "Cap the tessellation factor (8-64, 0 = off). Big win in tessellation-heavy games."
+ ],
+ [
+  "d3d11.relaxedBarriers",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Relax UAV pipeline barriers (ignore WAW in compute, all UAV hazards in graphics). Can raise performance; may cause rendering glitches."
+ ],
+ [
+  "d3d11.relaxedGraphicsBarriers",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Like relaxedBarriers but only for graphics-shader UAVs (compute untouched)."
+ ],
+ [
+  "d3d11.forceComputeLdsBarriers",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Insert barriers after group-shared-memory writes in compute shaders. Workaround for games with missing GroupMemoryBarrier; costs performance."
+ ],
+ [
+  "d3d11.forceComputeUavBarriers",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Insert barriers after UAV writes in compute shaders. Workaround for missing UAV sync; costs performance."
+ ],
+ [
+  "d3d11.forceSampleRateShading",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Per-sample instead of per-pixel shading when MSAA is on. Cleaner image, big performance cost."
+ ],
+ [
+  "d3d9.forceSampleRateShading",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Per-sample shading when MSAA is on (D3D9). Cleaner image, big performance cost."
+ ],
+ [
+  "d3d11.disableMsaa",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Force every texture to 1 sample and fix up resolves/shaders. Big FPS gain at the cost of no MSAA."
+ ],
+ [
+  "d3d11.disableDirectImageMapping",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Don't map dynamic images directly. Fixes corruption in games that ignore the driver's row pitch."
+ ],
+ [
+  "d3d11.cachedDynamicResources",
+  "str",
+  "e.g. vicr",
+  "Put dynamic resources with these bind flags in cached system memory for fast CPU readback (v=vertex, i=index, c=constant, r=shader resource ...). Buggy-app workaround."
+ ],
+ [
+  "d3d11.exposeDriverCommandLists",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Advertise native driver command-list support (default True). Turn off if a game misbehaves with deferred contexts."
+ ],
+ [
+  "d3d11.enableContextLock",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Force-enable the D3D11 context lock (ID3D10Multithread). Race-condition debugging."
+ ],
+ [
+  "d3d9.samplerLodBias",
+  "num",
+  "0.0",
+  "Add to the app's mip LOD bias for D3D9 samplers."
+ ],
+ [
+  "d3d9.clampNegativeLodBias",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Clamp negative D3D9 LOD bias to 0 (after samplerLodBias)."
+ ],
+ [
+  "d3d9.floatEmulation",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False",
+   "Strict"
+  ],
+  "x*0 floating-point quirk emulation. True = fast/less exact, Strict = slow/exact, False = off. Auto = per-game."
+ ],
+ [
+  "d3d9.deviceLocalConstantBuffers",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "Stream shader constants into VRAM; may help GPU-bound scenes. Auto = discrete GPUs only."
+ ],
+ [
+  "d3d9.lenientClear",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Fast-path clears that nearly cover the whole render target."
+ ],
+ [
+  "d3d9.maxAvailableMemory",
+  "num",
+  "4096",
+  "Initial value (MB) for GetAvailableTextureMem tracking. Raise for old games that refuse to start with 'too little' video memory."
+ ],
+ [
+  "d3d9.forceRefreshRate",
+  "num",
+  "0",
+  "Only expose D3D9 display modes with this refresh rate (0 = off)."
+ ],
+ [
+  "d3d9.seamlessCubes",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Always use seamless cube maps (prettier edges, deviates from real D3D9)."
+ ],
+ [
+  "d3d9.useFP16",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "FP16 for partial-precision instructions. May help weak GPUs, can regress desktop GPUs."
+ ],
+ [
+  "d3d9.cachedWriteOnlyBuffers",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Allocate write-only D3DPOOL_DEFAULT buffers in cached system memory (buggy-app readback fix)."
+ ],
+ [
+  "d3d9.forceAspectRatio",
+  "str",
+  "e.g. 16:9",
+  "Force the aspect ratio of exposed D3D9 display modes."
+ ],
+ [
+  "dxvk.maxMemoryBudget",
+  "num",
+  "0",
+  "Cap the VRAM DXVK will use, in MB (0 = off). Debug only: severe slowdown when hit."
+ ],
+ [
+  "dxvk.zeroMappedMemory",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Zero mapped memory when suballocations are freed. Huge CPU cost; last resort for games that don't initialise their buffers."
+ ],
+ [
+  "dxvk.useRawSsbo",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "Raw/structured buffer views via SSBOs. Auto = on where offset alignment is 4 B (AMD). Unsafe on hardware with stricter alignment."
+ ],
+ [
+  "dxvk.enableNvRawAccessChains",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Use VK_NV_raw_access_chains on NVIDIA (default True). Disabling reduces performance; debug only."
+ ],
+ [
+  "dxvk.enableImplicitResolves",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Resolve multisampled images when a game samples them as plain textures (fixes striped artifacts on NVIDIA). Default True."
+ ],
+ [
+  "dxvk.enableUnifiedImageLayouts",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Use VK_KHR_unified_image_layouts where available. Default True; debug only."
+ ],
+ [
+  "dxvk.trackPipelineLifetime",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "Free pipeline libraries aggressively to save memory/address space. Auto = 32-bit games only."
+ ],
+ [
+  "dxvk.lowerSinCos",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "Custom sin/cos approximation. Auto = only on drivers with poor native precision."
+ ],
+ [
+  "dxvk.tilerMode",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "Tiler (mobile GPU) submission heuristics. For perf testing only."
+ ],
+ [
+  "dxvk.enableDebugUtils",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Enable VK_EXT_debug_utils object names/labels (RenderDoc / Nsight)."
+ ]
+]

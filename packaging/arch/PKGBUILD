@@ -6,7 +6,7 @@
 #   cd packaging/arch && makepkg -si
 #
 # Installed by the package:
-#   /usr/bin/drstool + the DRSTool / drstool_core Python modules
+#   /usr/bin/drstool + the DRSTool / drstool_gui / drstool_core Python modules
 #   the vk_flip_meter Vulkan layer (/usr/lib + implicit_layer.d manifest)
 #   desktop entry and icon
 #   /usr/share/drstool/{lutris-game-tune-main,vk-flip-meter-main} sources

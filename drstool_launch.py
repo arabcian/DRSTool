@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Thin entry point: DRSTool.py is imported as a module (not run as __main__), so Python
-keeps its compiled bytecode (.pyc) instead of recompiling 25k lines on every start."""
+"""Thin entry point used by the installers: imports DRSTool (which starts nothing by itself)
+and calls main()."""
 import sys
 from pathlib import Path
 

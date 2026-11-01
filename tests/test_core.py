@@ -10,11 +10,13 @@ import struct
 import sys
 import tempfile
 import unittest
+import zipfile
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from drstool_core import dll_ops, game_scan, pe_version, share_code, steam_shortcuts as ss  # noqa: E402
+from drstool_core import catalog, dll_ops, game_scan, pe_version, share_code, steam_shortcuts as ss, support_bundle, validate, winetricks  # noqa: E402
 
 
 def fake_dll(path: Path, ver=(310, 2, 1, 0), filler=b"") -> Path:
@@ -25,6 +27,79 @@ def fake_dll(path: Path, ver=(310, 2, 1, 0), filler=b"") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(body + b"\0" * 64)
     return path
+
+
+class WinetricksPlanTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _prefix(self, *parts) -> Path:
+        p = self.root.joinpath(*parts)
+        (p / "drive_c" / "windows").mkdir(parents=True)
+        return p
+
+    def test_lutris_prefix_uses_winetricks_with_wineprefix(self):
+        pfx = self._prefix("lutris", "game")
+        with mock.patch.object(winetricks.shutil, "which", lambda n: f"/usr/bin/{n}"):
+            p = winetricks.plan(pfx, ["vcrun2022", "xact"])
+        self.assertEqual(p.tool, "winetricks")
+        self.assertEqual(p.argv, ["/usr/bin/winetricks", "-q", "vcrun2022", "xact"])
+        self.assertEqual(p.env, {"WINEPREFIX": str(pfx)})
+
+    def test_steam_prefix_uses_protontricks_with_appid(self):
+        pfx = self._prefix("steamapps", "compatdata", "1245620", "pfx")
+        with mock.patch.object(winetricks.shutil, "which", lambda n: f"/usr/bin/{n}"):
+            p = winetricks.plan(pfx, ["d3dx9"])
+        self.assertEqual(p.tool, "protontricks")
+        self.assertEqual(p.argv, ["/usr/bin/protontricks", "1245620", "-q", "d3dx9"])
+        self.assertEqual(p.env, {})
+
+    def test_unknown_component_is_rejected(self):
+        pfx = self._prefix("game")
+        with mock.patch.object(winetricks.shutil, "which", lambda n: f"/usr/bin/{n}"):
+            with self.assertRaises(ValueError):
+                winetricks.plan(pfx, ["vcrun2022; rm -rf ~"])
+
+    def test_folder_without_drive_c_is_rejected(self):
+        with self.assertRaises(ValueError):
+            winetricks.plan(self.root / "nothing", ["xact"])
+
+    def test_missing_tool_is_reported(self):
+        pfx = self._prefix("game")
+        with mock.patch.object(winetricks.shutil, "which", lambda n: None):
+            with self.assertRaises(RuntimeError):
+                winetricks.plan(pfx, ["xact"])
+
+
+class ValidateTests(unittest.TestCase):
+    def test_int(self):
+        self.assertEqual(validate.check_int(""), "")
+        self.assertEqual(validate.check_int("60"), "")
+        self.assertEqual(validate.check_int(" 60 "), "")
+        self.assertNotEqual(validate.check_int("6o"), "")
+        self.assertNotEqual(validate.check_int("1.5"), "")
+        self.assertNotEqual(validate.check_int("-1"), "")
+        self.assertNotEqual(validate.check_int("3000000000"), "")
+
+    def test_hex(self):
+        self.assertEqual(validate.check_hex(""), "")
+        self.assertEqual(validate.check_hex("0x1F"), "")
+        self.assertEqual(validate.check_hex("DEADBEEF"), "")
+        self.assertNotEqual(validate.check_hex("0xZZ"), "")
+        self.assertNotEqual(validate.check_hex("123456789"), "")
+
+    def test_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "file.txt"
+            f.write_text("x")
+            self.assertEqual(validate.check_dir(""), "")
+            self.assertEqual(validate.check_dir(d), "")
+            self.assertNotEqual(validate.check_dir(str(Path(d) / "missing")), "")
+            self.assertNotEqual(validate.check_dir(str(f)), "")
 
 
 class ShareCodeTests(unittest.TestCase):
@@ -350,6 +425,254 @@ class DllOpsTests(unittest.TestCase):
             self.assertEqual(len(left), dll_ops.KEEP_BACKUPS)
             # the oldest backup (the game's original DLLs) is never pruned
             self.assertEqual(left[-1][0].name, "202601000")
+
+
+class CatalogTests(unittest.TestCase):
+    """The catalog lives in drstool_core/data/*.json; these catch a broken hand edit early."""
+
+    def test_counts_and_loading(self):
+        self.assertEqual(len(catalog.gpu_archs()), 9)
+        self.assertEqual(len(catalog.drs_settings()), 118)
+        self.assertEqual(len(catalog.gamescope_flags()), 66)
+        self.assertEqual(len(catalog.dxvk_config_keys()), 70)
+        self.assertEqual(sum(len(v) for v in catalog.env_var_groups().values()), 289)
+
+    def test_drs_settings(self):
+        sett = catalog.drs_settings()
+        ids = [s.id.upper() for s in sett]
+        self.assertEqual(len(ids), len(set(ids)), "duplicate DRS setting id")
+        for s in sett:
+            self.assertRegex(s.id, r"^0x[0-9A-Fa-f]{1,8}$", s.name)
+            self.assertIn(s.type, {"enum", "numeric", "hex", "hex-preset", "bitfield"}, s.id)
+            if s.type == "enum":
+                self.assertTrue(s.values, f"{s.id} {s.name}: enum without values")
+            if s.type == "bitfield":
+                self.assertTrue(s.bits, f"{s.id} {s.name}: bitfield without bits")
+
+    def test_env_vars(self):
+        groups = catalog.env_var_groups()
+        names = [e.name for v in groups.values() for e in v]
+        self.assertEqual(len(names), len(set(names)), "duplicate env var name")
+        for e in (e for v in groups.values() for e in v):
+            if e.vtype in ("enum", "flags"):
+                self.assertTrue(e.options, f"{e.name}: {e.vtype} without options")
+            for ex in e.exclusive:
+                self.assertIn(ex, e.options, f"{e.name}: exclusive entry not in options")
+
+    def test_gamescope_flags(self):
+        flags = catalog.gamescope_flags()
+        self.assertEqual(len({f.flag for f in flags}), len(flags), "duplicate gamescope flag")
+        for f in flags:
+            self.assertIn(f.kind, {"toggle", "int", "enum", "string"}, f.flag)
+            if f.kind == "enum":
+                self.assertTrue(f.options, f.flag)
+
+    def test_gpu_archs_and_config_keys(self):
+        codes = [a.code for a in catalog.gpu_archs()]
+        self.assertEqual(len(codes), len(set(codes)))
+        keys = [k[0] for k in catalog.dxvk_config_keys()]
+        self.assertEqual(len(keys), len(set(keys)))
+        for k in catalog.dxvk_config_keys():
+            self.assertEqual(len(k), 4, k[0])
+            if k[1] == "enum":
+                self.assertIsInstance(k[2], list, k[0])
+        self.assertTrue(all(isinstance(v, str) and v for v in catalog.vkd3d_config_descs().values()))
+
+
+class PackagingTests(unittest.TestCase):
+    """pyproject.toml has to ship every package and the catalog data files."""
+
+    def test_pyproject_lists_packages_and_catalog_data(self):
+        import tomllib
+        root = Path(__file__).resolve().parents[1]
+        cfg = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["setuptools"]
+        on_disk = {p.parent.name for p in root.glob("*/__init__.py") if p.parent.name.startswith("drstool_")}
+        self.assertEqual(set(cfg["packages"]), on_disk)
+        self.assertTrue(list((root / "drstool_core" / "data").glob("*.json")))
+        self.assertEqual(cfg["package-data"]["drstool_core"], ["data/*.json"])
+
+
+class GuiLayoutTests(unittest.TestCase):
+    """drstool_gui modules import only downwards (no import cycles), checked without Qt."""
+
+    @staticmethod
+    def _imports():
+        import ast
+        pkg = Path(__file__).resolve().parents[1] / "drstool_gui"
+        graph = {}
+        for f in sorted(pkg.glob("*.py")):
+            if f.stem == "__init__":
+                continue
+            deps = set()
+            for node in ast.parse(f.read_text(encoding="utf-8")).body:      # top level only: lazy and TYPE_CHECKING imports are skipped
+                if isinstance(node, ast.ImportFrom) and node.level == 1:
+                    deps.update([node.module] if node.module else [a.name for a in node.names])
+            graph[f.stem] = deps
+        return graph
+
+    def test_no_import_cycles(self):
+        graph = self._imports()
+        state = {}
+
+        def visit(m, path):
+            self.assertNotEqual(state.get(m), 1, "import cycle: " + " -> ".join(path + [m]))
+            if state.get(m) == 2:
+                return
+            state[m] = 1
+            for d in sorted(graph[m]):
+                self.assertIn(d, graph, f"{m} imports unknown module {d}")
+                visit(d, path + [m])
+            state[m] = 2
+        for m in graph:
+            visit(m, [])
+
+    def test_bottom_layers(self):
+        graph = self._imports()
+        self.assertEqual(graph["base"], set())
+        self.assertLessEqual(graph["theme"], {"base"})
+        self.assertLessEqual(graph["widgets"], {"base", "theme"})
+
+
+
+class GameLinkTests(unittest.TestCase):
+    def setUp(self):
+        from drstool_core import game_links
+        self.gl = game_links
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "game_links.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_fingerprint_is_order_independent(self):
+        a = {("Env", "A"): "1", ("DRS", "0x1"): "0x2"}
+        b = {("DRS", "0x1"): "0x2", ("Env", "A"): "1"}
+        self.assertEqual(self.gl.fingerprint(a), self.gl.fingerprint(b))
+        self.assertNotEqual(self.gl.fingerprint(a), self.gl.fingerprint({("Env", "A"): "2"}))
+
+    def test_record_outdated_rename_drop(self):
+        s = self.gl.LinkStore(self.path)
+        tgt = {"kind": "steam", "key": "42", "path": "/x/localconfig.vdf", "title": "Cool"}
+        s.record("steam:42", name="Cool", launcher="Steam", target=tgt, profile="P", fp="aaa")
+        s.record("lutris:rpg-1", name="RPG", launcher="Lutris", target={"kind": "lutris"}, profile="P", fp="bbb")
+        s.record("steam:7", name="Other", launcher="Steam", target=tgt, profile="Q", fp="aaa")
+        # a second store (another window) sees the same file
+        s2 = self.gl.LinkStore(self.path)
+        self.assertEqual(s2.games_for("P"), ["steam:42", "lutris:rpg-1"])
+        self.assertEqual(s2.counts(), {"P": 2, "Q": 1})
+        self.assertEqual(s2.outdated("P", "aaa"), ["lutris:rpg-1"])
+        self.assertEqual(s.rename_profile("P", "P2"), 2)
+        s2.reload()
+        self.assertEqual(len(s2.games_for("P2")), 2)
+        self.assertEqual(s.drop_profile("P2"), 2)
+        self.assertIsNone(s.get("steam:42")["profile"])
+        self.assertEqual(s.get("steam:42")["target"], tgt)  # the last write is still known
+
+    def test_assign_and_extras(self):
+        s = self.gl.LinkStore(self.path)
+        s.assign("heroic:abc", "P", name="H", launcher="Heroic")
+        self.assertEqual(s.get("heroic:abc")["fp"], "")    # linked but never written
+        self.assertEqual(s.outdated("P", "zzz"), ["heroic:abc"])
+        s.set_field("heroic:abc", "appid", "1091500")
+        s.assign("heroic:abc", None)
+        e = s.get("heroic:abc")
+        self.assertNotIn("profile", e)
+        self.assertEqual(e["appid"], "1091500")
+        s.set_field("heroic:abc", "appid", "")
+        self.assertEqual(s.get("heroic:abc"), {"name": "H", "launcher": "Heroic"})
+        self.path.write_text("not json")                  # a broken file never raises
+        self.assertEqual(self.gl.LinkStore(self.path).all(), {})
+
+
+class GameInfoTests(unittest.TestCase):
+    def setUp(self):
+        from drstool_core import game_info
+        self.gi = game_info
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_steam_runtime_and_logs(self):
+        h = self.home
+        apps = h / ".local/share/Steam/steamapps"
+        (apps / "common/Cool/bin").mkdir(parents=True)
+        (apps / "common/Cool/bin/Cool-Win64.exe").write_bytes(b"MZ")
+        (apps / "common/Cool/bin/unins000.exe").write_bytes(b"MZ")
+        (apps / "common/Cool/bin/Cool-Win64_d3d11.log").write_text("err: x\n")
+        pfx = apps / "compatdata/42/pfx"
+        (pfx / "drive_c/windows/system32").mkdir(parents=True)
+        (apps / "compatdata/42/version").write_text("GE-Proton10-1\n")
+        (h / ".local/share/Steam/config").mkdir(parents=True)
+        (h / ".local/share/Steam/config/config.vdf").write_text(
+            '"InstallConfigStore"\n{\n "Software"\n {\n  "Valve"\n  {\n   "Steam"\n   {\n'
+            '    "CompatToolMapping"\n    {\n     "7"\n     {\n      "name" "proton_9"\n     }\n'
+            '     "42"\n     {\n      "name" "GE-Proton10-1"\n      "config" ""\n     }\n    }\n'
+            '   }\n  }\n }\n}\n')
+        g = game_scan.GameEntry("Steam", "steam:42", "Cool", [apps / "common/Cool"], pfx, "Proton")
+        rt = self.gi.runtime_info(g, h)
+        self.assertEqual((rt["runner"], rt["configured"], rt["last_used"]),
+                         ("Proton", "GE-Proton10-1", "GE-Proton10-1"))
+        files = self.gi.game_files(g)
+        self.assertEqual(files["exes"], ["Cool-Win64"])
+        (h / "steam-42.log").write_text("x")
+        (h / "steam-43.log").write_text("x")
+        logs = self.gi.find_logs(g, [h], files["dxvk_logs"], files["exes"])
+        self.assertEqual({p.name for p in logs}, {"steam-42.log", "Cool-Win64_d3d11.log"})
+
+    def test_lutris_runtime_and_frametime(self):
+        h = self.home
+        lut = h / ".local/share/lutris/games"
+        lut.mkdir(parents=True)
+        (lut / "rpg-1.yml").write_text("game:\n  exe: /x/rpg.exe\nwine:\n  version: wine-ge-8-26\n"
+                                       "system:\n  runner: wine\n")
+        g = game_scan.GameEntry("Lutris", "lutris:rpg-1", "The RPG", [h], None, "")
+        self.assertEqual(self.gi.runtime_info(g, h)["configured"], "wine-ge-8-26")
+        mh = h / "mh"
+        mh.mkdir()
+        for n in ("rpg_2026-10-01_10-00-00.csv", "rpg_2026-10-01_10-00-00_summary.csv",
+                  "TheRPG_2026-10-02_10-00-00.csv", "other_2026-10-02_10-00-00.csv"):
+            (mh / n).write_text("fps,frametime\n")
+        os.utime(mh / "TheRPG_2026-10-02_10-00-00.csv", (2e9, 2e9))
+        got = [p.name for p in self.gi.find_frametime_logs(g, [mh], ["rpg"])]
+        self.assertEqual(got, ["TheRPG_2026-10-02_10-00-00.csv", "rpg_2026-10-01_10-00-00.csv"])
+        env = {"MANGOHUD_CONFIG": "fps,output_folder=~/caps,log_duration=30"}
+        self.assertIn(Path(os.path.expanduser("~/caps")), self.gi.mangohud_output_dirs(env, h))
+
+    def test_read_tail(self):
+        p = self.home / "big.log"
+        p.write_text("".join(f"line {i}\n" for i in range(1000)))
+        tail = self.gi.read_tail(p, 100)
+        self.assertEqual(tail[-1], "line 999")
+        self.assertTrue(all(ln.startswith("line ") for ln in tail))
+
+
+class SupportBundleTests(unittest.TestCase):
+    def test_redact_hides_home_user_and_host(self):
+        home = str(Path.home())
+        with mock.patch.dict(os.environ, {"USER": "tester_x"}), \
+                mock.patch("drstool_core.support_bundle.socket.gethostname", return_value="mybox"):
+            out = support_bundle.redact(f"{home}/games/x.exe /home/tester_x/a mybox:1 tester_xy")
+        self.assertEqual(out, "~/games/x.exe /home/<user>/a <host>:1 tester_xy")
+
+    def test_bundle_contains_anonymised_log_and_profiles(self):
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": td, "USER": "tester_x"}):
+                (Path(td) / "drstool").mkdir()
+                (Path(td) / "drstool" / "debug.log").write_text("Traceback in /home/tester_x/app.py\n")
+                dest = Path(td) / "report.zip"
+                prof = {"Cool": {"env_vars": {"WINEPREFIX": f"{Path.home()}/pfx"}}}
+                support_bundle.build(dest, prof, ["nvidia driver: 595.58.03"])
+            with zipfile.ZipFile(dest) as zf:
+                self.assertEqual(set(zf.namelist()), {"system.txt", "profiles.json", "log/debug.log"})
+                log = zf.read("log/debug.log").decode()
+                profiles = zf.read("profiles.json").decode()
+                system = zf.read("system.txt").decode()
+        self.assertNotIn("tester_x", log)
+        self.assertIn("/home/<user>/app.py", log)
+        self.assertIn("~/pfx", profiles)
+        self.assertIn("nvidia driver: 595.58.03", system)
 
 
 if __name__ == "__main__":

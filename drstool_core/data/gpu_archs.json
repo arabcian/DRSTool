@@ -1,0 +1,65 @@
+[
+ {
+  "name": "GeForce 600/700",
+  "arch": "Kepler",
+  "prefix": "GK",
+  "code": "GK100",
+  "example": "GTX 780 Ti"
+ },
+ {
+  "name": "GeForce 750",
+  "arch": "Maxwell 1st gen",
+  "prefix": "GM",
+  "code": "GM000",
+  "example": "GTX 750 Ti"
+ },
+ {
+  "name": "GeForce 900",
+  "arch": "Maxwell",
+  "prefix": "GM",
+  "code": "GM200",
+  "example": "GTX 980 Ti"
+ },
+ {
+  "name": "GeForce 10",
+  "arch": "Pascal",
+  "prefix": "GP",
+  "code": "GP100",
+  "example": "GTX 1080"
+ },
+ {
+  "name": "Titan V",
+  "arch": "Volta",
+  "prefix": "GV",
+  "code": "GV100",
+  "example": "TITAN V"
+ },
+ {
+  "name": "GeForce 16/20",
+  "arch": "Turing",
+  "prefix": "TU",
+  "code": "TU100",
+  "example": "RTX 2080 Ti"
+ },
+ {
+  "name": "RTX 30",
+  "arch": "Ampere",
+  "prefix": "GA",
+  "code": "GA100",
+  "example": "RTX 3090"
+ },
+ {
+  "name": "RTX 40",
+  "arch": "Ada",
+  "prefix": "AD",
+  "code": "AD100",
+  "example": "RTX 4090"
+ },
+ {
+  "name": "RTX 50",
+  "arch": "Blackwell",
+  "prefix": "GB",
+  "code": "GB200",
+  "example": "RTX 5090"
+ }
+]
