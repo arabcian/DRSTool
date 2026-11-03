@@ -15,7 +15,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "drstool"
-version = "2026.10.23"
+version = "2026.11.03.3"
 description = "dxvk-nvapi / NVIDIA DRS profile editor with Proton, DXVK, VKD3D and gamescope tooling"
 readme = "README.md"
 license = { text = "MIT" }
@@ -66,6 +66,7 @@ drstool_core = ["data/*.json"]
     "lutris-game-tune-main/install.sh",
     "lutris-game-tune-main/uninstall.sh",
     "lutris-game-tune-main/lutris-game-tune.sh",
+    "lutris-game-tune-main/lgtune-recovery-service.sh",
     "lutris-game-tune-main/lutris-game-tune-wrapper.c",
     "lutris-game-tune-main/lutris-game-tune.conf",
     "lutris-game-tune-main/lutris-game-tune.conf.example",
@@ -73,6 +74,7 @@ drstool_core = ["data/*.json"]
     "lutris-game-tune-main/LICENSE",
     "lutris-game-tune-main/README.md",
 ]
+"share/drstool/lutris-game-tune-main/services" = ["lutris-game-tune-main/services/lutris-game-tune-recovery.openrc", "lutris-game-tune-main/services/lutris-game-tune-recovery.service"]
 "share/drstool/lutris-game-tune-main/profiles" = ["lutris-game-tune-main/profiles/heavy-game.conf.example"]
 
 [tool.ruff]

@@ -83,6 +83,14 @@ mkdir -p "${LIB_DIR}"
 install -o root -g root -m 755 "${SCRIPT_DIR}/lutris-game-tune.sh" "${SCRIPT_DEST}"
 # DRSTool's "Uninstall" button runs the copy in the lib dir
 install -o root -g root -m 755 "${SCRIPT_DIR}/uninstall.sh" "${LIB_DIR}/uninstall.sh"
+# Installing a recovery helper does not automatically enable privileged background work.
+install -o root -g root -m 755 "${SCRIPT_DIR}/lgtune-recovery-service.sh" "${LIB_DIR}/lgtune-recovery-service.sh"
+if [[ -d /etc/init.d ]]; then
+    install -o root -g root -m 755 "${SCRIPT_DIR}/services/lutris-game-tune-recovery.openrc" /etc/init.d/lutris-game-tune-recovery
+fi
+if [[ -d /etc/systemd/system ]]; then
+    install -o root -g root -m 644 "${SCRIPT_DIR}/services/lutris-game-tune-recovery.service" /etc/systemd/system/lutris-game-tune-recovery.service
+fi
 
 # --- 3. Install the config file ---------------------------------------------
 c_yellow "[3/5] Checking configuration file..."

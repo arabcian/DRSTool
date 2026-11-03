@@ -130,9 +130,21 @@ class SettingsManager(QObject):
     def get_current_profile(self) -> Optional[str]:
         return self._current_profile
 
+    def _checkpoint_profiles(self):
+        """Snapshot memory before an operation that may lose a save race."""
+        return (json.loads(json.dumps(self._profiles)), self._current_profile)
+
+    def _commit_profiles(self, snapshot) -> bool:
+        if not self._save_profiles():
+            self._profiles, self._current_profile = snapshot
+            return False
+        self.profiles_changed.emit()
+        return True
+
     def save_profile(self, name: str, env_vars: Optional[Dict] = None,
                      gamescope_enabled: bool = False,
                      gamescope_flags: Optional[Dict[str, str]] = None):
+        snapshot = self._checkpoint_profiles()
         self._profiles[name] = {
             "settings": self._settings.copy(),
             "arch": self._arch.code if self._arch else None,
@@ -141,10 +153,10 @@ class SettingsManager(QObject):
             "gamescope_flags": gamescope_flags.copy() if gamescope_flags else {},
         }
         self._current_profile = name
-        ok = self._save_profiles()
-        self.profiles_changed.emit()
-        if ok:
+        if self._commit_profiles(snapshot):
             self.profile_saved.emit(name)
+            return True
+        return False
 
     def load_profile(self, name: str):
         if name not in self._profiles:
@@ -202,45 +214,44 @@ class SettingsManager(QObject):
             return False
         if new == old:
             return True
+        snapshot = self._checkpoint_profiles()
         # keep the visual order stable: rebuild the dict with the key swapped
         self._profiles = {(new if k == old else k): v for k, v in self._profiles.items()}
         if self._current_profile == old:
             self._current_profile = new
-        ok = self._save_profiles()
-        if ok:
-            LINKS.rename_profile(old, new)        # the games written from it follow the new name
-        self.profiles_changed.emit()
-        return ok
+        if not self._commit_profiles(snapshot):
+            return False
+        LINKS.rename_profile(old, new)        # the games written from it follow the new name
+        return True
 
     def duplicate_profile(self, name: str) -> Optional[str]:
         if name not in self._profiles:
             return None
         new = unique_profile_name(f"{name} copy", self._profiles)
+        snapshot = self._checkpoint_profiles()
         self._profiles[new] = json.loads(json.dumps(self._profiles[name]))
-        self._save_profiles()
-        self.profiles_changed.emit()
-        return new
+        return new if self._commit_profiles(snapshot) else None
 
     def import_profiles(self, profiles: Dict[str, dict]) -> List[str]:
         """Add profiles, renaming on name clashes. Returns the names used."""
+        snapshot = self._checkpoint_profiles()
         added = []
         for name, prof in profiles.items():
             nm = unique_profile_name(name, self._profiles)
             self._profiles[nm] = json.loads(json.dumps(prof))
             added.append(nm)
-        if added:
-            self._save_profiles()
-            self.profiles_changed.emit()
+        if added and not self._commit_profiles(snapshot):
+            return []
         return added
 
     def delete_profile(self, name: str):
         if name in self._profiles:
+            snapshot = self._checkpoint_profiles()
             del self._profiles[name]
             if self._current_profile == name:
                 self._current_profile = None
-            if self._save_profiles():
+            if self._commit_profiles(snapshot):
                 LINKS.drop_profile(name)
-            self.profiles_changed.emit()
 
     # ── Profile file location ────────────────────────────────────────────────
     # Moved to XDG_CONFIG_HOME to match the other tools in this toolbox
@@ -337,20 +348,18 @@ class SettingsManager(QObject):
     def restore_profile(self, name: str, data) -> bool:
         if not isinstance(data, dict):
             return False
+        snapshot = self._checkpoint_profiles()
         self._profiles[name] = json.loads(json.dumps(data))
-        ok = self._save_profiles()
-        self.profiles_changed.emit()
-        return ok
+        return self._commit_profiles(snapshot)
 
     def restore_all_profiles(self, profiles: Dict) -> bool:
         if not isinstance(profiles, dict):
             return False
+        snapshot = self._checkpoint_profiles()
         self._profiles = json.loads(json.dumps(profiles))
         if self._current_profile not in self._profiles:
             self._current_profile = None
-        ok = self._save_profiles()
-        self.profiles_changed.emit()
-        return ok
+        return self._commit_profiles(snapshot)
 
     def reload_from_disk(self, merge: bool) -> str:
         """Adopt an externally modified profiles.json. merge=True keeps our profiles on
@@ -365,13 +374,16 @@ class SettingsManager(QObject):
             self.disk_written.emit()
             return f"profiles.json on disk is unreadable ({ex}) — kept the in-memory profiles."
         if merge:
+            snapshot = self._checkpoint_profiles()
+            previous_sha = self._last_disk_sha
             added = [n for n in disk if n not in self._profiles]
             clash = [n for n in disk if n in self._profiles and disk[n] != self._profiles[n]]
             for n in added:
                 self._profiles[n] = disk[n]
             self._last_disk_sha = self._file_sha(data_file)  # explicit user-approved merge
-            ok = self._save_profiles()
-            self.profiles_changed.emit()
+            ok = self._commit_profiles(snapshot)
+            if not ok:
+                self._last_disk_sha = previous_sha
             return (f"Merged: {len(added)} profile(s) added from disk, "
                     f"{len(clash)} differing one(s) kept as in DRSTool." + ("" if ok else " (save failed)"))
         self._profiles = disk

@@ -13,7 +13,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from drstool_core.benchmark import compare as compare_captures
+
 from .base import APP_ID
+from .i18n import tr
 from .theme import T
 from .tool_ui import _tool_btn
 from .widgets import _desc_label, _LINEEDIT_QSS, _table_qss, _title_label
@@ -202,7 +205,7 @@ class FrametimeWidget(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 8, 4, 4)
         lay.setSpacing(8)
-        lay.addWidget(_title_label("Frametime analyser"))
+        lay.addWidget(_title_label(tr("Frametime analyser")))
         lay.addWidget(_desc_label(
             "Loads MangoHud logs (enable output_folder in the MangoHud tab, log with the toggle key) or "
             "vk_flip_meter FLM_CSV dumps. Load a second run to compare two configurations side by side."))
@@ -276,7 +279,7 @@ class FrametimeWidget(QWidget):
             return
         for r, (label, _v, hib, fmt) in enumerate(ref):
             t.insertRow(r)
-            t.setItem(r, 0, QTableWidgetItem(label))
+            t.setItem(r, 0, QTableWidgetItem(tr(label)))
             vals = [s[r][1] if s else None for s in stats]
             for c in (0, 1):
                 t.setItem(r, c + 1, QTableWidgetItem("" if vals[c] is None else fmt.format(vals[c])))
@@ -291,6 +294,17 @@ class FrametimeWidget(QWidget):
         extra = [f"{d['name']}: " + ", ".join(f"{k}={v}" for k, v in d["extra"].items())
                  for d in ds if d and d["extra"]]
         if ds[0] and ds[1]:
+            # Descriptive A/B only; explicitly refuse a comparable verdict
+            # without repeated same-scene conditions supplied by the user.
+            try:
+                analysis = compare_captures(ds[0]['ft'], ds[1]['ft'],
+                                            kind_a=ds[0]['kind'], kind_b=ds[1]['kind'])
+                extra.append(f"B vs A: average FPS {analysis['fps_change_pct']:+.1f}%, "
+                             f"1% low {analysis['low_change_pct']:+.1f}% "
+                             "(descriptive, not a controlled benchmark)")
+                extra.extend('⚠ ' + w for w in analysis['warnings'])
+            except ValueError as exc:
+                extra.append(f'⚠ Comparison unavailable: {exc}')
             # Averages from radically different scenes or durations are not
             # a defensible A/B result. Advise rather than hiding the data.
             durations = [sum(d['ft']) for d in ds]

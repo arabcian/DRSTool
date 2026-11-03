@@ -1,0 +1,14 @@
+[Unit]
+Description=DRSTool safe game-tuning crash recovery
+After=local-fs.target
+ConditionPathExists=/usr/local/lib/lutris-game-tune/lgtune-recovery-service.sh
+
+[Service]
+Type=simple
+ExecStart=/usr/local/lib/lutris-game-tune/lgtune-recovery-service.sh
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

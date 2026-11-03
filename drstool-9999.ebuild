@@ -245,6 +245,13 @@ src_install() {
 		# Bash tuning script → lib dir (called by the wrapper; not in PATH)
 		exeinto "${LGT_LIB_DIR}"
 		doexe lutris-game-tune-main/lutris-game-tune.sh
+		doexe lutris-game-tune-main/lgtune-recovery-service.sh
+
+		# Crash recovery monitor is installed but never enabled automatically.
+		exeinto /etc/init.d
+		newexe lutris-game-tune-main/services/lutris-game-tune-recovery.openrc lutris-game-tune-recovery
+		insinto /usr/lib/systemd/system
+		doins lutris-game-tune-main/services/lutris-game-tune-recovery.service
 
 		# uninstall.sh is kept in the lib dir so the DRSTool GUI can call it
 		# (LgtuneWidget._on_uninstall uses LGTUNE_LIB_DIR / "uninstall.sh")

@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
 )
 
 from .base import APP_ID
+from .i18n import tr, current_language
+from drstool_core.i18n import translate
 from .theme import ACCENT_PRESETS, APPEARANCE, btn_ss, T
 from .widgets import NavTab
 
@@ -75,7 +77,7 @@ class ShortcutsDialog(QDialog):
                 grid.addWidget(d, r, 1)
             grid.setColumnStretch(1, 1)
             lay.addLayout(grid)
-        close = QPushButton("Close")
+        close = QPushButton(tr("Close"))
         close.setStyleSheet(btn_ss("default", "md"))
         close.clicked.connect(self.accept)
         row = QHBoxLayout()
@@ -92,7 +94,7 @@ class ShortcutsDialog(QDialog):
 class AppearanceDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Appearance")
+        self.setWindowTitle(tr("Appearance"))
         self.setModal(True)
         self.setMinimumWidth(460)
         self.restart_requested = False
@@ -101,15 +103,15 @@ class AppearanceDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 18, 22, 16)
         lay.setSpacing(12)
-        title = QLabel("Appearance")
+        title = QLabel(tr("Appearance"))
         title.setStyleSheet(f"color:{T['text']};font-size:16px;font-weight:700;")
         lay.addWidget(title)
         form = QFormLayout()
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(10)
         self._theme = QComboBox()
-        self._theme.addItem("Dark", "dark")
-        self._theme.addItem("Light", "light")
+        self._theme.addItem(tr("Dark"), "dark")
+        self._theme.addItem(tr("Light"), "light")
         self._accent = QComboBox()
         for key, col in ACCENT_PRESETS.items():
             pm = QPixmap(14, 14)
@@ -117,7 +119,7 @@ class AppearanceDialog(QDialog):
             self._accent.addItem(QIcon(pm), key.capitalize(), key)
         self._density = QComboBox()
         for k, lbl in (("compact", "Compact"), ("default", "Default"), ("spacious", "Spacious")):
-            self._density.addItem(lbl, k)
+            self._density.addItem(tr(lbl), k)
         self._scale = QSpinBox()
         self._scale.setRange(70, 200)
         self._scale.setSingleStep(5)
@@ -125,10 +127,16 @@ class AppearanceDialog(QDialog):
         for combo, key in ((self._theme, "theme"), (self._accent, "accent"), (self._density, "density")):
             combo.setCurrentIndex(max(0, combo.findData(ap[key])))
         self._scale.setValue(ap["scale"])
-        form.addRow("Theme", self._theme)
-        form.addRow("Accent colour", self._accent)
-        form.addRow("List density", self._density)
-        form.addRow("UI scale", self._scale)
+        self._language = QComboBox()
+        for code, label in (("auto", "Automatic"), ("en", "English"), ("tr", "Turkish")):
+            self._language.addItem(tr(label), code)
+        self._language.setCurrentIndex(max(0, self._language.findData(
+            str(QSettings(APP_ID, APP_ID).value('appearance/language', 'auto')))))
+        form.addRow(tr("Language"), self._language)
+        form.addRow(tr("Theme"), self._theme)
+        form.addRow(tr("Accent colour"), self._accent)
+        form.addRow(tr("List density"), self._density)
+        form.addRow(tr("UI scale"), self._scale)
         lay.addLayout(form)
         self._restore = QCheckBox("Restore the last profile and selections on start")
         self._restore.setChecked(ap["restore"])
@@ -139,16 +147,16 @@ class AppearanceDialog(QDialog):
         note.setStyleSheet(f"color:{T['muted']};font-size:11px;")
         lay.addWidget(note)
         row = QHBoxLayout()
-        reset = QPushButton("Reset")
+        reset = QPushButton(tr("Reset"))
         reset.setStyleSheet(btn_ss("ghost", "md"))
         reset.clicked.connect(self._reset)
-        cancel = QPushButton("Cancel")
+        cancel = QPushButton(tr("Cancel"))
         cancel.setStyleSheet(btn_ss("default", "md"))
         cancel.clicked.connect(self.reject)
-        save = QPushButton("Save")
+        save = QPushButton(tr("Save"))
         save.setStyleSheet(btn_ss("default", "md"))
         save.clicked.connect(lambda: self._save(False))
-        both = QPushButton("Save && restart")
+        both = QPushButton(tr("Save && restart"))
         both.setStyleSheet(btn_ss("primary", "md"))
         both.clicked.connect(lambda: self._save(True))
         row.addWidget(reset)
@@ -162,18 +170,23 @@ class AppearanceDialog(QDialog):
         self._accent.setCurrentIndex(self._accent.findData("green"))
         self._density.setCurrentIndex(self._density.findData("default"))
         self._scale.setValue(100)
+        self._language.setCurrentIndex(self._language.findData("auto"))
         self._restore.setChecked(True)
 
     def _save(self, restart: bool):
         ap = APPEARANCE
         new = {"theme": self._theme.currentData(), "accent": self._accent.currentData(),
                "density": self._density.currentData(), "scale": self._scale.value()}
-        self.needs_restart = any(new[k] != ap[k] for k in new)
+        qs = QSettings(APP_ID, APP_ID)
+        new_language = self._language.currentData()
+        self.needs_restart = any(new[k] != ap[k] for k in new) or (
+            str(qs.value('appearance/language', 'auto')) != new_language)
         try:
             qs = QSettings(APP_ID, APP_ID)
             for k, v in new.items():
                 qs.setValue(f"appearance/{k}", v)
             qs.setValue("appearance/restore_session", self._restore.isChecked())
+            qs.setValue("appearance/language", new_language)
             qs.sync()
         except Exception:
             _log.debug("ignored error", exc_info=True)
@@ -229,12 +242,51 @@ class UXFilter(QObject):
 
     def __init__(self, app):
         super().__init__(app)
+        self._language = current_language()
         app.installEventFilter(self)
+
+    def _translate_control(self, w: QWidget):
+        """Translate known static UI chrome, including lazily constructed pages.
+
+        Never translate list data, user-provided profile names, dynamic status
+        contents, tab IDs (used for routing), or environment/technical values.
+        The exact-match catalog makes this idempotent across repeated shows.
+        """
+        if self._language != 'tr':
+            return
+        def mapped(source):
+            return translate(source, self._language)
+        if isinstance(w, QLabel) and w.textFormat() != Qt.RichText:
+            old = w.text()
+            new = mapped(old)
+            if new != old:
+                w.setText(new)
+        elif isinstance(w, QGroupBox):
+            old = w.title()
+            new = mapped(old)
+            if new != old:
+                w.setTitle(new)
+        elif isinstance(w, QAbstractButton) and not isinstance(w, NavTab):
+            old = w.text()
+            new = mapped(old)
+            if new != old:
+                w.setText(new)
+        elif isinstance(w, QLineEdit):
+            old = w.placeholderText()
+            new = mapped(old)
+            if new != old:
+                w.setPlaceholderText(new)
+        tip = w.toolTip()
+        if tip:
+            new = mapped(tip)
+            if new != tip:
+                w.setToolTip(new)
 
     def label_tree(self, root: QWidget):
         """Name the controls that already exist, once. Installing the filter before the window
         is built made ~62,000 Python eventFilter calls (~0.5 s) during construction."""
         for w in root.findChildren(QWidget):
+            self._translate_control(w)
             if isinstance(w, self._A11Y) and not w.property("_a11y"):
                 w.setProperty("_a11y", True)
                 if not w.accessibleName():
@@ -242,10 +294,12 @@ class UXFilter(QObject):
 
     def eventFilter(self, obj, ev):           # noqa: N802
         try:
-            if ev.type() == QEvent.Show and isinstance(obj, self._A11Y) and not obj.property("_a11y"):
-                obj.setProperty("_a11y", True)
-                if not obj.accessibleName():
-                    _a11y_label(obj)
+            if ev.type() == QEvent.Show and isinstance(obj, QWidget):
+                self._translate_control(obj)
+                if isinstance(obj, self._A11Y) and not obj.property("_a11y"):
+                    obj.setProperty("_a11y", True)
+                    if not obj.accessibleName():
+                        _a11y_label(obj)
         except Exception:
             _log.debug("ignored error", exc_info=True)
             pass

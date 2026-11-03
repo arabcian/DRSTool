@@ -213,6 +213,36 @@ t  "irq: audio when selected" _irq_class_wanted 0x040300
 detect_cpu_vendor >/dev/null 2>&1
 t  "vendor detected" test "${CPU_VENDOR}" = intel -o "${CPU_VENDOR}" = amd -o "${CPU_VENDOR}" = unknown
 
+# --- safe crashed-launcher recovery: NEVER override a live or unanchored game ---
+rm -rf "${STATE_DIR}"; mkdir -p "${GAMES_DIR}"
+printf 'fake active state\n' > "${STATE_DIR}/.summary"
+# Subshell stubs _restore_all so the test never touches the host tuning.
+(
+    _restore_all() { printf 'restored\n' > "${TMP}/recovered"; }
+    printf '0 0 legacy\n' > "${GAMES_DIR}/legacy"
+    recover_stale_session >/dev/null 2>&1
+    [[ ! -f "${TMP}/recovered" ]]
+) && PASS=$((PASS + 1)) || { echo 'FAIL: unanchored game safety'; FAIL=$((FAIL + 1)); }
+rm -f "${GAMES_DIR}/legacy"
+(
+    _restore_all() { printf 'restored\n' > "${TMP}/recovered"; }
+    _pid_start() { printf 'expected-start'; }
+    printf '%s\n' '1234 expected-start still-running' > "${GAMES_DIR}/live"
+    touch -d '2 minutes ago' "${GAMES_DIR}/live"
+    recover_stale_session >/dev/null 2>&1
+    [[ ! -f "${TMP}/recovered" ]]
+) && PASS=$((PASS + 1)) || { echo 'FAIL: live launcher recovery safety'; FAIL=$((FAIL + 1)); }
+rm -f "${GAMES_DIR}/live"
+(
+    _restore_all() { printf 'restored\n' > "${TMP}/recovered"; }
+    printf '99999999 11 game\n' > "${GAMES_DIR}/stale"
+    touch -d '2 minutes ago' "${GAMES_DIR}/stale"
+    recover_stale_session >/dev/null 2>&1
+    [[ -f "${TMP}/recovered" ]]
+) && PASS=$((PASS + 1)) || { echo 'FAIL: stale launcher recovery'; FAIL=$((FAIL + 1)); }
+rm -f "${TMP}/recovered"
+rm -rf "${STATE_DIR}"
+
 echo
 echo "passed: ${PASS}   failed: ${FAIL}"
 (( FAIL == 0 ))

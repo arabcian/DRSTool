@@ -40,6 +40,10 @@ class LinterWidget(QWidget):
         b.clicked.connect(lambda: hasattr(self.window(), "_run_lint") and self.window()._run_lint())
         head.addWidget(b)
         lay.addLayout(head)
+        self._risk = QLabel("Profile risk: not evaluated")
+        self._risk.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        self._risk.setWordWrap(True)
+        lay.addWidget(self._risk)
         d = QLabel("Looks for combinations that contradict each other or can't work on this "
                    "system (PROTON_NVIDIA_LIBS + WoW64, FSR4 on NVIDIA, ENABLE_HDR_WSI on drivers ≥ 595, "
                    "double latency stacks, …). Runs automatically whenever the configuration changes.")
@@ -61,6 +65,13 @@ class LinterWidget(QWidget):
             f"gridline-color:{T['border']};}}QHeaderView::section{{background:{T['raised']};"
             f"color:{T['muted']};border:none;padding:4px;}}")
         lay.addWidget(self._table, 1)
+
+    def set_risk(self, level, findings):
+        details = "; ".join(f"{f.key}: {f.reason}" for f in findings[:5])
+        tail = f" (+{len(findings)-5} more)" if len(findings) > 5 else ""
+        self._risk.setText(f"Profile risk: {level.upper()}" +
+                           (f" — {details}{tail}" if details else
+                            " — no special risk indicators found; not a safety guarantee"))
 
     def set_issues(self, issues: List[LintIssue]):
         self._issues = issues

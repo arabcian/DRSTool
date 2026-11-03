@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+# Optional crash-recovery monitor. Enable explicitly after reviewing.
+name="lutris-game-tune recovery"
+description="Restore game tuning after a confirmed crashed launcher"
+command="/usr/local/lib/lutris-game-tune/lgtune-recovery-service.sh"
+command_background="yes"
+pidfile="/run/lutris-game-tune-recovery.pid"
+output_log="/var/log/lutris-game-tune-recovery.log"
+error_log="/var/log/lutris-game-tune-recovery.log"
+depend() {
+    need localmount
+    after bootmisc
+}

@@ -59,6 +59,17 @@ remove() {
     fi
 }
 
+# Stop optional root recovery monitor before removing the script it invokes.
+if command -v rc-service >/dev/null 2>&1 && [[ -f /etc/init.d/lutris-game-tune-recovery ]]; then
+    rc-service lutris-game-tune-recovery stop >/dev/null 2>&1 || true
+fi
+if command -v systemctl >/dev/null 2>&1 && [[ -f /etc/systemd/system/lutris-game-tune-recovery.service ]]; then
+    systemctl disable --now lutris-game-tune-recovery.service >/dev/null 2>&1 || true
+fi
+remove /etc/init.d/lutris-game-tune-recovery
+remove /etc/systemd/system/lutris-game-tune-recovery.service
+remove "${LIB_DIR}/lgtune-recovery-service.sh"
+
 remove "${WRAPPER_DST}"
 remove "${SCRIPT_DST}"
 remove "${POLICY_DST}"

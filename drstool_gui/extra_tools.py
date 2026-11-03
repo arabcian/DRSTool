@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QScrollArea, QTabWidget, QVBoxLayout, QWidget
 from .cache_manager import CacheManagerWidget
 from .community_tips import CommunityTipsWidget
 from .diag_panels import LinterWidget, SystemInfoWidget
+from .diagnostics_ui import DiagnosticsWidget
 from .dll_manager import DllManagerWidget
 from .flm import FlmInstallWidget
 from .frametime import FrametimeWidget
@@ -74,6 +75,7 @@ QTabBar::tab:hover:!selected {{ color:{T['text2']}; border-bottom:2px solid {T['
         self.linter = LinterWidget()
         tabs.addTab(self.linter, "Linter")
         lazy("System", "sysinfo", SystemInfoWidget)
+        lazy("Diagnostics", "diagnostics", DiagnosticsWidget)
         lazy("Tool Manager", "toolmgr", ToolManagerWidget, scrolled)
         lazy("MangoHud", "mangohud", MangoHudBuilder)
         lazy("vkBasalt", "vkbasalt", VkBasaltBuilder)

@@ -9,7 +9,11 @@ from PySide6.QtWidgets import (
     QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
+from drstool_core.change_plan import plan as profile_change_plan, render as render_profile_changes
+from drstool_core.risk import risk_level
+
 from .base import APP_TITLE
+from .i18n import tr
 from .launch_line import build_launch_line
 from .settings_manager import SettingsManager
 from .theme import btn_ss, caption, T
@@ -54,7 +58,7 @@ class OutputBarWidget(QWidget):
         dot = QLabel("\u25cf")
         dot.setStyleSheet(f"color:{T['accent']}; font-size:9px; background:transparent;")
         head.addWidget(dot)
-        head.addWidget(caption("Launch string", T["text2"]))
+        head.addWidget(caption(tr("Launch string"), T["text2"]))
         self._summary = QLabel("")
         self._summary.setStyleSheet(f"color:{T['muted']}; font-size:11px; background:transparent;")
         head.addSpacing(6)
@@ -69,23 +73,23 @@ class OutputBarWidget(QWidget):
             f"QPushButton:hover{{background:rgba(227,167,63,0.24);}}"
         )
 
-        reset_btn = QPushButton("Reset")
+        reset_btn = QPushButton(tr("Reset"))
         reset_btn.setStyleSheet(btn_ss("danger"))
         reset_btn.setToolTip("Clear every DRS setting, the GPU arch, env vars and gamescope flags")
         reset_btn.clicked.connect(self._reset_all)
 
-        self._save_profile_btn = QPushButton("Save")
+        self._save_profile_btn = QPushButton(tr("Save"))
         self._save_profile_btn.setStyleSheet(self._btn_ss_quiet)
         self._save_profile_btn.setEnabled(False)
         self._save_profile_btn.clicked.connect(self._save_to_profile)
 
-        steam_btn = QPushButton("Steam line")
+        steam_btn = QPushButton(tr("Steam line"))
         steam_btn.setStyleSheet(self._btn_ss_quiet)
         steam_btn.setToolTip("Copy  env … gamescope … -- %command%  for Steam's launch options")
         steam_btn.clicked.connect(self._copy_steam_env)
 
         copy_btn = QToolButton()
-        copy_btn.setText("Copy all")
+        copy_btn.setText(tr("Copy all"))
         copy_btn.setToolTip("Copy the full launch string  (Ctrl+Shift+C)")
         copy_btn.setPopupMode(QToolButton.MenuButtonPopup)
         copy_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
@@ -238,7 +242,7 @@ class OutputBarWidget(QWidget):
         current = self.settings_manager.get_current_profile()
         self._save_profile_btn.setEnabled(current is not None)
         dirty = bool(current) and self._dirty
-        self._save_profile_btn.setText("Save •" if dirty else "Save")
+        self._save_profile_btn.setText(tr("Save •") if dirty else tr("Save"))
         self._save_profile_btn.setStyleSheet(self._btn_ss_dirty if dirty else self._btn_ss_quiet)
         if current:
             self._save_profile_btn.setToolTip(
@@ -295,12 +299,35 @@ class OutputBarWidget(QWidget):
             if self._gamescope_widget is not None:
                 gs_enabled = self._gamescope_widget.is_enabled()
                 gs_flags = self._gamescope_widget.get_flag_values()
-            self.settings_manager.save_profile(
-                current, env_vars,
-                gamescope_enabled=gs_enabled,
-                gamescope_flags=gs_flags,
-            )
-            self._show_feedback(f"Saved to: {current}")
+            proposed = {
+                "settings": self.settings_manager.get_settings_list(),
+                "arch": self.settings_manager.get_arch().code if self.settings_manager.get_arch() else None,
+                "env_vars": env_vars,
+                "gamescope_enabled": gs_enabled,
+                "gamescope_flags": gs_flags,
+            }
+            saved = self.settings_manager.get_profiles().get(current)
+            if isinstance(saved, dict):
+                changes = profile_change_plan(saved, proposed)
+                if changes:
+                    risk = risk_level(env_vars)
+                    text = (f"Profile: {current}\nChanges: {len(changes)}\n"
+                            f"Configuration risk: {risk} (advisory only)\n\n"
+                            + render_profile_changes(changes))
+                    dialog = QMessageBox(self)
+                    dialog.setWindowTitle("Review profile changes")
+                    dialog.setText("Review the changes before overwriting the saved profile.")
+                    dialog.setDetailedText(text)
+                    dialog.setStandardButtons(QMessageBox.Save | QMessageBox.Cancel)
+                    dialog.setDefaultButton(QMessageBox.Cancel)
+                    if dialog.exec() != QMessageBox.Save:
+                        return
+            if self.settings_manager.save_profile(
+                    current, env_vars, gamescope_enabled=gs_enabled,
+                    gamescope_flags=gs_flags):
+                self._show_feedback(f"Saved to: {current}")
+            else:
+                self._show_feedback(f"Save failed: {current} (see error message)")
 
     def _reset_all(self):
         reply = QMessageBox.question(

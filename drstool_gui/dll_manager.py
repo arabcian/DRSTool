@@ -747,7 +747,7 @@ class _DllUpdateWorker(QThread):
                     failed += 1
                     self.log.emit("err", f"  ✗ {ex}")
             if plan["prefix"]:
-                backup = g.prefix / ".drstool-backup" / datetime.now().strftime("%Y%m%d-%H%M%S-%f") + "-" + uuid.uuid4().hex[:6]
+                backup = g.prefix / ".drstool-backup" / (datetime.now().strftime("%Y%m%d-%H%M%S-%f") + "-" + uuid.uuid4().hex[:6])
                 for cid in plan["prefix"]:
                     comp, rel = _DLLM_PD[cid], self._rels.get(cid)
                     self.log.emit("info", f"  {comp['name']} → {rel.get('tag_name', '?') if rel else '?'}")

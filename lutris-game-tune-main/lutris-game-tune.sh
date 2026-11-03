@@ -2661,6 +2661,49 @@ sweep_stale_games() {
     fi
 }
 
+# RECOVER detects a crashed launcher without guessing about unanchored games.
+# This operation is idempotent, and the entry point holds the same flock as
+# PRE/POST/RESTORE. A launcher PID is verified using its start timestamp.
+# Unknown/legacy anchors deliberately block automatic restoration.
+recover_stale_session() {
+    [[ -d "${STATE_DIR}" && ! -L "${STATE_DIR}" ]] || return 0
+    [[ -d "${GAMES_DIR}" && ! -L "${GAMES_DIR}" ]] || return 0
+    local f anchor start active=0 unknown=0
+    for f in "${GAMES_DIR}"/*; do
+        [[ -f "${f}" && ! -L "${f}" ]] || continue
+        read -r anchor start _ < "${f}" || true
+        if [[ ! "${anchor}" =~ ^[0-9]+$ || ! "${start}" =~ ^[0-9]+$ ]] ||
+                (( anchor == 0 )); then
+            unknown=$((unknown + 1))
+            continue
+        fi
+        if [[ "$(_pid_start "${anchor}" 2>/dev/null || true)" == "${start}" ]]; then
+            active=$((active + 1))
+        fi
+    done
+    if (( active > 0 )); then
+        log "RECOVER: ${active} launcher(s) still active; leaving tuning unchanged"
+        return 0
+    fi
+    if (( unknown > 0 )); then
+        warn "RECOVER: ${unknown} unanchored/legacy game(s); not safe to restore automatically"
+        return 2
+    fi
+    # Stale anchor handling is intentionally delayed at least 15 seconds to
+    # avoid treating a launcher handoff as a crash.
+    sweep_stale_games
+    if (( $(_refcount_read) > 0 )); then
+        log "RECOVER: recent entries remain; deferring restoration"
+        return 0
+    fi
+    # Even if no files remain, require a PRE marker before restoring; fresh
+    # or unrelated state directories must never trigger a restore.
+    if [[ -f "${STATE_DIR}/.summary" && ! -L "${STATE_DIR}/.summary" ]]; then
+        warn "RECOVER: all tracked launchers exited without POST; restoring"
+        _restore_all
+    fi
+}
+
 # Called by PRE (in a command substitution — must stay silent): add an entry,
 # print the new number of running games.
 refcount_inc() {
@@ -3115,7 +3158,7 @@ detect_cpu_vendor
 
 ACTION="${1:-}"
 case "${ACTION}" in
-    PRE|pre|POST|post|RESTORE|restore)
+    PRE|pre|POST|post|RESTORE|restore|RECOVER|recover)
         # Lock against concurrent PRE/POST runs (Lutris fast-restart scenario).
         # PRE can hold this lock for up to CCD_MONITOR_SECONDS while it scans
         # for newly spawned child processes — if a game is closed quickly
@@ -3135,6 +3178,7 @@ case "${ACTION}" in
             PRE|pre)         apply_game_settings "${2:-}" ;;
             POST|post)       restore_game_settings ;;
             RESTORE|restore) force_restore ;;
+            RECOVER|recover) recover_stale_session ;;
         esac
         ;;
     DRYRUN|dryrun)
@@ -3144,7 +3188,7 @@ case "${ACTION}" in
         show_status
         ;;
     *)
-        err "Invalid argument: '${ACTION}'. Expected: PRE [profile], POST, RESTORE, DRYRUN [profile], or STATUS"
+        err "Invalid argument: '${ACTION}'. Expected: PRE [profile], POST, RESTORE, RECOVER, DRYRUN [profile], or STATUS"
         exit 1
         ;;
 esac

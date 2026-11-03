@@ -15,9 +15,13 @@ from PySide6.QtWidgets import (
 )
 
 from drstool_core import support_bundle
+from drstool_core.risk import assess_profile, risk_level
 from drstool_core.models import GPUArch
 
 from . import base as _base
+from .i18n import tr
+from .main_history import HistoryMixin
+from .main_session import SessionMixin
 from .app_dialogs import _qbool, _spawn_restart, AppearanceDialog, ShortcutsDialog
 from .arch_widgets import ArchDetailWidget, ArchListWidget
 from .base import _CORE_ERR, APP_ID, APP_TITLE, ICON_PATH, share_code
@@ -70,7 +74,7 @@ if TYPE_CHECKING:
     from .recipes import Recipe
 
 
-class MainWindow(QMainWindow):
+class MainWindow(HistoryMixin, SessionMixin, QMainWindow):
     # Tab indices (sidebar stack pages). Nav order on screen matches.
     TAB_DRS, TAB_ARCH, TAB_ENV, TAB_GAMES, TAB_PROFILES, TAB_TOOLS = range(6)
     # Right-stack pages
@@ -145,14 +149,14 @@ class MainWindow(QMainWindow):
         seg_l.setContentsMargins(3, 3, 3, 3)
         seg_l.setSpacing(2)
 
-        self._settings_tab = NavTab("DRS Settings", "\u25c8")
-        self._arch_tab = NavTab("GPU Arch", "\u25a3")
-        self._env_tab = NavTab("Environment", "\u2630")
+        self._settings_tab = NavTab(tr("DRS Settings"), "\u25c8")
+        self._arch_tab = NavTab(tr("GPU Arch"), "\u25a3")
+        self._env_tab = NavTab(tr("Environment"), "\u2630")
         self._env_tab.setToolTip("DXVK, VKD3D-Proton, forks, DXVK-NVAPI, NVIDIA, Proton, "
                                  "Wine, vk_flip_meter and Gamescope")
-        self._flm_tab = NavTab("Extra Tools", "\u2692")
-        self._profiles_tab = NavTab("Profiles", "\u25a4")
-        self._games_tab = NavTab("Games", "\u25b6")
+        self._flm_tab = NavTab(tr("Extra Tools"), "\u2692")
+        self._profiles_tab = NavTab(tr("Profiles"), "\u25a4")
+        self._games_tab = NavTab(tr("Games"), "\u25b6")
         self._games_tab.setToolTip("Every installed game with its profile, Proton, DLSS / DXVK, "
                                    "frametime, log errors and ProtonDB tier")
         self._nav_tabs = [self._settings_tab, self._arch_tab, self._env_tab,
@@ -645,6 +649,17 @@ class MainWindow(QMainWindow):
                                  p["mangohud"], SYSHUB.info)
         except Exception as ex:                      # a linter bug must never break the editor
             issues = [LintIssue("info", "lint-crash", f"Linter failed: {ex}")]
+        # Explicitly distinguish a risky profile from a configuration error.
+        # Risk findings are informational: no user's custom overrides are removed.
+        try:
+            risk_items = assess_profile(p["env"],
+                                        has_ntsync=SYSHUB.info.ntsync_dev if SYSHUB.info.probed else None,
+                                        has_nvidia=SYSHUB.info.has_nvidia if SYSHUB.info.probed else None)
+            self._extra_tools.linter.set_risk(risk_level(
+                p["env"], has_ntsync=SYSHUB.info.ntsync_dev if SYSHUB.info.probed else None,
+                has_nvidia=SYSHUB.info.has_nvidia if SYSHUB.info.probed else None), risk_items)
+        except Exception:
+            _log.exception("Risk assessment failed")
         self._extra_tools.linter.set_issues(issues)
         self._set_lint_button(sum(1 for i in issues if i.sev == "error"),
                               sum(1 for i in issues if i.sev == "warn"))
@@ -854,151 +869,18 @@ class MainWindow(QMainWindow):
                 return
 
     # ===== Feature pack 4: editor state, undo/redo, import, recipes =====
-    def capture_state(self) -> dict:
-        arch = self.settings_manager.get_arch()
-        return {"settings": self.settings_manager.get_settings_list(),
-                "arch": arch.code if arch else None,
-                "env": self._env_widget.get_env_dict(),
-                "gs_on": self._gamescope.is_enabled(),
-                "gs_flags": self._gamescope.get_raw_flag_values()}
 
-    def apply_state(self, st: dict, label: Optional[str] = None):
-        """Put a whole state into the editor. With a label it becomes an undo step."""
-        self._state_timer.stop()
-        self._restoring = True
-        try:
-            self._env_editor.discard_pending_edit()
-            self.settings_manager.replace_state(st["settings"], st["arch"])
-            self._env_widget.load_values(st["env"])
-            self._gamescope.load_flag_values(st["gs_on"], st["gs_flags"])
-            self._env_widget.set_gamescope_enabled(st["gs_on"])
-            tab = self._sidebar_stack.currentIndex()
-            self._populate_settings(self._search.text() if tab == self.TAB_DRS else "", quiet=True)
-            self._env_widget.populate(self._search.text() if tab == self.TAB_ENV else "")
-            self._seen_env_keys = frozenset(self._env_widget.get_env_dict())
-            self._populate_arch_list()
-            name = getattr(self._env_editor, "_current_name", "")
-            ev = env_def(name)
-            if ev:
-                self._env_editor.set_var(ev)
-            cur = self._setting_editor._current_setting
-            if cur is not None:
-                self._setting_editor.set_setting(cur)
-            self._refresh_badges()
-            self._output_bar._update()
-        finally:
-            self._restoring = False
-        self._state_timer.stop()
-        if label is not None:
-            self._pending_label = label
-        self._on_state_settled()
 
-    def _on_state_settled(self):
-        if self._timeline is None:
-            return
-        cur = self.capture_state()
-        prev = self._timeline.current()
-        if cur != prev:
-            label = self._pending_label or describe_change(prev, cur)
-            key = None if self._pending_label else single_change_key(prev, cur)
-            self._timeline.push(cur, label, key)
-        self._pending_label = None
-        self._update_undo_ui()
-        self._reeval_dirty(cur)
 
-    def _saved_state(self) -> Optional[dict]:
-        name = self.settings_manager.get_current_profile()
-        prof = self.settings_manager.get_profiles().get(name) if name else None
-        return state_from_profile(prof) if isinstance(prof, dict) else None
 
-    def _reeval_dirty(self, cur: Optional[dict] = None):
-        """Dirty = the editor differs from what is saved — so undoing back to the
-        saved state (or re-setting the same value) clears the marker again."""
-        saved = self._saved_state()
-        if saved is None:
-            return
-        cur = cur or self.capture_state()
-        dirty = canon_flat(state_as_profile(cur)) != canon_flat(state_as_profile(saved))
-        if dirty != self._dirty:
-            self._set_dirty(dirty)
 
-    def undo(self):
-        if self._state_timer.isActive():            # an edit is still settling: record it first
-            self._state_timer.stop()
-            self._on_state_settled()
-        if not self._timeline or not self._timeline.can_undo():
-            self.statusBar().showMessage("Nothing to undo", 2000)
-            return
-        what = self._timeline.undo_label()
-        self.apply_state(self._timeline.undo())
-        self.statusBar().showMessage(f"Undid: {what}", 4000)
 
-    def redo(self):
-        if not self._timeline or not self._timeline.can_redo():
-            self.statusBar().showMessage("Nothing to redo", 2000)
-            return
-        what = self._timeline.redo_label()
-        self.apply_state(self._timeline.redo())
-        self.statusBar().showMessage(f"Redid: {what}", 4000)
 
-    def _jump_history(self, idx: int):
-        if self._state_timer.isActive():
-            self._state_timer.stop()
-            self._on_state_settled()
-        st = self._timeline.jump(idx) if self._timeline else None
-        if st is not None:
-            self.apply_state(st)
-            self.statusBar().showMessage("Jumped in history", 3000)
 
-    def _update_undo_ui(self):
-        tl = self._timeline
-        can_u, can_r = bool(tl and tl.can_undo()), bool(tl and tl.can_redo())
-        self._undo_btn.setEnabled(bool(tl))
-        self._undo_btn.setText("↶")
-        self._undo_btn.setToolTip(f"Undo: {tl.undo_label()}  (Ctrl+Z)\nArrow: history" if can_u
-                                  else "Nothing to undo — arrow: history")
-        self._redo_btn.setEnabled(can_r)
-        self._redo_btn.setToolTip(f"Redo: {tl.redo_label()}  (Ctrl+Shift+Z)" if can_r else "Nothing to redo")
 
-    def _fill_history_menu(self):
-        m = self._undo_menu
-        m.clear()
-        if not self._timeline:
-            return
-        entries = self._timeline.entries()
-        shown = entries[-30:]
-        if len(entries) > len(shown):
-            a = m.addAction(f"… {len(entries) - len(shown)} older step(s)")
-            a.setEnabled(False)
-        for idx, label, ts, is_cur in reversed(shown):
-            a = m.addAction(f"{'●' if is_cur else '   '}  {label}    ·  {datetime.fromtimestamp(ts):%H:%M:%S}")
-            if is_cur:
-                a.setEnabled(False)
-            else:
-                a.triggered.connect(lambda _c=False, i=idx: self._jump_history(i))
 
-    def _chip_text(self, glyph: str, text: str, tail: str = "") -> str:
-        fm = self._profile_chip.fontMetrics()
-        return f"{glyph}  " + fm.elidedText(text, Qt.ElideMiddle, 150) + tail
 
-    def _style_chip(self, color: str, bold: bool):
-        self._profile_chip.setStyleSheet(
-            f"QPushButton{{color:{color};background:{T['surface']};border:1px solid {T['border_hi']};"
-            f"border-radius:14px;font-size:12px;font-weight:{600 if bold else 500};padding:5px 14px;}}"
-            f"QPushButton:hover{{border-color:{color};background:{T['raised']};}}")
 
-    def _show_unsaved_changes(self):
-        name = self.settings_manager.get_current_profile()
-        saved = self._saved_state()
-        if not name or saved is None:
-            self._switch_tab(self.TAB_PROFILES)
-            return
-        dlg = ChangesDialog(state_as_profile(saved), state_as_profile(self.capture_state()),
-                            "Saved", "Editor", f"Unsaved changes — “{name}”", "Revert to saved", self)
-        if dlg.exec() == QDialog.Accepted and dlg.revert:
-            self.settings_manager.load_profile(name)
-            self._on_profile_loaded(name)
-            self._pending_label = f"Revert to saved “{name}”"
 
     def open_import_dialog(self, text: str = ""):
         if not text:
@@ -1318,55 +1200,7 @@ class MainWindow(QMainWindow):
         rid = f'{it["kind"]}|{it["key"]}'
         self._qsettings.setValue("palette/recent", ([rid] + [x for x in self._palette_recent() if x != rid])[:12])
 
-    def _save_session(self):
-        qs = self._qsettings
-        qs.setValue("session/profile", self.settings_manager.get_current_profile() or "")
-        qs.setValue("session/chip_set", self._chip_set.isChecked())
-        qs.setValue("session/chip_fav", self._chip_fav.isChecked())
-        tab = self._sidebar_stack.currentIndex()
-        key = ""
-        if tab == self.TAB_DRS and self._settings_list.currentItem():
-            key = str(self._settings_list.currentItem().data(Qt.UserRole) or "")
-        elif tab == self.TAB_ENV and self._env_widget.currentItem():
-            key = str(self._env_widget.currentItem().data(Qt.UserRole) or "")
-        qs.setValue("session/key", key)
-        qs.setValue("session/key_tab", tab)
-        tabs = self._extra_tools._tabs
-        qs.setValue("session/tool", tabs.tabText(tabs.currentIndex()).replace(" \u26a0", ""))
-        qs.setValue("session/sync", self._sync_tabs.tabText(self._sync_tabs.currentIndex()))
 
-    def _restore_session(self):
-        if _base._CLI_MODE or not APPEARANCE["restore"]:
-            return
-        qs = self._qsettings
-        try:
-            name = str(qs.value("session/profile", "") or "")
-            if name:
-                self.load_profile_by_name(name)
-            if _qbool(qs.value("session/chip_set", False)):
-                self._chip_set.setChecked(True)
-            if _qbool(qs.value("session/chip_fav", False)):
-                self._chip_fav.setChecked(True)
-            tab = self._sidebar_stack.currentIndex()
-            key = str(qs.value("session/key", "") or "")
-            if key and int(qs.value("session/key_tab", -1)) == tab:
-                if tab == self.TAB_DRS:
-                    self._select_item(self._settings_list, key)
-                elif tab == self.TAB_ENV:
-                    self._select_item(self._env_widget, key)
-            if tab == self.TAB_TOOLS:
-                tool = str(qs.value("session/tool", "") or "")
-                if tool:
-                    self._extra_tools.show_tab(tool)
-            elif tab == self.TAB_PROFILES:
-                sync = str(qs.value("session/sync", "") or "")
-                for i in range(self._sync_tabs.count()):
-                    if self._sync_tabs.tabText(i) == sync:
-                        self._sync_tabs.setCurrentIndex(i)
-                        break
-        except Exception:
-            _log.debug("ignored error", exc_info=True)
-            pass
 
     def _install_a11y(self):
         self.setAccessibleName(APP_TITLE)
