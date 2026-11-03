@@ -16,6 +16,7 @@ from .base import APP_ID, APP_TITLE, apply_wayland_app_id, ICON_PATH
 from .cli import _cli_parse, _cli_wants, cli_run
 from .main_window import MainWindow
 from .theme import APPEARANCE, apply_theme
+from .user_catalog import apply_user_catalog, load_user_catalog
 
 _log = logging.getLogger(__name__)
 
@@ -30,6 +31,8 @@ def main():
     # okurken zaten doğru argv[0]'ı görsün.
     apply_wayland_app_id(APP_ID)
     applog.setup()
+    for note in apply_user_catalog(load_user_catalog()):    # before any page/CLI path reads the catalog lists
+        _log.warning("user catalog: %s", note)
     cli_args, cli_rest = _cli_parse(sys.argv[1:])
     if _cli_wants(cli_args):
         cli_run(cli_args)                     # headless; exits

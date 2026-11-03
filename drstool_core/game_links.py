@@ -27,6 +27,8 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .file_transactions import atomic_write_json, file_lock
+
 STORE_VERSION = 1
 _LINK_FIELDS = ("profile", "fp", "applied_at", "target")
 
@@ -60,24 +62,16 @@ class LinkStore:
             self._games = {}
 
     def _write(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        text = json.dumps({"version": STORE_VERSION, "games": self._games}, indent=2, ensure_ascii=False)
-        fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=f".{self.path.name}.", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(text)
-            os.replace(tmp, self.path)
-        except BaseException:
-            Path(tmp).unlink(missing_ok=True)
-            raise
+        atomic_write_json(self.path, {"version": STORE_VERSION, "games": self._games})
 
     def _change(self, fn) -> bool:
-        """Re-read, apply fn(games) -> changed?, write when it changed."""
-        self.reload()
-        changed = bool(fn(self._games))
-        if changed:
-            self._write()
-        return changed
+        """Lock before reload+mutate+write so concurrent windows preserve edits."""
+        with file_lock(self.path):
+            self.reload()
+            changed = bool(fn(self._games))
+            if changed:
+                self._write()
+            return changed
 
     # ── queries ─────────────────────────────────────────────────────────────
     def get(self, key: str) -> dict:

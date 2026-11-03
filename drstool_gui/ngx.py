@@ -1,10 +1,13 @@
 """NVIDIA NGX OTA client (DLSS / Streamline builds) used by the DLL Manager."""
 
 import hashlib
+import json
 import os
 import re
 import shutil
 import tempfile
+import time
+import uuid
 import threading
 import urllib.error
 import urllib.parse
@@ -18,6 +21,8 @@ from typing import Dict, List, Optional
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QColor
+
+from drstool_core import dll_ops, file_transactions as tx
 
 from .theme import T
 
@@ -367,38 +372,100 @@ class NgxClient:
                 raise ValueError(f"sha256 mismatch ({digest[:12]}… ≠ {expected[:12]}…)")
             if not expected and total and done != total:
                 raise ValueError(f"truncated download ({done}/{total} bytes)")
-            return self._install(b, Path(tmp), dest), digest, bool(expected)
+            written = self._install(b, Path(tmp), dest)
+            ngx_cache_record(b, dest, written, digest, bool(expected))
+            return written, digest, bool(expected)
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
 
     @staticmethod
     def _install(b: NgxBuild, tmp: Path, dest: Path) -> List[str]:
+        """Validate every downloaded DLL, then publish the set atomically."""
         name = ngx_target_name(b.feature)
         if name:
-            with open(tmp, "rb") as f:
-                if f.read(2) != b"MZ":
-                    raise ValueError("payload is not a PE/DLL file")
-            os.replace(tmp, dest / name)
-            return [name]
-        written = []
-        with zipfile.ZipFile(tmp) as zf:
-            for info in zf.infolist():
-                base = info.filename.replace("\\", "/").rsplit("/", 1)[-1]
-                if info.is_dir() or not base.lower().endswith(".dll") or base in (".", ".."):
-                    continue
-                fd, part = tempfile.mkstemp(prefix=".ngx-", suffix=".part", dir=dest)
-                try:
-                    with os.fdopen(fd, "wb") as out, zf.open(info) as src:
-                        shutil.copyfileobj(src, out, 1 << 16)
-                    os.replace(part, dest / base)
-                finally:
-                    if os.path.exists(part):
-                        os.unlink(part)
-                written.append(base)
-        if not written:
-            raise ValueError("Streamline archive contained no .dll files")
-        return sorted(written)
+            if not dll_ops._is_pe(tmp):
+                raise ValueError('NGX payload is not a valid Windows PE DLL')
+            paths = [(name, tmp)]
+            stage = None
+        else:
+            stage = Path(tempfile.mkdtemp(prefix='.ngx-extract-', dir=dest))
+            try:
+                with zipfile.ZipFile(tmp) as zf:
+                    paths = []
+                    seen = set()
+                    total = 0
+                    for info in zf.infolist():
+                        base = info.filename.replace('\\', '/').rsplit('/', 1)[-1]
+                        if info.is_dir() or not base.lower().endswith('.dll'):
+                            continue
+                        if not re.fullmatch(r'sl\.[A-Za-z0-9_.-]+\.dll', base, re.I):
+                            raise ValueError(f'unexpected Streamline DLL name: {base}')
+                        if base.lower() in seen:
+                            raise ValueError(f'duplicate Streamline DLL: {base}')
+                        seen.add(base.lower())
+                        total += info.file_size
+                        if len(seen) > 100 or info.file_size > 250 * 1024**2 or total > 1024**3:
+                            raise ValueError('Streamline archive exceeds safe size')
+                        destfile = stage / base
+                        with zf.open(info) as inp, destfile.open('xb') as out:
+                            shutil.copyfileobj(inp, out, 1 << 20)
+                        if not dll_ops._is_pe(destfile):
+                            raise ValueError(f'invalid Streamline DLL: {base}')
+                        paths.append((base, destfile))
+                if not paths:
+                    raise ValueError('Streamline archive contained no DLLs')
+            except BaseException:
+                shutil.rmtree(stage, ignore_errors=True)
+                raise
+        backup = dest / f'.ngx-transaction-{uuid.uuid4().hex}'
+        try:
+            changes = [tx.Change(dest / n, src, f'{i}-{n}', 'NVIDIA NGX download')
+                       for i, (n, src) in enumerate(paths)]
+            tx.apply(changes, backup)
+            return sorted(n for n, _ in paths)
+        finally:
+            # Cache files can always be re-downloaded. The transaction restores
+            # originals on failure; no need to retain cache-local backups.
+            shutil.rmtree(backup, ignore_errors=True)
+            if stage is not None:
+                shutil.rmtree(stage, ignore_errors=True)
+
+
+def _ngx_cache_meta(build: NgxBuild, dest: Path) -> Path:
+    return dest / f'.drstool-ngx-{build.feature}-{build.version}.json'
+
+
+def ngx_cache_record(build: NgxBuild, dest: Path, names: List[str],
+                     payload_sha256: str, verified: bool) -> None:
+    tx.atomic_write_json(_ngx_cache_meta(build, dest), {
+        'feature': build.feature, 'version': build.version,
+        'payload_sha256': payload_sha256, 'verified_sidecar': verified,
+        'files': {name: tx.sha256(dest / name) for name in names},
+        'checked_at': int(time.time()),
+    })
+
+
+def ngx_cache_valid(build: NgxBuild, dest: Path) -> bool:
+    try:
+        data = json.loads(_ngx_cache_meta(build, dest).read_text(encoding='utf-8'))
+        if data.get('feature') != build.feature or data.get('version') != build.version:
+            return False
+        files = data.get('files')
+        if not isinstance(files, dict) or not files:
+            return False
+        expected_name = ngx_target_name(build.feature)
+        if expected_name and expected_name not in files:
+            return False
+        for name, hash_value in files.items():
+            if Path(name).name != name or not re.fullmatch(r'[0-9a-f]{64}', str(hash_value)):
+                return False
+            p = dest / name
+            if not p.is_file() or p.is_symlink() or not dll_ops._is_pe(p) or tx.sha256(p) != hash_value:
+                return False
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 class _NgxWorker(QThread):

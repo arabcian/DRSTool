@@ -32,7 +32,13 @@ find_package(Vulkan REQUIRED)
 # ============================================================================
 # Target
 # ============================================================================
-add_library(vk_flip_meter SHARED src/flip_meter.cpp)
+# Repository builds compile the canonical source at ../src/.  Wheels contain
+# its packaged copy under share/drstool/vk-flip-meter-main/src/.
+set(_FLM_SOURCE "${CMAKE_CURRENT_LIST_DIR}/../src/flip_meter.cpp")
+if(NOT EXISTS "${_FLM_SOURCE}")
+    set(_FLM_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/flip_meter.cpp")
+endif()
+add_library(vk_flip_meter SHARED "${_FLM_SOURCE}")
 
 # ============================================================================
 # Warnings  (the code compiles with ZERO warnings under this set)

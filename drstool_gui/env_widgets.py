@@ -5,16 +5,16 @@ from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QButtonGroup, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from drstool_core.models import EnvVarDef
 
 from .catalog_data import (
-    ALL_ENV_VARS, DXVK_CONFIG_KEY_NAMES, DXVK_CONFIG_KEYS, ENV_CATEGORY_ORDER, LOG_ENV_OFF,
-    LOG_ENV_ON, LOG_ENV_UNSET_OFF, LOG_VKD3D_CONFIG_FLAGS, VKD3D_CONFIG_DESCS,
-    vkd3d_config_tokens,
+    ALL_ENV_VARS, DXVK_CONFIG_KEY_NAMES, DXVK_CONFIG_KEYS, DXVK_KEY_GROUPS, ENV_CATEGORY_ORDER,
+    grouped_names, LOG_ENV_OFF, LOG_ENV_ON, LOG_ENV_UNSET_OFF, LOG_VKD3D_CONFIG_FLAGS,
+    VKD3D_CONFIG_DESCS, VKD3D_FLAG_GROUPS, vkd3d_config_tokens,
 )
 from .favorites import FAVS
 from .field_check import watch
@@ -40,6 +40,61 @@ from .widgets import (
 # ============================================================================
 # Env Var List Widget  (left sidebar — same pattern as SettingsListWidget)
 # ============================================================================
+
+# One stylesheet per config page (set on the page's container) instead of one
+# setStyleSheet() per label/button/combo — dozens of per-widget style
+# recalculations were what made the page build slowly and visibly re-flow.
+_CFG_PAGE_QSS = (FLAG_BTN_SS + """
+QLabel#cfgHdr{ color:#7b8496; font-size:10px; font-weight:600; }
+QLabel#cfgGroup{ color:#76b900; font-size:12px; font-weight:800; padding-top:10px;
+    border-bottom:1px solid #1d222c; }
+QLabel#cfgDesc{ color:#b3bac7; font-size:11px; }
+QLabel#cfgKey{ color:#dfe3ea; font-family:monospace; font-size:11px; }
+QComboBox{ background:#181c24; border:1px solid #2a313d; border-radius:6px; color:#dfe3ea;
+    padding:3px 8px; font-size:11px; }
+QComboBox:hover{ border:1px solid #76b900; }
+QLineEdit{ background:#181c24; border:1px solid #2a313d; border-radius:6px; color:#dfe3ea;
+    font-family:monospace; font-size:12px; padding:5px 10px; }
+QLineEdit:focus{ border:1px solid #76b900; }
+""")
+
+
+class _LazyCombo(QComboBox):
+    """Combo that only holds its current text until the popup is first opened
+    (items are filled in then). A page with ~45 of these used to spend most of
+    its build time in addItem()."""
+
+    def __init__(self, options, current=""):
+        super().__init__()
+        self._opts = list(options)
+        self._filled = False
+        self.addItem(current)
+
+    def _fill(self):
+        if self._filled:
+            return
+        self._filled = True
+        cur = self.currentText()
+        self.blockSignals(True)
+        self.clear()
+        self.addItems([""] + self._opts)
+        for i in range(self.count()):
+            if self.itemText(i).lower() == cur.lower():
+                self.setCurrentIndex(i)
+                break
+        else:
+            self.addItem(cur)
+            self.setCurrentText(cur)
+        self.blockSignals(False)
+
+    def showPopup(self):
+        self._fill()
+        super().showPopup()
+
+    def keyPressEvent(self, e):
+        self._fill()
+        super().keyPressEvent(e)
+
 
 class EnvVarsWidget(QListWidget):
     """
@@ -530,66 +585,61 @@ QLineEdit:hover{ background:#1f2430; }
         # We keep a local dict so toggle logic can read state without re-querying widgets
         self._vkd3d_btns: Dict[str, QPushButton] = {}
 
-        grid = QGridLayout()
+        host = QWidget()
+        host.setUpdatesEnabled(False)          # build off-screen, paint once
+        host.setStyleSheet(_CFG_PAGE_QSS)
+        grid = QGridLayout(host)
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(6)
-        # Flag column sized to its longest button, description takes the rest.
-        # The old 1:2 stretch split made buttons ~500px wide on a wide panel
-        # and squeezed the word-wrapped descriptions into tall narrow columns
-        # on a narrow one.
         grid.setColumnStretch(0, 0)
         grid.setColumnStretch(1, 1)
 
-        # Column headers
-        hdr_flag = QLabel("Flag")
-        hdr_flag.setStyleSheet("color:#7b8496; font-size:10px; font-weight:600;")
-        hdr_desc = QLabel("Description")
-        hdr_desc.setStyleSheet("color:#7b8496; font-size:10px; font-weight:600;")
-        grid.addWidget(hdr_flag, 0, 0)
-        grid.addWidget(hdr_desc, 0, 1)
+        def _hdr(text, col):
+            h = QLabel(text)
+            h.setObjectName("cfgHdr")
+            grid.addWidget(h, 0, col)
+        _hdr("Flag", 0)
+        _hdr("Description", 1)
 
-        # Separator line
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("border: none; border-top: 1px solid #1d222c;")
-        sep.setFixedHeight(1)
-        grid.addWidget(sep, 1, 0, 1, 2)
+        row = 1
+        for title, flags in grouped_names(VKD3D_FLAG_GROUPS, ev.options):
+            gl = QLabel(f"{title}  ·  {len(flags)}")
+            gl.setObjectName("cfgGroup")
+            grid.addWidget(gl, row, 0, 1, 2)
+            row += 1
+            for flag in flags:
+                btn = QPushButton(flag)
+                btn.setCheckable(True)
+                btn.setChecked(flag in active)
+                _fw = vkd3d_flag_unavailable(flag)
+                if _fw and flag not in active:
+                    btn.setEnabled(False)
+                    btn.setToolTip("Not supported here: " + _fw)
+                btn.setFixedHeight(30)
+                btn.toggled.connect(lambda checked, f=flag: self._on_vkd3d_flag_toggled())
+                self._vkd3d_btns[flag] = btn
 
-        for r_idx, flag in enumerate(ev.options):
-            btn = QPushButton(flag)
-            btn.setCheckable(True)
-            btn.setChecked(flag in active)
-            _fw = vkd3d_flag_unavailable(flag)
-            if _fw and flag not in active:
-                btn.setEnabled(False)
-                btn.setToolTip("Not supported here: " + _fw)
-            btn.setFixedHeight(30)
-            self._apply_flag_btn_style(btn)
-            btn.toggled.connect(lambda checked, f=flag: self._on_vkd3d_flag_toggled())
-            self._vkd3d_btns[flag] = btn
+                desc_lbl = QLabel(VKD3D_CONFIG_DESCS.get(flag, ""))
+                desc_lbl.setObjectName("cfgDesc")
+                desc_lbl.setWordWrap(True)
+                desc_lbl.setMinimumWidth(120)
+                desc_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+                grid.addWidget(btn,      row, 0, Qt.AlignTop)
+                grid.addWidget(desc_lbl, row, 1, Qt.AlignVCenter)
+                row += 1
 
-            desc_text = VKD3D_CONFIG_DESCS.get(flag, "")
-            desc_lbl = QLabel(desc_text)
-            desc_lbl.setWordWrap(True)
-            desc_lbl.setStyleSheet("color:#b3bac7; font-size:11px;")
-            desc_lbl.setMinimumWidth(120)
-            desc_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-
-            # Top-aligned so a 3-line description doesn't leave the button
-            # floating in the middle of a tall row.
-            grid.addWidget(btn,      r_idx + 2, 0, Qt.AlignTop)
-            grid.addWidget(desc_lbl, r_idx + 2, 1, Qt.AlignVCenter)
-
-        # Uniform button width = widest flag name, so the column lines up and
-        # never grows past what the text needs.
+        # Uniform button width = widest flag. Polish only the widest button
+        # (stylesheet padding must count) instead of all of them.
         if self._vkd3d_btns:
-            for b in self._vkd3d_btns.values():
-                b.ensurePolished()      # stylesheet padding must count
-            bw = max(b.sizeHint().width() for b in self._vkd3d_btns.values())
+            widest = max(self._vkd3d_btns.values(), key=lambda x: len(x.text()))
+            widest.ensurePolished()
+            bw = widest.sizeHint().width()
             for b in self._vkd3d_btns.values():
                 b.setFixedWidth(bw)
+        host.setUpdatesEnabled(True)
 
-        self._control_layout.addLayout(grid)
+        self._control_layout.addWidget(host)
         if self._vkd3d_extra:
             note = QLabel("Kept as-is (not a current upstream flag — no effect unless your "
                           "vkd3d-proton build/fork knows it): " + ", ".join(self._vkd3d_extra))
@@ -627,58 +677,83 @@ QLineEdit:hover{ background:#1f2430; }
                   if not (k in DXVK_CONFIG_KEY_NAMES and v is not None)]
 
         self._dxvkcfg_widgets: Dict[str, QWidget] = {}
-        grid = QGridLayout()
+        host = QWidget()
+        host.setUpdatesEnabled(False)          # build off-screen, paint once
+        host.setStyleSheet(_CFG_PAGE_QSS)
+        grid = QGridLayout(host)
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(6)
         grid.setColumnStretch(2, 1)
         for c, t in enumerate(("Key", "Value", "Description")):
             h = QLabel(t)
-            h.setStyleSheet("color:#7b8496; font-size:10px; font-weight:600;")
+            h.setObjectName("cfgHdr")
             grid.addWidget(h, 0, c)
 
-        combo_ss = ("QComboBox{background:#181c24;border:1px solid #2a313d;border-radius:6px;"
-                    "color:#dfe3ea;padding:3px 8px;font-size:11px;}"
-                    "QComboBox:hover{border:1px solid #76b900;}")
-        for r, (key, kind, opt, desc) in enumerate(DXVK_CONFIG_KEYS, start=1):
-            lbl = QLabel(key)
-            lbl.setStyleSheet("color:#dfe3ea; font-family:monospace; font-size:11px;")
-            val = known.get(key, "")
-            if kind == "enum":
-                w = QComboBox()
-                w.addItem("")
-                w.addItems(opt)
-                # case-insensitive match (dxvk accepts true/True)
-                for i in range(w.count()):
-                    if w.itemText(i).lower() == val.lower():
-                        w.setCurrentIndex(i)
-                        break
+        by_key = {k[0]: k for k in DXVK_CONFIG_KEYS}
+        # Keys whose rows are not built yet keep their known value, so an early
+        # edit never drops them from the combined value.
+        self._dxvkcfg_known = dict(known)
+        self._dxvkcfg_gen = getattr(self, "_dxvkcfg_gen", 0) + 1
+        gen = self._dxvkcfg_gen
+        state = {"r": 1}
+
+        def add_group(title, keys):
+            r = state["r"]
+            gl = QLabel(f"{title}  ·  {len(keys)}")
+            gl.setObjectName("cfgGroup")
+            grid.addWidget(gl, r, 0, 1, 3)
+            r += 1
+            for key in keys:
+                _k, kind, opt, desc = by_key[key]
+                lbl = QLabel(key)
+                lbl.setObjectName("cfgKey")
+                val = known.get(key, "")
+                if kind == "enum":
+                    w = _LazyCombo(opt, val)
+                    w.setFixedHeight(28)
+                    w.setMinimumWidth(90)
+                    w.installEventFilter(_NO_SCROLL_FILTER)
+                    w.currentIndexChanged.connect(lambda _i: self._set_value(self._dxvkcfg_value()))
                 else:
-                    if val:
-                        w.addItem(val)
-                        w.setCurrentText(val)
-                w.setStyleSheet(combo_ss)
-                w.setFixedHeight(28)
-                w.setMinimumWidth(90)
-                w.installEventFilter(_NO_SCROLL_FILTER)
-                w.currentIndexChanged.connect(lambda _i: self._set_value(self._dxvkcfg_value()))
-            else:
-                w = QLineEdit(val)
-                w.setStyleSheet(self._EDIT_SS)
-                w.setPlaceholderText(opt)
-                w.setFixedHeight(28)
-                w.setMinimumWidth(90)
-                w.textChanged.connect(lambda _t: self._on_dxvkcfg_text())
-            self._dxvkcfg_widgets[key] = w
-            _kw = dxvk_cfg_unavailable(key)
-            if _kw and not val:
-                w.setEnabled(False)
-                w.setToolTip("Not supported here: " + _kw)
-            d = QLabel(desc)
-            d.setWordWrap(True)
-            d.setStyleSheet("color:#b3bac7; font-size:11px;")
-            grid.addWidget(lbl, r, 0)
-            grid.addWidget(w, r, 1)
-            grid.addWidget(d, r, 2)
-        self._control_layout.addLayout(grid)
+                    w = QLineEdit(val)
+                    w.setPlaceholderText(opt)
+                    w.setFixedHeight(28)
+                    w.setMinimumWidth(90)
+                    w.textChanged.connect(lambda _t: self._on_dxvkcfg_text())
+                self._dxvkcfg_widgets[key] = w
+                _kw = dxvk_cfg_unavailable(key)
+                if _kw and not val:
+                    w.setEnabled(False)
+                    w.setToolTip("Not supported here: " + _kw)
+                d = QLabel(desc)
+                d.setObjectName("cfgDesc")
+                d.setWordWrap(True)
+                grid.addWidget(lbl, r, 0)
+                grid.addWidget(w, r, 1)
+                grid.addWidget(d, r, 2)
+                r += 1
+            state["r"] = r
+
+        pending = grouped_names(DXVK_KEY_GROUPS, DXVK_CONFIG_KEY_NAMES)
+
+        def build_next():
+            if gen != self._dxvkcfg_gen or not pending:
+                return
+            host.setUpdatesEnabled(False)
+            add_group(*pending.pop(0))
+            host.setUpdatesEnabled(True)
+            if pending:
+                QTimer.singleShot(0, build_next)
+
+        # First two sections right away, the rest one section per event-loop turn
+        # so the page appears immediately instead of after the whole build.
+        for _ in range(2):
+            if pending:
+                add_group(*pending.pop(0))
+        host.setUpdatesEnabled(True)
+        self._control_layout.addWidget(host)
+        if pending:
+            QTimer.singleShot(0, build_next)
 
         hint = QLabel("Other entries (any other dxvk.conf key, ; separated):")
         hint.setStyleSheet("color:#7b8496; font-size:10px; font-weight:600;")
@@ -694,7 +769,10 @@ QLineEdit:hover{ background:#1f2430; }
         parts = []
         for key in DXVK_CONFIG_KEY_NAMES:
             w = self._dxvkcfg_widgets.get(key)
-            v = (w.currentText() if isinstance(w, QComboBox) else w.text()).strip() if w else ""
+            if w is None:
+                v = getattr(self, "_dxvkcfg_known", {}).get(key, "").strip()
+            else:
+                v = (w.currentText() if isinstance(w, QComboBox) else w.text()).strip()
             if v:
                 parts.append(f"{key} = {v}")
         extra = self._dxvkcfg_extra.text().strip() if hasattr(self, "_dxvkcfg_extra") else ""
@@ -763,7 +841,7 @@ QLineEdit:hover{ background:#1f2430; }
 
         if param_options:
             hint = QLabel("Also available (type manually, comma-separated): " + ", ".join(param_options))
-            hint.setStyleSheet(f"color:{T['muted']}; font-size:11px; font-family:{T['mono']}; padding-top:2px;")
+            hint.setStyleSheet("color:#3a4a5a; font-size:10px; font-family:monospace;")
             hint.setWordWrap(True)
             self._control_layout.addWidget(hint)
 

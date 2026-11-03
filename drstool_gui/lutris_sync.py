@@ -2,6 +2,10 @@
 
 import logging
 import glob
+import hashlib
+import json
+import io
+from drstool_core.file_transactions import atomic_write_json
 import os
 import shlex
 import shutil
@@ -851,18 +855,19 @@ class LutrisSyncWidget(QWidget):
 
         all_env = self._collect_all_env()
         system_keys, env_vars, warnings = self._split_gamescope(all_env)
-        if not system_keys and not env_vars:
-            self._preview.setPlainText(
-                "(Nothing configured yet — set DRS settings, env vars, "
-                "gamescope flags, or lutris-game-tune "
-                "in the other tabs/groups first.)"
-            )
+        index = self._game_combo.currentIndex()
+        if index < 0 or index >= len(self._games):
+            self._apply_btn.setEnabled(False)
+            return
+        if not system_keys and not env_vars and not any(self._owned(self._games[index].path).values()):
+            self._preview.setPlainText("(Nothing configured yet — no owned values to remove.)")
             self._apply_btn.setEnabled(False)
             return
 
         try:
             new_text, sys_changed, env_changed, sys_removed, env_removed = self._merge_yaml(
-                self._current_yaml_text, system_keys, env_vars
+                self._current_yaml_text, system_keys, env_vars,
+                self._owned(self._games[index].path)
             )
         except Exception as e:
             self._preview.setPlainText(f"(Could not parse this game's YAML: {e})")
@@ -935,16 +940,16 @@ class LutrisSyncWidget(QWidget):
         original_text: str,
         system_keys: Dict[str, object],
         env_vars: Dict[str, str],
+        owned: Optional[dict] = None,
     ):
         """Parse original_text, write system_keys into system.* and env_vars
         into system.env.  Returns
         (new_yaml_text, sys_changed, env_changed, sys_removed, env_removed).
         Comments are not preserved (PyYAML limitation); all other structure is.
 
-        Keys DRSTool owns (see _managed_system_keys) but that are NOT in
-        system_keys this round are REMOVED rather than left behind. Without
-        that step the merge could only ever add or overwrite, so unchecking a
-        box in the GUI had no effect on an existing file.
+        Only previously committed DRSTool-owned values can be deleted.
+        Catalogue membership alone NEVER proves ownership: Lutris and users
+        are allowed to configure the same environment variables.
         """
         data = yaml.load(original_text, Loader=_YAML_LOADER) or {}
         if not isinstance(data, dict):
@@ -953,24 +958,12 @@ class LutrisSyncWidget(QWidget):
             data["system"] = {}
         sysdict = data["system"]
 
-        # Drop owned keys the GUI is no longer asking for.
+        owned = owned or {}
         sys_removed = set()
-        for k in cls._managed_system_keys() - set(system_keys):
-            if k not in sysdict:
-                continue
-            # lutris-game-tune keys are only ours while they still point at our
-            # wrapper — never clobber a hand-written prelaunch_command.
-            # prefix_command has a second owner: a MangoHud-only prefix carries
-            # no wrapper path, so without this it could never be removed and
-            # unticking MangoHud would leave `prefix_command: mangohud --dlsym`
-            # behind forever.
-            cur_val = str(sysdict.get(k, ""))
-            if k in cls._LGTUNE_KEYS and \
-               cls._LGTUNE_WRAPPER_PATH not in cur_val and \
-               cur_val.strip() != GamescopeFlagsWidget.MANGOHUD_PREFIX:
-                continue
-            del sysdict[k]
-            sys_removed.add(k)
+        for k, prev in owned.get('system', {}).items():
+            if k not in system_keys and k in sysdict and sysdict[k] == prev:
+                del sysdict[k]
+                sys_removed.add(k)
 
         # Only keys whose value really differs count as "changed"; identical
         # ones are left untouched so the file keeps its own types, and a fully
@@ -987,8 +980,8 @@ class LutrisSyncWidget(QWidget):
         envdict = sysdict["env"]
 
         env_removed = set()
-        for k in cls._managed_env_keys() - set(env_vars):
-            if k in envdict:
+        for k, prev in owned.get('env', {}).items():
+            if k not in env_vars and k in envdict and str(envdict[k]) == str(prev):
                 del envdict[k]
                 env_removed.add(k)
 
@@ -1005,9 +998,69 @@ class LutrisSyncWidget(QWidget):
 
         new_text = yaml.dump(
             data, default_flow_style=False, sort_keys=False, allow_unicode=True,
-            width=1_000_000,   # no folding of long gamescope_flags / prefix_command
+            width=1_000_000,
         )
+        # ruamel round-trips comments, quoting and order. Only mutate the
+        # exact keys chosen above; never reconstruct the whole YAML document.
+        try:
+            from ruamel.yaml import YAML
+            ry = YAML(typ='rt')
+            ry.preserve_quotes = True
+            ry.width = 1_000_000
+            doc = ry.load(original_text) or {}
+            if not isinstance(doc, dict):
+                raise ValueError('invalid Lutris YAML structure')
+            if 'system' not in doc or not isinstance(doc.get('system'), dict):
+                doc['system'] = {}
+            rs = doc['system']
+            for k in sys_removed:
+                rs.pop(k, None)
+            for k in sys_changed:
+                rs[k] = system_keys[k]
+            if 'env' not in rs or not isinstance(rs.get('env'), dict):
+                if env_changed:
+                    rs['env'] = {}
+            if isinstance(rs.get('env'), dict):
+                re = rs['env']
+                for k in env_removed:
+                    re.pop(k, None)
+                for k in env_changed:
+                    re[k] = str(env_vars[k])
+                if not re:
+                    rs.pop('env', None)
+            out = io.StringIO()
+            ry.dump(doc, out)
+            new_text = out.getvalue()
+        except ImportError:
+            pass  # Minimal installation: use safe, comment-losing PyYAML fallback.
         return new_text, sys_changed, env_changed, sys_removed, env_removed
+
+    @staticmethod
+    def _ownership_path(target: Path) -> Path:
+        state = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state')
+        digest = hashlib.sha256(str(target.resolve()).encode('utf-8')).hexdigest()
+        return state / 'drstool' / 'lutris-ownership' / (digest + '.json')
+
+    @classmethod
+    def _owned(cls, target: Path) -> dict:
+        try:
+            state = json.loads(cls._ownership_path(target).read_text(encoding='utf-8'))
+            if state.get('target') == str(target.resolve()):
+                return {'system': state.get('system', {}), 'env': state.get('env', {})}
+        except (OSError, ValueError, AttributeError):
+            pass
+        return {'system': {}, 'env': {}}
+
+    @classmethod
+    def _save_owned(cls, target: Path, system: dict, env: dict, old: dict,
+                    sys_changed: set, env_changed: set) -> None:
+        # Identical values initially written by a user must NOT become ours.
+        owners = {'target': str(target.resolve()),
+                  'system': {k: v for k, v in system.items()
+                             if k in old.get('system', {}) or k in sys_changed},
+                  'env': {k: str(v) for k, v in env.items()
+                          if k in old.get('env', {}) or k in env_changed}}
+        atomic_write_json(cls._ownership_path(target), owners)
 
     _BACKUP_KEEP = 20
 
@@ -1034,8 +1087,9 @@ class LutrisSyncWidget(QWidget):
         try:
             with open(entry.path, "r", encoding="utf-8") as f:
                 original_text = f.read()
+            ownership = self._owned(entry.path)
             new_text, sys_changed, env_changed, sys_removed, env_removed = self._merge_yaml(
-                original_text, system_keys, env_vars
+                original_text, system_keys, env_vars, ownership
             )
         except Exception as e:
             QMessageBox.critical(self, "Merge failed", f"Could not merge: {e}")
@@ -1110,6 +1164,14 @@ class LutrisSyncWidget(QWidget):
                     pass
                 raise
             self._prune_backups(target)
+            try:
+                self._save_owned(target, system_keys, env_vars, ownership, sys_changed, env_changed)
+            except OSError as ex:
+                # The YAML write succeeded; a sidecar failure must be
+                # reported accurately and not misrepresented as a failed save.
+                QMessageBox.warning(self, 'Ownership record unavailable',
+                                    f'Lutris YAML was updated, but DRSTool could not save its ownership record: {ex}\n'
+                                    'Future updates will preserve untracked values rather than delete them.')
         except Exception as e:
             QMessageBox.critical(self, "Write failed", f"Could not write {entry.path}: {e}")
             return False

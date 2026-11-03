@@ -290,4 +290,13 @@ class FrametimeWidget(QWidget):
                 t.setItem(r, 3, it)
         extra = [f"{d['name']}: " + ", ".join(f"{k}={v}" for k, v in d["extra"].items())
                  for d in ds if d and d["extra"]]
+        if ds[0] and ds[1]:
+            # Averages from radically different scenes or durations are not
+            # a defensible A/B result. Advise rather than hiding the data.
+            durations = [sum(d['ft']) for d in ds]
+            if max(durations) / max(min(durations), 0.001) > 1.2:
+                extra.append('⚠ Capture durations differ by over 20%; '
+                             'run the same repeatable scene for a fair comparison')
+            if ds[0]['kind'] != ds[1]['kind']:
+                extra.append('⚠ Different log types; verify both capture the same frame stream')
         self._status.setText("  ".join(extra))

@@ -263,7 +263,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.setSpacing(8)
 
         self._search = QLineEdit()
-        self._search.setPlaceholderText("\u2315  Filter this list…   Ctrl+F")
+        self._search.setPlaceholderText("\u2315  Filter…   Ctrl+F   ·   everything: Ctrl+K")
         self._search.setClearButtonEnabled(True)
         self._search.setStyleSheet(f"""
             QLineEdit {{
@@ -1267,16 +1267,12 @@ class MainWindow(QMainWindow):
             return
         run = [t for t in ts if t["state"] == "running"]
         if run:
-            txt, col = f"\u27f3 {len(run)} running", T["accent"]
+            txt, col = f"\u27f3 {len(run)}", T["accent"]
             tip = "Running: " + ", ".join(t["title"] for t in run)
-        elif ts[-1]["state"] == "failed":
-            txt, col = "\u2716 Task failed", T["danger"]
-            tip = "Last task: " + ts[-1]["title"]
         else:
-            # A bare ✔ next to "Lint ✔" read as a second lint badge; finished
-            # tasks stay reachable from ⚙ › Background tasks.
-            self._tasks_btn.hide()
-            return
+            bad = ts[-1]["state"] == "failed"
+            txt, col = ("\u2716" if bad else "\u2714"), (T["danger"] if bad else T["muted"])
+            tip = "Last task: " + ts[-1]["title"]
         self._tasks_btn.setText(txt)
         self._tasks_btn.setToolTip(tip + "\nClick for the task list")
         self._tasks_btn.setAccessibleName("Background tasks")
@@ -1687,6 +1683,17 @@ class MainWindow(QMainWindow):
     def _create_support_bundle(self):
         """'Sorun bildir': one anonymised zip with system info, DRSTool's debug log and the saved profiles."""
         default = Path.home() / f"drstool-report-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+        answer = QMessageBox.question(
+            self, "Support bundle privacy preview",
+            "The bundle can include:\n\n"
+            "• System and GPU/driver information\n"
+            "• Saved profile settings (without known credentials)\n"
+            "• Diagnostic debug logs (automatically redacted)\n\n"
+            "Please inspect the zip contents before sharing; no automated scrubber can "
+            "guarantee removal of all sensitive information. Continue?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
         path, _ = QFileDialog.getSaveFileName(self, "Create support bundle", str(default), "Zip archive (*.zip)")
         if not path:
             return

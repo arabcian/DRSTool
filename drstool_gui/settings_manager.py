@@ -4,6 +4,8 @@ persistence.
 
 import logging
 import json
+import hashlib
+from drstool_core.file_transactions import file_lock
 import os
 import shutil
 import tempfile
@@ -50,6 +52,7 @@ class SettingsManager(QObject):
         self._settings: Dict[str, str] = {}
         self._arch: Optional[GPUArch] = None
         self._profiles: Dict[str, Dict] = {}
+        self._last_disk_sha = None
         self._current_profile: Optional[str] = None
         self._loaded_env_vars: Dict[str, str] = {}
         self._loaded_gamescope_enabled = False
@@ -250,6 +253,13 @@ class SettingsManager(QObject):
         config_dir = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "drstool"
         return config_dir / "profiles.json"
 
+    @staticmethod
+    def _file_sha(path: Path) -> Optional[str]:
+        try:
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+        except FileNotFoundError:
+            return None
+
     def _load_profiles(self):
         data_file = self._profiles_path()
         try:
@@ -272,6 +282,7 @@ class SettingsManager(QObject):
                 if not isinstance(loaded, dict):
                     raise ValueError("profiles file is not a JSON object")
                 self._profiles = loaded
+                self._last_disk_sha = self._file_sha(data_file)
         except Exception:
             _log.debug("ignored error", exc_info=True)
             # Corrupt or unreadable file. Starting with an empty in-memory set
@@ -358,11 +369,13 @@ class SettingsManager(QObject):
             clash = [n for n in disk if n in self._profiles and disk[n] != self._profiles[n]]
             for n in added:
                 self._profiles[n] = disk[n]
+            self._last_disk_sha = self._file_sha(data_file)  # explicit user-approved merge
             ok = self._save_profiles()
             self.profiles_changed.emit()
             return (f"Merged: {len(added)} profile(s) added from disk, "
                     f"{len(clash)} differing one(s) kept as in DRSTool." + ("" if ok else " (save failed)"))
         self._profiles = disk
+        self._last_disk_sha = self._file_sha(data_file)
         if self._current_profile not in self._profiles:
             self._current_profile = None
         self.disk_written.emit()
@@ -370,30 +383,35 @@ class SettingsManager(QObject):
         return f"Reloaded {len(disk)} profile(s) from disk."
 
     def _save_profiles(self) -> bool:
-        """Write profiles to disk atomically. Returns True on success."""
+        """Write atomically, but reject stale saves from another DRSTool window."""
         data_file = self._profiles_path()
         try:
             data_file.parent.mkdir(parents=True, exist_ok=True)
             text = json.dumps(self._profiles, indent=2)
-            # unique temp name: two running instances used to share "<file>.json.tmp"
-            fd, tmp_name = tempfile.mkstemp(dir=str(data_file.parent), prefix=f".{data_file.name}.", suffix=".tmp")
-            tmp_file = Path(tmp_name)
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(text)
-                    f.flush()
-                    os.fsync(f.fileno())
-                if data_file.exists():             # mkstemp is 0600; keep the file's existing mode
-                    shutil.copymode(data_file, tmp_file)
-                else:
-                    os.chmod(tmp_file, 0o644 & ~_umask())
-                self._snapshot_old(data_file, text)
-                os.replace(tmp_file, data_file)  # atomic on POSIX — no partial-write corruption
-            except BaseException:
-                tmp_file.unlink(missing_ok=True)
-                raise
+            with file_lock(data_file):
+                current = self._file_sha(data_file)
+                if current != self._last_disk_sha:
+                    raise RuntimeError('profiles.json was modified by another process; '
+                                       'reload or merge it before saving')
+                fd, tmp_name = tempfile.mkstemp(dir=str(data_file.parent),
+                                                prefix=f'.{data_file.name}.', suffix='.tmp')
+                tmp_file = Path(tmp_name)
+                try:
+                    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                        f.write(text)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    if data_file.exists():
+                        shutil.copymode(data_file, tmp_file)
+                    else:
+                        os.chmod(tmp_file, 0o644 & ~_umask())
+                    self._snapshot_old(data_file, text)
+                    os.replace(tmp_file, data_file)
+                    self._last_disk_sha = hashlib.sha256(text.encode('utf-8')).hexdigest()
+                finally:
+                    tmp_file.unlink(missing_ok=True)
             self.disk_written.emit()
             return True
         except Exception as e:
-            self.profile_save_error.emit(f"Failed to save profiles to {data_file}: {e}")
+            self.profile_save_error.emit(f'Failed to save profiles to {data_file}: {e}')
             return False

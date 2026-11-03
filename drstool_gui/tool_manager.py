@@ -28,6 +28,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QProgressBar, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from drstool_core import safe_archive
+from drstool_core.file_transactions import atomic_write_json
+
 from .base import _atomic_write, _backup_file, _proc_running
 from .ngx import ngx_human
 from .steam_utils import STEAM_COMPAT_PATH, vdf_get_app_value, vdf_set_app_value
@@ -433,7 +436,22 @@ def _tm_actions_resolve(tool: TMTool, ver: TMVer) -> TMVer:
     items = [a for a in arts.get("artifacts", []) if not a.get("expired")]
     if not items:
         raise RuntimeError(f"CI run {ver.ref} has no (unexpired) artifact")
-    a = items[0]
+    # Never silently choose the first artifact; CI workflows often upload test
+    # logs, source bundles and ARM builds alongside the Linux tool binary.
+    expected = tool.id.replace('proton-', '').replace('-', '')
+    candidates = [a for a in items if not _TM_ARM.search(a.get('name', '')) and
+                  not re.search(r"(windows|win64|win32|macos|osx|darwin)", a.get('name', ''), re.I) and
+                  not re.search(r"(debug|symbol|log|test-results|source|src-only)",
+                                a.get('name', ''), re.I)]
+    matching = [a for a in candidates if expected in re.sub(r'[^a-z0-9]', '',
+                a.get('name', '').lower())]
+    if matching:
+        candidates = matching
+    if len(candidates) != 1:
+        names = ', '.join(str(a.get('name')) for a in items[:15])
+        raise RuntimeError(f"ambiguous CI artifact for {tool.name} ({len(candidates)} candidates): {names}; "
+                           "refusing to install an arbitrary artifact")
+    a = candidates[0]
     ver.url = (f"https://nightly.link/{tool.repo}/actions/runs/{ver.ref}/"
                f"{urllib.parse.quote(a['name'])}.zip")
     ver.name, ver.size = a["name"] + ".zip", int(a.get("size_in_bytes") or 0)
@@ -478,13 +496,32 @@ def _tm_download(url: str, dest: Path, hint: int, cancel, prog, digest=None):
         raise RuntimeError(f"download failed: {getattr(e, 'reason', e)}") from None
 
 
-def _tm_verify(path: Path, csum_url: str, cancel, prog, digest=None) -> str:
-    """`digest`: SHA-512 already computed while downloading; without it the file is read again."""
+def _tm_checksum_value(text: str, filename: str) -> str:
+    """Find the SHA-512 for exactly this archive, not the first digest in a list."""
+    records = []
+    bare = []
+    for line in text.splitlines():
+        m = re.match(r"^\s*([0-9a-fA-F]{128})\s+\*?(.+?)\s*$", line)
+        if m:
+            records.append((m.group(2).lstrip('./'), m.group(1).lower()))
+            continue
+        b = re.match(r"^\s*([0-9a-fA-F]{128})\s*$", line)
+        if b:
+            bare.append(b.group(1).lower())
+    matched = [h for name, h in records if name == filename]
+    if len(matched) == 1:
+        return matched[0]
+    if not records and len(bare) == 1:
+        return bare[0]
+    raise RuntimeError(f"no unambiguous SHA-512 checksum for {filename!r}")
+
+
+def _tm_verify(path: Path, csum_url: str, cancel, prog, digest=None, filename: str | None = None) -> str:
+    """`digest`: SHA-512 calculated while downloading, else hash from disk."""
     if not csum_url:
         return "no checksum published for this build"
-    m = re.search(r"\b([0-9a-fA-F]{128})\b", _tm_get(csum_url, "*/*").decode("utf-8", "replace"))
-    if not m:
-        raise RuntimeError("checksum file has no SHA-512 value")
+    checksum = _tm_checksum_value(_tm_get(csum_url, "*/*").decode("utf-8", "replace"),
+                                  filename or path.name)
     h = digest
     if h is None:
         h, done, size = hashlib.sha512(), 0, max(path.stat().st_size, 1)
@@ -495,79 +532,35 @@ def _tm_verify(path: Path, csum_url: str, cancel, prog, digest=None) -> str:
                 h.update(chunk)
                 done += len(chunk)
                 prog("Verifying", done, size)
-    if h.hexdigest() != m.group(1).lower():
+    if h.hexdigest() != checksum:
         raise RuntimeError("SHA-512 mismatch — the download is corrupted; nothing was installed")
     return "SHA-512 verified"
 
 
 def _tm_untar_cli(path: Path, dest: Path, cancel):
-    err = ""
-    for extra in (["--zstd"], ["--use-compress-program=unzstd"]):
-        # stderr goes to a temp file, not a PIPE: the poll loop never drains a
-        # pipe, so a tar printing >64 KiB of warnings blocked forever.
-        with tempfile.TemporaryFile() as errf:
-            try:
-                p = subprocess.Popen(["tar", *extra, "-xf", str(path), "-C", str(dest)],
-                                     stdout=subprocess.DEVNULL, stderr=errf)
-            except FileNotFoundError:
-                raise RuntimeError("`tar` not found") from None
-            while p.poll() is None:
-                if cancel.is_set():
-                    p.kill()
-                    p.wait()
-                    raise _TMCancelled()
-                time.sleep(0.15)
-            if p.returncode == 0:
-                return
-            errf.seek(0)
-            err = errf.read().decode("utf-8", "replace").strip()
-    raise RuntimeError("cannot unpack .tar.zst — install zstd (app-arch/zstd) or use Python ≥ 3.14"
-                       + (f": {err[:160]}" if err else ""))
+    """Legacy entry point; now safely streams zstd through verified extraction."""
+    return _tm_untar(path, dest, cancel, lambda *_: None)
 
 
 def _tm_untar(path: Path, dest: Path, cancel, prog, label: str = "Extracting"):
-    dest.mkdir(parents=True, exist_ok=True)
-    size = max(path.stat().st_size, 1)
-    zst = path.name.endswith(".zst")
-    raw = open(path, "rb")
     try:
-        tf = tarfile.open(fileobj=raw, mode="r|zst" if zst else "r|*")
-    except Exception as e:                                   # noqa: BLE001
-        raw.close()
-        if zst:
-            return _tm_untar_cli(path, dest, cancel)
-        raise RuntimeError(f"cannot read archive: {e}") from None
-    try:
-        with tf:
-            for m in tf:
-                if cancel.is_set():
-                    raise _TMCancelled()
-                if _TM_FILTER:
-                    tf.extract(m, dest, filter="tar")        # blocks path escapes, strips setuid/world-write
-                else:
-                    n = os.path.normpath(m.name)
-                    if n.startswith(("/", "..")) or m.isdev():
-                        raise RuntimeError(f"unsafe path in archive: {m.name}")
-                    tf.extract(m, dest)
-                prog(label, raw.tell(), size)
-    except tarfile.FilterError as e:
-        raise RuntimeError(f"unsafe archive member rejected: {e}") from None
-    except OSError as e:
-        if e.errno == _errno.ENOSPC:
-            raise RuntimeError("no space left on device while extracting") from None
+        prog(label, 0, 0)  # unknown expanded size: use indeterminate progress
+        safe_archive.extract_tar(path, dest, cancel=cancel, allow_internal_links=True)
+        prog(label, 1, 1)
+    except RuntimeError as ex:
+        if 'cancelled' in str(ex):
+            raise _TMCancelled() from ex
         raise
-    finally:
-        raw.close()
 
 
 def _tm_unzip(path: Path, dest: Path, cancel, prog):
-    with _zipfile.ZipFile(path) as zf:
-        names = zf.namelist()
-        for i, n in enumerate(names, 1):
-            if cancel.is_set():
-                raise _TMCancelled()
-            zf.extract(n, dest)                              # ZipFile.extract sanitises the path
-            prog("Extracting", i, len(names))
+    try:
+        safe_archive.extract_zip(path, dest, cancel=cancel,
+                                 progress=lambda n, total: prog('Extracting', n, total))
+    except RuntimeError as ex:
+        if 'cancelled' in str(ex):
+            raise _TMCancelled() from ex
+        raise
 
 
 def _tm_extract(tool: TMTool, ver: TMVer, archive: Path, stage: Path, cancel, prog):
@@ -671,41 +664,62 @@ def tm_install(tool: TMTool, ver: TMVer, launcher: TMLauncher, force: bool, canc
         log(f"  ↓ {ver.name or ver.url}" + (f"  ({ngx_human(ver.size)})" if ver.size else ""))
         digest = hashlib.sha512() if ver.csum else None
         _tm_download(ver.url, archive, ver.size, cancel, prog, digest)
-        log("  " + _tm_verify(archive, ver.csum, cancel, prog, digest))
+        log("  " + _tm_verify(archive, ver.csum, cancel, prog, digest, ver.name))
         _tm_extract(tool, ver, archive, stage, cancel, prog)
         prog("Installing", 0, 0)
         main = _tm_post(tool, stage)
         main_name = main.name
+        # Stage the version metadata BEFORE any installation is visible.
+        atomic_write_json(main / _TM_VERSION_FILE,
+                          {"compat_tool": tool.name, "version": ver.label,
+                           "installed_at": int(time.time()), "arch": "x86_64"})
+        if launcher.key == "steam" and tool.kind == "proton" and not (main / "compatibilitytool.vdf").is_file():
+            raise RuntimeError("invalid compatibility tool: compatibilitytool.vdf missing; nothing installed")
+        dirs = sorted(x for x in stage.iterdir() if x.is_dir() and not x.name.startswith('_'))
+        if main not in dirs or not dirs:
+            raise RuntimeError('malformed tool archive: installation directory missing')
+        for folder in dirs:
+            if folder.is_symlink() or not folder.name or folder.name.startswith('.'):
+                raise RuntimeError(f'unsafe install folder: {folder}')
+            if (dest / folder.name).exists() and not force:
+                raise RuntimeError(f'{dest / folder.name} already exists — tick “Reinstall” to replace it')
         moved = []
-        for p in sorted(x for x in stage.iterdir() if x.is_dir()):
-            tgt, bak = dest / p.name, None
-            if tgt.exists() or tgt.is_symlink():
-                if not force:
-                    raise RuntimeError(f"{tgt} already exists — tick “Reinstall” to replace it")
-                bak = dest / f".{p.name}.old-{os.getpid()}"
-                if bak.exists() or bak.is_symlink():    # leftover of a crashed run → ENOTEMPTY
-                    if bak.is_symlink() or not bak.is_dir():
-                        bak.unlink()
-                    else:
+        renamed = []
+        try:
+            # Keep ALL old folders until the full set has been installed.
+            for folder in dirs:
+                tgt = dest / folder.name
+                if tgt.exists() or tgt.is_symlink():
+                    bak = dest / f'.drstool-previous-{os.getpid()}-{folder.name}'
+                    if bak.exists():
+                        raise RuntimeError(f'previous failed install requires recovery: {bak}')
+                    os.replace(tgt, bak)
+                    renamed.append((tgt, bak))
+                os.replace(folder, tgt)
+                moved.append(tgt)
+            for tgt, bak in renamed:
+                try:
+                    if bak.is_dir() and not bak.is_symlink():
                         shutil.rmtree(bak)
-                os.replace(tgt, bak)
-            try:
-                os.replace(p, tgt)
-            except OSError:
-                if bak is not None:
+                    else:
+                        bak.unlink()
+                except OSError as ex:
+                    # Cleanup must never turn a completed install into a
+                    # rollback after some older backups were deleted.
+                    log(f'  old version kept at {bak}: {ex}')
+            return {"path": dest / main_name, "tool": tool.name, "version": ver.label,
+                    "note": "", "all": moved}
+        except BaseException:
+            for tgt in reversed(moved):
+                if tgt.is_symlink() or tgt.is_file():
+                    tgt.unlink()
+                else:
+                    shutil.rmtree(tgt)
+            for tgt, bak in reversed(renamed):
+                if bak.exists() or bak.is_symlink():
                     os.replace(bak, tgt)
-                raise
-            if bak is not None:
-                shutil.rmtree(bak, ignore_errors=True)
-            moved.append(tgt)
-        final = dest / main_name
-        (final / _TM_VERSION_FILE).write_text(json.dumps(
-            {"compat_tool": tool.name, "version": ver.label, "installed_at": int(time.time()),
-             "arch": "x86_64"}, indent=2), encoding="utf-8")
-        note = ""
-        if launcher.key == "steam" and tool.kind == "proton" and not (final / "compatibilitytool.vdf").is_file():
-            note = "no compatibilitytool.vdf in the archive — Steam will not list this tool"
-        return {"path": final, "tool": tool.name, "version": ver.label, "note": note, "all": moved}
+            raise
+
     finally:
         archive.unlink(missing_ok=True)
         shutil.rmtree(stage, ignore_errors=True)
@@ -1141,6 +1155,21 @@ class ToolManagerWidget(QWidget):
     def _install(self):
         t, v, l = self._tc.currentData(), self._vc.currentData(), self._launcher()
         if t is None or v is None or l is None or not self._idle():
+            return
+        dest = l.dir_for(t.kind)
+        if dest is None:
+            return
+        replacing = tm_find_installed(dest, t.name, v.label)
+        note = ("The existing installation will be replaced after a verified stage."
+                if replacing is not None else "An additional tool installation will be created.")
+        answer = QMessageBox.question(
+            self, "Review tool installation",
+            f"Tool: {t.name}\nVersion: {v.label}\nLauncher: {l.label}\n"
+            f"Destination: {dest}\nArchive: {v.name or 'CI artifact'}\n"
+            f"Checksum: {'SHA-512 published' if v.csum else 'not published; HTTPS only'}\n\n"
+            f"{note}\n\nDownload and install?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
             return
         w = _TMWorker("install", launcher=l, jobs=[(t, v, [])], force=self._force.isChecked())
         w.done.connect(self._on_installed)

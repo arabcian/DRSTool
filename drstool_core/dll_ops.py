@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from . import file_transactions as tx
+
 KEEP_BACKUPS = 10
 
 
@@ -50,33 +52,32 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _is_pe(path: Path) -> bool:
+def _is_pe(path: Path, machine: int | None = None) -> bool:
+    """Validate DOS header, bounded PE offset, signature and DLL machine type.
+
+    Merely checking b'MZ' accepts arbitrary files and truncated downloads.
+    """
     try:
-        with open(path, "rb") as f:
-            return f.read(2) == b"MZ"
-    except OSError:
+        with path.open("rb") as f:
+            head = f.read(64)
+            if len(head) != 64 or head[:2] != b"MZ":
+                return False
+            offset = int.from_bytes(head[0x3c:0x40], 'little')
+            if not (64 <= offset <= 1024 * 1024):
+                return False
+            f.seek(offset)
+            pe = f.read(24)
+            if len(pe) < 24 or pe[:4] != b"PE\0\0":
+                return False
+            arch = int.from_bytes(pe[4:6], 'little')
+            return arch in (0x14c, 0x8664) and (machine is None or arch == machine)
+    except (OSError, ValueError):
         return False
 
 
 def atomic_copy(src: Path, dst: Path):
-    """Copy src over dst via a temp file in dst's folder; keeps dst's permission bits."""
-    fd, tmp = tempfile.mkstemp(dir=str(dst.parent), prefix=".drstool-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as out, open(src, "rb") as inp:
-            shutil.copyfileobj(inp, out, 1 << 20)
-            out.flush()
-            os.fsync(out.fileno())
-        try:
-            shutil.copymode(dst if dst.exists() else src, tmp)
-        except OSError:
-            pass
-        os.replace(tmp, dst)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    """Atomic, fsync'd copy guarded against symlink substitution."""
+    tx.atomic_copy(src, dst)
 
 
 @dataclass
@@ -133,27 +134,19 @@ def replace_files(game_key: str, game_name: str, pairs: List[Tuple[Path, Path, s
         n += 1
         bdir = root / _slug(game_key) / f"{stamp}-{n}"
     (bdir / "files").mkdir(parents=True)
-    manifest = {"game_key": game_key, "game": game_name, "created": stamp, "entries": []}
-    mpath = bdir / "manifest.json"
-    for i, (target, src, label) in enumerate(work):
-        bfile = bdir / "files" / f"{i:03d}-{target.name}"
-        shutil.copy2(target, bfile)
-        manifest["entries"].append({"target": str(target), "backup": bfile.name, "label": label,
-                                    "old_sha256": old_sha[target], "new_sha256": "",
-                                    "source": str(src)})
-    _write_json(mpath, manifest)
-
-    replaced = []
-    for i, (target, src, label) in enumerate(work):
-        try:
-            atomic_copy(src, target)
-            manifest["entries"][i]["new_sha256"] = sha256(target)
-            replaced.append(target)
-            log(f"  ✓ {target}  →  {label}")
-        except OSError as ex:
-            skipped.append((target, str(ex)))
-            log(f"  ✗ {target.name}: {ex}")
-        _write_json(mpath, manifest)
+    changes = [tx.Change(target, src, f"{i:03d}-{target.name}", label)
+               for i, (target, src, label) in enumerate(work)]
+    try:
+        replaced = tx.apply(changes, bdir, log=log, journal_name="manifest.json")
+        manifest = json.loads((bdir / "manifest.json").read_text())
+        manifest.update(game_key=game_key, game=game_name, created=stamp)
+        _write_json(bdir / "manifest.json", manifest)
+    except (OSError, ValueError, RuntimeError) as ex:
+        # All files in a single game are rolled back as a group.  Keep the
+        # transaction journal for recovery from a rare rollback failure.
+        log(f"  ✗ game DLL transaction rolled back: {ex}")
+        skipped.extend((target, f"transaction failed: {ex}") for target, _src, _label in work)
+        return ReplaceResult(bdir, [], skipped)
     prune(game_key, root)
     return ReplaceResult(bdir, replaced, skipped)
 
@@ -187,7 +180,7 @@ def restore(backup_dir: Path, log: Callable[[str], None] = lambda _m: None) -> T
     """Put the originals from one backup back. Returns (restored count, notes)."""
     m = json.loads((backup_dir / "manifest.json").read_text())
     restored, notes = 0, []
-    for e in m.get("entries", []):
+    for e in reversed(m.get("entries", [])):
         try:
             target = Path(e["target"])
             bfile = backup_dir / "files" / Path(e["backup"]).name
@@ -208,8 +201,13 @@ def restore(backup_dir: Path, log: Callable[[str], None] = lambda _m: None) -> T
         if cur and cur == e.get("old_sha256"):
             notes.append(f"{target.name}: already the original")
             continue
-        if cur and e.get("new_sha256") and cur != e["new_sha256"]:
-            notes.append(f"{target}: changed since the update (game patched?) — left alone")
+        # Fail closed for interrupted/legacy records without a known installed
+        # digest. Never overwrite an independently patched game DLL.
+        if not e.get("new_sha256") or cur != e["new_sha256"]:
+            notes.append(f"{target}: changed since the update or unverified backup — left alone")
+            continue
+        if sha256(bfile) != e.get("old_sha256"):
+            notes.append(f"{target}: corrupt backup checksum — left alone")
             continue
         if not cur and not target.parent.is_dir():
             notes.append(f"{target}: game folder is gone")

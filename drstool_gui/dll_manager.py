@@ -15,6 +15,8 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -28,11 +30,13 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
+from drstool_core import safe_archive, file_transactions as tx
+
 from .base import _CORE_ERR, _proc_running, APP_ID, dll_ops, game_scan, pe_version, user_cache_dir
 from .launchers import BottlesBackend, SteamBackend
 from .ngx import (
     _ngx_accent, _NgxWorker, ngx_human, ngx_is_sl, ngx_target_name, ngx_title, ngx_ver_str,
-    NgxBuild, NgxCancelled, NgxClient,
+    NgxBuild, NgxCancelled, NgxClient, ngx_cache_valid,
 )
 from .tasks import _NAV, TASKS
 from .theme import btn_ss, caption, T
@@ -309,53 +313,20 @@ def _inside(base: Path, tgt: Path) -> bool:
 
 
 def _safe_extract(tf: tarfile.TarFile, dest: Path):
+    """Validate member paths without following symlinks; kept for API compatibility."""
+    # Validates before extracting anything, including dangerous hardlinks.
     base = dest.resolve()
-    for m in tf.getmembers():
-        tgt = (dest / m.name).resolve()
-        if not _inside(base, tgt) or m.issym() or m.islnk() or m.isdev():
-            raise RuntimeError(f"unsafe path in archive: {m.name}")
-    try:
-        tf.extractall(dest, filter="data")          # Python >= 3.12 (and backports)
-    except TypeError:
-        tf.extractall(dest)
-
-
-def _reject_links(root: Path):
-    """External `tar` extraction gets no member vetting; refuse any link it produced
-    (shutil.copy2 follows symlinks, so a planted x64/d3d11.dll -> ~/secret would
-    otherwise be copied into the prefix)."""
-    for dp, dns, fns in os.walk(root):
-        for n in dns + fns:
-            if os.path.islink(os.path.join(dp, n)):
-                raise RuntimeError(f"unsafe link in archive: {os.path.relpath(os.path.join(dp, n), root)}")
+    for member in tf.getmembers():
+        path = (base / member.name).resolve()
+        if not _inside(base, path) or not (member.isfile() or member.isdir()):
+            raise RuntimeError(f'unsafe archive entry: {member.name}')
+    tf.extractall(dest, filter='data')
 
 
 def _extract_archive(path: Path, dest: Path):
-    dest.mkdir(parents=True, exist_ok=True)
-    if path.name.endswith(".zst"):
-        try:
-            with tarfile.open(path, "r:zst") as tf:           # Python >= 3.14
-                _safe_extract(tf, dest)
-                return
-        except RuntimeError:
-            raise
-        except Exception:
-            _log.debug("ignored error", exc_info=True)
-            pass
-        for cmd in (["tar", "--zstd", "-xf", str(path), "-C", str(dest)],
-                    ["tar", "--use-compress-program=unzstd", "-xf", str(path), "-C", str(dest)]):
-            try:
-                if subprocess.run(cmd, capture_output=True, timeout=300).returncode == 0:
-                    _reject_links(dest)
-                    return
-            except RuntimeError:
-                raise
-            except Exception:
-                _log.debug("ignored error", exc_info=True)
-                continue
-        raise RuntimeError("cannot unpack .tar.zst — install zstd (app-arch/zstd) or use Python ≥ 3.14")
-    with tarfile.open(path, "r:*") as tf:
-        _safe_extract(tf, dest)
+    # Never use external `tar -xf`: in .tar.zst it wrote paths to disk before
+    # the old post-extraction symlink validation could run.
+    safe_archive.extract_tar(path, dest, allow_internal_links=False)
 
 
 def _cache_dir() -> Path:
@@ -364,74 +335,102 @@ def _cache_dir() -> Path:
     return d
 
 
+def _cached_release_archive(cache: Path, asset: dict, log) -> Path:
+    """Download or reuse an artifact only after checking size and known SHA-256."""
+    name = asset.get('name', '')
+    if not name or Path(name).name != name or not re.fullmatch(r'[A-Za-z0-9_.+\-]+', name):
+        raise RuntimeError(f'unsafe release asset name: {name!r}')
+    arch = cache / name
+    meta_path = cache / f'{name}.drstool.json'
+    size = int(asset.get('size', 0))
+    url = asset.get('browser_download_url', '')
+    if not isinstance(url, str) or not url.startswith('https://'):
+        raise RuntimeError('release asset is missing a secure download URL')
+    upstream = asset.get('digest') or ''
+    expected = upstream[7:].lower() if re.fullmatch(r'sha256:[0-9a-fA-F]{64}', upstream) else ''
+    try:
+        saved = json.loads(meta_path.read_text())
+    except (OSError, ValueError):
+        saved = {}
+    pinned = saved.get('sha256', '') if saved.get('url') == url else ''
+    good = arch.is_file() and (not size or arch.stat().st_size == size)
+    if good:
+        h = _sha256(arch)
+        good = bool(expected or pinned) and h == (expected or pinned)
+    if not good:
+        log(f'  downloading {name} …')
+        tmp = cache / f'.{name}.{uuid.uuid4().hex}.part'
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': _PD_UA})
+            with urllib.request.urlopen(req, timeout=60) as response, tmp.open('wb') as stream:
+                shutil.copyfileobj(response, stream, 1 << 20)
+            if size and tmp.stat().st_size != size:
+                raise RuntimeError('release asset size mismatch')
+            h = _sha256(tmp)
+            if expected and h != expected:
+                raise RuntimeError('release asset SHA-256 mismatch')
+            os.replace(tmp, arch)
+        finally:
+            tmp.unlink(missing_ok=True)
+    tx.atomic_write_json(meta_path, {'url': url, 'sha256': h,
+                                     'verified_upstream': bool(expected),
+                                     'checked_at': int(time.time()), 'size': arch.stat().st_size})
+    return arch
+
+
 def apply_component_update(prefix: Path, comp: dict, rel: dict, backup_root: Path, log) -> int:
+    if not isinstance(rel, dict):
+        raise RuntimeError('release metadata unavailable')
     asset = _pick_asset(rel, comp)
     if asset is None:
         raise RuntimeError(f"no matching release asset for {comp['name']}")
-    # tag_name comes from the network: never let it climb out of the cache dir.
-    tag = re.sub(r"[^A-Za-z0-9._+-]", "_", str(rel.get("tag_name") or "latest")).lstrip(".") or "latest"
+    tag = re.sub(r"[^A-Za-z0-9._+-]", "_", str(rel.get('tag_name') or 'latest')).lstrip('.') or 'latest'
     cache = _cache_dir() / tag
     cache.mkdir(parents=True, exist_ok=True)
-    arch = cache / asset["name"]
-    if not arch.is_file() or arch.stat().st_size != asset.get("size", -1):
-        log(f"  downloading {asset['name']} …")
-        req = urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": _PD_UA})
-        tmp = arch.with_suffix(arch.suffix + ".part")
-        with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
-            shutil.copyfileobj(r, f)
-        os.replace(tmp, arch)
-    work = Path(tempfile.mkdtemp(prefix="pd-", dir=str(cache)))
+    arch = _cached_release_archive(cache, asset, log)
+    work = Path(tempfile.mkdtemp(prefix='pd-', dir=str(cache)))
     try:
         _extract_archive(arch, work)
         tops = [p for p in work.iterdir() if p.is_dir()]
         root = tops[0] if len(tops) == 1 else work
         ok, s32, s64 = prefix_sysdirs(prefix)
         if not ok:
-            raise RuntimeError("not a Wine prefix (drive_c/windows missing)")
+            raise RuntimeError('not a Wine prefix (drive_c/windows missing)')
         jobs = []
-        if s64 is not None:                            # 64-bit prefix
-            jobs.append((root / comp["d64"], s32, "system32"))
-            jobs.append((root / comp["d32"], s64, "syswow64"))
-        else:                                          # 32-bit prefix
-            jobs.append((root / comp["d32"], s32, "system32"))
-        n, manifest_files, added = 0, {}, []
-        for src, dst, tag in jobs:
+        if s64 is not None:
+            jobs.extend([(root / comp['d64'], s32, 'system32', 0x8664),
+                         (root / comp['d32'], s64, 'syswow64', 0x14c)])
+        else:
+            jobs.append((root / comp['d32'], s32, 'system32', 0x14c))
+        changes = []
+        for src, dst, sub, machine in jobs:
             if not src.is_dir():
                 continue
-            for dll in comp["dlls"]:
-                f = src / f"{dll}.dll"
+            for dll in comp['dlls']:
+                f = src / f'{dll}.dll'
                 if not f.is_file():
                     continue
+                if not dll_ops._is_pe(f, machine):
+                    raise RuntimeError(f'invalid or wrong-architecture DLL: {f}')
                 target = dst / f.name
-                if target.exists() or target.is_symlink():
-                    bdir = backup_root / tag
-                    bdir.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(target, bdir / f.name)
-                    target.unlink()
-                else:
-                    added.append(f"{tag}/{f.name}")       # nothing to back up: Restore has to delete it
-                shutil.copy2(f, target)
-                manifest_files[f"{tag}/{f.name}"] = _sha256(target)
-                n += 1
-                log(f"  {tag}/{f.name}")
-        if added:
-            backup_root.mkdir(parents=True, exist_ok=True)
-            apath = backup_root / _PD_ADDED
-            try:
-                prev = json.loads(apath.read_text())
-            except Exception:
-                prev = []
-            apath.write_text(json.dumps(sorted(set(prev) | set(added))))
+                if target.is_symlink():
+                    raise RuntimeError(f'symlink destination refused: {target}')
+                changes.append(tx.Change(target, f, f'{sub}/{f.name}', f'{comp["name"]} {rel.get("tag_name", "")}'))
+        if not changes:
+            raise RuntimeError('archive contained no installable component DLLs')
+        tx.apply(changes, backup_root, log=log,
+                 journal_name=f'prefix-{comp["id"]}.json')
+        # The provenance manifest is only updated AFTER every DLL has been committed.
         mpath = prefix / _PD_MANIFEST
         try:
             man = json.loads(mpath.read_text())
-        except Exception:
-            _log.debug("ignored error", exc_info=True)
+        except (OSError, ValueError):
             man = {}
-        man[comp["id"]] = {"version": rel.get("tag_name", "").lstrip("v"), "files": manifest_files,
-                           "updated": datetime.now().isoformat(timespec="seconds")}
-        mpath.write_text(json.dumps(man, indent=2))
-        return n
+        man[comp['id']] = {'version': str(rel.get('tag_name', '')).lstrip('v'),
+                           'files': {f'{Path(c.backup_name)}': _sha256(c.target) for c in changes},
+                           'updated': datetime.now().isoformat(timespec='seconds')}
+        tx.atomic_write_json(mpath, man)
+        return len(changes)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -461,6 +460,21 @@ def restore_prefix_backup(prefix: Path) -> tuple:
     if not stamps:
         raise FileNotFoundError("no DLL backups in this prefix")
     last = stamps[-1]
+    journals = sorted(last.glob('prefix-*.json'))
+    if journals:
+        n, problems = 0, []
+        for journal in reversed(journals):
+            count, notes = tx.restore(last, journal_name=journal.name)
+            n += count
+            problems.extend(notes)
+        if problems:
+            # Preserve the backup so the user can resolve external edits.
+            raise RuntimeError('restore left externally modified files untouched: ' + '; '.join(problems))
+        shutil.rmtree(last)
+        # The manifest stores the last applied versions; after restoration a
+        # rescan discovers the actual DLLs rather than trusting stale metadata.
+        (prefix / _PD_MANIFEST).unlink(missing_ok=True)
+        return n, last.name
     win = prefix / "drive_c" / "windows"
     n = 0
     for sub in ("system32", "syswow64"):
@@ -679,7 +693,7 @@ class _DllUpdateWorker(QThread):
                 break
             d = dllm_cache_dir(b)
             name = ngx_target_name(b.feature)
-            have = (d / name).is_file() if name else any(d.glob("sl.*.dll"))
+            have = ngx_cache_valid(b, d)
             label = f"{ngx_title(b.feature)} {b.version}"
             if have:
                 self.log.emit("info", f"cached: {label}")
@@ -733,7 +747,7 @@ class _DllUpdateWorker(QThread):
                     failed += 1
                     self.log.emit("err", f"  ✗ {ex}")
             if plan["prefix"]:
-                backup = g.prefix / ".drstool-backup" / datetime.now().strftime("%Y%m%d-%H%M%S")
+                backup = g.prefix / ".drstool-backup" / datetime.now().strftime("%Y%m%d-%H%M%S-%f") + "-" + uuid.uuid4().hex[:6]
                 for cid in plan["prefix"]:
                     comp, rel = _DLLM_PD[cid], self._rels.get(cid)
                     self.log.emit("info", f"  {comp['name']} → {rel.get('tag_name', '?') if rel else '?'}")

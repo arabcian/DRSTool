@@ -23,7 +23,11 @@ def fake_dll(path: Path, ver=(310, 2, 1, 0), filler=b"") -> Path:
     """Minimal 'PE' with a VS_FIXEDFILEINFO block."""
     ms = (ver[0] << 16) | ver[1]
     ls = (ver[2] << 16) | ver[3]
-    body = b"MZ" + b"\0" * 62 + filler + b"\xbd\x04\xef\xfe" + struct.pack("<III", 0x00010000, ms, ls)
+    mz = bytearray(128)
+    mz[:2] = b'MZ'
+    struct.pack_into('<I', mz, 0x3c, 128)
+    pe = b'PE\0\0' + struct.pack('<H', 0x8664) + b'\0' * 18
+    body = bytes(mz) + pe + filler + b"\xbd\x04\xef\xfe" + struct.pack("<III", 0x00010000, ms, ls)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(body + b"\0" * 64)
     return path

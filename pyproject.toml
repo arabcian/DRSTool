@@ -35,6 +35,7 @@ classifiers = [
 [project.optional-dependencies]
 # Makes KDE/Wayland show the right taskbar icon (renames the process to "drstool")
 proctitle = ["setproctitle"]
+yaml-roundtrip = ["ruamel.yaml>=0.18"]  # Preserve Lutris YAML comments and quotation styles
 
 [project.urls]
 Homepage = "https://github.com/arabcian/DRSTool"
@@ -59,7 +60,7 @@ drstool_core = ["data/*.json"]
     "vk-flip-meter-main/LICENSE",
     "vk-flip-meter-main/README.md",
 ]
-"share/drstool/vk-flip-meter-main/src" = ["vk-flip-meter-main/src/flip_meter.cpp"]
+"share/drstool/vk-flip-meter-main/src" = ["src/flip_meter.cpp"]
 "share/drstool/vk-flip-meter-main/manifest" = ["vk-flip-meter-main/manifest/VkLayer_cpu_flip_meter.json.in"]
 "share/drstool/lutris-game-tune-main" = [
     "lutris-game-tune-main/install.sh",

@@ -218,3 +218,80 @@ ENV_CATEGORY_ORDER = [
     "NVIDIA __GL", "NVIDIA PRIME", "NVIDIA Smooth Motion",
     "Proton", "Wine", "System / Loader", "MangoHud / vkBasalt", "vk_flip_meter", "Gamescope",
 ]
+
+
+# Presentation only: (section title, [names]). Anything not listed lands in
+# "Other" so a newly added flag/key is never hidden.
+VKD3D_FLAG_GROUPS = [
+    ("⚡ Performance & frame pacing", ["force_static_cbv", "no_clear_uav_sync", "prefer_thin_uav_tiling",
+        "no_staggered_submit", "memory_allocator_skip_clear", "memory_allocator_skip_image_heap_clear",
+        "recycle_command_pools", "allow_image_heap_suballocation"]),
+    ("🧠 Memory & VRAM", ["no_upload_hvv", "no_gpu_upload_heap", "small_vram_rebar", "host_import_fallback",
+        "disallow_committed_texture_suballocation", "avoid_image_buffer_aliasing",
+        "defer_resource_destruction", "retain_psos"]),
+    ("🔦 Raytracing (DXR)", ["nodxr", "dxr", "dxr12", "allow_sbt_collection", "extra_rtas_sync",
+        "rtas_allow_blas_rebuild_sizes", "zero_fill_blp"]),
+    ("💾 Pipeline & shader cache", ["pipeline_library_ignore_mismatch_driver", "pipeline_library_app_cache",
+        "pipeline_library_no_serialize_spirv", "pipeline_library_ignore_spirv",
+        "pipeline_library_sanitize_spirv", "pipeline_library_log", "global_pipeline_cache",
+        "shader_cache_sync"]),
+    ("🧩 Descriptors & binding", ["descriptor_heap", "descriptor_heap_robustness", "mutable_single_set",
+        "force_raw_va_cbv", "preallocate_srv_mip_clamps"]),
+    ("🛠 Troubleshooting: rendering & corruption", ["no_invariant_position", "disable_uav_compression",
+        "disable_simultaneous_uav_compression", "disable_color_compression", "disable_depth_compression",
+        "skip_null_sparse_tiles", "force_dynamic_msaa", "reject_padded_small_resource_alignment",
+        "force_initial_transition"]),
+    ("🛠 Troubleshooting: crashes, hangs & sync", ["single_queue", "one_time_submit", "ignore_shared_fence"]),
+    ("🖥 GPU / driver specific", ["no_nvx", "enable_experimental_features", "adreno_7xx_extra_compat"]),
+    ("🐞 Debugging & diagnostics", ["breadcrumbs", "breadcrumbs_sync", "breadcrumbs_trace", "fault",
+        "log_memory_budget", "vk_debug", "debug_utils", "app_debug_marker_only", "queue_profile_extra",
+        "descriptor_qa_checks", "instruction_qa_checks", "damage_not_zeroed_allocations",
+        "debug_wave64_simulation", "fail_unsupported_state_template", "skip_application_workarounds",
+        "skip_driver_workarounds", "force_host_cached"]),
+]
+
+DXVK_KEY_GROUPS = [
+    ("⚡ Performance", ["dxvk.enableGraphicsPipelineLibrary", "dxvk.numCompilerThreads", "d3d11.maxTessFactor",
+        "d3d11.relaxedBarriers", "d3d11.relaxedGraphicsBarriers", "d3d11.disableMsaa",
+        "d3d11.cachedDynamicResources", "d3d9.cachedWriteOnlyBuffers", "d3d9.deviceLocalConstantBuffers",
+        "d3d9.useFP16"]),
+    ("⏱ Frame pacing & latency", ["dxvk.latencySleep", "dxvk.latencyTolerance", "dxvk.disableNvLowLatency2",
+        "dxvk.maxFrameRate", "dxgi.maxFrameRate", "d3d9.maxFrameRate", "dxgi.maxFrameLatency",
+        "d3d9.maxFrameLatency", "dxgi.syncInterval", "d3d9.presentInterval", "dxvk.tearFree",
+        "dxvk.enablePresentTiming"]),
+    ("🖥 Display & HDR", ["dxgi.forceRefreshRate", "d3d9.forceRefreshRate", "dxgi.enableHDR",
+        "d3d9.forceAspectRatio"]),
+    ("🎞 Texture filtering", ["d3d11.samplerAnisotropy", "d3d9.samplerAnisotropy", "d3d11.samplerLodBias",
+        "d3d9.samplerLodBias", "d3d11.clampNegativeLodBias", "d3d9.clampNegativeLodBias"]),
+    ("🧠 Memory & VRAM", ["dxgi.maxDeviceMemory", "dxgi.maxSharedMemory", "dxvk.maxMemoryBudget",
+        "d3d9.maxAvailableMemory", "dxvk.zeroMappedMemory", "dxvk.enableMemoryDefrag"]),
+    ("🎭 GPU identification & spoofing", ["dxgi.hideNvidiaGpu", "dxgi.hideAmdGpu", "dxgi.hideIntelGpu",
+        "dxgi.hideNvkGpu", "dxvk.hideIntegratedGraphics", "dxvk.enableNvCudaInterop", "dxgi.customVendorId",
+        "dxgi.customDeviceId", "dxgi.customDeviceDesc", "dxvk.deviceFilter", "dxgi.enableUe4Workarounds"]),
+    ("🧩 Vulkan backend & descriptors", ["dxvk.enableDescriptorHeap", "dxvk.enableDescriptorBuffer",
+        "dxvk.useRawSsbo", "dxvk.enableNvRawAccessChains", "dxvk.enableImplicitResolves",
+        "dxvk.enableUnifiedImageLayouts", "dxvk.lowerSinCos", "dxvk.tilerMode"]),
+    ("🛠 Troubleshooting: Direct3D 11", ["d3d11.maxFeatureLevel", "d3d11.forceComputeLdsBarriers",
+        "d3d11.forceComputeUavBarriers", "d3d11.forceSampleRateShading", "d3d11.disableDirectImageMapping",
+        "d3d11.exposeDriverCommandLists", "d3d11.enableContextLock"]),
+    ("🛠 Troubleshooting: Direct3D 9", ["d3d9.forceSampleRateShading", "d3d9.floatEmulation",
+        "d3d9.lenientClear", "d3d9.seamlessCubes"]),
+    ("🐞 Debugging", ["dxvk.enableDebugUtils", "dxvk.trackPipelineLifetime"]),
+]
+
+
+def grouped_names(groups, names):
+    """[(title, [name,...])] following `groups`, keeping only names that exist;
+    unlisted names go to a trailing "Other" section."""
+    have = list(names)
+    seen = set()
+    out = []
+    for title, lst in groups:
+        sel = [n for n in lst if n in have and n not in seen]
+        seen.update(sel)
+        if sel:
+            out.append((title, sel))
+    rest = [n for n in have if n not in seen]
+    if rest:
+        out.append(("Other", rest))
+    return out
