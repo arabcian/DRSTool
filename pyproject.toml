@@ -81,7 +81,18 @@ drstool_core = ["data/*.json"]
 target-version = "py312"
 exclude = ["vk-flip-meter-main", "lutris-game-tune-main", "packaging"]
 
-# Only hard errors for now: syntax errors and undefined names. Widen this list
-# once the existing style findings have been cleaned up.
+# Syntax errors plus all pyflakes checks (unused imports/variables, undefined
+# names …). Files with older findings are exempted per rule below; remove an
+# entry once its file is cleaned up. Style rules (E5xx, E7xx) come later.
 [tool.ruff.lint]
-select = ["E9", "F63", "F7", "F82"]
+select = ["E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+"drstool_core/diagnostics.py" = ["F401"]
+"drstool_gui/dll_manager.py" = ["F401", "F841"]
+"drstool_gui/main_window.py" = ["F401"]
+"drstool_gui/profiles.py" = ["F541"]
+"drstool_gui/steam_utils.py" = ["F841"]
+"drstool_gui/tool_manager.py" = ["F401"]
+"tests/test_enhancements.py" = ["F401"]
+"tests/test_safety.py" = ["F401", "F841"]

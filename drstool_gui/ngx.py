@@ -23,6 +23,7 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QColor
 
 from drstool_core import dll_ops, file_transactions as tx
+from drstool_core import net
 
 from .theme import T
 
@@ -194,8 +195,7 @@ class NgxClient:
             raise NgxCancelled()
 
     def _open(self, url: str, method: str = "GET", timeout: float = 20):
-        req = urllib.request.Request(url, method=method, headers={"User-Agent": _NGX_UA})
-        return urllib.request.urlopen(req, timeout=timeout)
+        return net.open_url(url, timeout=timeout, method=method, ua=_NGX_UA)
 
     def _text(self, url: str, timeout: float = 20) -> str:
         with self._open(url, timeout=timeout) as r:

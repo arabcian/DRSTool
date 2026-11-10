@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
+from drstool_core import launcher_paths
+
 from .base import _fmt_bytes, APP_ID
 from .sysinfo import SYSHUB
 from .tasks import _NAV, TASKS
@@ -63,37 +65,16 @@ def _path_stats(path: str) -> tuple:
     return total, files, newest
 
 
-def _steam_roots() -> List[Path]:
-    home = Path.home()
-    cands = [home / ".local/share/Steam", home / ".steam/steam", home / ".steam/root",
-             home / ".var/app/com.valvesoftware.Steam/.local/share/Steam"]
-    seen, out = set(), []
-    for c in cands:
-        try:
-            rp = c.resolve()
-        except OSError:
-            continue
-        if rp.is_dir() and rp not in seen:
-            seen.add(rp)
-            out.append(rp)
-    return out
-
-
 def _steam_libraries() -> List[Path]:
+    """Steam library folders (the dirs that hold steamapps/), de-duplicated."""
     libs, seen = [], set()
-    for root in _steam_roots():
-        paths = [root]
-        vdf = root / "steamapps" / "libraryfolders.vdf"
-        try:
-            paths += [Path(m) for m in re.findall(r'"path"\s+"([^"]+)"', vdf.read_text(errors="replace"))]
-        except OSError:
-            pass
-        for p in paths:
+    for root in launcher_paths.steam_roots():
+        for sa in launcher_paths.steam_libraries(root):
             try:
-                rp = p.resolve()
+                rp = sa.parent.resolve()
             except OSError:
                 continue
-            if rp not in seen and (rp / "steamapps").is_dir():
+            if rp not in seen:
                 seen.add(rp)
                 libs.append(rp)
     return libs

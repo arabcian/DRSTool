@@ -24,13 +24,13 @@ import json
 import os
 import re
 import shutil
-import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 from . import file_transactions as tx
+from .fsutil import atomic_write
 
 KEEP_BACKUPS = 10
 
@@ -152,10 +152,7 @@ def replace_files(game_key: str, game_name: str, pairs: List[Tuple[Path, Path, s
 
 
 def _write_json(path: Path, data: dict):
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".manifest-", suffix=".tmp")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, path)
+    atomic_write(path, json.dumps(data, indent=2))
 
 
 def list_backups(game_key: str, root: Optional[Path] = None) -> List[Tuple[Path, dict]]:

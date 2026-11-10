@@ -28,7 +28,7 @@ English version: [README.md](README.md)
 - Uygulamadan önce ortaya çıkacak komut/ortamın önizlemesi
 
 ### Ortam Değişkenleri
-Ortam sekmesi aşağıdaki gruplarda 238 değişkeni kapsar:
+Ortam sekmesi aşağıdaki gruplarda 289 değişkeni kapsar:
 
 - **DXVK** (`DXVK_HUD` bayrak tablosu ve `DXVK_CONFIG` anahtar seçici dahil)
 - **DXVK çatalları**: d7vk, dxvk-low-latency, DXVK-Sarek (hangi Proton çatalına ait olduğu etiketli)

@@ -128,7 +128,7 @@ class SystemInfoWidget(QWidget):
         lay.addWidget(self._grey)
         row = QHBoxLayout()
         b = _tool_btn("Re-probe")
-        b.clicked.connect(SYSHUB.refresh)
+        b.clicked.connect(lambda: SYSHUB.refresh(force=True))
         row.addWidget(b)
         row.addStretch(1)
         lay.addLayout(row)

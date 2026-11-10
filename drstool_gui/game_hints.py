@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from drstool_core import net
+
 from drstool_core import game_info
 
 from .catalog_data import ALL_ENV_VARS
@@ -43,10 +45,9 @@ _log = logging.getLogger(__name__)
 # ----------------------------------------------------------------------------
 
 def _http_get(url: str, timeout: float = 12.0, limit: int = 2_000_000):
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "DRSTool/1.0 (+https://github.com/arabcian/DRSTool; game hint lookup) python-urllib",
-        "Accept": "application/json, text/plain;q=0.9, */*;q=0.5", "Accept-Language": "en"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with net.open_url(url, timeout=timeout, accept="application/json, text/plain;q=0.9, */*;q=0.5",
+                      ua="DRSTool/1.0 (+https://github.com/arabcian/DRSTool; game hint lookup) python-urllib",
+                      headers={"Accept-Language": "en"}) as r:
         return r.read(limit), r.geturl()
 
 

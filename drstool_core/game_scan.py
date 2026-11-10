@@ -33,6 +33,8 @@ except ImportError:          # PyYAML is optional; a regex fallback covers the k
 _YAML_LOADER = getattr(yaml, "CSafeLoader", getattr(yaml, "SafeLoader", None))
 
 from . import pe_version
+from .launcher_paths import (  # noqa: F401  (re-exported: game_scan.steam_roots etc.)
+    STEAM_TOOL_NAMES, bottles_roots, heroic_roots, steam_apps, steam_libraries, steam_roots, vdf_unesc)
 
 _log = logging.getLogger(__name__)
 
@@ -117,68 +119,24 @@ def _is_prefix(p: Path) -> bool:
         return False
 
 
-def _vdf_unesc(s: str) -> str:
-    return re.sub(r"\\(.)", lambda m: {"n": "\n", "t": "\t"}.get(m.group(1), m.group(1)), s)
+_vdf_unesc = vdf_unesc
 
 
 # ── Steam ───────────────────────────────────────────────────────────────────
-
-def steam_roots(home: Optional[Path] = None) -> List[Path]:
-    h = _home(home)
-    cands = [h / ".local/share/Steam", h / ".steam/steam", h / ".steam/root",
-             h / ".var/app/com.valvesoftware.Steam/.local/share/Steam",
-             h / ".var/app/com.valvesoftware.Steam/data/Steam"]
-    seen, out = set(), []
-    for c in cands:
-        try:
-            r = c.resolve()
-            if (r / "steamapps").is_dir() and r not in seen:
-                seen.add(r)
-                out.append(r)
-        except OSError:
-            continue
-    return out
-
-
-def steam_libraries(root: Path) -> List[Path]:
-    libs = [root / "steamapps"]
-    try:
-        text = (root / "steamapps" / "libraryfolders.vdf").read_text(errors="replace")
-        for m in re.finditer(r'"path"\s+"((?:[^"\\]|\\.)*)"', text):
-            p = Path(_vdf_unesc(m.group(1))) / "steamapps"
-            if p not in libs:
-                libs.append(p)
-    except OSError:
-        pass
-    return [lib for lib in libs if lib.is_dir()]
-
-
-_STEAM_TOOLS = re.compile(r"^(Proton\b|Steam Linux Runtime|Steamworks Common|SteamVR\b)", re.I)
-
 
 def scan_steam(home: Optional[Path] = None) -> List[GameEntry]:
     out, seen = [], set()
     for root in steam_roots(home):
         for lib in steam_libraries(root):
-            for acf in sorted(lib.glob("appmanifest_*.acf")):
-                try:
-                    t = acf.read_text(errors="replace")
-                except OSError:
+            for appid, name, installdir in steam_apps(lib):
+                if not installdir or appid in seen or STEAM_TOOL_NAMES.match(name):
                     continue
-                a = re.search(r'"appid"\s+"(\d+)"', t)
-                n = re.search(r'"name"\s+"((?:[^"\\]|\\.)*)"', t)
-                d = re.search(r'"installdir"\s+"((?:[^"\\]|\\.)*)"', t)
-                if not (a and d) or a.group(1) in seen:
-                    continue
-                name = _vdf_unesc(n.group(1)) if n else a.group(1)
-                if _STEAM_TOOLS.match(name):
-                    continue
-                folder = lib / "common" / _vdf_unesc(d.group(1))
+                folder = lib / "common" / installdir
                 if not folder.is_dir():
                     continue
-                seen.add(a.group(1))
-                pfx = lib / "compatdata" / a.group(1) / "pfx"
-                out.append(GameEntry("Steam", f"steam:{a.group(1)}", name, [folder],
+                seen.add(appid)
+                pfx = lib / "compatdata" / appid / "pfx"
+                out.append(GameEntry("Steam", f"steam:{appid}", name, [folder],
                                      pfx if _is_prefix(pfx) else None,
                                      "Proton" if _is_prefix(pfx) else ""))
     return out
@@ -297,12 +255,6 @@ def _inside(base: Path, p: Path) -> bool:
 
 # ── Heroic ──────────────────────────────────────────────────────────────────
 
-def heroic_roots(home: Optional[Path] = None) -> List[Path]:
-    h = _home(home)
-    return [p for p in (h / ".config/heroic", h / ".var/app/com.heroicgameslauncher.hgl/config/heroic")
-            if p.is_dir()]
-
-
 def _json(path: Path):
     try:
         return json.loads(path.read_text(errors="replace"))
@@ -383,12 +335,6 @@ def scan_heroic(home: Optional[Path] = None) -> List[GameEntry]:
 
 
 # ── Bottles ─────────────────────────────────────────────────────────────────
-
-def bottles_roots(home: Optional[Path] = None) -> List[Path]:
-    h = _home(home)
-    return [p for p in (h / ".local/share/bottles/bottles",
-                        h / ".var/app/com.usebottles.bottles/data/bottles/bottles") if p.is_dir()]
-
 
 def scan_bottles(home: Optional[Path] = None) -> List[GameEntry]:
     out = []

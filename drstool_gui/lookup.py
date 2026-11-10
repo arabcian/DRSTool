@@ -125,11 +125,18 @@ def env_def(name: str) -> Optional[EnvVarDef]:
 # Real GPU generation (the hardware, not the DXVK_NVAPI_GPU_ARCH spoof)
 # ----------------------------------------------------------------------------
 
+# Order matters: explicit generation names and workstation series first, because
+# workstation model numbers ("Quadro RTX 5000", "RTX 2000 Ada") collide with the
+# GeForce number patterns below them.
 _GEN_RULES = [
-    (r"\bRTX\s*(?:PRO\s*)?50\d\d|blackwell|\bGB20\d", "GB200"),
-    (r"\bRTX\s*40\d\d|\bada\b|\bAD10\d", "AD100"),
-    (r"\bRTX\s*30\d\d|\bampere\b|\bGA10\d|\bRTX\s*A\d{3,4}\b", "GA100"),
-    (r"\bRTX\s*20\d\d|\bGTX\s*16\d\d|\bturing\b|\bTU1\d\d|TITAN\s*RTX|Quadro\s*RTX", "TU100"),
+    (r"blackwell|\bGB20\d", "GB200"),
+    (r"\bada\b|\bAD10\d", "AD100"),
+    (r"\bturing\b|\bTU1\d\d|TITAN\s*RTX|Quadro\s*RTX", "TU100"),
+    (r"\bampere\b|\bGA10\d|\bRTX\s*A\d{3,4}\b", "GA100"),
+    (r"\bRTX\s*(?:PRO\s*)?50\d\d", "GB200"),
+    (r"\bRTX\s*40\d\d", "AD100"),
+    (r"\bRTX\s*30\d\d", "GA100"),
+    (r"\bRTX\s*20\d\d|\bGTX\s*16\d\d", "TU100"),
     (r"TITAN\s*V\b|\bvolta\b", "GV100"),
     (r"\bGTX\s*10\d\d|\bGT\s*10\d\d|\bpascal\b|TITAN\s*Xp", "GP100"),
     (r"\bGTX\s*75\d", "GM000"),

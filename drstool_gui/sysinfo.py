@@ -2,16 +2,20 @@
 available on this system' greying.
 """
 
+import json
 import logging
 import os
 import re
 import shutil
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QSettings, Qt, QThread, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
+
+from drstool_core.fsutil import atomic_write
 
 from .base import _run, APP_ID
 from .theme import T
@@ -116,7 +120,43 @@ def parse_vulkaninfo(text: str):
     return inst, gpus
 
 
-def probe_system() -> SysInfo:
+_VK_CACHE_TTL = 7 * 86400
+
+
+def _vk_cache_path() -> Path:
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "drstool" / "vulkan-probe.json"
+
+
+def _vk_cache_key(si: SysInfo, vi: str) -> str:
+    """Changes when the driver, the GPU list or the vulkaninfo binary changes."""
+    try:
+        vi_mtime = os.stat(vi).st_mtime_ns
+    except OSError:
+        vi_mtime = 0
+    return json.dumps([si.raw_version, si.nv_driver, si.nv_gpus, vi, vi_mtime])
+
+
+def _vk_cache_load(key: str):
+    try:
+        d = json.loads(_vk_cache_path().read_text(encoding="utf-8"))
+        if d.get("key") != key or time.time() - d.get("ts", 0) > _VK_CACHE_TTL:
+            return None
+        return set(d["inst"]), [VkGpu(g["name"], g["vendor_id"], g["driver"], set(g["exts"])) for g in d["gpus"]]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _vk_cache_save(key: str, inst: set, gpus: List[VkGpu]) -> None:
+    try:
+        atomic_write(_vk_cache_path(), json.dumps({
+            "key": key, "ts": time.time(), "inst": sorted(inst),
+            "gpus": [{"name": g.name, "vendor_id": g.vendor_id, "driver": g.driver, "exts": sorted(g.exts)}
+                     for g in gpus]}))
+    except OSError:
+        _log.debug("vulkan probe cache not written", exc_info=True)
+
+
+def probe_system(use_cache: bool = True) -> SysInfo:
     si = SysInfo()
     # --- NVIDIA kernel/driver version -------------------------------------
     try:
@@ -140,8 +180,14 @@ def probe_system() -> SysInfo:
     # --- Vulkan -------------------------------------------------------------
     vi = shutil.which("vulkaninfo")
     if vi:
-        out = _run([vi], 25)
-        inst, gpus = parse_vulkaninfo(out)
+        key = _vk_cache_key(si, vi)
+        cached = _vk_cache_load(key) if use_cache else None
+        if cached:
+            inst, gpus = cached
+        else:
+            inst, gpus = parse_vulkaninfo(_run([vi], 25))
+            if gpus:
+                _vk_cache_save(key, inst, gpus)
         if gpus:
             si.vk_gpus, si.vk_instance_exts, si.vk_ok = gpus, inst, True
         else:
@@ -163,9 +209,13 @@ def probe_system() -> SysInfo:
 class _ProbeThread(QThread):
     done = Signal(object)
 
+    def __init__(self, use_cache: bool = True):
+        super().__init__()
+        self._use_cache = use_cache
+
     def run(self):
         try:
-            self.done.emit(probe_system())
+            self.done.emit(probe_system(self._use_cache))
         except Exception as e:                       # never kill the GUI for a probe
             si = SysInfo(probed=True)
             si.vulkaninfo_error = f"probe failed: {e}"
@@ -196,10 +246,11 @@ class SysHub(QObject):
             pass
         self.info_changed.emit(self.info)
 
-    def refresh(self):
+    def refresh(self, force: bool = False):
+        """force: run vulkaninfo again instead of using the cached result."""
         if self._thread is not None and self._thread.isRunning():
             return
-        self._thread = _ProbeThread()
+        self._thread = _ProbeThread(use_cache=not force)
         self._thread.done.connect(self._on_done)
         self._thread.start()
 

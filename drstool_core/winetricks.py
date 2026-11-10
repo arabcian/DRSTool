@@ -61,21 +61,9 @@ COMPONENTS: Tuple[Tuple[str, str], ...] = tuple((v["verb"], v["pop"]) for v in r
 _KNOWN = frozenset(v["verb"] for v in _load()[1])
 
 # A game's log line -> the library that fixes it. (regex on a lower-cased line, verb, why)
-LOG_HINTS: Tuple[Tuple[str, str, str], ...] = (
-    (r"(msvcp|vcruntime|msvcr|concrt)140|ucrtbase", "vcrun2022", "Visual C++ 2015-2022 runtime"),
-    (r"msvc[pr]120", "vcrun2013", "Visual C++ 2013 runtime"),
-    (r"msvc[pr]110", "vcrun2012", "Visual C++ 2012 runtime"),
-    (r"msvc[pr]100", "vcrun2010", "Visual C++ 2010 runtime"),
-    (r"msvc[pr]90", "vcrun2008", "Visual C++ 2008 runtime"),
-    (r"msvc[pr]80", "vcrun2005", "Visual C++ 2005 runtime"),
-    (r"d3dcompiler_47", "d3dcompiler_47", "D3D compiler 47"),
-    (r"d3dcompiler_43", "d3dcompiler_43", "D3D compiler 43"),
-    (r"d3dx9_\d+", "d3dx9", "D3DX9"),
-    (r"d3dx10_\d+", "d3dx10", "D3DX10"),
-    (r"d3dx11_\d+", "d3dx11_43", "D3DX11"),
-    (r"xactengine|x3daudio|xapofx", "xact", "XACT audio"),
-    (r"xaudio2_9", "xaudio29", "XAudio 2.9"),
-    (r"physx", "physx", "PhysX"),
+LOG_HINTS: Tuple[Tuple[str, str, str], ...] = tuple(
+    (h["regex"], h["verb"], h["why"])
+    for h in json.loads((_DATA.parent / "winetricks_log_hints.json").read_text(encoding="utf-8"))
 )
 
 

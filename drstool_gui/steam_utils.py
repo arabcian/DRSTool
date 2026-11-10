@@ -5,6 +5,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List
 
+from drstool_core.launcher_paths import STEAM_TOOL_NAMES, steam_apps
+
 
 # ── minimal VDF (Valve KeyValues text) editor ───────────────────────────────
 
@@ -285,21 +287,13 @@ def steam_install_dirs() -> List[tuple]:
     res, seen = [], set()
     for root in SteamBackend.roots():
         for lib in SteamBackend._libraries(root):
-            for acf in sorted(lib.glob("appmanifest_*.acf")):
-                try:
-                    t = acf.read_text(errors="replace")
-                except OSError:
+            for appid, name, installdir in steam_apps(lib):
+                if not installdir or appid in seen:
                     continue
-                a = re.search(r'"appid"\s+"(\d+)"', t)
-                n = re.search(r'"name"\s+"((?:[^"\\]|\\.)*)"', t)
-                d = re.search(r'"installdir"\s+"((?:[^"\\]|\\.)*)"', t)
-                if not (a and d) or a.group(1) in seen:
-                    continue
-                p = lib / "common" / _vdf_unesc(d.group(1))
-                name = _vdf_unesc(n.group(1)) if n else a.group(1)
-                if p.is_dir() and not re.match(r"(Proton\b|Steam Linux Runtime|Steamworks Common)", name):
-                    seen.add(a.group(1))
-                    res.append((f"{name}  [{a.group(1)}]", p, a.group(1)))
+                p = lib / "common" / installdir
+                if p.is_dir() and not STEAM_TOOL_NAMES.match(name):
+                    seen.add(appid)
+                    res.append((f"{name}  [{appid}]", p, appid))
     res.sort(key=lambda x: x[0].lower())
     return res
 

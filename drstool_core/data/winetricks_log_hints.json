@@ -1,0 +1,72 @@
+[
+ {
+  "regex": "(msvcp|vcruntime|msvcr|concrt)140|ucrtbase",
+  "verb": "vcrun2022",
+  "why": "Visual C++ 2015-2022 runtime"
+ },
+ {
+  "regex": "msvc[pr]120",
+  "verb": "vcrun2013",
+  "why": "Visual C++ 2013 runtime"
+ },
+ {
+  "regex": "msvc[pr]110",
+  "verb": "vcrun2012",
+  "why": "Visual C++ 2012 runtime"
+ },
+ {
+  "regex": "msvc[pr]100",
+  "verb": "vcrun2010",
+  "why": "Visual C++ 2010 runtime"
+ },
+ {
+  "regex": "msvc[pr]90",
+  "verb": "vcrun2008",
+  "why": "Visual C++ 2008 runtime"
+ },
+ {
+  "regex": "msvc[pr]80",
+  "verb": "vcrun2005",
+  "why": "Visual C++ 2005 runtime"
+ },
+ {
+  "regex": "d3dcompiler_47",
+  "verb": "d3dcompiler_47",
+  "why": "D3D compiler 47"
+ },
+ {
+  "regex": "d3dcompiler_43",
+  "verb": "d3dcompiler_43",
+  "why": "D3D compiler 43"
+ },
+ {
+  "regex": "d3dx9_\\d+",
+  "verb": "d3dx9",
+  "why": "D3DX9"
+ },
+ {
+  "regex": "d3dx10_\\d+",
+  "verb": "d3dx10",
+  "why": "D3DX10"
+ },
+ {
+  "regex": "d3dx11_\\d+",
+  "verb": "d3dx11_43",
+  "why": "D3DX11"
+ },
+ {
+  "regex": "xactengine|x3daudio|xapofx",
+  "verb": "xact",
+  "why": "XACT audio"
+ },
+ {
+  "regex": "xaudio2_9",
+  "verb": "xaudio29",
+  "why": "XAudio 2.9"
+ },
+ {
+  "regex": "physx",
+  "verb": "physx",
+  "why": "PhysX"
+ }
+]

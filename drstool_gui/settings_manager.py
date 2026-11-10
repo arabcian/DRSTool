@@ -7,17 +7,16 @@ import json
 import hashlib
 from drstool_core.file_transactions import file_lock
 import os
-import shutil
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QObject, Signal
 
+from drstool_core.fsutil import atomic_write
 from drstool_core.models import GPUArch
 
-from .base import _as_dict, _umask
+from .base import _as_dict
 from .catalog_data import ALL_SETTINGS, GPU_ARCHS
 from .gamescope import normalize_gs_flags
 from .links import LINKS
@@ -405,23 +404,9 @@ class SettingsManager(QObject):
                 if current != self._last_disk_sha:
                     raise RuntimeError('profiles.json was modified by another process; '
                                        'reload or merge it before saving')
-                fd, tmp_name = tempfile.mkstemp(dir=str(data_file.parent),
-                                                prefix=f'.{data_file.name}.', suffix='.tmp')
-                tmp_file = Path(tmp_name)
-                try:
-                    with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                        f.write(text)
-                        f.flush()
-                        os.fsync(f.fileno())
-                    if data_file.exists():
-                        shutil.copymode(data_file, tmp_file)
-                    else:
-                        os.chmod(tmp_file, 0o644 & ~_umask())
-                    self._snapshot_old(data_file, text)
-                    os.replace(tmp_file, data_file)
-                    self._last_disk_sha = hashlib.sha256(text.encode('utf-8')).hexdigest()
-                finally:
-                    tmp_file.unlink(missing_ok=True)
+                self._snapshot_old(data_file, text)
+                atomic_write(data_file, text)
+                self._last_disk_sha = hashlib.sha256(text.encode('utf-8')).hexdigest()
             self.disk_written.emit()
             return True
         except Exception as e:

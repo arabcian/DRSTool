@@ -14,12 +14,14 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QVBoxLayout, QWidget,
 )
 
+from drstool_core import launcher_paths
+
 from .base import _atomic_write, _backup_file, _HAVE_YAML, _proc_running, _YAML_LOADER, yaml
 from .gamescope import GamescopeFlagsWidget
 from .launch_line import build_launch_line, gamescope_arg_string
 from .lutris_sync import LutrisSyncWidget
 from .steam_utils import (
-    _vdf_unesc, proton_tool_dirs, STEAM_COMPAT_PATH, steam_compat_tools, steam_config_vdf,
+    proton_tool_dirs, STEAM_COMPAT_PATH, steam_compat_tools, steam_config_vdf,
     UMU_STORES, vdf_get_app_value, vdf_get_launch_options, vdf_remove_app_block,
     vdf_set_app_value, vdf_set_launch_options,
 )
@@ -78,20 +80,7 @@ class SteamBackend(LauncherBackend):
 
     @staticmethod
     def roots() -> List[Path]:
-        h = Path.home()
-        cands = [h / ".local/share/Steam", h / ".steam/steam", h / ".steam/root",
-                 h / ".var/app/com.valvesoftware.Steam/.local/share/Steam",
-                 h / ".var/app/com.valvesoftware.Steam/data/Steam"]
-        seen, out = set(), []
-        for c in cands:
-            try:
-                r = c.resolve()
-            except OSError:
-                continue
-            if (r / "userdata").is_dir() and r not in seen:
-                seen.add(r)
-                out.append(r)
-        return out
+        return launcher_paths.steam_roots(marker="userdata")
 
     def unavailable(self):
         return "" if self.roots() else "No Steam installation found (~/.local/share/Steam, flatpak)."
@@ -112,18 +101,7 @@ class SteamBackend(LauncherBackend):
                     res.append((f"{name or 'account'}  ({ud.name})", str(cfg)))
         return res
 
-    @staticmethod
-    def _libraries(root: Path) -> List[Path]:
-        libs = [root / "steamapps"]
-        vf = root / "steamapps" / "libraryfolders.vdf"
-        try:
-            for m in re.finditer(r'"path"\s+"((?:[^"\\]|\\.)*)"', vf.read_text(errors="replace")):
-                p = Path(_vdf_unesc(m.group(1))) / "steamapps"
-                if p not in libs:
-                    libs.append(p)
-        except OSError:
-            pass
-        return [l for l in libs if l.is_dir()]
+    _libraries = staticmethod(launcher_paths.steam_libraries)
 
     def scan(self, account=None):
         cfg = Path(account) if account else None
@@ -135,20 +113,11 @@ class SteamBackend(LauncherBackend):
         root = cfg.parents[3]                      # <root>/userdata/<id>/config/localconfig.vdf
         out, seen = [], set()
         for lib in self._libraries(root):
-            for acf in sorted(lib.glob("appmanifest_*.acf")):
-                try:
-                    t = acf.read_text(errors="replace")
-                except OSError:
+            for appid, name, _dir in launcher_paths.steam_apps(lib):
+                if appid in seen or launcher_paths.STEAM_TOOL_NAMES.match(name):
                     continue
-                a = re.search(r'"appid"\s+"(\d+)"', t)
-                n = re.search(r'"name"\s+"((?:[^"\\]|\\.)*)"', t)
-                if not a or a.group(1) in seen:
-                    continue
-                name = _vdf_unesc(n.group(1)) if n else a.group(1)
-                if re.match(r"(Proton\b|Steam Linux Runtime|Steamworks Common)", name):
-                    continue
-                seen.add(a.group(1))
-                out.append(LEntry(a.group(1), f"{name}  [{a.group(1)}]", cfg))
+                seen.add(appid)
+                out.append(LEntry(appid, f"{name}  [{appid}]", cfg))
         out.sort(key=lambda e: e.title.lower())
         return out
 
@@ -215,11 +184,7 @@ class HeroicBackend(LauncherBackend):
              "GamesConfig/<game>.json (or the global defaults). Only variables DRSTool owns are "
              "replaced; your other entries stay. Close Heroic first, otherwise it may overwrite.")
 
-    @staticmethod
-    def roots() -> List[Path]:
-        h = Path.home()
-        return [p for p in (h / ".config/heroic",
-                            h / ".var/app/com.heroicgameslauncher.hgl/config/heroic") if p.is_dir()]
+    roots = staticmethod(launcher_paths.heroic_roots)
 
     def unavailable(self):
         return "" if self.roots() else "No Heroic config found (~/.config/heroic, flatpak)."
@@ -339,11 +304,7 @@ class BottlesBackend(LauncherBackend):
             "--framerate-limit": ("gamescope_fps", int), "--nested-unfocused-refresh": ("gamescope_fps_no_focus", int),
             "--borderless": ("gamescope_borderless", bool), "--fullscreen": ("gamescope_fullscreen", bool)}
 
-    @staticmethod
-    def roots() -> List[Path]:
-        h = Path.home()
-        return [p for p in (h / ".local/share/bottles/bottles",
-                            h / ".var/app/com.usebottles.bottles/data/bottles/bottles") if p.is_dir()]
+    roots = staticmethod(launcher_paths.bottles_roots)
 
     def unavailable(self):
         if not _HAVE_YAML:

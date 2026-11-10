@@ -84,7 +84,10 @@ class SourceIntegrityTests(unittest.TestCase):
 
     def test_history_and_session_are_separate_mixins(self):
         source = (ROOT / 'drstool_gui/main_window.py').read_text()
-        self.assertIn('class MainWindow(HistoryMixin, SessionMixin, QMainWindow):', source)
+        self.assertIn('class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):', source)
+        games = (ROOT / 'drstool_gui/main_games.py').read_text()
+        self.assertIn('def write_profile_to_games(', games)
+        ast.parse(games)
         history = (ROOT / 'drstool_gui/main_history.py').read_text()
         self.assertIn('def apply_state(', history)
         ast.parse(history)

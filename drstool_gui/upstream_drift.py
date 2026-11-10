@@ -7,7 +7,6 @@ import http.client
 import io
 import json
 import logging
-import os
 import re
 import threading
 import time
@@ -27,6 +26,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from drstool_core import net
+
 from .base import APP_ID
 from .catalog_data import (
     ALL_ENV_VARS, ALL_SETTINGS, DXVK_CONFIG_KEY_NAMES, DXVK_KEY_GROUPS, GAMESCOPE_FLAGS,
@@ -37,7 +38,7 @@ from .tasks import _NAV, TASKS
 from .theme import T
 from .tool_ui import _tool_btn
 from .user_catalog import (
-    _UC_LABEL, _UC_LISTS, _uc_add, _uc_as_python, _uc_form, _uc_merge, _uc_record, _uc_validate,
+    _UC_LABEL, _UC_LISTS, _uc_add, _uc_as_json, _uc_form, _uc_merge, _uc_record, _uc_validate,
     load_user_catalog, save_user_catalog, user_catalog_path,
 )
 from .widgets import _COMBO_QSS, _LINEEDIT_QSS, _pack2_table_ss, _pack2_title, _slugify
@@ -205,12 +206,8 @@ def _drift_raw_url(src: dict, ref: str, rel: str) -> str:
 
 def _drift_fetch_json(url: str, timeout: float = 25.0):
     """-> (data, note, headers). data is None on 403/429 (rate limit), HTTP errors and network errors."""
-    hdr = {"User-Agent": _DRIFT_UA, "Accept": "application/vnd.github+json"}
-    tok = os.environ.get("GITHUB_TOKEN")
-    if tok and url.startswith("https://api.github.com/"):
-        hdr["Authorization"] = f"Bearer {tok}"
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=hdr), timeout=timeout) as r:
+        with net.open_url(url, timeout=timeout, accept="application/vnd.github+json", ua=_DRIFT_UA) as r:
             return json.loads(r.read(16 * 1024 * 1024).decode("utf-8", errors="replace")), "", r.headers
     except urllib.error.HTTPError as e:
         return None, ("API rate limit" if e.code in (403, 429) else "API error") + f" (HTTP {e.code})", None
@@ -1019,7 +1016,7 @@ class DriftAddDialog(QDialog):
 
 
 class UserCatalogDialog(QDialog):
-    """List / edit / delete / import / export the user catalog; 'Copy as Python' for pasting into DRSTool.py."""
+    """List / edit / delete / import / export the user catalog; 'Copy as JSON' gives entries for drstool_core/data/*.json."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1041,7 +1038,7 @@ class UserCatalogDialog(QDialog):
         lay.addWidget(self._table, 1)
         brow = QHBoxLayout()
         for label, fn in (("Edit…", self._edit), ("Delete", self._delete), ("Export JSON…", self._export),
-                          ("Import JSON…", self._import), ("Copy as Python", self._copy_py)):
+                          ("Import JSON…", self._import), ("Copy as JSON", self._copy_json)):
             b = _tool_btn(label)
             b.clicked.connect(fn)
             brow.addWidget(b)
@@ -1119,9 +1116,9 @@ class UserCatalogDialog(QDialog):
         self._save()
         QMessageBox.information(self, "Import", f"{n} entries added (existing names were kept).")
 
-    def _copy_py(self):
+    def _copy_json(self):
         sel = self._selected() or [(t, r) for t, (lst, _k) in _UC_LISTS.items() for r in self._data.get(lst, [])]
-        QApplication.clipboard().setText("\n".join(f"{_UC_LABEL[t]}:  {_uc_as_python(t, r)}" for t, r in sel))
+        QApplication.clipboard().setText("\n".join(f"{_UC_LABEL[t]}:  {_uc_as_json(t, r)}" for t, r in sel))
 
 
 class DriftSourceDialog(QDialog):

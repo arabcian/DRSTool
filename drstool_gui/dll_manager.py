@@ -31,6 +31,8 @@ from PySide6.QtWidgets import (
 )
 
 from drstool_core import safe_archive, file_transactions as tx
+from drstool_core import net
+from drstool_core.catalog import DATA_DIR
 
 from .base import _CORE_ERR, _proc_running, APP_ID, dll_ops, game_scan, pe_version, user_cache_dir
 from .launchers import BottlesBackend, SteamBackend
@@ -55,20 +57,9 @@ _log = logging.getLogger(__name__)
 # ============================================================================
 
 
-PD_COMPONENTS = [
-    {"id": "dxvk", "name": "DXVK", "repo": "doitsujin/dxvk",
-     "dlls": ["d3d8", "d3d9", "d3d10core", "d3d11", "dxgi"],
-     "markers": [b"DXVK", b"dxvk"], "ver_prefix_required": True,
-     "asset_re": r"^dxvk-v?\d[\d.]*\.tar\.(gz|zst)$", "d64": "x64", "d32": "x32"},
-    {"id": "vkd3d", "name": "vkd3d-proton", "repo": "HansKristian-Work/vkd3d-proton",
-     "dlls": ["d3d12", "d3d12core"],
-     "markers": [b"vkd3d-proton", b"VKD3D_CONFIG"], "ver_prefix_required": False,
-     "asset_re": r"^vkd3d-proton-v?\d[\d.]*\.tar\.(zst|gz)$", "d64": "x64", "d32": "x86"},
-    {"id": "nvapi", "name": "dxvk-nvapi", "repo": "jp7677/dxvk-nvapi",
-     "dlls": ["nvapi64", "nvapi", "nvofapi64"],
-     "markers": [b"DXVK-NVAPI", b"dxvk-nvapi", b"NVAPI"], "ver_prefix_required": True,
-     "asset_re": r"^dxvk-nvapi-v?\d[\d.]*\.tar\.(gz|zst)$", "d64": "x64", "d32": "x32"},
-]
+# markers are matched as bytes against the DLL contents
+PD_COMPONENTS = [{**c, "markers": [m.encode() for m in c["markers"]]}
+                 for c in json.loads((DATA_DIR / "pd_components.json").read_text(encoding="utf-8"))]
 _PD_UA = "DRSTool-prefix-doctor"
 _PD_MANIFEST = ".drstool-doctor.json"
 _PD_ADDED = "added.json"        # in a prefix backup: files the update created (no original to put back)
@@ -289,9 +280,8 @@ def find_prefixes() -> List[tuple]:
 
 
 def _gh_release(repo: str) -> dict:
-    req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/latest",
-                                 headers={"User-Agent": _PD_UA, "Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=20) as r:
+    with net.open_url(f"https://api.github.com/repos/{repo}/releases/latest", timeout=20,
+                      accept="application/vnd.github+json", ua=_PD_UA) as r:
         return json.loads(r.read().decode("utf-8", "replace"))
 
 

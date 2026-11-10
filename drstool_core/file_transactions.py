@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+from .fsutil import atomic_write
+
 
 def sha256(p: Path) -> str:
     import hashlib
@@ -26,18 +28,7 @@ def sha256(p: Path) -> str:
 
 
 def atomic_write_json(path: Path, obj: object):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix='.drstool-manifest-', dir=path.parent)
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as out:
-            json.dump(obj, out, indent=2)
-            out.flush()
-            os.fsync(out.fileno())
-        os.replace(tmp, path)
-        _sync_dir(path.parent)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    atomic_write(path, json.dumps(obj, indent=2))
 
 
 def _sync_dir(path: Path):

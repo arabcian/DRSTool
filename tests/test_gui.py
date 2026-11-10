@@ -301,7 +301,7 @@ class DriftCatalogTests(unittest.TestCase):
         self.assertIn("empty", m._uc_validate(dict(f, name=" ")))
         self.assertIn("already", m._uc_validate({"target": "env", "name": "DXVK_HUD", "type": "string", "options": []},
                                                  m._drift_catalog()))
-        self.assertIn("Setting('0x0000ABCD'", m._uc_as_python("drs", rec))
+        self.assertEqual(json.loads(m._uc_as_json("drs", rec))["values"], [{"name": "A", "val": "0x1"}])
         d = {}
         self.assertTrue(m._uc_add(d, "env", {"name": "A"}))
         self.assertFalse(m._uc_add(d, "env", {"name": "a", "desc": "x"}))      # same key → replaced
@@ -1012,7 +1012,7 @@ class GuiTests(unittest.TestCase):
 
         # changing and saving the profile offers to update both games
         win.set_env_var("DXVK_ASYNC", "1")
-        with mock.patch("drstool_gui.main_window.toast") as t:
+        with mock.patch("drstool_gui.main_games.toast") as t:
             sm.save_profile("GamesLinkP", win._env_widget.get_env_dict())
         offers = [c for c in t.call_args_list if len(c.args) > 3 and c.args[3]]
         self.assertTrue(offers and "2 games" in offers[-1].args[0], t.call_args_list)
@@ -1273,12 +1273,12 @@ class GuiTests(unittest.TestCase):
                          ("ddraw.guiKey", "enum", ["True", "False"], "[DXVK-Sarek] edited"))
         self.assertEqual(w._table.rowCount(), 0)                             # saved rows count as reviewed
         self.assertIn("restart", w._status.text())
-        # manage dialog: lists it, 'Copy as Python' works, delete removes it
+        # manage dialog: lists it, 'Copy as JSON' works, delete removes it
         dlg = m.UserCatalogDialog()
         self.assertEqual(dlg._table.item(0, 1).text(), "ddraw.guiKey")
         dlg._table.selectRow(0)
-        dlg._copy_py()
-        self.assertIn("('ddraw.guiKey', 'enum', ['True', 'False']", m.QApplication.clipboard().text())
+        dlg._copy_json()
+        self.assertIn('["ddraw.guiKey", "enum", ["True", "False"]', m.QApplication.clipboard().text())
         with mock.patch.object(m.QMessageBox, "question", return_value=m.QMessageBox.Yes):
             dlg._delete()
         self.assertEqual(json.loads(path.read_text())["dxvk_conf_keys"], [])

@@ -41,6 +41,9 @@ except ImportError as _ex:          # pragma: no cover - depends on the install
                  "package (or run DRSTool.py from the repository folder) to use this feature.")
 
 
+from drstool_core.fsutil import atomic_write  # noqa: E402
+
+
 # ============================================================================
 # App constants and paths
 # ============================================================================
@@ -167,29 +170,7 @@ def _backup_file(path: Path) -> Path:
     return bak
 
 
-def _atomic_write(path: Path, text: str):
-    """Write via an unpredictable temp file + fsync + rename. Follows a symlinked
-    target (os.replace on the link would turn it into a plain file) and keeps the
-    original file's permission bits — write_text() used to recreate e.g. a 0600
-    config with the umask default (usually 0644)."""
-    target = Path(os.path.realpath(path))
-    fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".drstool-tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-        if target.exists():
-            shutil.copymode(target, tmp)
-        else:
-            os.chmod(tmp, 0o644 & ~_umask())
-        os.replace(tmp, target)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+_atomic_write = atomic_write
 
 
 def _umask() -> int:
@@ -233,26 +214,7 @@ def _fmt_bytes(n: float) -> str:
 # Add to Steam: non-Steam game shortcuts (userdata/<id>/config/shortcuts.vdf)
 # ----------------------------------------------------------------------------
 
-def _atomic_write_bytes(path: Path, data: bytes):
-    target = Path(os.path.realpath(path))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".drstool-tmp")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        if target.exists():
-            shutil.copymode(target, tmp)
-        else:
-            os.chmod(tmp, 0o644 & ~_umask())
-        os.replace(tmp, target)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+_atomic_write_bytes = atomic_write
 
 
 # ----------------------------------------------------------------------------

@@ -3,6 +3,7 @@
 import errno as _errno
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -30,6 +31,8 @@ from PySide6.QtWidgets import (
 
 from drstool_core import safe_archive
 from drstool_core.file_transactions import atomic_write_json
+from drstool_core import launcher_paths, net
+from drstool_core.catalog import DATA_DIR
 
 from .base import _atomic_write, _backup_file, _proc_running
 from .ngx import ngx_human
@@ -37,8 +40,11 @@ from .steam_utils import STEAM_COMPAT_PATH, vdf_get_app_value, vdf_set_app_value
 from .tasks import _NAV, TASKS
 from .theme import T
 from .toasts import toast
+from .user_catalog import user_tm_tools
 from .tool_ui import _tool_btn, _TOOL_GROUP_SS
 from .widgets import _COMBO_QSS, _desc_label, _MONO_BOX_QSS
+
+_log = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -69,97 +75,24 @@ class TMTool:
     ref: str = ""                # branch / tarball source URL
 
 
-def _gh(repo: str) -> str:
-    return f"https://api.github.com/repos/{repo}/releases"
+def _load_tm_tools() -> List[TMTool]:
+    """Built-in tools (drstool_core/data/tm_tools.json), then the user's own
+    "tm_tools" records from user_catalog.json; a built-in id always wins."""
+    tools = [TMTool(**d) for d in json.loads((DATA_DIR / "tm_tools.json").read_text(encoding="utf-8"))]
+    have = {t.id for t in tools}
+    for d in user_tm_tools():
+        try:
+            t = TMTool(**d)
+        except TypeError as e:
+            _log.warning("user tool source skipped (%s)", e)
+            continue
+        if t.id not in have:
+            have.add(t.id)
+            tools.append(t)
+    return tools
 
 
-_TKG = "Frogging-Family/wine-tkg-git"
-TM_TOOLS: List[TMTool] = [
-    TMTool("ge-proton", "GE-Proton", "proton",
-           "Valve's Proton plus media codecs, extra patches and game fixes — the community default.",
-           "https://github.com/GloriousEggroll/proton-ge-custom", "github",
-           _gh("GloriousEggroll/proton-ge-custom"), ".tar.gz", ".sha512sum"),
-    TMTool("proton-cachyos", "Proton-CachyOS", "proton",
-           "CachyOS Proton build with CPU-specific optimisation levels (x86-64 v1–v4); the best level "
-           "your CPU supports is picked automatically.",
-           "https://github.com/CachyOS/proton-cachyos", "github",
-           _gh("CachyOS/proton-cachyos"), ".tar.xz", ".sha512sum"),
-    TMTool("proton-tkg", "Proton-Tkg", "proton",
-           "Custom Proton built with the Wine-tkg build system (CI artifact, nightly.link).",
-           f"https://github.com/{_TKG}", "actions", fmt=".zip", repo=_TKG,
-           wf="proton-valvexbe-arch-nopackage", branch="master"),
-    TMTool("proton-tkg-wm", "Proton-Tkg (Wine Master)", "proton",
-           "Proton-Tkg built on Wine master.", f"https://github.com/{_TKG}", "actions",
-           fmt=".zip", advanced=True, repo=_TKG, wf="proton-arch-nopackage.yml", branch="master"),
-    TMTool("proton-tkg-vw", "Proton-Tkg (Valve Wine)", "proton",
-           "Proton-Tkg built on Valve's Wine.", f"https://github.com/{_TKG}", "actions",
-           fmt=".zip", advanced=True, repo=_TKG, wf="wine-valvexbe", branch="master"),
-    TMTool("proton-tkg-ntsync", "Proton-Tkg (Wine Master NTSYNC)", "proton",
-           "Proton-Tkg on Wine master with NTSYNC (needs a kernel with ntsync).",
-           f"https://github.com/{_TKG}", "actions", fmt=".zip", advanced=True, repo=_TKG,
-           wf="proton-arch-ntsync-nopackage.yml", branch="master"),
-    TMTool("wine-tkg-wm", "Wine-Tkg (Wine Master)", "wine",
-           "Wine-tkg build of Wine master (Ubuntu CI artifact).", f"https://github.com/{_TKG}",
-           "actions", fmt=".zip", advanced=True, repo=_TKG, wf="wine-ubuntu.yml", branch="master"),
-    TMTool("dxvk", "DXVK", "dxvk",
-           "Vulkan based Direct3D 8/9/10/11 for Wine (release builds).",
-           "https://github.com/doitsujin/dxvk", "github", _gh("doitsujin/dxvk"), ".tar.gz"),
-    TMTool("dxvk-async", "DXVK Async", "dxvk",
-           "DXVK with the gplasync patch by Ph42oN (GitLab).",
-           "https://gitlab.com/Ph42oN/dxvk-gplasync", "gitlab",
-           "https://gitlab.com/api/v4/projects/43488626/releases", ".tar.gz"),
-    TMTool("dxvk-nightly", "DXVK (nightly)", "dxvk",
-           "DXVK master-branch CI builds.", "https://github.com/doitsujin/dxvk", "actions",
-           fmt=".zip", advanced=True, repo="doitsujin/dxvk", wf="artifacts", branch="master"),
-    TMTool("vkd3d-proton", "vkd3d-proton", "vkd3d",
-           "Direct3D 12 on Vulkan (Valve/HansKristian-Work).",
-           "https://github.com/HansKristian-Work/vkd3d-proton", "github",
-           _gh("HansKristian-Work/vkd3d-proton"), ".tar.zst"),
-    TMTool("vkd3d-lutris", "vkd3d-lutris", "vkd3d",
-           "Lutris' vkd3d build.", "https://github.com/lutris/vkd3d", "github",
-           _gh("lutris/vkd3d"), ".tar.xz"),
-    TMTool("boxtron", "Boxtron", "proton",
-           "Steam Play tool: run DOS games with DOSBox.", "https://github.com/dreamer/boxtron",
-           "github", _gh("dreamer/boxtron"), ".tar.xz", steam_only=True, fixed_dir="boxtron"),
-    TMTool("roberta", "Roberta", "proton",
-           "Steam Play tool: run adventure games with ScummVM.", "https://github.com/dreamer/roberta",
-           "github", _gh("dreamer/roberta"), ".tar.xz", steam_only=True, fixed_dir="roberta"),
-    TMTool("proton-em", "Proton-EM", "proton",
-           "Valve Proton fork with Wine-Wayland and AMD FSR4 patches.",
-           "https://github.com/Etaash-mathamsetty/Proton", "github",
-           _gh("Etaash-mathamsetty/Proton"), ".tar.xz", advanced=True),
-    TMTool("rtsp-proton", "RTSP Proton", "proton",
-           "Proton-GE fork by SpookySkeletons.", "https://github.com/SpookySkeletons/proton-ge-rtsp",
-           "github", _gh("SpookySkeletons/proton-ge-rtsp"), ".tar.gz", ".sha512sum", advanced=True),
-    TMTool("lutris-wine", "Lutris-Wine", "wine",
-           "Lutris' Wine builds, including the fshack variants.", "https://github.com/lutris/wine",
-           "github", _gh("lutris/wine"), ".tar.xz"),
-    TMTool("luxtorpeda", "Luxtorpeda", "proton",
-           "Steam Play tool: run games with native engine ports.",
-           "https://codeberg.org/luxtorpeda/luxtorpeda", "gitea",
-           "https://codeberg.org/api/v1/repos/luxtorpeda/luxtorpeda/releases", ".tar.xz", ".sha512",
-           steam_only=True, fixed_dir="luxtorpeda"),
-    TMTool("kron4ek-wine", "Kron4ek Wine-Builds Vanilla", "wine",
-           "Vanilla Wine builds (amd64 / wow64) by Kron4ek.", "https://github.com/Kron4ek/Wine-Builds",
-           "github", _gh("Kron4ek/Wine-Builds"), ".tar.xz"),
-    TMTool("dwproton", "dwproton", "proton",
-           "Dawn Winery Proton.", "https://dawn.wine/dawn-winery/dwproton", "gitea",
-           "https://dawn.wine/api/v1/repos/dawn-winery/dwproton/releases", ".tar.xz", ".sha512sum",
-           advanced=True),
-    TMTool("steam-play-none", "Steam-Play-None", "proton",
-           "Runs Linux games as they are, even where Valve recommends Proton.",
-           "https://github.com/Scrumplex/Steam-Play-None", "branch", fmt=".tar.gz", steam_only=True,
-           ref="https://github.com/Scrumplex/Steam-Play-None/archive/refs/heads/main.tar.gz"),
-    TMTool("stl", "SteamTinkerLaunch", "proton",
-           "Wrapper with a GUI to configure game tools for Proton and native Linux games.",
-           "https://github.com/sonic2kk/steamtinkerlaunch", "stl", _gh("sonic2kk/steamtinkerlaunch"),
-           ".tar.gz", steam_only=True),
-    TMTool("stl-git", "SteamTinkerLaunch-git", "proton",
-           "SteamTinkerLaunch development branch — may be unstable.",
-           "https://github.com/sonic2kk/steamtinkerlaunch", "stl", fmt=".tar.gz", advanced=True,
-           steam_only=True,
-           ref="https://github.com/sonic2kk/steamtinkerlaunch/archive/refs/heads/master.tar.gz"),
-]
+TM_TOOLS: List[TMTool] = _load_tm_tools()
 TM_BY_NAME: Dict[str, TMTool] = {t.name: t for t in TM_TOOLS}
 TM_KIND_LABEL = {"proton": "Proton", "wine": "Wine", "dxvk": "DXVK", "vkd3d": "VKD3D"}
 
@@ -243,11 +176,9 @@ def tm_discover() -> List[TMLauncher]:
             pass
 
     steam_ok = lambda p: (p / "config").is_dir() or (p / "ubuntu12_32").exists()
-    for c in (data / "Steam", h / ".steam/root", h / ".steam/steam", h / ".steam/debian-installation"):
-        add("steam", "Steam", c, steam_ok)
-    add("steam", "Steam (Flatpak)", h / ".var/app/com.valvesoftware.Steam/.local/share/Steam", steam_ok)
-    add("steam", "Steam (Flatpak)", h / ".var/app/com.valvesoftware.Steam/data/Steam", steam_ok)
-    add("steam", "Steam (Snap)", h / "snap/steam/common/.steam/root", steam_ok)
+    add("steam", "Steam", data / "Steam", steam_ok)
+    for label, c in launcher_paths.steam_root_candidates(h):
+        add("steam", label, c, steam_ok)
     lut_ok = lambda p: (p / "runners").is_dir() or (p / "runtime").is_dir()
     add("lutris", "Lutris", data / "lutris", lut_ok)
     add("lutris", "Lutris (Flatpak)", h / ".var/app/net.lutris.Lutris/data/lutris", lut_ok)
@@ -265,22 +196,12 @@ def tm_discover() -> List[TMLauncher]:
 
 def _tm_get(url: str, accept: str = "application/json", timeout: int = 25) -> bytes:
     host = urllib.parse.urlsplit(url).hostname or ""
-    hdr = {"User-Agent": _TM_UA, "Accept": accept}
-    req = urllib.request.Request(url, headers=hdr)
-    tok = {"api.github.com": ("GITHUB_TOKEN", "token "), "gitlab.com": ("GITLAB_TOKEN", "Bearer ")}.get(host)
-    if tok and os.environ.get(tok[0]):          # API calls only — never sent to download mirrors
-        # Unredirected: urllib copies normal headers onto a redirect to ANY host,
-        # which would hand the token to whatever the API redirects to.
-        req.add_unredirected_header("Authorization", tok[1] + os.environ[tok[0]])
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with net.open_url(url, timeout=timeout, accept=accept, ua=_TM_UA) as r:
             return r.read()
     except urllib.error.HTTPError as e:
-        if e.code == 429 or (e.code == 403 and e.headers.get("X-RateLimit-Remaining") == "0"):
-            reset = e.headers.get("X-RateLimit-Reset") or ""
-            when = time.strftime("%H:%M", time.localtime(int(reset))) if reset.isdigit() else "later"
-            raise RuntimeError(f"{host}: API rate limit reached — retry after {when}, or export "
-                               f"GITHUB_TOKEN / GITLAB_TOKEN before starting DRSTool") from None
+        if net.rate_limit_note(e):
+            raise RuntimeError(f"{host}: {net.rate_limit_note(e)}") from None
         raise RuntimeError(f"{host}: HTTP {e.code} for {urllib.parse.urlsplit(url).path}") from None
     except (urllib.error.URLError, OSError) as e:
         raise RuntimeError(f"cannot reach {host or url}: {getattr(e, 'reason', e)}") from None
@@ -467,13 +388,31 @@ def _tm_cache_dir() -> Path:
 
 
 def _tm_download(url: str, dest: Path, hint: int, cancel, prog, digest=None):
-    """`digest`: optional hashlib object fed with every chunk, so _tm_verify need not re-read the file."""
+    """`digest`: optional hashlib object fed with every chunk, so _tm_verify need not re-read the file.
+    A partial `dest` from an interrupted run is resumed with an HTTP Range request when the
+    server supports it (206); otherwise the download starts over."""
+    have = dest.stat().st_size if dest.is_file() else 0
     req = urllib.request.Request(url, headers={"User-Agent": _TM_UA})
+    if have:
+        req.add_header("Range", f"bytes={have}-")
     done = 0
     try:
-        with urllib.request.urlopen(req, timeout=30) as r, open(dest, "wb") as f:
+        try:
+            r = urllib.request.urlopen(req, timeout=30)
+        except urllib.error.HTTPError as e:
+            if e.code != 416 or not have:                     # 416: stale/complete part → start over
+                raise
+            dest.unlink()
+            return _tm_download(url, dest, hint, cancel, prog, digest)
+        resumed = have and r.status == 206
+        if resumed and digest is not None:
+            with open(dest, "rb") as old:
+                for chunk in iter(lambda: old.read(1 << 20), b""):
+                    digest.update(chunk)
+        with r, open(dest, "ab" if resumed else "wb") as f:
+            base = have if resumed else 0
             clen = int(r.headers.get("Content-Length") or 0)
-            total = clen or hint
+            total = (base + clen) if clen else hint
             plain = not r.headers.get("Content-Encoding")
             while True:
                 if cancel.is_set():
@@ -485,7 +424,7 @@ def _tm_download(url: str, dest: Path, hint: int, cancel, prog, digest=None):
                 if digest is not None:
                     digest.update(b)
                 done += len(b)
-                prog("Downloading", done, total)
+                prog("Downloading", base + done, total)
         if clen and plain and done != clen:
             raise RuntimeError(f"download truncated ({done} of {clen} bytes)")
     except urllib.error.HTTPError as e:
@@ -656,10 +595,15 @@ def tm_install(tool: TMTool, ver: TMVer, launcher: TMLauncher, force: bool, canc
         for where, need in ((dest, ver.size * 4), (_tm_cache_dir(), ver.size * 1.2)):
             if shutil.disk_usage(where).free < need:
                 raise RuntimeError(f"not enough free space in {where} (about {int(need / 1048576)} MB needed)")
-    fd, tmpname = tempfile.mkstemp(prefix="dl-", suffix="-" + re.sub(r"[^\w.\-]", "_", ver.name or "x"),
-                                   dir=_tm_cache_dir())
-    os.close(fd)
-    archive, stage = Path(tmpname), Path(tempfile.mkdtemp(prefix=".drstool-tm-", dir=dest))
+    cache = _tm_cache_dir()
+    for old in cache.glob("part-*"):                          # abandoned partial downloads
+        if time.time() - old.stat().st_mtime > 7 * 86400:
+            old.unlink(missing_ok=True)
+    # Stable name per URL: an interrupted download is kept here and resumed next time.
+    archive = cache / ("part-" + hashlib.sha256(ver.url.encode()).hexdigest()[:16] + "-"
+                       + re.sub(r"[^\w.\-]", "_", ver.name or "x"))
+    stage = Path(tempfile.mkdtemp(prefix=".drstool-tm-", dir=dest))
+    ok = False
     try:
         log(f"  ↓ {ver.name or ver.url}" + (f"  ({ngx_human(ver.size)})" if ver.size else ""))
         digest = hashlib.sha512() if ver.csum else None
@@ -721,7 +665,8 @@ def tm_install(tool: TMTool, ver: TMVer, launcher: TMLauncher, force: bool, canc
             raise
 
     finally:
-        archive.unlink(missing_ok=True)
+        if ok:
+            archive.unlink(missing_ok=True)
         shutil.rmtree(stage, ignore_errors=True)
 
 

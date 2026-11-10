@@ -1,0 +1,82 @@
+[
+ {
+  "code": "nvapi",
+  "regex": "(?i)nvapi\\w*\\.dll.*(not found|failed)|nvapi.*(initiali[sz]e|init).*(fail|error)",
+  "title": "NVAPI unavailable",
+  "hint": "dxvk-nvapi did not initialise. Needs PROTON_ENABLE_NVAPI=1 (Proton) / DXVK_ENABLE_NVAPI=1 and an NVIDIA GPU that is not hidden (Linter: nvapi-hidden).",
+  "fixes": [
+   [
+    "PROTON_ENABLE_NVAPI",
+    "1"
+   ]
+  ]
+ },
+ {
+  "code": "nvcuda",
+  "regex": "(?i)library nvcuda\\.dll.*not found|nvcuda\\.dll.*not found",
+  "title": "nvcuda.dll missing",
+  "hint": "CUDA/PhysX path: enable NVAPI/NVIDIA libs in Proton (PROTON_ENABLE_NVAPI, PROTON_NVIDIA_LIBS).",
+  "fixes": []
+ },
+ {
+  "code": "device-lost",
+  "regex": "VK_ERROR_DEVICE_LOST|\\bdevice lost\\b",
+  "title": "GPU device lost (hang/reset)",
+  "hint": "Often an unstable GPU overclock/undervolt or driver fault: test at stock clocks and a default V/F curve.",
+  "fixes": []
+ },
+ {
+  "code": "oom",
+  "regex": "VK_ERROR_OUT_OF_(DEVICE|HOST)_MEMORY|out of (video|device|gpu) memory",
+  "title": "Out of memory",
+  "hint": "VRAM or RAM exhausted: lower textures/resolution; DXVK_CONFIG dxgi.maxDeviceMemory caps reported VRAM.",
+  "fixes": []
+ },
+ {
+  "code": "ntsync",
+  "regex": "(?i)ntsync.*(fail|cannot|unavailable|not (found|supported))|/dev/ntsync",
+  "title": "ntsync not usable",
+  "hint": "Kernel module not loaded (modprobe ntsync / CONFIG_NTSYNC) — or unset PROTON_USE_NTSYNC (Linter: ntsync-missing).",
+  "fixes": []
+ },
+ {
+  "code": "esync",
+  "regex": "(?i)too many open files|esync:.*(limit|fail)",
+  "title": "esync/fsync file-descriptor limit",
+  "hint": "Raise the nofile hard limit (≥ 524288) in limits.conf / the service, or set PROTON_NO_ESYNC=1.",
+  "fixes": []
+ },
+ {
+  "code": "vk-device",
+  "regex": "(?i)vkCreate(Device|Instance).*fail|VK_ERROR_INCOMPATIBLE_DRIVER|VK_ERROR_INITIALIZATION_FAILED|no suitable vulkan|failed to create (a )?vulkan (instance|device)",
+  "title": "Vulkan device/instance creation failed",
+  "hint": "Driver/ICD problem: check the System tab (vulkaninfo), DXVK_FILTER_DEVICE_NAME and the PRIME offload variables.",
+  "fixes": []
+ },
+ {
+  "code": "vk-ext",
+  "regex": "VK_ERROR_(EXTENSION|FEATURE)_NOT_PRESENT|required vulkan (extension|feature)|(unsupported|not supported) vulkan",
+  "title": "Missing Vulkan extension/feature",
+  "hint": "Driver too old for this DXVK/vkd3d-proton build: update the driver or use an older build (DLL Manager).",
+  "fixes": []
+ },
+ {
+  "code": "ngx",
+  "regex": "(?i)(ngx|nvngx).*(fail|error|not found)",
+  "title": "NGX / DLSS failed to load",
+  "hint": "Check the DLL Manager tab and PROTON_ENABLE_NVAPI=1; a mismatching nvngx_dlss.dll in the game folder also causes this.",
+  "fixes": [
+   [
+    "PROTON_ENABLE_NVAPI",
+    "1"
+   ]
+  ]
+ },
+ {
+  "code": "import-dll",
+  "regex": "err:module:import_dll",
+  "title": "Missing DLL import",
+  "hint": "A required runtime DLL is absent in the prefix (VC++ redistributables, d3dcompiler_47, xinput …).",
+  "fixes": []
+ }
+]

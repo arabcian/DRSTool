@@ -26,7 +26,7 @@ Turkish version: [README.tr.md](README.tr.md)
 - Preview of the resulting command/environment before applying
 
 ### Environment Variables
-The Environment tab covers 238 variables in these groups:
+The Environment tab covers 289 variables in these groups:
 
 - **DXVK** (incl. `DXVK_HUD` flag grid and the `DXVK_CONFIG` key picker)
 - **DXVK forks**: d7vk, dxvk-low-latency, DXVK-Sarek (each labelled with the Proton fork it belongs to)

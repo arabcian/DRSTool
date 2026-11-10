@@ -1,5 +1,6 @@
 """Proton / DXVK / vkd3d-proton log viewer."""
 
+import json
 import os
 import re
 from datetime import datetime
@@ -12,6 +13,8 @@ from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QPlainTextEdit, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
+
+from drstool_core.catalog import DATA_DIR
 
 from .catalog_data import LOG_ENV_ON
 from .theme import T
@@ -30,41 +33,8 @@ _LOG_WARN = re.compile(r"\bwarn(?:ing)?\b\s*:", re.I)
 _LOG_FIXME = re.compile(r"\bfixme\b\s*:", re.I)
 
 # (code, regex, title, hint, fixes[(var, value)])
-_LOG_RULES = [
-    ("nvapi", r"(?i)nvapi\w*\.dll.*(not found|failed)|nvapi.*(initiali[sz]e|init).*(fail|error)",
-     "NVAPI unavailable",
-     "dxvk-nvapi did not initialise. Needs PROTON_ENABLE_NVAPI=1 (Proton) / DXVK_ENABLE_NVAPI=1 and an NVIDIA GPU "
-     "that is not hidden (Linter: nvapi-hidden).", [("PROTON_ENABLE_NVAPI", "1")]),
-    ("nvcuda", r"(?i)library nvcuda\.dll.*not found|nvcuda\.dll.*not found",
-     "nvcuda.dll missing",
-     "CUDA/PhysX path: enable NVAPI/NVIDIA libs in Proton (PROTON_ENABLE_NVAPI, PROTON_NVIDIA_LIBS).", []),
-    ("device-lost", r"VK_ERROR_DEVICE_LOST|\bdevice lost\b",
-     "GPU device lost (hang/reset)",
-     "Often an unstable GPU overclock/undervolt or driver fault: test at stock clocks and a default V/F curve.", []),
-    ("oom", r"VK_ERROR_OUT_OF_(DEVICE|HOST)_MEMORY|out of (video|device|gpu) memory",
-     "Out of memory",
-     "VRAM or RAM exhausted: lower textures/resolution; DXVK_CONFIG dxgi.maxDeviceMemory caps reported VRAM.", []),
-    ("ntsync", r"(?i)ntsync.*(fail|cannot|unavailable|not (found|supported))|/dev/ntsync",
-     "ntsync not usable",
-     "Kernel module not loaded (modprobe ntsync / CONFIG_NTSYNC) — or unset PROTON_USE_NTSYNC (Linter: ntsync-missing).", []),
-    ("esync", r"(?i)too many open files|esync:.*(limit|fail)",
-     "esync/fsync file-descriptor limit",
-     "Raise the nofile hard limit (≥ 524288) in limits.conf / the service, or set PROTON_NO_ESYNC=1.", []),
-    ("vk-device", r"(?i)vkCreate(Device|Instance).*fail|VK_ERROR_INCOMPATIBLE_DRIVER|VK_ERROR_INITIALIZATION_FAILED|"
-                  r"no suitable vulkan|failed to create (a )?vulkan (instance|device)",
-     "Vulkan device/instance creation failed",
-     "Driver/ICD problem: check the System tab (vulkaninfo), DXVK_FILTER_DEVICE_NAME and the PRIME offload variables.", []),
-    ("vk-ext", r"VK_ERROR_(EXTENSION|FEATURE)_NOT_PRESENT|required vulkan (extension|feature)|(unsupported|not supported) vulkan",
-     "Missing Vulkan extension/feature",
-     "Driver too old for this DXVK/vkd3d-proton build: update the driver or use an older build (DLL Manager).", []),
-    ("ngx", r"(?i)(ngx|nvngx).*(fail|error|not found)",
-     "NGX / DLSS failed to load",
-     "Check the DLL Manager tab and PROTON_ENABLE_NVAPI=1; a mismatching nvngx_dlss.dll in the game folder also causes this.",
-     [("PROTON_ENABLE_NVAPI", "1")]),
-    ("import-dll", r"err:module:import_dll",
-     "Missing DLL import",
-     "A required runtime DLL is absent in the prefix (VC++ redistributables, d3dcompiler_47, xinput …).", []),
-]
+_LOG_RULES = [(r["code"], r["regex"], r["title"], r["hint"], [tuple(f) for f in r["fixes"]])
+              for r in json.loads((DATA_DIR / "log_rules.json").read_text(encoding="utf-8"))]
 
 
 # Lower-case substrings that every match of the rule must contain (a superset of its pattern's

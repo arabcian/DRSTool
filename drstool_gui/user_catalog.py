@@ -6,12 +6,12 @@ Qt-free; the drift dialogs that edit it live in ``upstream_drift``.
 
 import json
 import logging
-import os
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+from drstool_core.fsutil import atomic_write
 from drstool_core.models import EnvVarDef, GamescopeFlagDef, Setting, SettingValue
 
 from .catalog_data import (
@@ -53,12 +53,17 @@ def load_user_catalog() -> dict:
     return data
 
 
+def user_tm_tools() -> List[dict]:
+    """The user's own Tool Manager sources ("tm_tools": [{id, name, kind, desc, url, src, api, …}])."""
+    try:
+        v = json.loads(user_catalog_path().read_text(encoding="utf-8")).get("tm_tools")
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [x for x in v if isinstance(x, dict)] if isinstance(v, list) else []
+
+
 def save_user_catalog(data: dict) -> None:
-    p = user_catalog_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, p)
+    atomic_write(user_catalog_path(), json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def _uc_group(groups: list, group: str, name: str) -> None:
@@ -240,24 +245,25 @@ def _uc_form(target: str, rec: dict) -> dict:
     return f
 
 
-def _uc_as_python(target: str, rec: dict) -> str:
-    """Source text to paste into DRSTool.py to make a user-catalog record a built-in one."""
-    r = repr
-    if target == "env":
-        return (f'EnvVarDef({r(rec["name"])}, {r(rec.get("cat", ""))}, {r(rec.get("vtype", "string"))}, '
-                f'{r(rec.get("default", ""))}, {r(rec.get("desc", ""))}, options={r(rec.get("options", []))}, '
-                f'placeholder={r(rec.get("placeholder", ""))}),')
-    if target == "vkd3d":
-        return f'{r(rec["name"])}: {r(rec.get("desc", ""))},'
-    if target == "conf":
-        return f'({r(rec["key"])}, {r(rec.get("kind", "text"))}, {r(rec.get("opt", ""))}, {r(rec.get("desc", ""))}),'
-    if target == "gs":
-        return (f'GamescopeFlagDef({r(rec.get("name", ""))}, {r(rec["flag"])}, {r(rec.get("cat", ""))}, '
-                f'{r(rec.get("kind", "toggle"))}, {r(rec.get("desc", ""))}, short={r(rec.get("short", ""))}, '
-                f'options={r(rec.get("options", []))}),')
-    if target == "drs":
-        vals = ", ".join(f"SettingValue({r(a)}, {r(b)})" for a, b in rec.get("values", []))
-        return (f'Setting({r(rec["id"])}, {r(rec.get("name", ""))}, {r(rec.get("cat", ""))}, '
-                f'{r(rec.get("type", "hex"))}, {r(rec.get("default", "0x0"))}, {r(rec.get("desc", ""))}, '
-                f'values=[{vals}]),')
-    return f"# {rec.get('key', '')}: user-defined drift source, JSON only"
+def _uc_as_json(target: str, rec: dict) -> str:
+    """The record as an entry for drstool_core/data/*.json, to make it a built-in one."""
+    g = rec.get
+    if target == "env":       # env_vars.json, inside its group's list
+        e = {"name": rec["name"], "cat": g("cat", ""), "vtype": g("vtype", "string"),
+             "default": g("default", ""), "desc": g("desc", "")}
+        e.update({k: g(k) for k in ("options", "placeholder") if g(k)})
+    elif target == "vkd3d":   # vkd3d_config_descs.json
+        e = {rec["name"]: g("desc", "")}
+    elif target == "conf":    # dxvk_config_keys.json
+        e = [rec["key"], g("kind", "text"), g("opt", ""), g("desc", "")]
+    elif target == "gs":      # gamescope_flags.json
+        e = {"name": g("name", ""), "flag": rec["flag"], "cat": g("cat", ""), "kind": g("kind", "toggle"),
+             "desc": g("desc", "")}
+        e.update({k: g(k) for k in ("short", "options") if g(k)})
+    elif target == "drs":     # drs_settings.json
+        e = {"id": rec["id"], "name": g("name", ""), "cat": g("cat", ""), "type": g("type", "hex"),
+             "default": g("default", "0x0"), "desc": g("desc", ""),
+             "values": [{"name": a, "val": b} for a, b in g("values", [])]}
+    else:
+        e = rec                   # drift source: user catalog only
+    return json.dumps(e, ensure_ascii=False)
