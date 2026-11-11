@@ -28,19 +28,13 @@ import importlib.util, sys
 if sys.version_info < (3, 12):
     raise SystemExit('Python >= 3.12 required')
 missing = []
-for mod in ('PySide6.QtWidgets', 'yaml'):
+for mod in ('PySide6.QtWidgets', 'yaml', 'ruamel.yaml'):
     try:
         found = importlib.util.find_spec(mod)
     except (ModuleNotFoundError, ValueError):
         found = None
     if found is None:
         missing.append(mod)
-for mod in ('ruamel.yaml',):
-    try:
-        found = importlib.util.find_spec(mod)
-    except (ModuleNotFoundError, ValueError):
-        found = None
-    print(f'{mod}: {"available" if found else "optional: missing"}')
 print('Python:', sys.executable, sys.version.split()[0])
 if missing:
     raise SystemExit('Required Python modules missing: ' + ', '.join(missing))

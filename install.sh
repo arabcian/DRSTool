@@ -178,19 +178,19 @@ has_mod() { "$1" -c "import $2" >/dev/null 2>&1; }
 # Distribution packages for each need: "<runtime>|<flm build>|<lgtune build>|<polkit extras>"
 pkgs_for() {
     case "$PM:$1" in
-        apt-get:runtime) echo "python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets python3-yaml" ;;
+        apt-get:runtime) echo "python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets python3-yaml python3-ruamel.yaml" ;;
         apt-get:flm)     echo "cmake g++ libvulkan-dev" ;;
         apt-get:lgt)     echo "gcc util-linux" ;;
         apt-get:polkit)  echo "pkexec libcap2-bin" ;;
-        dnf:runtime)     echo "python3-pyside6 python3-pyyaml" ;;
+        dnf:runtime)     echo "python3-pyside6 python3-pyyaml python3-ruamel-yaml" ;;
         dnf:flm)         echo "cmake gcc-c++ vulkan-headers vulkan-loader-devel" ;;
         dnf:lgt)         echo "gcc util-linux" ;;
         dnf:polkit)      echo "polkit libcap" ;;
-        pacman:runtime)  echo "pyside6 python-yaml" ;;
+        pacman:runtime)  echo "pyside6 python-yaml python-ruamel-yaml" ;;
         pacman:flm)      echo "cmake gcc vulkan-headers vulkan-icd-loader" ;;
         pacman:lgt)      echo "gcc util-linux" ;;
         pacman:polkit)   echo "polkit libcap" ;;
-        zypper:runtime)  echo "python3-pyside6 python3-PyYAML" ;;
+        zypper:runtime)  echo "python3-pyside6 python3-PyYAML python3-ruamel.yaml" ;;
         zypper:flm)      echo "cmake gcc-c++ vulkan-devel vulkan-headers" ;;
         zypper:lgt)      echo "gcc util-linux" ;;
         zypper:polkit)   echo "polkit libcap-progs" ;;
@@ -278,11 +278,12 @@ USE_VENV=0
 [[ -x "$VENV/bin/python3" ]] && USE_VENV=1
 need_rt=0
 if (( USE_VENV )); then
-    has_mod "$VENV/bin/python3" PySide6.QtWidgets && has_mod "$VENV/bin/python3" yaml || need_rt=1
+    has_mod "$VENV/bin/python3" PySide6.QtWidgets && has_mod "$VENV/bin/python3" yaml && has_mod "$VENV/bin/python3" ruamel.yaml || need_rt=1
     say "$(L "Using the existing private environment" "Mevcut özel ortam kullanılıyor"): $VENV"
 else
     has_mod "$PY" PySide6.QtWidgets || need_rt=1
     has_mod "$PY" yaml || need_rt=1
+    has_mod "$PY" ruamel.yaml || need_rt=1
 fi
 DEPS_ACTION=none
 if (( need_rt )); then
@@ -461,7 +462,7 @@ if [[ "$DEPS_ACTION" == venv ]]; then
                         "venv oluşturulamadı — python3-venv paketini kurun (Debian/Ubuntu) ve tekrar deneyin")"
     fi
     "${RUN[@]}" "$VENV/bin/python3" -m pip install --upgrade --disable-pip-version-check -q \
-        "PySide6>=6.5" "PyYAML>=6" setproctitle \
+        "PySide6>=6.5" "PyYAML>=6" "ruamel.yaml>=0.18" setproctitle \
         || die "$(L "pip install failed" "pip kurulumu başarısız")"
     USE_VENV=1
 fi
