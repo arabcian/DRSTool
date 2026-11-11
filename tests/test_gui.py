@@ -745,13 +745,29 @@ class GuiTests(unittest.TestCase):
                                      lambda _m: None)
         self.assertEqual(n, 2)
         self.assertTrue(sys32.is_file() and wow.is_file())
-        # a second update replaces one of them: that one has an original now
-        sys32.write_bytes(b"MZ older")
-        m.apply_component_update(pfx, m._DLLM_PD["nvapi"], rel, pfx / ".drstool-backup/20260102-000000",
+        # a second update (newer release, 64-bit DLL only) replaces one of them: that one has an original now
+        first = sys32.read_bytes()
+        src2 = root / "src/dxvk-nvapi-v9.10"
+        (src2 / "x64").mkdir(parents=True)
+        (src2 / "x64/nvapi64.dll").write_bytes(pe_bytes(b'NVAPI\0v9.10\0', machine=0x8664))
+        arch2 = root / "dxvk-nvapi-v9.10.tar.gz"
+        with tarfile.open(arch2, "w:gz") as tf:
+            tf.add(src2, arcname="dxvk-nvapi-v9.10")
+        cache2 = m._cache_dir() / "v9.10"
+        cache2.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(shutil.rmtree, cache2, True)
+        shutil.copy2(arch2, cache2 / arch2.name)
+        (cache2 / (arch2.name + '.drstool.json')).write_text(json.dumps({
+            'url': 'https://invalid.example/never2',
+            'sha256': hashlib.sha256(arch2.read_bytes()).hexdigest()}))
+        rel2 = {"tag_name": "v9.10", "assets": [{"name": arch2.name, "size": arch2.stat().st_size,
+                                                 "browser_download_url": "https://invalid.example/never2"}]}
+        m.apply_component_update(pfx, m._DLLM_PD["nvapi"], rel2, pfx / ".drstool-backup/20260102-000000",
                                  lambda _m: None)
+        self.assertNotEqual(sys32.read_bytes(), first)
         n, stamp = m.restore_prefix_backup(pfx)
         self.assertEqual(stamp, "20260102-000000")
-        self.assertEqual(sys32.read_bytes(), b"MZ older")                  # original back
+        self.assertEqual(sys32.read_bytes(), first)                         # original back
         self.assertTrue(wow.is_file())                                      # not created by this update
         n, stamp = m.restore_prefix_backup(pfx)                             # the first update created both
         self.assertEqual(stamp, "20260101-000000")

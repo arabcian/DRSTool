@@ -8,8 +8,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
-import tarfile
 import tempfile
 import threading
 import urllib.error
@@ -292,25 +290,6 @@ def _pick_asset(rel: dict, comp: dict) -> Optional[dict]:
         return None
     assets.sort(key=lambda a: (a["name"].endswith(".zst"), a["name"]))   # prefer .gz
     return assets[0]
-
-
-def _inside(base: Path, tgt: Path) -> bool:
-    """Path containment that a plain startswith() gets wrong ("/c/pd-ab" vs "/c/pd-abX/…")."""
-    try:
-        return os.path.commonpath([str(base), str(tgt)]) == str(base)
-    except ValueError:
-        return False
-
-
-def _safe_extract(tf: tarfile.TarFile, dest: Path):
-    """Validate member paths without following symlinks; kept for API compatibility."""
-    # Validates before extracting anything, including dangerous hardlinks.
-    base = dest.resolve()
-    for member in tf.getmembers():
-        path = (base / member.name).resolve()
-        if not _inside(base, path) or not (member.isfile() or member.isdir()):
-            raise RuntimeError(f'unsafe archive entry: {member.name}')
-    tf.extractall(dest, filter='data')
 
 
 def _extract_archive(path: Path, dest: Path):
@@ -684,7 +663,6 @@ class _DllUpdateWorker(QThread):
             if self._cancel.is_set():
                 break
             d = dllm_cache_dir(b)
-            name = ngx_target_name(b.feature)
             have = ngx_cache_valid(b, d)
             label = f"{ngx_title(b.feature)} {b.version}"
             if have:

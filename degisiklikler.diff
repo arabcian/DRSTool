@@ -1,0 +1,320 @@
+diff -ruN -x .ruff_cache -x __pycache__ -x '*.patch' -x '*_TR.md' -x flip_meter.cpp orig/README.tr.md /home/claude/drstool/DRSTool-experimental/README.tr.md
+--- orig/README.tr.md	2026-11-11 03:56:56.720410652 +0300
++++ /home/claude/drstool/DRSTool-experimental/README.tr.md	2026-11-11 03:59:14.134358450 +0300
+@@ -1,4 +1,4 @@
+-> **v3 yerel kurulum:** Gentoo/OpenRC için önce `V3_STATUS_TR.md` ve `bash scripts/gentoo-local-install.sh --check` komutunu kullanın. Bu arşivi kurmak için yalnızca uzak git HEAD çeken `drstool-9999.ebuild` dosyasına güvenmeyin; bu ebuild yerel değişiklikleri içermeyebilir.
++> **v3 yerel kurulum:** Gentoo/OpenRC için önce `bash scripts/gentoo-local-install.sh --check` komutunu kullanın. Bu arşivi kurmak için yalnızca uzak git HEAD çeken `drstool-9999.ebuild` dosyasına güvenmeyin; bu ebuild yerel değişiklikleri içermeyebilir.
+ 
+ # DRSTool
+ 
+diff -ruN -x .ruff_cache -x __pycache__ -x '*.patch' -x '*_TR.md' -x flip_meter.cpp orig/drstool_core/diagnostics.py /home/claude/drstool/DRSTool-experimental/drstool_core/diagnostics.py
+--- orig/drstool_core/diagnostics.py	2026-11-11 03:56:56.722147591 +0300
++++ /home/claude/drstool/DRSTool-experimental/drstool_core/diagnostics.py	2026-11-11 03:56:56.770240647 +0300
+@@ -11,7 +11,6 @@
+ import hashlib
+ from datetime import datetime, timezone
+ import shutil
+-import subprocess
+ from pathlib import Path
+ 
+ from .support_bundle import _redact_obj
+diff -ruN -x .ruff_cache -x __pycache__ -x '*.patch' -x '*_TR.md' -x flip_meter.cpp orig/drstool_core/http_download.py /home/claude/drstool/DRSTool-experimental/drstool_core/http_download.py
+--- orig/drstool_core/http_download.py	2026-11-11 03:56:56.722508542 +0300
++++ /home/claude/drstool/DRSTool-experimental/drstool_core/http_download.py	2026-11-11 03:56:56.778240647 +0300
+@@ -7,7 +7,6 @@
+ 
+ import errno
+ import json
+-import os
+ import re
+ import urllib.error
+ import urllib.request
+diff -ruN -x .ruff_cache -x __pycache__ -x '*.patch' -x '*_TR.md' -x flip_meter.cpp orig/drstool_gui/dll_manager.py /home/claude/drstool/DRSTool-experimental/drstool_gui/dll_manager.py
+--- orig/drstool_gui/dll_manager.py	2026-11-11 03:56:56.724401863 +0300
++++ /home/claude/drstool/DRSTool-experimental/drstool_gui/dll_manager.py	2026-11-11 03:59:28.426249662 +0300
+@@ -8,8 +8,6 @@
+ import os
+ import re
+ import shutil
+-import subprocess
+-import tarfile
+ import tempfile
+ import threading
+ import urllib.error
+@@ -294,25 +292,6 @@
+     return assets[0]
+ 
+ 
+-def _inside(base: Path, tgt: Path) -> bool:
+-    """Path containment that a plain startswith() gets wrong ("/c/pd-ab" vs "/c/pd-abX/…")."""
+-    try:
+-        return os.path.commonpath([str(base), str(tgt)]) == str(base)
+-    except ValueError:
+-        return False
+-
+-
+-def _safe_extract(tf: tarfile.TarFile, dest: Path):
+-    """Validate member paths without following symlinks; kept for API compatibility."""
+-    # Validates before extracting anything, including dangerous hardlinks.
+-    base = dest.resolve()
+-    for member in tf.getmembers():
+-        path = (base / member.name).resolve()
+-        if not _inside(base, path) or not (member.isfile() or member.isdir()):
+-            raise RuntimeError(f'unsafe archive entry: {member.name}')
+-    tf.extractall(dest, filter='data')
+-
+-
+ def _extract_archive(path: Path, dest: Path):
+     # Never use external `tar -xf`: in .tar.zst it wrote paths to disk before
+     # the old post-extraction symlink validation could run.
+@@ -684,7 +663,6 @@
+             if self._cancel.is_set():
+                 break
+             d = dllm_cache_dir(b)
+-            name = ngx_target_name(b.feature)
+             have = ngx_cache_valid(b, d)
+             label = f"{ngx_title(b.feature)} {b.version}"
+             if have:
+diff -ruN -x .ruff_cache -x __pycache__ -x '*.patch' -x '*_TR.md' -x flip_meter.cpp orig/drstool_gui/main_window.py /home/claude/drstool/DRSTool-experimental/drstool_gui/main_window.py
+--- orig/drstool_gui/main_window.py	2026-11-11 03:56:56.727138052 +0300
++++ /home/claude/drstool/DRSTool-experimental/drstool_gui/main_window.py	2026-11-11 03:56:56.782240648 +0300
+@@ -2,7 +2,6 @@
+ 
+ import logging
+ import time
+-from datetime import datetime
+ from pathlib import Path
+ from typing import Dict, List, Optional, TYPE_CHECKING
+ 
+@@ -18,16 +17,15 @@
+ from drstool_core.risk import assess_profile, risk_level
+ from drstool_core.models import GPUArch
+ 
+-from . import base as _base
+ from .i18n import tr
+ from .main_games import GameLinksMixin
+ from .main_history import HistoryMixin
+ from .main_session import SessionMixin
+-from .app_dialogs import _qbool, _spawn_restart, AppearanceDialog, ShortcutsDialog
++from .app_dialogs import _spawn_restart, AppearanceDialog, ShortcutsDialog
+ from .arch_widgets import ArchDetailWidget, ArchListWidget
+ from .base import _CORE_ERR, APP_ID, APP_TITLE, ICON_PATH, share_code
+ from .catalog_data import ALL_ENV_VARS, ALL_SETTINGS, GPU_ARCHS
+-from .dialogs import ChangesDialog, PlanDialog, RecipeGallery
++from .dialogs import PlanDialog, RecipeGallery
+ from .dxvk_conf import DxvkConfWidget
+ from .env_widgets import EnvVarEditorWidget, EnvVarsWidget
+ from .external_change import ExternalChangeBanner, ExternalChangeWatcher
+@@ -59,13 +57,12 @@
+ from .settings_list import SettingsListWidget
+ from .settings_manager import SettingsManager
+ from .state import (
+-    canon_flat, describe_change, single_change_key, state_as_profile, state_from_profile,
+-    UndoTimeline,
++    state_as_profile, UndoTimeline,
+ )
+ from .steam_shortcuts_ui import ShortcutWidget, SteamShortcutsWidget
+ from .sysinfo import drs_unavailable, env_unavailable, SYSHUB
+ from .tasks import TASKS
+-from .theme import APPEARANCE, btn_ss, pill_ss, SCROLLABLE_CONTROL_QSS, T
++from .theme import btn_ss, pill_ss, SCROLLABLE_CONTROL_QSS, T
+ from .toasts import _install_toasts, toast, ToastStatusBar
+ from .tool_ui import ExtraToolsSidebarWidget
+ from .widgets import _fmt_drs_value, BrandMark, EmptyState, NavTab
+diff -ruN -x .ruff_cache -x __pycache__ -x '*.patch' -x '*_TR.md' -x flip_meter.cpp orig/drstool_gui/profiles.py /home/claude/drstool/DRSTool-experimental/drstool_gui/profiles.py
+--- orig/drstool_gui/profiles.py	2026-11-11 03:56:56.727982489 +0300
++++ /home/claude/drstool/DRSTool-experimental/drstool_gui/profiles.py	2026-11-11 03:59:14.136709627 +0300
+@@ -146,13 +146,13 @@
+         more_btn = QToolButton()
+         more_btn.setText("More ▾")
+         more_btn.setPopupMode(QToolButton.InstantPopup)
+-        more_btn.setStyleSheet(f"""
+-            QToolButton {{ border:1px solid #1d222c; border-radius:3px; padding:3px 10px;
+-                          background:#12151b; color:#c8cdd8; font-size:11px; min-height:18px; }}
+-            QToolButton:hover {{ border-color:#4a7300; }}
+-            QToolButton::menu-indicator {{ image:none; width:0; }}""")
++        more_btn.setStyleSheet("""
++            QToolButton { border:1px solid #1d222c; border-radius:3px; padding:3px 10px;
++                          background:#12151b; color:#c8cdd8; font-size:11px; min-height:18px; }
++            QToolButton:hover { border-color:#4a7300; }
++            QToolButton::menu-indicator { image:none; width:0; }""")
+         self._more_menu = QMenu(more_btn)
+-        self._more_menu.aboutToShow.connect(lambda: self._fill_menu(self._more_menu, True))
++        self._more_menu.aboutToShow.connect(lambda: self._fill_menu(self._more_menu))
+         more_btn.setMenu(self._more_menu)
+         btn_layout.addWidget(more_btn)
+ 
+@@ -226,10 +226,10 @@
+         if item and item.data(Qt.UserRole):
+             self._profile_list.setCurrentItem(item)
+         menu = QMenu(self)
+-        self._fill_menu(menu, False)
++        self._fill_menu(menu)
+         menu.exec(self._profile_list.viewport().mapToGlobal(pos))
+ 
+-    def _fill_menu(self, menu: QMenu, include_import: bool):
++    def _fill_menu(self, menu: QMenu):
+         menu.clear()
+         name = self._selected_name()
+         acts = [("Load", self._load_selected), ("Rename…", self._rename_selected),
+diff -ruN -x .ruff_cache -x __pycache__ -x '*.patch' -x '*_TR.md' -x flip_meter.cpp orig/drstool_gui/steam_shortcuts_ui.py /home/claude/drstool/DRSTool-experimental/drstool_gui/steam_shortcuts_ui.py
+--- orig/drstool_gui/steam_shortcuts_ui.py	2026-11-11 03:56:56.728596979 +0300
++++ /home/claude/drstool/DRSTool-experimental/drstool_gui/steam_shortcuts_ui.py	2026-11-11 03:59:14.137134402 +0300
+@@ -616,7 +616,7 @@
+             return True
+         return False
+ 
+-    def _write(self, root_kv, extra_cfg=None) -> str:
++    def _write(self, root_kv) -> str:
+         """Dump + self-check + backup + atomic write. Returns the backup file name ('' if new)."""
+         p = self._vdf_path()
+         data = steam_shortcuts.dump(root_kv)
+diff -ruN -x .ruff_cache -x __pycache__ -x '*.patch' -x '*_TR.md' -x flip_meter.cpp orig/drstool_gui/steam_utils.py /home/claude/drstool/DRSTool-experimental/drstool_gui/steam_utils.py
+--- orig/drstool_gui/steam_utils.py	2026-11-11 03:56:56.728696363 +0300
++++ /home/claude/drstool/DRSTool-experimental/drstool_gui/steam_utils.py	2026-11-11 03:57:00.885627032 +0300
+@@ -205,7 +205,7 @@
+     if app is None:
+         return text
+     # app = (open_tok, items, close_tok); the key token sits right before open_tok
+-    open_tok, close_tok = app[0], app[2]
++    close_tok = app[2]
+     items = blk[1]
+     key_tok = next((k for k, kd, pl in items if kd == "block" and pl is app), None)
+     if key_tok is None:
+diff -ruN -x .ruff_cache -x __pycache__ -x '*.patch' -x '*_TR.md' -x flip_meter.cpp orig/drstool_gui/tool_manager.py /home/claude/drstool/DRSTool-experimental/drstool_gui/tool_manager.py
+--- orig/drstool_gui/tool_manager.py	2026-11-11 03:56:56.729180671 +0300
++++ /home/claude/drstool/DRSTool-experimental/drstool_gui/tool_manager.py	2026-11-11 03:56:56.794240648 +0300
+@@ -1,13 +1,11 @@
+ """Tool Manager: download / install / update Proton, Wine, DXVK and vkd3d builds."""
+ 
+-import errno as _errno
+ import hashlib
+ import json
+ import logging
+ import os
+ import re
+ import shutil
+-import subprocess
+ import tarfile
+ import tempfile
+ import threading as _threading
+@@ -15,7 +13,6 @@
+ import urllib.error
+ import urllib.parse
+ import urllib.request
+-import zipfile as _zipfile
+ from concurrent.futures import ThreadPoolExecutor
+ from dataclasses import dataclass
+ from datetime import datetime
+diff -ruN -x .ruff_cache -x __pycache__ -x '*.patch' -x '*_TR.md' -x flip_meter.cpp orig/install.sh /home/claude/drstool/DRSTool-experimental/install.sh
+--- orig/install.sh	2026-11-11 03:56:56.729931293 +0300
++++ /home/claude/drstool/DRSTool-experimental/install.sh	2026-11-11 03:59:14.133665422 +0300
+@@ -472,7 +472,7 @@
+     "${RUN[@]}" rm -rf "$old"
+ done
+ "${RUN[@]}" cp -r "$SRC/DRSTool.py" "$SRC/drstool_launch.py" "$SRC/drstool_core" "$SRC/drstool_gui" "$SRC/assets" \
+-    "$SRC/vk-flip-meter-main" "$SRC/lutris-game-tune-main" "$LIB/"
++    "$SRC/vk-flip-meter-main" "$SRC/src" "$SRC/lutris-game-tune-main" "$LIB/"
+ [[ -f "$SRC/LICENSE" ]] && "${RUN[@]}" cp "$SRC/LICENSE" "$LIB/"
+ "${RUN[@]}" find "$LIB" -name __pycache__ -prune -exec rm -rf {} +
+ track "$BIN" "$APPS/drstool.desktop" "$ICONS/drstool.png"
+diff -ruN -x .ruff_cache -x __pycache__ -x '*.patch' -x '*_TR.md' -x flip_meter.cpp orig/pyproject.toml /home/claude/drstool/DRSTool-experimental/pyproject.toml
+--- orig/pyproject.toml	2026-11-11 03:56:56.732262431 +0300
++++ /home/claude/drstool/DRSTool-experimental/pyproject.toml	2026-11-11 03:56:56.762782077 +0300
+@@ -83,17 +83,6 @@
+ exclude = ["vk-flip-meter-main", "lutris-game-tune-main", "packaging"]
+ 
+ # Syntax errors plus all pyflakes checks (unused imports/variables, undefined
+-# names …). Files with older findings are exempted per rule below; remove an
+-# entry once its file is cleaned up. Style rules (E5xx, E7xx) come later.
++# names …). Style rules (E5xx, E7xx) come later.
+ [tool.ruff.lint]
+ select = ["E9", "F"]
+-
+-[tool.ruff.lint.per-file-ignores]
+-"drstool_core/diagnostics.py" = ["F401"]
+-"drstool_gui/dll_manager.py" = ["F401", "F841"]
+-"drstool_gui/main_window.py" = ["F401"]
+-"drstool_gui/profiles.py" = ["F541"]
+-"drstool_gui/steam_utils.py" = ["F841"]
+-"drstool_gui/tool_manager.py" = ["F401"]
+-"tests/test_enhancements.py" = ["F401"]
+-"tests/test_safety.py" = ["F401", "F841"]
+diff -ruN -x .ruff_cache -x __pycache__ -x '*.patch' -x '*_TR.md' -x flip_meter.cpp orig/tests/test_enhancements.py /home/claude/drstool/DRSTool-experimental/tests/test_enhancements.py
+--- orig/tests/test_enhancements.py	2026-11-11 03:56:56.738392864 +0300
++++ /home/claude/drstool/DRSTool-experimental/tests/test_enhancements.py	2026-11-11 03:56:56.798240649 +0300
+@@ -4,7 +4,6 @@
+ import tempfile
+ import unittest
+ from pathlib import Path
+-from unittest import mock
+ 
+ from drstool_core.benchmark import summarize, compare, compare_repeats
+ from drstool_core.risk import assess_profile, risk_level
+diff -ruN -x .ruff_cache -x __pycache__ -x '*.patch' -x '*_TR.md' -x flip_meter.cpp orig/tests/test_gui.py /home/claude/drstool/DRSTool-experimental/tests/test_gui.py
+--- orig/tests/test_gui.py	2026-11-11 03:56:56.738504157 +0300
++++ /home/claude/drstool/DRSTool-experimental/tests/test_gui.py	2026-11-11 03:59:14.138131350 +0300
+@@ -745,13 +745,29 @@
+                                      lambda _m: None)
+         self.assertEqual(n, 2)
+         self.assertTrue(sys32.is_file() and wow.is_file())
+-        # a second update replaces one of them: that one has an original now
+-        sys32.write_bytes(b"MZ older")
+-        m.apply_component_update(pfx, m._DLLM_PD["nvapi"], rel, pfx / ".drstool-backup/20260102-000000",
++        # a second update (newer release, 64-bit DLL only) replaces one of them: that one has an original now
++        first = sys32.read_bytes()
++        src2 = root / "src/dxvk-nvapi-v9.10"
++        (src2 / "x64").mkdir(parents=True)
++        (src2 / "x64/nvapi64.dll").write_bytes(pe_bytes(b'NVAPI\0v9.10\0', machine=0x8664))
++        arch2 = root / "dxvk-nvapi-v9.10.tar.gz"
++        with tarfile.open(arch2, "w:gz") as tf:
++            tf.add(src2, arcname="dxvk-nvapi-v9.10")
++        cache2 = m._cache_dir() / "v9.10"
++        cache2.mkdir(parents=True, exist_ok=True)
++        self.addCleanup(shutil.rmtree, cache2, True)
++        shutil.copy2(arch2, cache2 / arch2.name)
++        (cache2 / (arch2.name + '.drstool.json')).write_text(json.dumps({
++            'url': 'https://invalid.example/never2',
++            'sha256': hashlib.sha256(arch2.read_bytes()).hexdigest()}))
++        rel2 = {"tag_name": "v9.10", "assets": [{"name": arch2.name, "size": arch2.stat().st_size,
++                                                 "browser_download_url": "https://invalid.example/never2"}]}
++        m.apply_component_update(pfx, m._DLLM_PD["nvapi"], rel2, pfx / ".drstool-backup/20260102-000000",
+                                  lambda _m: None)
++        self.assertNotEqual(sys32.read_bytes(), first)
+         n, stamp = m.restore_prefix_backup(pfx)
+         self.assertEqual(stamp, "20260102-000000")
+-        self.assertEqual(sys32.read_bytes(), b"MZ older")                  # original back
++        self.assertEqual(sys32.read_bytes(), first)                         # original back
+         self.assertTrue(wow.is_file())                                      # not created by this update
+         n, stamp = m.restore_prefix_backup(pfx)                             # the first update created both
+         self.assertEqual(stamp, "20260101-000000")
+diff -ruN -x .ruff_cache -x __pycache__ -x '*.patch' -x '*_TR.md' -x flip_meter.cpp orig/tests/test_safety.py /home/claude/drstool/DRSTool-experimental/tests/test_safety.py
+--- orig/tests/test_safety.py	2026-11-11 03:56:56.738801925 +0300
++++ /home/claude/drstool/DRSTool-experimental/tests/test_safety.py	2026-11-11 03:57:07.261720793 +0300
+@@ -1,17 +1,15 @@
+ """Failure-injection and adversarial archive tests: stdlib only, no Qt/network."""
+ import io
+ import json
+-import os
+ import subprocess
+ import tarfile
+ import tempfile
+-import threading
+ import unittest
+ import zipfile
+ from pathlib import Path
+ from unittest import mock
+ 
+-from drstool_core import dll_ops, file_transactions as tx, safe_archive, support_bundle
++from drstool_core import file_transactions as tx, safe_archive, support_bundle
+ 
+ 
+ class TransactionSafetyTests(unittest.TestCase):
+@@ -192,7 +190,6 @@
+ 
+     @unittest.skipUnless(bool(__import__('shutil').which('zstd')), 'zstd missing')
+     def test_tar_zst_safe_stream(self):
+-        base = self._tar('good.tar.gz', [('contents/file', b'expected')])
+         archive = self.root / 'good.tar.zst'
+         raw = self.root / 'good.tar'
+         with tarfile.open(raw, 'w') as tf:

@@ -2,7 +2,6 @@
 
 import logging
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
@@ -18,16 +17,15 @@ from drstool_core import support_bundle
 from drstool_core.risk import assess_profile, risk_level
 from drstool_core.models import GPUArch
 
-from . import base as _base
 from .i18n import tr
 from .main_games import GameLinksMixin
 from .main_history import HistoryMixin
 from .main_session import SessionMixin
-from .app_dialogs import _qbool, _spawn_restart, AppearanceDialog, ShortcutsDialog
+from .app_dialogs import _spawn_restart, AppearanceDialog, ShortcutsDialog
 from .arch_widgets import ArchDetailWidget, ArchListWidget
 from .base import _CORE_ERR, APP_ID, APP_TITLE, ICON_PATH, share_code
 from .catalog_data import ALL_ENV_VARS, ALL_SETTINGS, GPU_ARCHS
-from .dialogs import ChangesDialog, PlanDialog, RecipeGallery
+from .dialogs import PlanDialog, RecipeGallery
 from .dxvk_conf import DxvkConfWidget
 from .env_widgets import EnvVarEditorWidget, EnvVarsWidget
 from .external_change import ExternalChangeBanner, ExternalChangeWatcher
@@ -59,13 +57,12 @@ from .setting_editor import SettingEditorWidget
 from .settings_list import SettingsListWidget
 from .settings_manager import SettingsManager
 from .state import (
-    canon_flat, describe_change, single_change_key, state_as_profile, state_from_profile,
-    UndoTimeline,
+    state_as_profile, UndoTimeline,
 )
 from .steam_shortcuts_ui import ShortcutWidget, SteamShortcutsWidget
 from .sysinfo import drs_unavailable, env_unavailable, SYSHUB
 from .tasks import TASKS
-from .theme import APPEARANCE, btn_ss, pill_ss, SCROLLABLE_CONTROL_QSS, T
+from .theme import btn_ss, pill_ss, SCROLLABLE_CONTROL_QSS, T
 from .toasts import _install_toasts, toast, ToastStatusBar
 from .tool_ui import ExtraToolsSidebarWidget
 from .widgets import _fmt_drs_value, BrandMark, EmptyState, NavTab

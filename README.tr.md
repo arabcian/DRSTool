@@ -1,4 +1,4 @@
-> **v3 yerel kurulum:** Gentoo/OpenRC için önce `V3_STATUS_TR.md` ve `bash scripts/gentoo-local-install.sh --check` komutunu kullanın. Bu arşivi kurmak için yalnızca uzak git HEAD çeken `drstool-9999.ebuild` dosyasına güvenmeyin; bu ebuild yerel değişiklikleri içermeyebilir.
+> **v3 yerel kurulum:** Gentoo/OpenRC için önce `bash scripts/gentoo-local-install.sh --check` komutunu kullanın. Bu arşivi kurmak için yalnızca uzak git HEAD çeken `drstool-9999.ebuild` dosyasına güvenmeyin; bu ebuild yerel değişiklikleri içermeyebilir.
 
 # DRSTool
 

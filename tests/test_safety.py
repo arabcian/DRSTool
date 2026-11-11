@@ -1,17 +1,15 @@
 """Failure-injection and adversarial archive tests: stdlib only, no Qt/network."""
 import io
 import json
-import os
 import subprocess
 import tarfile
 import tempfile
-import threading
 import unittest
 import zipfile
 from pathlib import Path
 from unittest import mock
 
-from drstool_core import dll_ops, file_transactions as tx, safe_archive, support_bundle
+from drstool_core import file_transactions as tx, safe_archive, support_bundle
 
 
 class TransactionSafetyTests(unittest.TestCase):
@@ -192,7 +190,6 @@ class ArchiveSafetyTests(unittest.TestCase):
 
     @unittest.skipUnless(bool(__import__('shutil').which('zstd')), 'zstd missing')
     def test_tar_zst_safe_stream(self):
-        base = self._tar('good.tar.gz', [('contents/file', b'expected')])
         archive = self.root / 'good.tar.zst'
         raw = self.root / 'good.tar'
         with tarfile.open(raw, 'w') as tf:

@@ -616,7 +616,7 @@ class SteamShortcutsWidget(QWidget):
             return True
         return False
 
-    def _write(self, root_kv, extra_cfg=None) -> str:
+    def _write(self, root_kv) -> str:
         """Dump + self-check + backup + atomic write. Returns the backup file name ('' if new)."""
         p = self._vdf_path()
         data = steam_shortcuts.dump(root_kv)

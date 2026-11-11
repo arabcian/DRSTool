@@ -11,7 +11,6 @@ import platform
 import hashlib
 from datetime import datetime, timezone
 import shutil
-import subprocess
 from pathlib import Path
 
 from .support_bundle import _redact_obj

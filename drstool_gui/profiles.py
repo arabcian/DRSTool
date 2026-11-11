@@ -146,13 +146,13 @@ class ProfileManagerWidget(QWidget):
         more_btn = QToolButton()
         more_btn.setText("More ▾")
         more_btn.setPopupMode(QToolButton.InstantPopup)
-        more_btn.setStyleSheet(f"""
-            QToolButton {{ border:1px solid #1d222c; border-radius:3px; padding:3px 10px;
-                          background:#12151b; color:#c8cdd8; font-size:11px; min-height:18px; }}
-            QToolButton:hover {{ border-color:#4a7300; }}
-            QToolButton::menu-indicator {{ image:none; width:0; }}""")
+        more_btn.setStyleSheet("""
+            QToolButton { border:1px solid #1d222c; border-radius:3px; padding:3px 10px;
+                          background:#12151b; color:#c8cdd8; font-size:11px; min-height:18px; }
+            QToolButton:hover { border-color:#4a7300; }
+            QToolButton::menu-indicator { image:none; width:0; }""")
         self._more_menu = QMenu(more_btn)
-        self._more_menu.aboutToShow.connect(lambda: self._fill_menu(self._more_menu, True))
+        self._more_menu.aboutToShow.connect(lambda: self._fill_menu(self._more_menu))
         more_btn.setMenu(self._more_menu)
         btn_layout.addWidget(more_btn)
 
@@ -226,10 +226,10 @@ class ProfileManagerWidget(QWidget):
         if item and item.data(Qt.UserRole):
             self._profile_list.setCurrentItem(item)
         menu = QMenu(self)
-        self._fill_menu(menu, False)
+        self._fill_menu(menu)
         menu.exec(self._profile_list.viewport().mapToGlobal(pos))
 
-    def _fill_menu(self, menu: QMenu, include_import: bool):
+    def _fill_menu(self, menu: QMenu):
         menu.clear()
         name = self._selected_name()
         acts = [("Load", self._load_selected), ("Rename…", self._rename_selected),

@@ -4,7 +4,6 @@ import math
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from drstool_core.benchmark import summarize, compare, compare_repeats
 from drstool_core.risk import assess_profile, risk_level

@@ -205,7 +205,7 @@ def vdf_remove_app_block(text: str, path: tuple, appid: str) -> str:
     if app is None:
         return text
     # app = (open_tok, items, close_tok); the key token sits right before open_tok
-    open_tok, close_tok = app[0], app[2]
+    close_tok = app[2]
     items = blk[1]
     key_tok = next((k for k, kd, pl in items if kd == "block" and pl is app), None)
     if key_tok is None:

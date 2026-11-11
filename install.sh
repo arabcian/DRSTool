@@ -472,7 +472,7 @@ for old in "$LIB"/*; do
     "${RUN[@]}" rm -rf "$old"
 done
 "${RUN[@]}" cp -r "$SRC/DRSTool.py" "$SRC/drstool_launch.py" "$SRC/drstool_core" "$SRC/drstool_gui" "$SRC/assets" \
-    "$SRC/vk-flip-meter-main" "$SRC/lutris-game-tune-main" "$LIB/"
+    "$SRC/vk-flip-meter-main" "$SRC/src" "$SRC/lutris-game-tune-main" "$LIB/"
 [[ -f "$SRC/LICENSE" ]] && "${RUN[@]}" cp "$SRC/LICENSE" "$LIB/"
 "${RUN[@]}" find "$LIB" -name __pycache__ -prune -exec rm -rf {} +
 track "$BIN" "$APPS/drstool.desktop" "$ICONS/drstool.png"
