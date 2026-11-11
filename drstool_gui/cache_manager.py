@@ -3,19 +3,19 @@
 import logging
 import os
 import re
-import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QSettings, Qt, QThread, QUrl, Signal
+from PySide6.QtCore import QSettings, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QMessageBox, QTreeWidget,
+    QFileDialog, QHBoxLayout, QHeaderView, QLabel, QMessageBox, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from drstool_core import launcher_paths
+from drstool_core.cache_ops import clear_cache_nodes
 
 from .base import _fmt_bytes, APP_ID
 from .sysinfo import SYSHUB
@@ -31,7 +31,7 @@ _log = logging.getLogger(__name__)
 # Shader / pipeline cache manager
 # ----------------------------------------------------------------------------
 
-def _path_stats(path: str) -> tuple:
+def _path_stats(path: str, cancelled=lambda: False, progress=lambda _n: None) -> tuple:
     """(disk bytes, file count, newest mtime) of a file or directory tree; symlinks not followed."""
     total = files = 0
     newest = 0.0
@@ -43,10 +43,14 @@ def _path_stats(path: str) -> tuple:
         return getattr(st, "st_blocks", 0) * 512 or st.st_size, 1, st.st_mtime
     stack = [path]
     while stack:
+        if cancelled():
+            break
         d = stack.pop()
         try:
             with os.scandir(d) as it:
                 for e in it:
+                    if cancelled():
+                        break
                     try:
                         if e.is_symlink():
                             continue
@@ -58,6 +62,8 @@ def _path_stats(path: str) -> tuple:
                         continue
                     total += getattr(s, "st_blocks", 0) * 512 or s.st_size
                     files += 1
+                    if files % 256 == 0:
+                        progress(files)
                     if s.st_mtime > newest:
                         newest = s.st_mtime
         except OSError:
@@ -191,7 +197,7 @@ def _safe_cache_path(p: str, extra: List[str]) -> bool:
         home = Path(os.path.realpath(Path.home()))
     except OSError:
         return False
-    if rp == home or rp == Path("/") or len(rp.parts) < 4:
+    if Path(p).is_symlink() or rp == home or rp == Path("/") or len(rp.parts) < 4:
         return False
     if p in extra:
         return True
@@ -204,16 +210,52 @@ _CACHE_NAME_RX = re.compile(r"(?i)(cache|\.dxvk|dxvk-|vkd3d|\.foz|fozdb|fossiliz
 
 class _CacheScanThread(QThread):
     done = Signal(object)
+    progress = Signal(int, str)
 
     def __init__(self, user_env: Dict[str, str], extra: List[str]):
         super().__init__()
         self._env, self._extra = user_env, extra
 
+    def cancel(self):
+        self.requestInterruption()
+
     def run(self):
+        if self.isInterruptionRequested():
+            return
         nodes = discover_cache_nodes(self._env, self._extra)
+        running_count = 0
         for n in nodes:
-            n["size"], n["files"], n["mtime"] = _path_stats(n["path"])
-        self.done.emit(nodes)
+            if self.isInterruptionRequested():
+                return
+            n["size"], n["files"], n["mtime"] = _path_stats(
+                n["path"], self.isInterruptionRequested,
+                lambda count, offset=running_count, label=n['label']:
+                    self.progress.emit(offset + count, label))
+            running_count += n['files']
+        if not self.isInterruptionRequested():
+            self.done.emit(nodes)
+
+
+class _CacheDeleteThread(QThread):
+    done = Signal(object)
+    progress = Signal(int, str)
+
+    def __init__(self, nodes: List[dict], extra: List[str]):
+        super().__init__()
+        self._nodes = [dict(n) for n in nodes]
+        self._extra = list(extra)
+
+    def cancel(self):
+        self.requestInterruption()
+
+    def run(self):
+        result = clear_cache_nodes(
+            self._nodes, lambda p: _safe_cache_path(p, self._extra),
+            self.isInterruptionRequested,
+            lambda count, path: self.progress.emit(count, path) if count % 128 == 0 else None,
+            lambda name: bool(_CACHE_NAME_RX.search(name)),
+        )
+        self.done.emit(result)
 
 
 class CacheManagerWidget(QWidget):
@@ -229,6 +271,7 @@ class CacheManagerWidget(QWidget):
         self._thread: Optional[_CacheScanThread] = None
         self._nodes: List[dict] = []
         self._scanned = False
+        self._delete_thread = None
         self._stale = False
         self._driver_msg_sent = False
         lay = QVBoxLayout(self)
@@ -279,13 +322,19 @@ class CacheManagerWidget(QWidget):
         row = QHBoxLayout()
         b_scan = _tool_btn("Rescan", bold=True)
         b_scan.clicked.connect(self.rescan)
+        self._btn_cancel_scan = _tool_btn("Cancel scan")
+        self._btn_cancel_scan.clicked.connect(self._cancel_scan)
+        self._btn_cancel_scan.setEnabled(False)
         b_add = _tool_btn("Add folder…")
         b_add.clicked.connect(self._add_folder)
         b_open = _tool_btn("Open folder")
         b_open.clicked.connect(self._open_selected)
         b_clear = _tool_btn("Clear selected")
         b_clear.clicked.connect(self._clear_selected)
-        for b in (b_scan, b_add, b_open, b_clear):
+        self._btn_cancel_delete = _tool_btn("Cancel cleanup")
+        self._btn_cancel_delete.clicked.connect(self._cancel_clear)
+        self._btn_cancel_delete.setEnabled(False)
+        for b in (b_scan, self._btn_cancel_scan, b_add, b_open, b_clear, self._btn_cancel_delete):
             row.addWidget(b)
         row.addStretch(1)
         self._total = QLabel("")
@@ -329,6 +378,8 @@ class CacheManagerWidget(QWidget):
             pass
 
     def rescan(self):
+        if self._delete_thread is not None and self._delete_thread.isRunning():
+            return
         if self._thread is not None and self._thread.isRunning():
             return
         env = self._user_env()
@@ -337,9 +388,23 @@ class CacheManagerWidget(QWidget):
                                if shown else "No cache-related variables are set in the Env Vars tab.")
         self._total.setText("Scanning…")
         self._thread = _CacheScanThread(env, self._extra_folders())
-        TASKS.track(self._thread, "Cache: scan", _NAV("Cache"))
+        TASKS.track(self._thread, "Cache: scan", _NAV("Cache"), self._thread.progress)
         self._thread.done.connect(self._on_scanned)
+        self._thread.progress.connect(
+            lambda count, label: self._total.setText(f"Scanning… {count} files ({label})"))
+        self._thread.finished.connect(self._scan_finished)
+        self._btn_cancel_scan.setEnabled(True)
         self._thread.start()
+
+    def _cancel_scan(self):
+        if self._thread is not None and self._thread.isRunning():
+            self._thread.cancel()
+            self._total.setText("Cancelling scan…")
+
+    def _scan_finished(self):
+        self._btn_cancel_scan.setEnabled(False)
+        if self._thread is not None and self._thread.isInterruptionRequested():
+            self._total.setText("Cache scan cancelled.")
 
     def _on_scanned(self, nodes):
         self._nodes = nodes
@@ -479,32 +544,35 @@ class CacheManagerWidget(QWidget):
                 + (f"\n\n{refused} location(s) skipped (not recognised as caches)." if refused else "")
                 + "\n\nGames rebuild their caches on the next run (one-time stutter).") != QMessageBox.Yes:
             return
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        errors = kept = 0
-        try:
-            for n in ok:
-                p = Path(n["path"])
-                try:
-                    if p.is_dir() and not p.is_symlink():
-                        for child in p.iterdir():
-                            # A *_CACHE_PATH env var may point at a shared folder (the
-                            # game dir, ~/Games …). Wiping its whole content deleted
-                            # unrelated files — there, only cache-named entries go.
-                            if n.get("user_path") and not _CACHE_NAME_RX.search(child.name):
-                                kept += 1
-                                continue
-                            if child.is_dir() and not child.is_symlink():
-                                shutil.rmtree(child, ignore_errors=True)
-                            else:
-                                child.unlink(missing_ok=True)
-                    else:
-                        p.unlink(missing_ok=True)
-                except OSError:
-                    errors += 1
-        finally:
-            QApplication.restoreOverrideCursor()
+        if self._delete_thread is not None and self._delete_thread.isRunning():
+            return
+        self._delete_thread = _CacheDeleteThread(ok, extra)
+        TASKS.track(self._delete_thread, "Cache: clean", _NAV("Cache"),
+                    progress=self._delete_thread.progress)
+        self._delete_thread.progress.connect(
+            lambda count, _path: self._total.setText(f"Cleaning… {count} files removed"))
+        self._delete_thread.done.connect(self._on_cleaned)
+        self._delete_thread.finished.connect(lambda: QTimer.singleShot(0, self.rescan))
+        self._btn_cancel_delete.setEnabled(True)
+        self._total.setText("Cleaning… (you may cancel)")
+        self._delete_thread.start()
+
+    def _cancel_clear(self):
+        if self._delete_thread is not None and self._delete_thread.isRunning():
+            self._delete_thread.cancel()
+            self._total.setText("Cancelling cleanup…")
+
+    def _on_cleaned(self, result: dict):
+        self._btn_cancel_delete.setEnabled(False)
+        errors = result['errors']
+        summary = (f"Removed {result['deleted']} cache file(s); "
+                   f"kept {result['kept']} unrelated item(s), "
+                   f"refused {result['refused']} unsafe path(s).")
+        if result['cancelled']:
+            summary += " Cleanup cancelled; remaining files were left intact."
         if errors:
-            QMessageBox.warning(self, "Clear caches", f"{errors} location(s) could not be fully cleared.")
-        if kept:
-            self._total.setText(f"{kept} non-cache item(s) inside your *_CACHE_PATH folder(s) were left alone.")
-        self.rescan()
+            details = "\n".join(errors[:15])
+            QMessageBox.warning(self, "Cache cleanup incomplete",
+                                summary + f"\n\n{len(errors)} error(s):\n" + details)
+        else:
+            self._total.setText(summary)

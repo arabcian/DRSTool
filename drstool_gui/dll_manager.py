@@ -578,9 +578,11 @@ class _DllScanWorker(QThread):
     progress = Signal(float, str)
     done = Signal(int, object)           # games scanned, [errors]
 
-    def __init__(self, custom: List[str], only: Optional[list] = None, parent=None):
+    def __init__(self, custom: List[str], only: Optional[list] = None, parent=None,
+                 force_full: bool = False):
         super().__init__(parent)
         self._custom, self._only = list(custom), only
+        self._force_full = force_full
         self._cancel = threading.Event()
 
     def cancel(self):
@@ -603,7 +605,7 @@ class _DllScanWorker(QThread):
                 break
             self.progress.emit(i / max(1, n), g.name)
             try:
-                dlls = game_scan.find_dlls(g)
+                dlls = game_scan.find_dlls(g, force_rescan=self._force_full)
             except Exception as ex:                       # noqa: BLE001 - one game must not stop the scan
                 errors.append(f"{g.name}: {ex}")
                 dlls = game_scan.GameDlls()
@@ -873,6 +875,10 @@ class DllManagerWidget(QWidget):
         self._scan_btn = _tool_btn("⟳  Scan games", bold=True)
         self._scan_btn.clicked.connect(lambda: self.scan())    # not clicked(bool) -> only=False
         top.addWidget(self._scan_btn)
+        self._full_scan_btn = _tool_btn("Force full rescan")
+        self._full_scan_btn.setToolTip("Ignore the DLL metadata cache and inspect every game directory again")
+        self._full_scan_btn.clicked.connect(lambda: self.scan(force_full=True))
+        top.addWidget(self._full_scan_btn)
         self._online_btn = _tool_btn("Check for updates", bg="#1d2a10", border="#4a7300", fg="#cfe8a8", bold=True)
         self._online_btn.setToolTip("Lists every DLSS / Streamline build on ngx.download.nvidia.com (staged "
                                     "drops included) and the newest DXVK, vkd3d-proton and dxvk-nvapi releases")
@@ -1056,6 +1062,7 @@ class DllManagerWidget(QWidget):
         busy = self._busy()
         st = self._current_state()
         self._scan_btn.setEnabled(not busy)
+        self._full_scan_btn.setEnabled(not busy)
         self._online_btn.setEnabled(not busy)
         self._cancel_btn.setVisible(busy)
         sel = self._checked_states()
@@ -1098,7 +1105,7 @@ class DllManagerWidget(QWidget):
         return out
 
     # ── scan ────────────────────────────────────────────────────────────────
-    def scan(self, only: Optional[list] = None):
+    def scan(self, only: Optional[list] = None, *, force_full: bool = False):
         if not self._ok:
             return
         if self._busy():
@@ -1109,7 +1116,7 @@ class DllManagerWidget(QWidget):
             self._tree.clear()
             self._states.clear()
             self._items.clear()
-        w = _DllScanWorker(self._custom(), only, self)
+        w = _DllScanWorker(self._custom(), only, self, force_full=force_full)
         self._scan_worker = w
         w.game_ready.connect(self._on_game)
         w.progress.connect(self._on_progress)
@@ -1426,5 +1433,5 @@ class DllManagerWidget(QWidget):
     def shutdown(self):
         self._cancel()
         for w in (self._worker, self._scan_worker):
-            if w is not None:
-                w.wait(5000)
+            if w is not None and w.isRunning():
+                w.requestInterruption()

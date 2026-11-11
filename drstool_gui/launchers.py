@@ -4,19 +4,22 @@ import logging
 import json
 import os
 import re
+import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QVBoxLayout, QWidget,
 )
 
 from drstool_core import launcher_paths
+from drstool_core.file_transactions import Change, apply as apply_file_transaction
 
-from .base import _atomic_write, _backup_file, _HAVE_YAML, _proc_running, _YAML_LOADER, yaml
+from .base import _atomic_write, _backup_file, _PENDING_BAKS, _HAVE_YAML, _proc_running, _YAML_LOADER, yaml
 from .gamescope import GamescopeFlagsWidget
 from .launch_line import build_launch_line, gamescope_arg_string
 from .lutris_sync import LutrisSyncWidget
@@ -26,6 +29,7 @@ from .steam_utils import (
     vdf_set_app_value, vdf_set_launch_options,
 )
 from .theme import T
+from .tasks import TASKS, _NAV
 from .toasts import offer_undo
 from .tool_ui import _tool_btn
 from .widgets import _COMBO_QSS, _LAUNCHER_QSS, _LINEEDIT_QSS, _MONO_BOX_QSS
@@ -103,6 +107,22 @@ class SteamBackend(LauncherBackend):
 
     _libraries = staticmethod(launcher_paths.steam_libraries)
 
+    def _preview_text(self, path: Path) -> str:
+        if not hasattr(self, '_preview_cache'):
+            self._preview_cache = {}
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino)
+        cached = self._preview_cache.get(key)
+        if cached is not None:
+            return cached
+        value = path.read_text(errors="replace")
+        # Bounded cache; disk content is always read fresh when writing.
+        self._preview_cache[key] = value
+        if len(self._preview_cache) > 8:
+            self._preview_cache.pop(next(iter(self._preview_cache)))
+        return value
+
+
     def scan(self, account=None):
         cfg = Path(account) if account else None
         if cfg is None:
@@ -123,7 +143,7 @@ class SteamBackend(LauncherBackend):
 
     def current(self, e):
         try:
-            return vdf_get_launch_options(e.path.read_text(errors="replace"), e.key)
+            return vdf_get_launch_options(self._preview_text(e.path), e.key)
         except OSError:
             return ""
 
@@ -157,19 +177,38 @@ class SteamBackend(LauncherBackend):
                 ok = vdf_get_app_value(cfg_new, STEAM_COMPAT_PATH, e.key, "name") == ct
             if not ok:
                 raise ValueError("Self-check failed: config.vdf does not read back as intended — aborted.")
-        bak = _backup_file(e.path)
-        _atomic_write(e.path, new)
-        msg = f"Steam launch options written for {e.title}. Backup: {bak.name}"
+        # Transactional multi-file update: the second target failing must not
+        # leave localconfig.vdf partially applied. The core journal records
+        # per-target SHA-256 values, rejects external edits and rolls back.
+        if self.busy():
+            raise RuntimeError(self.busy())
+        state_dir = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state')
+        txn_dir = (state_dir / 'drstool' / 'steam-transactions' /
+                   f'{time.time_ns()}-{os.getpid()}')
+        with tempfile.TemporaryDirectory(prefix='.drstool-steam-') as work:
+            staging = Path(work)
+            local_src = staging / 'localconfig.vdf'
+            local_src.write_text(new, encoding='utf-8')
+            changes = [Change(e.path, local_src, 'localconfig.vdf', 'launch options')]
+            if cfg_new is not None:
+                cfg_src = staging / 'config.vdf'
+                cfg_src.write_text(cfg_new, encoding='utf-8')
+                changes.append(Change(cfg, cfg_src, 'config.vdf', 'compatibility override'))
+            apply_file_transaction(changes, txn_dir)
+        # Preserve the existing per-file Undo toast, including both VDF files.
+        # The transaction copies are immutable backups that survive a crash.
+        _PENDING_BAKS.clear()
+        for change in changes:
+            _PENDING_BAKS.append((change.target, txn_dir / 'files' / change.backup_name,
+                                  time.monotonic()))
+        msg = f'Steam launch options written for {e.title}. Transaction backup: {txn_dir}'
         if cfg_new is not None:
-            cbak = _backup_file(cfg)
-            _atomic_write(cfg, cfg_new)
-            msg += (" Proton override removed." if ct == "__default__" else f" Proton set to {ct}.") + \
-                f" Backup: {cbak.name}"
+            msg += (' Proton override removed.' if ct == '__default__' else f' Proton set to {ct}.')
         return msg
 
     def extra_preview(self, e, opts):
         try:
-            cur = vdf_get_app_value(steam_config_vdf(e.path).read_text(errors="replace"),
+            cur = vdf_get_app_value(self._preview_text(steam_config_vdf(e.path)),
                                     STEAM_COMPAT_PATH, e.key, "name")
         except (OSError, ValueError):
             cur = ""
@@ -398,6 +437,35 @@ class BottlesBackend(LauncherBackend):
         return f"bottle.yml updated for {e.title}. Backup: {bak.name}"
 
 
+class _LauncherScanThread(QThread):
+    scanned = Signal(object, object, str)
+
+    def __init__(self, backend: LauncherBackend, keep: bool, account):
+        super().__init__()
+        self.backend, self.keep, self.account = backend, keep, account
+
+    def cancel(self):
+        self.requestInterruption()
+
+    def run(self):
+        accounts = None
+        try:
+            if not self.keep:
+                accounts = self.backend.accounts()
+                ids = [ident for _, ident in accounts]
+                account = self.account if self.account in ids else (ids[0] if ids else None)
+            else:
+                account = self.account
+            if self.isInterruptionRequested():
+                return
+            entries = self.backend.scan(account)
+            if not self.isInterruptionRequested():
+                self.scanned.emit(accounts, entries, '')
+        except Exception as exc:
+            if not self.isInterruptionRequested():
+                self.scanned.emit(accounts, [], str(exc))
+
+
 class LauncherSyncWidget(QWidget):
     """One tab per launcher (Steam / Heroic / Bottles): pick target -> preview -> apply."""
     # After a successful write: {"kind", "key", "path", "title"} (MainWindow links it to the profile)
@@ -407,6 +475,8 @@ class LauncherSyncWidget(QWidget):
         super().__init__(parent)
         self.backend = backend
         self._entries: List[LEntry] = []
+        self._scan_thread = None
+        self._queued_scan = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 8, 4, 4)
         lay.setSpacing(8)
@@ -492,32 +562,52 @@ class LauncherSyncWidget(QWidget):
         return w.collect_launch_payload() if hasattr(w, "collect_launch_payload") else {}
 
     def rescan(self, keep_account: bool = False):
+        if self._scan_thread is not None and self._scan_thread.isRunning():
+            self._queued_scan = keep_account
+            return
         be = self.backend
         if be.unavailable():
             return
-        if not keep_account:
+        acct = self._acct.currentData() if self._acct.count() else None
+        self._status.setText('Scanning targets…')
+        self._apply_btn.setEnabled(False)
+        self._scan_thread = _LauncherScanThread(be, keep_account, acct)
+        TASKS.track(self._scan_thread, f'{be.name}: scan', _NAV(be.name))
+        self._scan_thread.scanned.connect(self._on_scanned)
+        self._scan_thread.finished.connect(self._scan_finished)
+        self._scan_thread.start()
+
+    def _scan_finished(self):
+        if self._queued_scan is not None:
+            keep = self._queued_scan
+            self._queued_scan = None
+            QTimer.singleShot(0, lambda: self.rescan(keep_account=keep))
+
+    def _on_scanned(self, accounts, entries, error):
+        if self._queued_scan is not None:  # the selection changed while scanning
+            return
+        if accounts is not None:
+            selected = self._acct.currentData()
             self._acct.blockSignals(True)
             self._acct.clear()
-            for label, ident in be.accounts():
+            for label, ident in accounts:
                 self._acct.addItem(label, ident)
+            index = self._acct.findData(selected)
+            if index >= 0:
+                self._acct.setCurrentIndex(index)
             self._acct.setVisible(self._acct.count() > 1)
             self._acct.blockSignals(False)
-        acct = self._acct.currentData() if self._acct.count() else None
-        try:
-            self._entries = be.scan(acct)
-        except Exception as ex:
-            self._entries = []
-            self._status.setText(f"⚠ scan failed: {ex}")
+        self._entries = entries
         self._list.clear()
         for e in self._entries:
             it = QListWidgetItem(e.title)
             it.setData(Qt.UserRole, e)
             self._list.addItem(it)
         self._apply_filter(self._filter.text())
-        if self._entries:
-            self._status.setText(f"{len(self._entries)} target(s) found.")
-        elif not self._status.text().startswith("⚠"):
-            self._status.setText("No targets found.")
+        self._status.setText((f'⚠ scan failed: {error}' if error else
+                              f'{len(self._entries)} target(s) found.' if self._entries else
+                              'No targets found.'))
+        self._apply_btn.setEnabled(bool(self._entries))
         self.refresh_preview()
 
     def _apply_filter(self, text):

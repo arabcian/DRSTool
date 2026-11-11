@@ -46,6 +46,7 @@ RDEPEND="${PYTHON_DEPS}
 		dev-python/pyside[gui,widgets,${PYTHON_USEDEP}]
 		dev-python/setproctitle[${PYTHON_USEDEP}]
 		dev-python/pyyaml[${PYTHON_USEDEP}]
+		dev-python/ruamel-yaml[${PYTHON_USEDEP}]
 	')
 	flip-meter? ( media-libs/vulkan-loader )
 	lutris-tune? (

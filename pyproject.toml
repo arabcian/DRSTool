@@ -24,6 +24,7 @@ authors = [{ name = "arabcian" }]
 dependencies = [
     "PySide6>=6.5",
     "PyYAML>=6",
+    "ruamel.yaml>=0.18",
 ]
 classifiers = [
     "Environment :: X11 Applications :: Qt",
@@ -35,7 +36,7 @@ classifiers = [
 [project.optional-dependencies]
 # Makes KDE/Wayland show the right taskbar icon (renames the process to "drstool")
 proctitle = ["setproctitle"]
-yaml-roundtrip = ["ruamel.yaml>=0.18"]  # Preserve Lutris YAML comments and quotation styles
+yaml-roundtrip = ["ruamel.yaml>=0.18"]  # Compatibility alias; now a required dependency
 
 [project.urls]
 Homepage = "https://github.com/arabcian/DRSTool"

@@ -252,6 +252,10 @@ class SysHub(QObject):
             return
         self._thread = _ProbeThread(use_cache=not force)
         self._thread.done.connect(self._on_done)
+        # Register with the common cancellation/close coordinator. A vulkaninfo
+        # subprocess can take up to 25 seconds and must not block closeEvent.
+        from .tasks import TASKS
+        TASKS.track(self._thread, 'System: probe')
         self._thread.start()
 
     def _on_done(self, info):
@@ -260,7 +264,7 @@ class SysHub(QObject):
 
     def shutdown(self):
         if self._thread is not None and self._thread.isRunning():
-            self._thread.wait(30000)
+            self._thread.requestInterruption()
 
 
 SYSHUB = SysHub()

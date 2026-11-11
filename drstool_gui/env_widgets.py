@@ -17,6 +17,7 @@ from .catalog_data import (
     VKD3D_CONFIG_DESCS, VKD3D_FLAG_GROUPS, vkd3d_config_tokens,
 )
 from .favorites import FAVS
+from .perf_trace import GuiPerfTimer
 from .field_check import watch
 from .lookup import _ENV_BY_NAME, _ENV_NAME_RX, CUSTOM_ENV_CAT, env_def
 from .setting_editor import (
@@ -154,6 +155,7 @@ class EnvVarsWidget(QListWidget):
         description or current value match are shown; empty categories are
         skipped entirely.
         """
+        perf = GuiPerfTimer("EnvVars.populate")
         current_item = self.currentItem()
         current_name = current_item.data(Qt.UserRole) if current_item else None
 
@@ -210,6 +212,7 @@ class EnvVarsWidget(QListWidget):
                     self.setCurrentItem(item)
                     break
         self.blockSignals(False)
+        perf.report(count=self.count())
 
     def set_gamescope_enabled(self, on: bool):
         if on != self._gamescope_on:

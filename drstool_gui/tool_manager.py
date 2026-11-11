@@ -388,51 +388,14 @@ def _tm_cache_dir() -> Path:
 
 
 def _tm_download(url: str, dest: Path, hint: int, cancel, prog, digest=None):
-    """`digest`: optional hashlib object fed with every chunk, so _tm_verify need not re-read the file.
-    A partial `dest` from an interrupted run is resumed with an HTTP Range request when the
-    server supports it (206); otherwise the download starts over."""
-    have = dest.stat().st_size if dest.is_file() else 0
-    req = urllib.request.Request(url, headers={"User-Agent": _TM_UA})
-    if have:
-        req.add_header("Range", f"bytes={have}-")
-    done = 0
+    """Validated HTTP resume; partial files without server validators are replaced."""
+    from drstool_core.http_download import download, DownloadCancelled
     try:
-        try:
-            r = urllib.request.urlopen(req, timeout=30)
-        except urllib.error.HTTPError as e:
-            if e.code != 416 or not have:                     # 416: stale/complete part → start over
-                raise
-            dest.unlink()
-            return _tm_download(url, dest, hint, cancel, prog, digest)
-        resumed = have and r.status == 206
-        if resumed and digest is not None:
-            with open(dest, "rb") as old:
-                for chunk in iter(lambda: old.read(1 << 20), b""):
-                    digest.update(chunk)
-        with r, open(dest, "ab" if resumed else "wb") as f:
-            base = have if resumed else 0
-            clen = int(r.headers.get("Content-Length") or 0)
-            total = (base + clen) if clen else hint
-            plain = not r.headers.get("Content-Encoding")
-            while True:
-                if cancel.is_set():
-                    raise _TMCancelled()
-                b = r.read(1 << 20)
-                if not b:
-                    break
-                f.write(b)
-                if digest is not None:
-                    digest.update(b)
-                done += len(b)
-                prog("Downloading", base + done, total)
-        if clen and plain and done != clen:
-            raise RuntimeError(f"download truncated ({done} of {clen} bytes)")
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"download failed: HTTP {e.code} — {url}") from None
-    except OSError as e:
-        if e.errno == _errno.ENOSPC:
-            raise RuntimeError("no space left on device while downloading") from None
-        raise RuntimeError(f"download failed: {getattr(e, 'reason', e)}") from None
+        download(url, dest, hint, cancel, prog, user_agent=_TM_UA)
+    except DownloadCancelled:
+        raise _TMCancelled() from None
+    # Streaming verification during resume can accidentally hash stale bytes.
+    # The caller verifies the fully assembled file from disk instead.
 
 
 def _tm_checksum_value(text: str, filename: str) -> str:
@@ -458,7 +421,7 @@ def _tm_checksum_value(text: str, filename: str) -> str:
 def _tm_verify(path: Path, csum_url: str, cancel, prog, digest=None, filename: str | None = None) -> str:
     """`digest`: SHA-512 calculated while downloading, else hash from disk."""
     if not csum_url:
-        return "no checksum published for this build"
+        return "UNVERIFIED — no checksum published for this build"
     checksum = _tm_checksum_value(_tm_get(csum_url, "*/*").decode("utf-8", "replace"),
                                   filename or path.name)
     h = digest
@@ -599,6 +562,7 @@ def tm_install(tool: TMTool, ver: TMVer, launcher: TMLauncher, force: bool, canc
     for old in cache.glob("part-*"):                          # abandoned partial downloads
         if time.time() - old.stat().st_mtime > 7 * 86400:
             old.unlink(missing_ok=True)
+            old.with_name(old.name + '.http.json').unlink(missing_ok=True)
     # Stable name per URL: an interrupted download is kept here and resumed next time.
     archive = cache / ("part-" + hashlib.sha256(ver.url.encode()).hexdigest()[:16] + "-"
                        + re.sub(r"[^\w.\-]", "_", ver.name or "x"))
@@ -606,9 +570,8 @@ def tm_install(tool: TMTool, ver: TMVer, launcher: TMLauncher, force: bool, canc
     ok = False
     try:
         log(f"  ↓ {ver.name or ver.url}" + (f"  ({ngx_human(ver.size)})" if ver.size else ""))
-        digest = hashlib.sha512() if ver.csum else None
-        _tm_download(ver.url, archive, ver.size, cancel, prog, digest)
-        log("  " + _tm_verify(archive, ver.csum, cancel, prog, digest, ver.name))
+        _tm_download(ver.url, archive, ver.size, cancel, prog)
+        log("  " + _tm_verify(archive, ver.csum, cancel, prog, filename=ver.name))
         _tm_extract(tool, ver, archive, stage, cancel, prog)
         prog("Installing", 0, 0)
         main = _tm_post(tool, stage)
@@ -651,6 +614,7 @@ def tm_install(tool: TMTool, ver: TMVer, launcher: TMLauncher, force: bool, canc
                     # Cleanup must never turn a completed install into a
                     # rollback after some older backups were deleted.
                     log(f'  old version kept at {bak}: {ex}')
+            ok = True
             return {"path": dest / main_name, "tool": tool.name, "version": ver.label,
                     "note": "", "all": moved}
         except BaseException:
@@ -666,7 +630,11 @@ def tm_install(tool: TMTool, ver: TMVer, launcher: TMLauncher, force: bool, canc
 
     finally:
         if ok:
-            archive.unlink(missing_ok=True)
+            try:
+                archive.unlink(missing_ok=True)
+                archive.with_name(archive.name + '.http.json').unlink(missing_ok=True)
+            except OSError as ex:
+                log(f'  installed successfully but could not clean download cache: {ex}')
         shutil.rmtree(stage, ignore_errors=True)
 
 

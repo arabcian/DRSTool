@@ -53,6 +53,7 @@ from .output_bar import OutputBarWidget
 from .palette import CommandPalette
 from .profile_io import profile_share_code
 from .profiles import ProfileManagerWidget
+from .perf_trace import GuiPerfTimer
 from .recipes import recipe_coverage, recipe_ops, recipe_requirement, RECIPES
 from .setting_editor import SettingEditorWidget
 from .settings_list import SettingsListWidget
@@ -91,6 +92,7 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
     }
 
     def __init__(self):
+        perf = GuiPerfTimer("MainWindow.startup")
         super().__init__()
         self.settings_manager = SettingsManager()
         self.all_settings = ALL_SETTINGS
@@ -106,6 +108,8 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         self._state_timer.timeout.connect(self._on_state_settled)
         self._qsettings = QSettings(APP_ID, APP_ID)
         self._restart_pending = False
+        self._closing_for_tasks = False
+        self._closing_poll_started = 0.0
 
         self.setWindowTitle(APP_TITLE)
         if ICON_PATH.is_file():
@@ -556,6 +560,7 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         self._update_undo_ui()
         self.setAcceptDrops(True)
         self._install_a11y()
+        perf.report()
 
     # ===== Feature pack: launch payload / lint / system / favorites / palette =====
     def collect_launch_payload(self) -> dict:
@@ -804,7 +809,9 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         return items
 
     def _open_palette(self):
+        perf = GuiPerfTimer("CommandPalette.build")
         dlg = CommandPalette(self._palette_items(), self, self._palette_recent())
+        perf.report()
         g = self.geometry()
         dlg.move(g.center().x() - dlg.width() // 2, g.top() + 90)
         if dlg.exec() == QDialog.Accepted and dlg.chosen:
@@ -1124,7 +1131,12 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
             self._brand.set_compact(self.width() < 1420)
 
     def closeEvent(self, event):          # noqa: N802
-        restart, self._restart_pending = self._restart_pending, False
+        restart = self._restart_pending
+        if self._closing_for_tasks:
+            if TASKS.running():
+                event.ignore()
+                return
+            self._closing_for_tasks = False
         if self._state_timer.isActive():
             self._state_timer.stop()
             self._on_state_settled()
@@ -1156,14 +1168,41 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
             self._game_card.shutdown()
             if self._extra_tools.is_built("dllmgr"):
                 self._extra_tools.dllmgr.shutdown()
-            self.hide()                  # downloads may need a moment to notice the cancel
-            TASKS.wait_all()
+            TASKS.request_shutdown()
+            if TASKS.running():
+                # Keep the event loop processing while QThreads finish.
+                self._closing_for_tasks = True
+                self._closing_poll_started = time.monotonic()
+                event.ignore()
+                self.hide()
+                QTimer.singleShot(150, self._poll_pending_close)
+                return
         except Exception:
-            _log.debug("ignored error", exc_info=True)
-            pass
+            _log.exception("failed to initiate worker shutdown")
+            event.ignore()
+            return
+        self._restart_pending = False
         if restart:
             _spawn_restart()
         super().closeEvent(event)
+
+    def _poll_pending_close(self):
+        if not self._closing_for_tasks:
+            return
+        if not TASKS.running():
+            self.close()
+            return
+        if time.monotonic() - self._closing_poll_started > 12:
+            # Refuse to destroy still-running QThreads, but let the user retry.
+            self._closing_for_tasks = False
+            self.show()
+            QMessageBox.warning(self, "Background task still running",
+                                "A background operation has not stopped yet. "
+                                "The window remains open to avoid corrupting files or "
+                                "terminating a QThread while it is running. "
+                                "Try closing again after the operation finishes.")
+            return
+        QTimer.singleShot(150, self._poll_pending_close)
 
     # ===== Dirty tracking / badges =====
     def _mark_dirty(self, *_):
@@ -1192,6 +1231,7 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
 
     # ===== Tab switching =====
     def _switch_tab(self, idx):
+        perf = GuiPerfTimer("MainWindow.switch_tab")
         # Save current right-panel index for the tab we're leaving
         prev = self._sidebar_stack.currentIndex()
         self._tab_right_memory[prev] = self._right_stack.currentIndex()
@@ -1241,6 +1281,7 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
                 self._right_stack.setCurrentIndex(self.PAGE_TOOLS)
             else:
                 self._right_stack.setCurrentIndex(self.PAGE_EMPTY)
+        perf.report()
 
     # ===== Settings =====
     def _populate_settings(self, filter_text: str = "", quiet: bool = False):

@@ -26,17 +26,32 @@ class TaskCenter(QObject):
     def tasks(self) -> List[dict]:
         return list(self._tasks)
 
-    def wait_all(self):
-        """Cancel and join tracked threads. Qt aborts the process when a QThread is destroyed
-        while it still runs, which is what closing the window during a download/lookup did."""
+    def running(self) -> list:
+        """Strong references for unfinished QThreads; none may be destroyed running."""
         self._threads = [th for th in self._threads if th.isRunning()]
-        for th in self._threads:
-            th.blockSignals(True)      # no result handlers (message boxes) after the window is gone
-            if hasattr(th, "cancel"):
-                th.cancel()
+        return list(self._threads)
+
+    def request_shutdown(self):
+        """Non-blocking cancellation, called before closing a window."""
+        for th in self.running():
+            if hasattr(th, 'cancel'):
+                try:
+                    th.cancel()
+                except Exception:
+                    pass
             th.requestInterruption()
-        for th in self._threads:
-            th.wait()
+
+    def wait_all(self, timeout_ms: int = 1500) -> bool:
+        """Bounded join; False means a thread still needs time to stop.
+
+        Callers MUST retain this TaskCenter and let the Qt event loop run
+        until running() returns empty rather than destroying active QThreads.
+        """
+        self.request_shutdown()
+        for th in self.running():
+            if not th.wait(max(0, timeout_ms)):
+                return False
+        return not self.running()
 
     def track(self, thread, title: str, nav: Optional[dict] = None, progress=None, fail=None) -> dict:
         self._seq += 1

@@ -2,13 +2,15 @@
 # Reproduce all available checks on a Gentoo/other Linux build machine.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
-echo '== Python syntax and unit tests =='
-python -m compileall -q drstool_core drstool_gui tests
+echo '== Qt-free reproducible checks =='
+bash scripts/verify-core.sh
+echo '== Qt-enabled full GUI suite =='
+python - <<'PYCODE'
+import importlib.util
+if importlib.util.find_spec('PySide6') is None:
+    raise SystemExit('PySide6 unavailable: GUI tests cannot run; install the GUI dependency')
+PYCODE
 QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v
-echo '== Tuning regression tests =='
-bash lutris-game-tune-main/tests/run-tests.sh
-echo '== Native smoke build =='
-gcc -Wall -Wextra -Werror -fsyntax-only lutris-game-tune-main/lutris-game-tune-wrapper.c
 echo '== Dependency check =='
 python - <<'PY'
 import importlib.util

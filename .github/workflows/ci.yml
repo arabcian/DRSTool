@@ -7,22 +7,68 @@ on:
     branches: [main, experimental]
 
 jobs:
-  test:
+  core:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: System libraries for offscreen Qt
+      - name: Install Qt-free dependencies
+        run: pip install "PyYAML>=6" "ruamel.yaml>=0.18"
+      - name: Core, cache, HTTP, file transaction, YAML and C wrapper checks
+        run: bash scripts/verify-core.sh
+
+  qt-gui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Libraries for offscreen Qt
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
-      - name: Python dependencies
-        run: pip install "PySide6>=6.5" "PyYAML>=6" ruff
+      - name: Python dependencies (no silently skipped Qt tests)
+        run: pip install "PySide6>=6.5" "PyYAML>=6" "ruamel.yaml>=0.18" ruff
       - name: Ruff
         run: ruff check .
-      - name: Python tests (core, logic, offscreen GUI)
+      - name: Complete offscreen GUI and core suite
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m unittest discover -s tests -v
-      - name: lutris-game-tune tests
-        run: bash lutris-game-tune-main/tests/run-tests.sh
+
+  native-flm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vulkan development headers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake g++ libvulkan-dev
+      - name: Sanitizer compile checks (does not assert GPU runtime correctness)
+        run: bash scripts/test-flm-sanitizers.sh
+
+  package-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Wheel dependencies
+        run: pip install build wheel
+      - name: Build and inspect wheel
+        run: |
+          python -m build --wheel
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          wheels = list(Path('dist').glob('drstool-*.whl'))
+          assert len(wheels) == 1, 'expected exactly one wheel'
+          with ZipFile(wheels[0]) as archive:
+              members = archive.namelist()
+              for required in ('drstool_core/http_download.py',
+                               'drstool_core/cache_ops.py',
+                               'drstool_core/lutris_config_scan.py',
+                               'drstool_core/yaml_merge.py',
+                               'drstool_gui/launchers.py'):
+                  assert required in members, f'missing from wheel: {required}'
+          PY

@@ -4,8 +4,9 @@ import logging
 import glob
 import hashlib
 import json
-import io
 from drstool_core.file_transactions import atomic_write_json
+from drstool_core.yaml_merge import merge_lutris_yaml
+from drstool_core.lutris_config_scan import scan_game_configs
 import os
 import shlex
 import shutil
@@ -15,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPlainTextEdit, QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
@@ -32,6 +33,7 @@ from .lgtune import lgtune_cmd
 from .lookup import arch_by_code
 from .settings_manager import SettingsManager
 from .toasts import offer_undo
+from .tasks import TASKS, _NAV
 
 _log = logging.getLogger(__name__)
 
@@ -64,6 +66,28 @@ class LutrisGameEntry:
         self.slug = slug
         self.game_name = game_name
         self.runner = runner
+
+
+class _LutrisScanThread(QThread):
+    scanned = Signal(object, object, str)
+
+    def __init__(self, folder: Path, cached: dict):
+        super().__init__()
+        self.folder = folder
+        self.cached = dict(cached)
+
+    def cancel(self):
+        self.requestInterruption()
+
+    def run(self):
+        try:
+            rows, cache = scan_game_configs(self.folder, self.cached,
+                                            self.isInterruptionRequested)
+            if not self.isInterruptionRequested():
+                self.scanned.emit([LutrisGameEntry(*row) for row in rows], cache, '')
+        except OSError as exc:
+            if not self.isInterruptionRequested():
+                self.scanned.emit([], {}, str(exc))
 
 
 class LutrisSyncWidget(QWidget):
@@ -181,6 +205,12 @@ class LutrisSyncWidget(QWidget):
         super().__init__(parent)
         self.settings_manager = settings_manager
         self._games: List[LutrisGameEntry] = []
+        self._scan_cache = {}
+        self._scan_worker = None
+        self._scan_again = False
+        self._scan_timer = QTimer(self)
+        self._scan_timer.setSingleShot(True)
+        self._scan_timer.timeout.connect(self._start_scan)
         self._current_yaml_text: Optional[str] = None
         self._gamescope_widget: Optional["GamescopeFlagsWidget"] = None
 
@@ -418,46 +448,44 @@ class LutrisSyncWidget(QWidget):
             self._scan_games()
 
     def _scan_games(self):
-        self._games = []
+        # Debounce bursty rescan requests; never parse YAML in the GUI thread.
+        self._scan_timer.start(180)
+        self._status_label.setText('Scanning Lutris configurations…')
+
+    def _start_scan(self):
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            self._scan_again = True
+            return
+        self._scan_again = False
+        worker = _LutrisScanThread(self._games_dir, self._scan_cache)
+        self._scan_worker = worker
+        TASKS.track(worker, 'Lutris: scan', _NAV('Lutris'))
+        worker.scanned.connect(self._on_scan_complete)
+        worker.finished.connect(self._scan_finished)
+        worker.start()
+
+    def _scan_finished(self):
+        if self._scan_again:
+            self._scan_again = False
+            self._scan_timer.start(0)
+
+    def _on_scan_complete(self, entries, cache, error):
+        if self._scan_again or self._scan_worker.folder != self._games_dir:
+            self._scan_again = True
+            return
+        self._scan_cache = cache
+        self._games = entries
         self._game_combo.blockSignals(True)
         self._game_combo.clear()
-
-        if not self._games_dir.exists():
-            self._status_label.setText(f"Folder not found: {self._games_dir}")
-            self._game_combo.blockSignals(False)
-            self._apply_btn.setEnabled(False)
-            return
-
-        found = sorted(self._games_dir.glob("*.yml")) + sorted(self._games_dir.glob("*.yaml"))
-        for path in found:
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = yaml.load(f, Loader=_YAML_LOADER) or {}
-            except Exception:
-                _log.debug("ignored error", exc_info=True)
-                continue
-            if not isinstance(data, dict):
-                continue            # a list/scalar YAML used to crash the whole scan
-            game_section = data.get("game")
-            if not isinstance(game_section, dict):
-                game_section = {}
-            exe = str(game_section.get("exe") or "")
-            slug = path.stem
-            display_name = Path(exe).stem if exe else slug
-            runner = data.get("system", {}).get("runner", "") \
-                if isinstance(data.get("system"), dict) else ""
-            self._games.append(LutrisGameEntry(path, slug, display_name, runner))
-            self._game_combo.addItem(f"{display_name}  ({slug})")
-
+        for game in entries:
+            self._game_combo.addItem(f'{game.game_name}  ({game.slug})')
         self._game_combo.blockSignals(False)
-        if self._games:
-            self._status_label.setText(
-                f"Found {len(self._games)} game config(s) in {self._games_dir}"
-            )
+        if entries:
+            self._status_label.setText(f'Found {len(entries)} game config(s) in {self._games_dir}')
             self._game_combo.setCurrentIndex(0)
             self._on_game_selected(0)
         else:
-            self._status_label.setText(f"No .yml files found in {self._games_dir}")
+            self._status_label.setText(error or f'No .yml files found in {self._games_dir}')
             self._apply_btn.setEnabled(False)
             self._preview.clear()
 
@@ -935,105 +963,10 @@ class LutrisSyncWidget(QWidget):
     # ── Merge / write ─────────────────────────────────────────────────────────
 
     @classmethod
-    def _merge_yaml(
-        cls,
-        original_text: str,
-        system_keys: Dict[str, object],
-        env_vars: Dict[str, str],
-        owned: Optional[dict] = None,
-    ):
-        """Parse original_text, write system_keys into system.* and env_vars
-        into system.env.  Returns
-        (new_yaml_text, sys_changed, env_changed, sys_removed, env_removed).
-        Comments are not preserved (PyYAML limitation); all other structure is.
-
-        Only previously committed DRSTool-owned values can be deleted.
-        Catalogue membership alone NEVER proves ownership: Lutris and users
-        are allowed to configure the same environment variables.
-        """
-        data = yaml.load(original_text, Loader=_YAML_LOADER) or {}
-        if not isinstance(data, dict):
-            raise ValueError("the game YAML's top level is not a mapping")
-        if "system" not in data or not isinstance(data.get("system"), dict):
-            data["system"] = {}
-        sysdict = data["system"]
-
-        owned = owned or {}
-        sys_removed = set()
-        for k, prev in owned.get('system', {}).items():
-            if k not in system_keys and k in sysdict and sysdict[k] == prev:
-                del sysdict[k]
-                sys_removed.add(k)
-
-        # Only keys whose value really differs count as "changed"; identical
-        # ones are left untouched so the file keeps its own types, and a fully
-        # matching file reports "Nothing to write" instead of a phantom N changes.
-        sys_changed = set()
-        for k, v in system_keys.items():
-            if k in sysdict and sysdict[k] == v and type(sysdict[k]) is type(v):
-                continue
-            sysdict[k] = v
-            sys_changed.add(k)
-
-        if "env" not in sysdict or not isinstance(sysdict.get("env"), dict):
-            sysdict["env"] = {}
-        envdict = sysdict["env"]
-
-        env_removed = set()
-        for k, prev in owned.get('env', {}).items():
-            if k not in env_vars and k in envdict and str(envdict[k]) == str(prev):
-                del envdict[k]
-                env_removed.add(k)
-
-        env_changed = set()
-        for k, v in env_vars.items():
-            if k in envdict and str(envdict[k]) == str(v):
-                continue
-            envdict[k] = str(v)
-            env_changed.add(k)
-
-        # Don't leave an empty mapping behind if the block ends up cleared.
-        if not envdict:
-            del sysdict["env"]
-
-        new_text = yaml.dump(
-            data, default_flow_style=False, sort_keys=False, allow_unicode=True,
-            width=1_000_000,
-        )
-        # ruamel round-trips comments, quoting and order. Only mutate the
-        # exact keys chosen above; never reconstruct the whole YAML document.
-        try:
-            from ruamel.yaml import YAML
-            ry = YAML(typ='rt')
-            ry.preserve_quotes = True
-            ry.width = 1_000_000
-            doc = ry.load(original_text) or {}
-            if not isinstance(doc, dict):
-                raise ValueError('invalid Lutris YAML structure')
-            if 'system' not in doc or not isinstance(doc.get('system'), dict):
-                doc['system'] = {}
-            rs = doc['system']
-            for k in sys_removed:
-                rs.pop(k, None)
-            for k in sys_changed:
-                rs[k] = system_keys[k]
-            if 'env' not in rs or not isinstance(rs.get('env'), dict):
-                if env_changed:
-                    rs['env'] = {}
-            if isinstance(rs.get('env'), dict):
-                re = rs['env']
-                for k in env_removed:
-                    re.pop(k, None)
-                for k in env_changed:
-                    re[k] = str(env_vars[k])
-                if not re:
-                    rs.pop('env', None)
-            out = io.StringIO()
-            ry.dump(doc, out)
-            new_text = out.getvalue()
-        except ImportError:
-            pass  # Minimal installation: use safe, comment-losing PyYAML fallback.
-        return new_text, sys_changed, env_changed, sys_removed, env_removed
+    def _merge_yaml(cls, original_text: str, system_keys: Dict[str, object],
+                    env_vars: Dict[str, str], owned: Optional[dict] = None):
+        """Non-destructive Lutris merge; see the Qt-free core implementation."""
+        return merge_lutris_yaml(original_text, system_keys, env_vars, owned)
 
     @staticmethod
     def _ownership_path(target: Path) -> Path:

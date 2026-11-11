@@ -19,6 +19,9 @@ import json
 import os
 import re
 import sqlite3
+import copy
+import threading
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,6 +58,50 @@ _SKIP_DIRS = {"shadercache", "compatdata", "__pycache__", ".git", "$recycle.bin"
 
 MAX_DEPTH = 9
 MAX_ENTRIES = 250_000
+_DLL_CACHE_VERSION = 1
+_DLL_CACHE_LIMIT = 64
+_DLL_DIR_LIMIT = 5000
+_DLL_CACHE: OrderedDict[tuple, tuple] = OrderedDict()
+_DLL_CACHE_LOCK = threading.RLock()
+
+
+def _stat_key(path: Path) -> tuple:
+    """Directory/file identity + metadata; detects in-place DLL replacement too."""
+    st = path.lstat()
+    return (st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino, st.st_dev, st.st_mode)
+
+
+def clear_dll_scan_cache(game_key: Optional[str] = None):
+    """Force full rescan on next lookup (all games or one key)."""
+    with _DLL_CACHE_LOCK:
+        if game_key is None:
+            _DLL_CACHE.clear()
+        else:
+            for key in list(_DLL_CACHE):
+                if key[1] == game_key:
+                    _DLL_CACHE.pop(key, None)
+
+
+def _cached_dll_scan(key: tuple) -> Optional['GameDlls']:
+    with _DLL_CACHE_LOCK:
+        snapshot = _DLL_CACHE.get(key)
+    if snapshot is None:
+        return None
+    dirs, files, result = snapshot
+    try:
+        for path, stamp in dirs:
+            if _stat_key(Path(path)) != stamp:
+                return None
+        for path, stamp in files:
+            if _stat_key(Path(path)) != stamp or Path(path).is_symlink():
+                return None
+    except OSError:
+        return None
+    with _DLL_CACHE_LOCK:
+        if key in _DLL_CACHE:
+            _DLL_CACHE.move_to_end(key)
+    return copy.deepcopy(result)
+
 
 
 @dataclass
@@ -419,9 +466,21 @@ def scan_all(home: Optional[Path] = None, custom: Iterable[str] = ()) -> ScanRes
 
 # ── DLLs inside a game ──────────────────────────────────────────────────────
 
-def find_dlls(game: GameEntry, max_entries: int = MAX_ENTRIES) -> GameDlls:
-    """DLSS / Streamline DLLs under the game's folders (symlinks are not followed)."""
+def find_dlls(game: GameEntry, max_entries: int = MAX_ENTRIES,
+              *, force_rescan: bool = False) -> GameDlls:
+    """Bounded DLL discovery; warm rescans stat only visited directories and DLLs.
+
+    An in-place DLL update is detected by its own file metadata. Directory
+    contents added/removed at any depth invalidate the matching dir snapshot.
+    Existing MAX_DEPTH / MAX_ENTRIES protections remain in the full scanner.
+    """
+    key = (_DLL_CACHE_VERSION, game.key, tuple(str(p) for p in game.folders), max_entries)
+    if not force_rescan:
+        cached = _cached_dll_scan(key)
+        if cached is not None:
+            return cached
     res = GameDlls()
+    dir_stamps = []
     seen_files = set()
     count = 0
     for top in game.folders:
@@ -429,6 +488,11 @@ def find_dlls(game: GameEntry, max_entries: int = MAX_ENTRIES) -> GameDlls:
             continue
         top_depth = len(top.parts)
         for dp, dns, fns in os.walk(top, followlinks=False):
+            try:
+                if len(dir_stamps) <= _DLL_DIR_LIMIT:
+                    dir_stamps.append((dp, _stat_key(Path(dp))))
+            except OSError:
+                pass
             count += len(dns) + len(fns)
             if count > max_entries:
                 res.truncated = True
@@ -469,4 +533,18 @@ def find_dlls(game: GameEntry, max_entries: int = MAX_ENTRIES) -> GameDlls:
         if res.truncated:
             break
     res.dlls.sort(key=lambda d: (KINDS.index(d.kind), str(d.path)))
+    if not res.truncated and len(dir_stamps) <= _DLL_DIR_LIMIT:
+        try:
+            found = {d.path for d in res.dlls}
+            for d in res.dlls:
+                found.update(d.group)
+            file_stamps = [(str(path), _stat_key(path)) for path in sorted(found)]
+            if len(dir_stamps) and all(not Path(path).is_symlink() for path, _ in file_stamps):
+                with _DLL_CACHE_LOCK:
+                    _DLL_CACHE[key] = (dir_stamps, file_stamps, copy.deepcopy(res))
+                    _DLL_CACHE.move_to_end(key)
+                    while len(_DLL_CACHE) > _DLL_CACHE_LIMIT:
+                        _DLL_CACHE.popitem(last=False)
+        except OSError:
+            pass  # Racing game updates: return result but do not cache it.
     return res

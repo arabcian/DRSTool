@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QListWidget, QListWidgetItem
 from drstool_core.models import Setting
 
 from .favorites import FAVS
+from .perf_trace import GuiPerfTimer
 from .sysinfo import drs_unavailable
 from .widgets import (
     _fmt_drs_value, make_header_item, make_list_item, ROLE_COUNT, ROLE_KIND, ROLE_SET,
@@ -36,6 +37,7 @@ class SettingsListWidget(QListWidget):
         self.only_fav = False
 
     def populate(self, settings: List[Setting], current_state: Dict[str, str], filter_text: str = ""):
+        perf = GuiPerfTimer("SettingsList.populate")
         # Block selection signals for the rebuild (see EnvVarsWidget.populate).
         self.blockSignals(True)
         self.clear()
@@ -69,6 +71,7 @@ class SettingsListWidget(QListWidget):
                     value=_fmt_drs_value(s, cur) if cur is not None else "",
                     fav=FAVS.is_fav("drs", s.id), unavail=drs_unavailable(s)))
         self.blockSignals(False)
+        perf.report(count=self.count())
 
     def refresh_colors(self, current_state: Dict[str, str]):
         """

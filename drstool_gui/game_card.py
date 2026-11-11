@@ -1011,7 +1011,10 @@ class GameCardWidget(QWidget):
 
     def shutdown(self):
         for t in self._threads:
-            t.wait(3000)
+            if t.isRunning():
+                if hasattr(t, 'cancel'):
+                    t.cancel()
+                t.requestInterruption()
 
 
 # ============================================================================
