@@ -51,6 +51,8 @@ SL_VERSION_DLL = "sl.common.dll"
 KIND_TITLES = {"dlss": "DLSS SR", "dlssd": "DLSS RR", "dlssg": "DLSS FG", SL_FEATURE: "Streamline"}
 KINDS = ("dlss", "dlssd", "dlssg", SL_FEATURE)
 
+_OPTISCALER_PROXIES = ("optiscaler.dll", "dxgi.dll", "winmm.dll", "version.dll", "dbghelp.dll",
+                       "d3d12.dll", "wininet.dll", "winhttp.dll", "optiscaler.asi")
 _ANTI_CHEAT = ("easyanticheat", "battleye", "easyanticheat_eos", "beservice", "vanguard",
                "xigncode", "nprotect", "gameguard", "ricochet", "eaanticheat")
 _SKIP_DIRS = {"shadercache", "compatdata", "__pycache__", ".git", "$recycle.bin",
@@ -137,6 +139,7 @@ class GameDlls:
     dlls: List[FoundDll] = field(default_factory=list)
     anti_cheat: List[str] = field(default_factory=list)
     truncated: bool = False
+    optiscaler: List[tuple] = field(default_factory=list)     # [(folder, version or "")]
 
     def of(self, kind: str) -> List[FoundDll]:
         return [d for d in self.dlls if d.kind == kind]
@@ -511,6 +514,11 @@ def find_dlls(game: GameEntry, max_entries: int = MAX_ENTRIES,
                 stem = f.lower().rsplit(".", 1)[0]
                 if stem in _ANTI_CHEAT and f not in res.anti_cheat:
                     res.anti_cheat.append(f)
+            if "optiscaler.ini" in low:
+                # OptiScaler.dll is renamed to one of these proxy names next to its ini
+                proxy = next((low[n] for n in _OPTISCALER_PROXIES if n in low), None)
+                ver = pe_version.read_version(Path(dp) / proxy) if proxy else None
+                res.optiscaler.append((dp, pe_version.version_str(ver) if ver else ""))
             for kind, fname in DLSS_FILES.items():
                 real = low.get(fname)
                 if real:

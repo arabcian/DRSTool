@@ -236,6 +236,7 @@ class ProfileManagerWidget(QWidget):
                 ("Duplicate", self._duplicate_selected), ("Compare with editor…", self._compare_selected),
                 ("Export to file…", self._export_selected),
                 ("Copy share code", self._copy_share_code),
+                ("Base profile…", self._set_base_selected), ("Notes and tags…", self._edit_notes_selected),
                 ("Linked games…", self._linked_games), (None, None),
                 ("Delete", self._delete_selected)]
         for label, fn in acts:
@@ -282,6 +283,39 @@ class ProfileManagerWidget(QWidget):
                 self.settings_manager.load_profile(dlg.saved_name)
                 self.profile_loaded.emit(dlg.saved_name)
             toast(f"Imported shared profile “{dlg.saved_name}”", "ok")
+
+    def _set_base_selected(self):
+        name = self._selected_name()
+        sm = self.settings_manager
+        if not name:
+            return
+        from PySide6.QtWidgets import QInputDialog
+        none = "(none — standalone profile)"
+        opts = [none] + [n for n in sm.get_profiles() if n != name and n not in sm.children_of(name)]
+        cur = sm.get_base(name)
+        pick, ok = QInputDialog.getItem(
+            self, "Base profile",
+            f"“{name}” keeps only its differences from the base; a change saved to the base\n"
+            "reaches every profile built on it. The settings of this profile stay the same.",
+            opts, opts.index(cur) if cur in opts else 0, False)
+        if ok and sm.set_base(name, None if pick == none else pick):
+            toast(f"“{name}” is now " + ("standalone" if pick == none else f"based on “{pick}”"), "ok")
+            self._refresh()
+
+    def _edit_notes_selected(self):
+        name = self._selected_name()
+        prof = self.settings_manager.get_profiles().get(name) if name else None
+        if not isinstance(prof, dict):
+            return
+        from PySide6.QtWidgets import QInputDialog
+        notes, ok = QInputDialog.getMultiLineText(self, "Profile notes", f"Why “{name}” is set up this way:",
+                                                  prof.get("notes", ""))
+        if not ok:
+            return
+        tags, ok = QInputDialog.getText(self, "Profile tags", "Tags (comma separated):",
+                                        text=", ".join(prof.get("tags") or []))
+        if ok and self.settings_manager.set_meta(name, notes, tags.split(",")):
+            self._refresh()
 
     def _rename_selected(self):
         old = self._selected_name()
@@ -394,4 +428,12 @@ class ProfileManagerWidget(QWidget):
         tip = (f"{n_drs} DRS setting(s), {n_env} env var(s)\n"
                f"GPU arch: {arch or 'not set'}\n"
                f"Gamescope: {'on' if gs else 'off'}\n\nDouble-click to load.")
+        tags = [str(t) for t in prof.get("tags") or [] if isinstance(t, str)]
+        if prof.get("base"):
+            short = f"↳ {prof['base']} " + short
+            tip = f"Based on “{prof['base']}”\n" + tip
+        if tags:
+            short += " #" + " #".join(tags)
+        if isinstance(prof.get("notes"), str) and prof["notes"]:
+            tip += "\n\nNotes: " + prof["notes"]
         return short or "empty", tip

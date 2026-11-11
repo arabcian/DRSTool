@@ -146,6 +146,11 @@ class GameLinksMixin:
             self.write_profile_to_games(name, dlg.chosen, confirm=False)
 
     def _suggest_linked_update(self, name: str):
+        for child in self.settings_manager.children_of(name):   # a saved base changes its layers too
+            self._suggest_linked_update_one(child)
+        self._suggest_linked_update_one(name)
+
+    def _suggest_linked_update_one(self, name: str):
         prof = self.settings_manager.get_profiles().get(name)
         if not isinstance(prof, dict):
             return

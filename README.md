@@ -26,7 +26,7 @@ Turkish version: [README.tr.md](README.tr.md)
 - Preview of the resulting command/environment before applying
 
 ### Environment Variables
-The Environment tab covers 289 variables in these groups:
+The Environment tab covers 303 variables in these groups:
 
 - **DXVK** (incl. `DXVK_HUD` flag grid and the `DXVK_CONFIG` key picker)
 - **DXVK forks**: d7vk, dxvk-low-latency, DXVK-Sarek (each labelled with the Proton fork it belongs to)
@@ -34,7 +34,7 @@ The Environment tab covers 289 variables in these groups:
 - **DXVK-NVAPI** (DRS settings, Vulkan Reflex layer, logging, NGX debug options)
 - **Proton** and **Wine**, including Proton-GE, Proton-EM, Proton-CachyOS and Proton-DW specific flags
 - **NVIDIA** `__GL_*` and `__NV_*` variables, PRIME / hybrid-GPU settings
-- **NVIDIA Smooth Motion** (NVPresent layer)
+- **NVIDIA Smooth Motion** (NVPresent layer) and **lsfg-vk** frame generation
 - **Wayland input** flags and non-AMD game-optimization flags
 
 Variables that take a fixed set of values are shown as checkboxes or dropdowns; free-form values are text fields.

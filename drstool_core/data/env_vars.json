@@ -1109,6 +1109,125 @@
    "default": "",
    "desc": "Forces a specific driver-level full-screen antialiasing mode, using the same integer values as `nvidia-settings --assign FSAA=N`. Run `nvidia-settings --query fsaa` to list the modes your GPU supports. Only takes effect for modes the app doesn't already control itself (see FSAAAppControlled).",
    "placeholder": "e.g. 5"
+  },
+  {
+   "name": "LSFGVK_ENV",
+   "cat": "lsfg-vk",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Take the lsfg-vk settings from the LSFGVK_* variables below instead of the configuration file. (lsfg-vk.dev/docs/configuration/environment-variables)",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "DISABLE_LSFGVK",
+   "cat": "lsfg-vk",
+   "vtype": "enum",
+   "default": "",
+   "desc": "If set, lsfg-vk will be completely disabled. (lsfg-vk.dev/docs/configuration/environment-variables)",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "LSFGVK_CONFIG",
+   "cat": "lsfg-vk",
+   "vtype": "string",
+   "default": "",
+   "desc": "Path to configuration file. (lsfg-vk.dev/docs/configuration/environment-variables)",
+   "placeholder": "~/.config/lsfg-vk/conf.toml"
+  },
+  {
+   "name": "LSFGVK_PROFILE",
+   "cat": "lsfg-vk",
+   "vtype": "string",
+   "default": "",
+   "desc": "Name of the profile to use. If set, this will override automatic profile detection. (lsfg-vk.dev/docs/configuration/environment-variables)"
+  },
+  {
+   "name": "LSFGVK_DLL_PATH",
+   "cat": "lsfg-vk",
+   "vtype": "string",
+   "default": "",
+   "desc": "Path to the lsfg-vk.dll file. (lsfg-vk.dev/docs/configuration/environment-variables)"
+  },
+  {
+   "name": "LSFGVK_NO_FP16",
+   "cat": "lsfg-vk",
+   "vtype": "enum",
+   "default": "",
+   "desc": "If set to 1, half-precision will be disabled. (lsfg-vk.dev/docs/configuration/environment-variables)",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "LSFGVK_LOG_LEVEL",
+   "cat": "lsfg-vk",
+   "vtype": "string",
+   "default": "",
+   "desc": "The level of logging to output. (lsfg-vk.dev/docs/configuration/environment-variables)"
+  },
+  {
+   "name": "LSFGVK_LOG_FILE",
+   "cat": "lsfg-vk",
+   "vtype": "string",
+   "default": "",
+   "desc": "Path to the log file. (lsfg-vk.dev/docs/configuration/environment-variables)"
+  },
+  {
+   "name": "LSFGVK_MULTIPLIER",
+   "cat": "lsfg-vk",
+   "vtype": "string",
+   "default": "",
+   "desc": "Frame generation multiplier. (lsfg-vk.dev/docs/configuration/environment-variables)",
+   "placeholder": "2"
+  },
+  {
+   "name": "LSFGVK_FLOW_SCALE",
+   "cat": "lsfg-vk",
+   "vtype": "string",
+   "default": "",
+   "desc": "Flow scale value. (lsfg-vk.dev/docs/configuration/environment-variables)",
+   "placeholder": "1.0"
+  },
+  {
+   "name": "LSFGVK_PERFORMANCE_MODE",
+   "cat": "lsfg-vk",
+   "vtype": "enum",
+   "default": "",
+   "desc": "If set to 1, performance mode will be enabled. (lsfg-vk.dev/docs/configuration/environment-variables)",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "LSFGVK_PACING_MODE",
+   "cat": "lsfg-vk",
+   "vtype": "string",
+   "default": "",
+   "desc": "Pacing mode to use (see lsfg-vk.dev › Pacing Modes). (lsfg-vk.dev/docs/configuration/environment-variables)"
+  },
+  {
+   "name": "LSFGVK_OVERRIDE_PRESENT_MODE",
+   "cat": "lsfg-vk",
+   "vtype": "enum",
+   "default": "",
+   "desc": "If set to 0, present mode override will be disabled. (lsfg-vk.dev/docs/configuration/environment-variables)",
+   "options": [
+    "0"
+   ]
+  },
+  {
+   "name": "LSFGVK_PRESERVE_SWAPCHAIN_IMAGE_COUNT",
+   "cat": "lsfg-vk",
+   "vtype": "enum",
+   "default": "",
+   "desc": "If set to 1, the swapchain image count will be unchanged. (lsfg-vk.dev/docs/configuration/environment-variables)",
+   "options": [
+    "1"
+   ]
   }
  ],
  "NVIDIA_PRIME_ENV_VARS": [

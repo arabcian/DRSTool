@@ -168,6 +168,14 @@ RECIPES: List[Recipe] = [
            "PROTON_DXVK_LOWLATENCY=1. Mostly helps single-player D3D9-11 games; leave it off where "
            "Reflex is available.",
            lambda si: [_e("PROTON_DXVK_LOWLATENCY", "1")]),
+    Recipe("lsfg-vk", "lsfg-vk frame generation (2x)", ["FPS", "any GPU"],
+           "Frame generation through the lsfg-vk Vulkan layer, an alternative to Smooth Motion. "
+           "Needs lsfg-vk installed (lsfg-vk.dev).",
+           "LSFGVK_ENV=1 takes the settings from these variables instead of the config file; "
+           "LSFGVK_MULTIPLIER=2 is the frame generation multiplier. Do not combine with Smooth Motion "
+           "or in-game frame generation. Details: lsfg-vk.dev/docs/configuration/environment-variables.",
+           lambda si: [_e("LSFGVK_ENV", "1"), _e("LSFGVK_MULTIPLIER", "2"),
+                       _u("NVPRESENT_ENABLE_SMOOTH_MOTION")]),
 ]
 
 
@@ -222,3 +230,50 @@ def recipe_coverage(r: Recipe, cur: dict) -> tuple:
     done = sum(1 for o in pos if op_status(o, cur) == "same")
     clean = all(op_status(o, cur) == "absent" for o in ops if o not in pos)
     return done, len(pos), bool(pos) and done == len(pos) and clean
+
+
+# ── user recipes: $XDG_CONFIG_HOME/drstool/recipes.json ──────────────────────
+def user_recipes_path():
+    import os
+    from pathlib import Path
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "drstool" / "recipes.json"
+
+
+def _load_user_raw() -> list:
+    import json
+    try:
+        d = json.loads(user_recipes_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [r for r in d.get("recipes", []) if isinstance(r, dict)] if isinstance(d, dict) else []
+
+
+def user_recipes() -> List[Recipe]:
+    out = []
+    for r in _load_user_raw():
+        ops = [o for o in r.get("ops") or [] if isinstance(o, dict) and o.get("kind") and o.get("key")]
+        out.append(Recipe(f"user:{r.get('title', '')}", str(r.get("title") or "Untitled"),
+                          ["mine"] + [str(t) for t in r.get("tags") or []], str(r.get("summary") or ""),
+                          "Saved from the editor.", lambda _si, ops=ops: [dict(o) for o in ops]))
+    return out
+
+
+def all_recipes() -> List[Recipe]:
+    return RECIPES + user_recipes()
+
+
+def save_user_recipe(title: str, summary: str, ops: List[dict]) -> None:
+    from drstool_core.file_transactions import atomic_write_json
+    rs = [r for r in _load_user_raw() if r.get("title") != title]
+    rs.append({"title": title, "summary": summary, "ops": ops})
+    atomic_write_json(user_recipes_path(), {"version": 1, "recipes": rs})
+
+
+def ops_from_diff(base: dict, cur: dict) -> List[dict]:
+    """Recipe operations that turn editor state `base` into `cur`."""
+    ops = [_d(k, v) for k, v in cur["settings"].items() if base["settings"].get(k) != v]
+    ops += [_e(k, v) for k, v in cur["env"].items() if base["env"].get(k) != v]
+    ops += [_u(k) for k in base["env"] if k not in cur["env"]]
+    if cur["gs_on"]:
+        ops += [_g(k, v) for k, v in cur["gs_flags"].items() if base["gs_flags"].get(k) != v or not base["gs_on"]]
+    return ops

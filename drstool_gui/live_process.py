@@ -114,6 +114,39 @@ def read_proc_modules(pid: int) -> List[str]:
     return paths
 
 
+def nvapi_log_files(env: Dict[str, str]) -> List[Path]:
+    """Logs the running game's dxvk-nvapi can have written: DXVK_NVAPI_LOG_PATH, or the Proton log."""
+    out = []
+    d = env.get("DXVK_NVAPI_LOG_PATH")
+    if d and Path(d).is_dir():
+        out += sorted(Path(d).glob("*nvapi*.log"))
+    appid = env.get("SteamAppId") or env.get("SteamGameId")
+    if appid:
+        p = Path(env.get("PROTON_LOG_DIR") or Path.home()) / f"steam-{appid}.log"
+        if p.is_file():
+            out.append(p)
+    return out
+
+
+def drs_ids_in_logs(drs: str, files: List[Path]) -> tuple:
+    """Which ids of a DXVK_NVAPI_DRS_SETTINGS value the logs mention -> (seen, not seen)."""
+    text = ""
+    for f in files:
+        try:
+            text += f.read_text(errors="replace")[-2_000_000:].lower()
+        except OSError:
+            pass
+    seen, missing = [], []
+    for pair in filter(None, (x.strip() for x in drs.split(","))):
+        key = pair.split("=", 1)[0].strip()
+        try:                                        # any zero padding, never a prefix of a longer id
+            rx = rf"\b0x0*{int(key, 0):x}\b"
+        except ValueError:
+            rx = rf"\b{re.escape(key.lower())}\b"
+        (seen if re.search(rx, text) else missing).append(key)
+    return seen, missing
+
+
 class LiveProcessWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -236,6 +269,17 @@ class LiveProcessWidget(QWidget):
         if "DXVK_NVAPI_DRS_SETTINGS" in exp and "dxvk-nvapi" not in found:
             notes.append("⚠ DRS settings are configured but no nvapi DLL is mapped — they cannot take effect "
                          "(PROTON_ENABLE_NVAPI / DXVK_ENABLE_NVAPI missing, or the game has not loaded NVAPI yet).")
+        drs = env.get("DXVK_NVAPI_DRS_SETTINGS", "")
+        if drs:
+            logs = nvapi_log_files(env)
+            if not logs:
+                notes.append("DRS read-back: no dxvk-nvapi log found (set DXVK_NVAPI_LOG_LEVEL=info and "
+                             "DXVK_NVAPI_LOG_PATH, or PROTON_LOG=1).")
+            else:
+                seen, missing = drs_ids_in_logs(drs, logs)
+                notes.append(f"DRS read-back: {len(seen)}/{len(seen) + len(missing)} setting id(s) appear in "
+                             f"{', '.join(p.name for p in logs)}"
+                             + (f" — not mentioned: {', '.join(missing[:6])}" if missing else "") + ".")
         if _on(exp, "MANGOHUD") and "MangoHud" not in found:
             notes.append("⚠ MANGOHUD is set but libMangoHud is not loaded.")
         self._sum.setText(f"pid {pid}: {ok} variable(s) match, {bad} do not. "

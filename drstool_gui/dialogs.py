@@ -22,8 +22,8 @@ from .launch_line import gamescope_arg_string
 from .lint import lint_config
 from .lookup import CUSTOM_ENV_CAT, drs_lookup, env_def
 from .profile_io import lint_profile, unique_profile_name
-from .recipes import Recipe, recipe_coverage, recipe_ops, recipe_requirement, RECIPES
-from .state import copy_state, state_diff, state_payload
+from .recipes import all_recipes, ops_from_diff, Recipe, recipe_coverage, recipe_ops, recipe_requirement, save_user_recipe
+from .state import copy_state, empty_state, state_diff, state_from_profile, state_payload
 from .sysinfo import SYSHUB
 from .theme import btn_ss, caption, T
 from .tool_ui import _tool_btn
@@ -352,7 +352,7 @@ class RecipeGallery(QDialog):
             f"QListWidget::item{{padding:7px 8px;color:{T['text2']};border-bottom:1px solid {T['border']};}}"
             f"QListWidget::item:selected{{background:rgba(118,185,0,0.18);color:{T['text']};}}")
         self._list.setFixedWidth(330)
-        for r in RECIPES:
+        for r in all_recipes():
             done, total, full = recipe_coverage(r, self._cur)
             why = recipe_requirement(r)
             mark = "✔ " if full else "◐ " if done else "   "
@@ -384,6 +384,11 @@ class RecipeGallery(QDialog):
         right.addStretch(1)
         row = QHBoxLayout()
         row.addStretch(1)
+        mine = _tool_btn("Save editor changes as recipe…")
+        mine.setToolTip("What the editor changes compared with the loaded profile becomes a recipe of your own "
+                        "(stored in ~/.config/drstool/recipes.json)")
+        mine.clicked.connect(self._save_mine)
+        row.addWidget(mine)
         close = _tool_btn("Close")
         close.clicked.connect(self.reject)
         row.addWidget(close)
@@ -395,6 +400,24 @@ class RecipeGallery(QDialog):
         body.addLayout(right, 1)
         lay.addLayout(body, 1)
         self._list.setCurrentRow(0)
+
+    def _save_mine(self):
+        from PySide6.QtWidgets import QInputDialog
+        sm = getattr(self.parent(), "settings_manager", None)
+        name = sm.get_current_profile() if sm else None
+        base = state_from_profile(sm.get_profiles().get(name)) if name else empty_state()
+        ops = ops_from_diff(base, self._cur)
+        if not ops:
+            QMessageBox.information(self, "Recipes", "The editor has no changes against "
+                                    + (f"“{name}”." if name else "an empty configuration."))
+            return
+        title, ok = QInputDialog.getText(self, "Save recipe", f"{len(ops)} change(s). Recipe name:")
+        if ok and title.strip():
+            save_user_recipe(title.strip(), f"{len(ops)} setting(s) saved from the editor"
+                             + (f" (relative to “{name}”)" if name else ""), ops)
+            self._list.addItem(QListWidgetItem("   " + title.strip() + "\n      mine"))
+            self._list.item(self._list.count() - 1).setData(
+                Qt.UserRole, next(r for r in all_recipes() if r.rid == f"user:{title.strip()}"))
 
     def _show(self, cur, _prev=None):
         if cur is None:

@@ -38,8 +38,14 @@ def _cli_parse(argv):
                         "shell = env … \"$@\", export = export K=V lines, json = the full payload")
     g.add_argument("--lint", metavar="PROFILE", help="run the consistency linter on a profile")
     g.add_argument("--strict", action="store_true", help="--lint: warnings also give exit status 1")
-    g.add_argument("--apply", metavar="PROFILE", help="write a profile into a Lutris game config (needs --lutris)")
+    g.add_argument("--lint-all", action="store_true", help="lint every saved profile (one summary line each)")
+    g.add_argument("--apply", metavar="PROFILE", help="write a profile into a launcher target "
+                                                      "(needs --lutris, --steam, --heroic or --bottles)")
     g.add_argument("--lutris", metavar="GAME", help="--apply: game slug or name")
+    g.add_argument("--steam", metavar="APPID", help="--apply: Steam app id (or name) — Steam must be closed")
+    g.add_argument("--steam-proton", metavar="TOOL", help="--apply --steam: also set the per-game compat tool")
+    g.add_argument("--heroic", metavar="GAME", help="--apply: Heroic game id/title, or \"global\"")
+    g.add_argument("--bottles", metavar="BOTTLE", help="--apply: bottle name")
     g.add_argument("--lutris-dir", metavar="DIR", help="--apply: Lutris games folder (default $XDG_DATA_HOME/lutris/games, "
                         "i.e. ~/.local/share/lutris/games)")
     g.add_argument("--dry-run", action="store_true", help="--apply: show the diff, write nothing")
@@ -59,7 +65,7 @@ def _cli_parse(argv):
 
 
 def _cli_wants(a) -> bool:
-    return bool(a.list_profiles or a.print_env or a.lint or a.apply or a.import_nip
+    return bool(a.list_profiles or a.print_env or a.lint or a.lint_all or a.apply or a.import_nip
                 or a.share or a.import_share)
 
 
@@ -144,9 +150,35 @@ def _cli_dispatch(a) -> int:
         err(f"{n_err} error(s), {n_warn} warning(s)")
         return 1 if (n_err or (a.strict and n_warn)) else 0
 
+    def probe():
+        loop = QEventLoop()                       # let the system probe finish so the lint sees this machine
+        SYSHUB.info_changed.connect(lambda *_: loop.quit())
+        QTimer.singleShot(8000, loop.quit)
+        SYSHUB.refresh()
+        loop.exec()
+
+    if a.lint_all:
+        probe()
+        worst = 0
+        for n, prof in profiles.items():
+            issues = lint_profile(prof, SYSHUB.info)
+            ne = sum(1 for i in issues if i.sev == "error")
+            nw = sum(1 for i in issues if i.sev == "warn")
+            print(f"{n}\t{ne} error(s)\t{nw} warning(s)\t" + ",".join(sorted({i.code for i in issues})))
+            if ne or (a.strict and nw):
+                worst = 1
+        return worst
+
+    targets = [t for t in ("lutris", "steam", "heroic", "bottles") if getattr(a, t)]
+    if a.apply and targets and targets != ["lutris"]:
+        if len(targets) > 1:
+            err("--apply takes one target")
+            return 2
+        return _cli_apply_launcher(a, targets[0], resolve, window, err)
+
     if a.apply:
         if not a.lutris:
-            err("--apply needs --lutris GAME")
+            err("--apply needs --lutris, --steam, --heroic or --bottles")
             return 2
         name = resolve(a.apply)
         w = name and window(name)
@@ -297,6 +329,58 @@ def _cli_dispatch(a) -> int:
             return 1
         err(f'saved profile "{name}" ({len(pairs)} setting(s) merged)')
         return 0
+    return 0
+
+
+def _cli_apply_launcher(a, kind, resolve, window, err) -> int:
+    """--apply PROFILE --steam/--heroic/--bottles X: same backends the GUI launcher tabs use."""
+    from .launchers import BottlesBackend, HeroicBackend, SteamBackend
+    be = {"steam": SteamBackend, "heroic": HeroicBackend, "bottles": BottlesBackend}[kind]()
+    if be.unavailable():
+        err(be.unavailable())
+        return 2
+    name = resolve(a.apply)
+    w = name and window(name)
+    if not w:
+        return 2
+    want = getattr(a, kind).casefold()
+    entries = be.scan()
+    if kind == "heroic" and want == "global":
+        hit = [e for e in entries if e.key == "__global__"]
+    else:
+        hit = [e for e in entries if want == e.key.casefold()]
+        hit = hit or [e for e in entries if want in e.title.casefold()]
+    if len(hit) != 1:
+        err(f'"{getattr(a, kind)}" ' + ("matches several targets: " + ", ".join(e.key for e in hit)
+                                        if hit else f"matches no {be.name} target"))
+        return 2
+    e, payload = hit[0], w.collect_launch_payload()
+    opts = {"use_env": True, "compat_tool": a.steam_proton or "" if kind == "steam" else ""}
+    cur, new = be.current(e), be.proposed(e, payload, opts)
+    preview = f"--- {e.title} (current)\n{cur or '(empty)'}\n+++ new\n{new or '(empty)'}\n"
+    extra = be.extra_preview(e, opts)
+    if extra:
+        preview += extra + "\n"
+    if a.dry_run:
+        sys.stdout.write(preview)
+        return 0
+    busy = be.busy()
+    if busy:
+        err(busy)
+        return 1
+    if not a.yes:
+        if not sys.stdin.isatty():
+            err("refusing to write without --yes (use --dry-run to preview)")
+            return 2
+        sys.stdout.write(preview)
+        if input("Write these changes? [y/N] ").strip().lower() not in ("y", "yes"):
+            return 1
+    try:
+        print(be.apply(e, payload, opts))
+    except Exception as ex:                       # noqa: BLE001 - reported to the caller
+        err(str(ex))
+        return 1
+    w._on_game_written({"kind": kind, "key": e.key, "path": str(e.path), "title": e.title})   # link + fingerprint like the GUI
     return 0
 
 

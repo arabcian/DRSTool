@@ -226,3 +226,78 @@ class UndoTimeline:
 def single_change_key(a: dict, b: dict):
     rows = state_diff(a, b)
     return (rows[0][0], rows[0][1]) if len(rows) == 1 else None
+
+
+# ── layered profiles: a profile may name a "base" and store only its differences ──
+_META_KEYS = ("notes", "tags")                 # per-profile, never inherited
+
+
+def _unflat(flat: Dict[tuple, str]) -> dict:
+    """Inverse of _flat_profile()."""
+    p: dict = {"settings": {}, "arch": None, "env_vars": {}, "gamescope_enabled": False, "gamescope_flags": {}}
+    for (sec, key), v in flat.items():
+        if sec == "DRS":
+            p["settings"][key] = v
+        elif sec == "Arch":
+            p["arch"] = v
+        elif sec == "Env":
+            p["env_vars"][key] = v
+        elif key == "enabled":
+            p["gamescope_enabled"] = True
+        else:
+            p["gamescope_flags"][key] = v
+    return p
+
+
+def base_chain(profiles: dict, name: str) -> List[str]:
+    """[name, its base, the base's base, …] — stops at a missing base or a cycle."""
+    chain = []
+    while name in profiles and name not in chain:
+        chain.append(name)
+        p = profiles[name]
+        name = p.get("base") if isinstance(p, dict) else None
+    return chain
+
+
+def resolve_layers(profiles: dict, name: str) -> dict:
+    """The full profile `name` stands for: its base chain merged, its own values on top."""
+    chain = base_chain(profiles, name)
+    flat: Dict[tuple, str] = {}
+    for n in reversed(chain):
+        p = profiles[n]
+        for k in (p.get("unset") or []) if n != chain[-1] else []:
+            flat.pop(tuple(k), None)
+        flat.update(_flat_profile(p))
+    out = _unflat(flat)
+    me = profiles.get(name)
+    if isinstance(me, dict):
+        if me.get("base"):
+            out["base"] = me["base"]
+        out.update({k: me[k] for k in _META_KEYS if k in me})
+    return out
+
+
+def layer_diff(base_full: dict, full: dict) -> dict:
+    """What a profile based on `base_full` has to store to come out as `full`."""
+    fb, ff = _flat_profile(base_full), _flat_profile(full)
+    out = _unflat({k: v for k, v in ff.items() if fb.get(k) != v})
+    unset = [list(k) for k in fb if k not in ff]
+    if unset:
+        out["unset"] = unset
+    return out
+
+
+# ── bisect: one item per setting that can be switched off on its own ──
+def bisect_items(st: dict) -> List[tuple]:
+    return ([("settings", k) for k in st["settings"]] + [("env", k) for k in st["env"]]
+            + ([("gs_on", "")] if st["gs_on"] else []))
+
+
+def bisect_state(st: dict, keep) -> dict:
+    """`st` with only the bisect items in `keep` switched on (the GPU arch always stays)."""
+    keep = set(keep)
+    out = copy_state(st)
+    out["settings"] = {k: v for k, v in st["settings"].items() if ("settings", k) in keep}
+    out["env"] = {k: v for k, v in st["env"].items() if ("env", k) in keep}
+    out["gs_on"] = st["gs_on"] and ("gs_on", "") in keep
+    return out

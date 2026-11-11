@@ -200,6 +200,14 @@ def sanitize_profile(p) -> tuple:
     clean = {"settings": settings, "arch": arch or None, "env_vars": env,
              "gamescope_enabled": bool(p.get("gamescope_enabled", False)),
              "gamescope_flags": flags}
+    notes = p.get("notes")
+    if isinstance(notes, str) and notes.strip():
+        clean["notes"] = notes[:2000]
+    tags = p.get("tags")
+    if isinstance(tags, list):
+        tags = [t[:32] for t in tags if isinstance(t, str) and t.strip()][:16]
+        if tags:
+            clean["tags"] = tags
     if not (settings or env or flags or clean["arch"] or clean["gamescope_enabled"]):
         raise ShareCodeError("the shared profile is empty")
     return clean, dropped
@@ -265,4 +273,8 @@ def summary_lines(share: DecodedShare) -> List[str]:
              f"GPU arch spoof: {p['arch'] or '—'}",
              f"Gamescope: {'on' if p['gamescope_enabled'] else 'off'}"
              + (f" ({len(p['gamescope_flags'])} flag(s))" if p["gamescope_flags"] else "")]
+    if p.get("tags"):
+        lines.append("Tags: " + ", ".join(p["tags"]))
+    if p.get("notes"):
+        lines.append("Notes: " + p["notes"])
     return lines

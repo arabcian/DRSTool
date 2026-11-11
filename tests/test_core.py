@@ -439,7 +439,7 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(len(catalog.drs_settings()), 118)
         self.assertEqual(len(catalog.gamescope_flags()), 66)
         self.assertEqual(len(catalog.dxvk_config_keys()), 70)
-        self.assertEqual(sum(len(v) for v in catalog.env_var_groups().values()), 289)
+        self.assertEqual(sum(len(v) for v in catalog.env_var_groups().values()), 303)
 
     def test_drs_settings(self):
         sett = catalog.drs_settings()

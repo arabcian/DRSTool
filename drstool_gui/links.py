@@ -84,6 +84,15 @@ class _LinkHub(QObject):
     def set_field(self, key: str, field: str, value: str, **kw):
         return self._do(self.store.set_field, key, field, value, **kw)
 
+    def add_perf(self, key: str, run: dict) -> bool:
+        try:
+            added = self.store.add_perf(key, run)
+        except OSError:
+            return False
+        if added:
+            self.changed.emit()
+        return added
+
     def rename_profile(self, old: str, new: str):
         return self._do(self.store.rename_profile, old, new)
 

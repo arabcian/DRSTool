@@ -60,6 +60,29 @@ def _pcgw_param(raw: str, name: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+_AWACY_URL = "https://raw.githubusercontent.com/AreWeAntiCheatYet/AreWeAntiCheatYet/master/games.json"
+
+
+def _fetch_awacy(appid: str) -> Optional[dict]:
+    """Are We Anti-Cheat Yet entry of a Steam game -> {"status", "anticheats", "name"} or None.
+    The whole list (~0.5 MB) is cached for 7 days."""
+    cp = _xdg("XDG_CACHE_HOME", ".cache") / "drstool" / "awacy-games.json"
+    try:
+        fresh = time.time() - cp.stat().st_mtime < 7 * 86400
+    except OSError:
+        fresh = False
+    if not fresh:
+        body = _http_get(_AWACY_URL, timeout=20, limit=8_000_000)[0]
+        json.loads(body)                                 # only cache what parses
+        cp.parent.mkdir(parents=True, exist_ok=True)
+        cp.write_bytes(body)
+    for g in json.loads(cp.read_text(encoding="utf-8")):
+        if str((g.get("storeIds") or {}).get("steam", "")) == appid:
+            return {"status": g.get("status", ""), "anticheats": list(g.get("anticheats") or []),
+                    "name": g.get("name", "")}
+    return None
+
+
 def _fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
     appid = str(appid).strip()
     if not re.fullmatch(r"\d{1,10}", appid):      # also used as a cache file name and in URLs
@@ -82,6 +105,10 @@ def _fetch_game_hints(appid: str, use_cache: bool = True) -> dict:
                                                 "score", "confidence", "total")}
     except Exception as ex:
         res["errors"].append(f"ProtonDB: {ex}")
+    try:
+        res["awacy"] = _fetch_awacy(appid)
+    except Exception as ex:
+        res["errors"].append(f"Are We Anti-Cheat Yet: {ex}")
     try:
         api = "https://www.pcgamingwiki.com/w/api.php"
         title = ""
@@ -630,6 +657,45 @@ class _AppidWorker(QThread):
             self.done.emit([], str(ex))
 
 
+def umu_lookup(codename: str, title: str) -> List[str]:
+    """umu-database ids for a store codename (Epic / GOG app name) or, failing that, a title."""
+    api = "https://umu.openwinecomponents.org/umu_api.php?"
+    found: List[str] = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k.lower() == "umu_id" and isinstance(v, str) and v and v not in found:
+                    found.append(v)
+                else:
+                    walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    for q in ([{"codename": codename}] if codename else []) + ([{"title": title}] if title else []):
+        try:
+            walk(json.loads(_http_get(api + urllib.parse.urlencode(q))[0].decode("utf-8", "replace")))
+        except ValueError:
+            continue
+        if found:
+            break
+    return found
+
+
+class _UmuWorker(QThread):
+    done = Signal(list, str)
+
+    def __init__(self, codename: str, title: str, parent=None):
+        super().__init__(parent)
+        self._a = (codename, title)
+
+    def run(self):
+        try:
+            self.done.emit(umu_lookup(*self._a), "")
+        except Exception as ex:
+            self.done.emit([], str(ex))
+
+
 class _HintWorker(QThread):
     done = Signal(dict)
 
@@ -742,6 +808,11 @@ class GameHintsWidget(QWidget):
             b_.hide()
             mrow.addWidget(b_)
         mrow.addStretch(1)
+        self._umudb_btn = _tool_btn("umu-database GAMEID")
+        self._umudb_btn.setToolTip("Look the game up in umu-database (store codename, then title) and put "
+                                   "its protonfix id into the Launch line tab's GAMEID")
+        self._umudb_btn.clicked.connect(self._umu_db)
+        mrow.addWidget(self._umudb_btn)
         lay.addLayout(mrow)
 
         self._status = QLabel("")
@@ -940,6 +1011,29 @@ class GameHintsWidget(QWidget):
                 why += f"  ·  GAMEID = umu-{aid} on the Launch line tab (tick its umu-run box to use it)"
         self._status.setText(why)
         self._fetch(False, note=why)
+
+    def _umu_db(self):
+        g = self._game
+        code = g.key.split(":", 1)[1] if g is not None and g.launcher == "Heroic" else ""
+        title = g.name if g is not None else self._appid.text().strip()
+        if not (code or title):
+            self._status.setText("Pick a game or type its name first.")
+            return
+        self._status.setText("Searching umu-database…")
+        self._umu_w = _UmuWorker(code, title, self)
+        self._umu_w.done.connect(self._umu_db_done)
+        self._umu_w.start()
+
+    def _umu_db_done(self, ids: list, err: str):
+        if err or not ids:
+            self._status.setText(f"⚠ umu-database: {err}" if err else
+                                 "umu-database has no entry for this game (umu-0 works as GAMEID).")
+            return
+        ll = getattr(self.window(), "_launch_line", None)
+        if ll is not None:
+            ll._umu_gid.setText(ids[0])
+        self._status.setText(f"umu-database: GAMEID = {ids[0]} on the Launch line tab"
+                             + (f" (also listed: {', '.join(ids[1:4])})" if len(ids) > 1 else ""))
 
     def _use_match(self, umu: bool):
         it = self._matches.currentItem()

@@ -136,3 +136,27 @@ def plan(prefix: Path, components: Sequence[str], force: bool = False) -> Plan:
     if appid:
         return Plan([exe, appid, *opts, *components], {}, tool)
     return Plan([exe, *opts, *components], {"WINEPREFIX": str(prefix)}, tool)
+
+
+PREFIX_ACTIONS = ("winecfg", "regedit", "kill")
+
+
+def prefix_command(prefix: Path, action: str) -> Plan:
+    """winecfg / regedit / wineserver -k for a prefix, through protontricks for Steam games
+    (so the game's own Proton build is used) and winetricks / the system wine otherwise."""
+    prefix = Path(prefix)
+    if action not in PREFIX_ACTIONS:
+        raise ValueError(f"unknown prefix action: {action}")
+    appid = steam_appid(prefix)
+    if appid:
+        exe = shutil.which("protontricks")
+        if exe is None:
+            raise RuntimeError("protontricks is not installed")
+        if action == "kill":
+            return Plan([exe, "-c", "wineserver -k", appid], {}, "protontricks")
+        return Plan([exe, appid, action], {}, "protontricks")
+    tool = "wineserver" if action == "kill" else "winetricks"
+    exe = shutil.which(tool)
+    if exe is None:
+        raise RuntimeError(f"{tool} is not installed")
+    return Plan([exe, "-k"] if action == "kill" else [exe, action], {"WINEPREFIX": str(prefix)}, tool)

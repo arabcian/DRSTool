@@ -147,6 +147,23 @@ class LinkStore:
             return True
         self._change(fn)
 
+    def add_perf(self, key: str, run: dict, limit: int = 40) -> bool:
+        """Remember one frametime capture of the game ({"path", "mtime", "avg", "low1", ...}),
+        tagged with the profile and fingerprint written to the game when it was recorded
+        (fp "" = the capture predates the last write). Returns False if already known."""
+        def fn(g):
+            e = g.setdefault(key, {})
+            hist = e.setdefault("perf", [])
+            if any(r.get("path") == run.get("path") and r.get("mtime") == run.get("mtime") for r in hist):
+                return False
+            newer = (run.get("mtime") or 0) >= (e.get("applied_at") or 0)
+            hist.append(dict(run, fp=e.get("fp", "") if newer else "",
+                             profile=e.get("profile") if newer else None))
+            hist.sort(key=lambda r: r.get("mtime") or 0)
+            del hist[:-limit]
+            return True
+        return self._change(fn)
+
     def rename_profile(self, old: str, new: str) -> int:
         n = [0]
 

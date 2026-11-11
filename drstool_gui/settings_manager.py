@@ -22,6 +22,7 @@ from .gamescope import normalize_gs_flags
 from .links import LINKS
 from .lookup import canonical_drs_key, canonical_drs_value, drs_lookup
 from .profile_io import unique_profile_name
+from .state import base_chain, layer_diff, resolve_layers
 
 _log = logging.getLogger(__name__)
 
@@ -124,7 +125,49 @@ class SettingsManager(QObject):
         return " ".join(parts)
 
     def get_profiles(self) -> Dict[str, Dict]:
-        return self._profiles
+        """Profiles as they apply (a layered profile merged with its base chain)."""
+        if not any(isinstance(p, dict) and p.get("base") for p in self._profiles.values()):
+            return self._profiles
+        return {n: resolve_layers(self._profiles, n) if isinstance(p, dict) else p
+                for n, p in self._profiles.items()}
+
+    def get_base(self, name: str) -> Optional[str]:
+        p = self._profiles.get(name)
+        return p.get("base") if isinstance(p, dict) else None
+
+    def children_of(self, name: str) -> List[str]:
+        """Profiles that build on `name`, directly or through another layer."""
+        return [n for n in self._profiles if n != name and name in base_chain(self._profiles, n)]
+
+    def set_base(self, name: str, base: Optional[str]) -> bool:
+        """Make `name` a layer on `base` (stores only its differences), or None to flatten it.
+        The profile's resulting settings do not change."""
+        if name not in self._profiles or (base and (base not in self._profiles
+                                                    or name in base_chain(self._profiles, base))):
+            return False
+        snapshot = self._checkpoint_profiles()
+        self._profiles[name] = self._layered(name, resolve_layers(self._profiles, name), base)
+        return self._commit_profiles(snapshot)
+
+    def set_meta(self, name: str, notes: str, tags: List[str]) -> bool:
+        """Free-text notes ("why these settings") and tags of a profile."""
+        if not isinstance(self._profiles.get(name), dict):
+            return False
+        snapshot = self._checkpoint_profiles()
+        p = self._profiles[name]
+        for k, v in (("notes", notes.strip()), ("tags", [t.strip() for t in tags if t.strip()])):
+            if v:
+                p[k] = v
+            else:
+                p.pop(k, None)
+        return self._commit_profiles(snapshot)
+
+    def _layered(self, name: str, full: dict, base: Optional[str]) -> dict:
+        meta = {k: v for k, v in (self._profiles.get(name) or {}).items() if k in ("notes", "tags")}
+        full = {k: v for k, v in full.items() if k not in ("base", "unset", "notes", "tags")}
+        if not base:
+            return dict(full, **meta)
+        return dict(layer_diff(resolve_layers(self._profiles, base), full), base=base, **meta)
 
     def get_current_profile(self) -> Optional[str]:
         return self._current_profile
@@ -144,13 +187,13 @@ class SettingsManager(QObject):
                      gamescope_enabled: bool = False,
                      gamescope_flags: Optional[Dict[str, str]] = None):
         snapshot = self._checkpoint_profiles()
-        self._profiles[name] = {
+        self._profiles[name] = self._layered(name, {
             "settings": self._settings.copy(),
             "arch": self._arch.code if self._arch else None,
             "env_vars": env_vars.copy() if env_vars else {},
             "gamescope_enabled": gamescope_enabled,
             "gamescope_flags": gamescope_flags.copy() if gamescope_flags else {},
-        }
+        }, self.get_base(name))
         self._current_profile = name
         if self._commit_profiles(snapshot):
             self.profile_saved.emit(name)
@@ -160,7 +203,7 @@ class SettingsManager(QObject):
     def load_profile(self, name: str):
         if name not in self._profiles:
             return
-        profile = self._profiles[name]
+        profile = self.get_profiles()[name]
         if not isinstance(profile, dict):
             # Hand-edited/corrupt entry — refuse to load rather than crash
             # on profile.get(...) below.
@@ -216,6 +259,9 @@ class SettingsManager(QObject):
         snapshot = self._checkpoint_profiles()
         # keep the visual order stable: rebuild the dict with the key swapped
         self._profiles = {(new if k == old else k): v for k, v in self._profiles.items()}
+        for p in self._profiles.values():
+            if isinstance(p, dict) and p.get("base") == old:
+                p["base"] = new
         if self._current_profile == old:
             self._current_profile = new
         if not self._commit_profiles(snapshot):
@@ -246,6 +292,9 @@ class SettingsManager(QObject):
     def delete_profile(self, name: str):
         if name in self._profiles:
             snapshot = self._checkpoint_profiles()
+            for child in self._profiles:               # layers on it keep their settings, flattened
+                if child != name and self.get_base(child) == name:
+                    self._profiles[child] = self._layered(child, resolve_layers(self._profiles, child), None)
             del self._profiles[name]
             if self._current_profile == name:
                 self._current_profile = None

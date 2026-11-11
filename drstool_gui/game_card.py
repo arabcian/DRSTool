@@ -7,6 +7,7 @@ Everything here only reads; writing a profile to a game goes through the sync ta
 apply_target() (MainWindow.write_profile_to_games)."""
 
 import json
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +31,7 @@ from .game_hints import _HINT_CACHE_VER, _hints_cache_path, _HintWorker, pick_ap
 from .launchers import SteamBackend
 from .links import LINKS, profile_fp
 from .logs import _log_analyse, _LOG_RULES, LogViewerWidget
+from .sysinfo import SYSHUB
 from .tasks import TASKS
 from .theme import btn_ss, caption, SCROLLABLE_CONTROL_QSS, T
 from .toasts import toast
@@ -163,7 +165,8 @@ class _CardWorker(QThread):
         g = self._g
         found = game_scan.find_dlls(g)
         out = {"ngx": {k: sorted({d.version_str for d in found.of(k)}) for k in _KIND_TITLES},
-               "anti_cheat": list(found.anti_cheat), "truncated": found.truncated, "prefix": {}}
+               "anti_cheat": list(found.anti_cheat), "truncated": found.truncated, "prefix": {},
+               "optiscaler": list(found.optiscaler)}
         if g.prefix is not None:
             for c in PD_COMPONENTS:
                 st = detect_installed(g.prefix, c)
@@ -218,12 +221,40 @@ class _CardWorker(QThread):
             return {"appid": appid}
         if d.get("v") != _HINT_CACHE_VER:
             return {"appid": appid}
-        return {"appid": appid, "protondb": d.get("protondb"), "ts": d.get("ts", 0)}
+        return {"appid": appid, "protondb": d.get("protondb"), "ts": d.get("ts", 0), "awacy": d.get("awacy")}
 
 
 # ============================================================================
 # Sidebar: the game list
 # ============================================================================
+
+_PRESETS = [("All games", ""), ("No profile", "noprofile"), ("Profile behind", "behind"),
+            ("Profile with lint findings", "lint"), ("Anti-cheat", "ac"), ("Older DLSS", "olddlss")]
+
+
+def _ver(v: str) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", v or ""))
+
+
+def _preset_test(code: str, links: dict, profiles: dict):
+    """Predicate on game keys for a Games-list preset filter."""
+    if not code:
+        return lambda _k: True
+    ln = lambda k: links.get(k) or {}                          # noqa: E731
+    if code == "noprofile":
+        return lambda k: not ln(k).get("profile")
+    if code == "behind":
+        return lambda k: link_status(ln(k), profiles)[0] in ("behind", "never")
+    if code == "ac":
+        return lambda k: bool(ln(k).get("ac"))
+    if code == "olddlss":
+        newest = max((_ver(v.get("dlss", "")) for v in links.values()), default=())
+        return lambda k: bool(ln(k).get("dlss")) and _ver(ln(k)["dlss"]) < newest
+    from .profile_io import lint_profile                       # "lint": profiles with errors / warnings
+    bad = {n for n, p in profiles.items() if isinstance(p, dict)
+           and any(i.sev in ("error", "warn") for i in lint_profile(p, SYSHUB.info))}
+    return lambda k: ln(k).get("profile") in bad
+
 
 class GameListWidget(QWidget):
     """Every game found by game_scan, grouped by launcher; linked profiles shown on the right."""
@@ -245,6 +276,12 @@ class GameListWidget(QWidget):
         self._count = QLabel("")
         self._count.setStyleSheet(f"color:{T['muted']}; font-size:11px;")
         row.addWidget(self._count, 1)
+        self._preset = QComboBox()
+        for label, code in _PRESETS:
+            self._preset.addItem(label, code)
+        self._preset.setToolTip("Anti-cheat and DLSS are known for the games whose card was opened")
+        self._preset.currentIndexChanged.connect(lambda _i: self.refresh())
+        row.addWidget(self._preset)
         self._rescan_btn = QPushButton("↻ Rescan")
         self._rescan_btn.setCursor(Qt.PointingHandCursor)
         self._rescan_btn.setStyleSheet(btn_ss("ghost", "sm"))
@@ -312,10 +349,11 @@ class GameListWidget(QWidget):
         cur_key = cur.data(Qt.UserRole) if cur else None
         links = LINKS.all()
         profiles = self.sm.get_profiles()
+        keep = _preset_test(self._preset.currentData(), links, profiles)
         self.list.blockSignals(True)
         self.list.clear()
         for launcher in _LAUNCHERS:
-            rows = [g for g in self.games if g.launcher == launcher
+            rows = [g for g in self.games if g.launcher == launcher and keep(g.key)
                     and (not self._filter or self._filter in g.name.casefold()
                          or self._filter in str((links.get(g.key) or {}).get("profile") or "").casefold())]
             if not rows:
@@ -481,6 +519,8 @@ class GameCardWidget(QWidget):
         self._tricks_btn = self.t_runtime.add_button(
             "Windows libraries…", lambda: self._open_tricks(), "default",
             "Install Visual C++, DirectX / D3DX, .NET and every other winetricks library into this game's prefix")
+        self._pfx_btn = self.t_runtime.add_button("Prefix tools", self._prefix_menu, "ghost",
+                                                  "winecfg, regedit, stop wineserver, back up or reset the prefix")
 
         self.t_dlls = _Tile("DLSS / DXVK")
         self.t_dlls.add_button("DLL Manager", lambda: self._open_tool("DLL Manager"), "ghost")
@@ -692,10 +732,16 @@ class GameCardWidget(QWidget):
                 col = T["warn"] if state in ("mixed", "unknown") else ("" if state == "ok" else T["faint"])
             rows.append((name, txt, col))
         dlss = ngx.get("dlss") or []
+        seen = LINKS.get(self.game.key)
+        for field, val in (("dlss", dlss[-1] if dlss else ""), ("ac", ",".join(d.get("anti_cheat") or []))):
+            if seen.get(field, "") != val:             # only on change: set_field re-renders the list
+                LINKS.set_field(self.game.key, field, val, name=self.game.name)
         head = f"DLSS {dlss[-1]}" if dlss else ("Streamline" if ngx.get("sl_sdk_0") else "no DLSS")
         dx = next((v for n, (s, v) in (d.get("prefix") or {}).items() if n == "DXVK" and s == "ok" and v), "")
         value = head + (f"  ·  DXVK {dx}" if dx else "")
         extra = ""
+        for _dir, ver in d.get("optiscaler") or []:
+            rows.append(("OptiScaler", ver or "installed (version unknown)", ""))
         if d.get("anti_cheat"):
             extra += (f'<br><span style="color:{T["warn"]}">⚠ anti-cheat: '
                       f'{_esc(", ".join(d["anti_cheat"][:3]))} — swap DLLs with care</span>')
@@ -720,7 +766,28 @@ class GameCardWidget(QWidget):
                 ("duration", fmt(ft.get("dur")) + " s", "")]
         src = (f'<br><span style="color:{T["muted"]}">{_esc(Path(ft["path"]).name)}'
                f'{" (picked)" if ft.get("pinned") else ""} · {_esc(_when(ft.get("mtime", 0)))}</span>')
-        self.t_ft.set(f"{fmt(ft.get('avg'))} FPS avg", _rows_html(rows) + src)
+        if self.game is not None and ft.get("avg") is not None:
+            LINKS.add_perf(self.game.key, {k: ft.get(k) for k in ("path", "mtime", "avg", "low1", "p99")})
+        self.t_ft.set(f"{fmt(ft.get('avg'))} FPS avg", _rows_html(rows) + src + self._perf_history_html())
+
+    def _perf_history_html(self) -> str:
+        """Captures grouped by the configuration that was written when they were recorded."""
+        hist = LINKS.get(self.game.key).get("perf") or [] if self.game is not None else []
+        groups: dict = {}
+        for r in hist:
+            groups.setdefault((r.get("profile") or "?", r.get("fp") or ""), []).append(r)
+        if len(hist) < 2:
+            return ""
+        cur_fp = LINKS.get(self.game.key).get("fp", "")
+        rows = []
+        for (prof, fp), runs in sorted(groups.items(), key=lambda kv: kv[1][-1].get("mtime") or 0)[-5:]:
+            avg = sum(r["avg"] for r in runs) / len(runs)
+            lows = [r["low1"] for r in runs if r.get("low1") is not None]
+            label = f"{prof} · {fp[:6] or 'older'}" + (" (now)" if fp and fp == cur_fp else "")
+            rows.append((label, f"{avg:.1f} avg / {(sum(lows) / len(lows)) if lows else 0:.1f} 1% "
+                                f"· {len(runs)} run(s) · {_when(runs[-1].get('mtime') or 0)}", ""))
+        return f'<br><b>By profile version</b>{_rows_html(rows)}'
+
 
     def _fixes(self) -> list:
         """Libraries the last log asks for that the prefix does not have yet -> [(verb, why)]."""
@@ -794,6 +861,11 @@ class GameCardWidget(QWidget):
                     ("best reported", str(pd.get("bestReportedTier") or "—"),
                      _TIER_COLOR.get(str(pd.get("bestReportedTier")), "")),
                     ("reports", str(pd.get("total") or "—"), ""), ("confidence", str(pd.get("confidence") or "—"), "")]
+            ac = p.get("awacy")
+            if ac:
+                rows.append(("anti-cheat", f"{ac.get('status') or '?'} ({', '.join(ac.get('anticheats') or [])})",
+                             {"Supported": T["accent"], "Running": T["accent"], "Broken": T["danger"],
+                              "Denied": T["danger"]}.get(ac.get("status"), T["warn"])))
             self.t_pdb.set(tier.capitalize(), _rows_html(rows) +
                            f'<br><span style="color:{T["muted"]}">appid {_esc(appid)} · fetched {_ago(p.get("ts", 0))}</span>',
                            _TIER_COLOR.get(tier, T["text"]))
@@ -832,6 +904,70 @@ class GameCardWidget(QWidget):
         from .winetricks_dialog import WinetricksDialog
         WinetricksDialog(self.game.prefix, self.game.name, self, suggest=suggest).exec()
         self.reload()                      # the log / DLL tiles may have changed
+
+    def _prefix_menu(self):
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QMenu
+        if self.game is None or self.game.prefix is None:
+            toast("This game has no Wine prefix", "info")
+            return
+        m = QMenu(self)
+        for label, act in (("winecfg", "winecfg"), ("Registry editor (regedit)", "regedit"),
+                           ("Stop wineserver (wineserver -k)", "kill")):
+            m.addAction(label).triggered.connect(lambda _c=False, a=act: self._prefix_run(a))
+        m.addSeparator()
+        m.addAction("Back up prefix (.tar.gz)…").triggered.connect(self._prefix_backup)
+        m.addAction("Reset prefix…").triggered.connect(self._prefix_reset)
+        m.exec(QCursor.pos())
+
+    def _prefix_run(self, action: str):
+        from PySide6.QtCore import QProcess, QProcessEnvironment
+        try:
+            plan = winetricks.prefix_command(self.game.prefix, action)
+        except (RuntimeError, ValueError) as ex:
+            toast(str(ex), "error")
+            return
+        proc = QProcess(self)
+        env = QProcessEnvironment.systemEnvironment()
+        for k, v in plan.env.items():
+            env.insert(k, v)
+        proc.setProcessEnvironment(env)
+        proc.finished.connect(proc.deleteLater)
+        proc.start(plan.argv[0], plan.argv[1:])
+        toast(f"{self.game.name}: {' '.join(plan.argv[1:]) or action} started", "info")
+
+    def _prefix_backup(self):
+        from PySide6.QtCore import QProcess
+        pfx = self.game.prefix
+        dest = Path.home() / ".local/share/drstool/prefix-backups"
+        dest.mkdir(parents=True, exist_ok=True)
+        out = dest / f"{re.sub(r'[^A-Za-z0-9._-]+', '_', self.game.name)}-{time.strftime('%Y%m%d-%H%M%S')}.tar.gz"
+        proc = QProcess(self)
+        proc.finished.connect(lambda code, _s: toast(
+            f"Prefix backed up to {out}" if code == 0 else f"Prefix backup failed (tar exit {code})",
+            "ok" if code == 0 else "error", 8000))
+        proc.finished.connect(proc.deleteLater)
+        proc.start("tar", ["-czf", str(out), "-C", str(pfx.parent), pfx.name])
+        toast(f"Backing up {pfx} …", "info")
+
+    def _prefix_reset(self):
+        from PySide6.QtWidgets import QMessageBox
+        pfx = self.game.prefix
+        aside = pfx.with_name(f"{pfx.name}.drstool-reset-{time.strftime('%Y%m%d-%H%M%S')}")
+        if QMessageBox.question(
+                self, "Reset prefix",
+                f"Move the prefix aside so the launcher creates a fresh one on the next start?\n\n"
+                f"{pfx}\n→ {aside.name}\n\nSaves inside the prefix stay in the moved folder; "
+                "rename it back to undo.", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        self._prefix_run("kill")
+        try:
+            pfx.rename(aside)
+        except OSError as ex:
+            toast(f"Reset failed: {ex}", "error")
+            return
+        toast(f"Prefix moved to {aside}", "ok", 8000)
+        self.reload()
 
     def _open_folder(self):
         if self.game and self.game.folders:

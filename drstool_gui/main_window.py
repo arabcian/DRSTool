@@ -23,6 +23,7 @@ from .main_history import HistoryMixin
 from .main_session import SessionMixin
 from .app_dialogs import _spawn_restart, AppearanceDialog, ShortcutsDialog
 from .arch_widgets import ArchDetailWidget, ArchListWidget
+from . import base as _base
 from .base import _CORE_ERR, APP_ID, APP_TITLE, ICON_PATH, share_code
 from .catalog_data import ALL_ENV_VARS, ALL_SETTINGS, GPU_ARCHS
 from .dialogs import PlanDialog, RecipeGallery
@@ -52,7 +53,7 @@ from .palette import CommandPalette
 from .profile_io import profile_share_code
 from .profiles import ProfileManagerWidget
 from .perf_trace import GuiPerfTimer
-from .recipes import recipe_coverage, recipe_ops, recipe_requirement, RECIPES
+from .recipes import all_recipes, recipe_coverage, recipe_ops, recipe_requirement
 from .setting_editor import SettingEditorWidget
 from .settings_list import SettingsListWidget
 from .settings_manager import SettingsManager
@@ -243,6 +244,7 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         _mm.addAction("Appearance…\tCtrl+,").triggered.connect(self.open_appearance)
         _mm.addAction("Keyboard shortcuts\tF1").triggered.connect(self.open_shortcuts)
         _mm.addAction("Background tasks").triggered.connect(self._tasks_menu)
+        _mm.addAction("Find the breaking setting…").triggered.connect(self._open_bisect)
         self._menu_btn.setMenu(_mm)
         nav_layout.addWidget(self._menu_btn)
         main_layout.addWidget(nav)
@@ -520,6 +522,7 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         self._ext_watch.changed.connect(self._on_external_change)
         self._extra_tools.cache.driver_changed.connect(
             lambda msg: self.statusBar().showMessage(msg, 20000))
+        self._extra_tools.cache.driver_changed.connect(lambda _m: self._driver_lint_report())
         SYSHUB.info_changed.connect(self._on_sysinfo)
         FAVS.changed.connect(self._on_favs_changed)
         install_fav_menu(self._settings_list, "drs")
@@ -692,6 +695,9 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
                    next((g.name for g in info.vk_gpus if g.is_nvidia), "")) or "no NVIDIA GPU"
             parts = [gpu, f"driver {info.nv_driver}" if info.nv_driver else "", info.session or ""]
             self._sys_lbl.setText("  \u00b7  ".join(p for p in parts if p))
+            if not _base._CLI_MODE:
+                from .onboarding import maybe_show_onboarding
+                maybe_show_onboarding(self, info)
         self._refresh_availability()
         self._populate_arch_list()
         if self.settings_manager.get_arch():
@@ -776,7 +782,7 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
             shown = f"{title} sync" if title in ("Lutris", "Steam", "Heroic", "Bottles") else title
             items.append(dict(kind="sync", key=title, title=shown, sub="Profiles \u203a sync", desc=""))
         cur = self.capture_state()
-        for r in RECIPES:
+        for r in all_recipes():
             _done, _total, full = recipe_coverage(r, cur)
             items.append(dict(kind="recipe", key=r.rid, title=f"Recipe: {r.title}", sub="Recipe",
                               desc=r.summary + " " + " ".join(r.tags),
@@ -848,7 +854,7 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
                     self._sync_tabs.setCurrentIndex(i)
                     break
         elif kind == "recipe":
-            r = next((x for x in RECIPES if x.rid == key), None)
+            r = next((x for x in all_recipes() if x.rid == key), None)
             if r:
                 self.apply_recipe(r)
         elif kind == "action":
@@ -1022,6 +1028,22 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
             f"QPushButton{{background:transparent;border:1px solid {T['border_hi']};border-radius:8px;"
             f"color:{col};padding:2px 10px;font-weight:700;}}QPushButton:hover{{border-color:{col};}}")
         self._tasks_btn.show()
+
+    def _driver_lint_report(self):
+        """After a driver change: lint every profile against this machine and summarise."""
+        from .profile_io import lint_profile
+        hit = []
+        for name, prof in self.settings_manager.get_profiles().items():
+            if isinstance(prof, dict):
+                issues = [i for i in lint_profile(prof, SYSHUB.info) if i.sev in ("error", "warn")]
+                if issues:
+                    hit.append(f"{name} ({', '.join(sorted({i.code for i in issues}))})")
+        if hit:
+            toast(f"New driver: {len(hit)} profile(s) have lint findings — " + "; ".join(hit[:5]), "warn", 20000)
+
+    def _open_bisect(self):
+        from .bisect_dialog import BisectDialog
+        BisectDialog(self).show()
 
     def _tasks_menu(self):
         m = QMenu(self)
