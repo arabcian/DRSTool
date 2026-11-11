@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -23,6 +25,42 @@ _YAML_LOADER = getattr(yaml, "CSafeLoader", getattr(yaml, "SafeLoader", None))
 
 _DXVK_LOG = re.compile(r"_(d3d8|d3d9|d3d10|d3d10core|d3d11|dxgi|d3d12|d3d12core)\.log$", re.I)
 _SKIP = {"windows", "shadercache", "__pycache__", ".git", "dosdevices"}
+
+# Only the names of files matter here. Directory metadata detects additions,
+# removals and renames without opening every file again when a game card reopens.
+_FILES_CACHE_LIMIT = 64
+_FILES_DIR_LIMIT = 5000
+_FILES_CACHE: OrderedDict[tuple, tuple] = OrderedDict()
+_FILES_CACHE_LOCK = threading.RLock()
+
+
+def clear_game_files_cache(game_key: Optional[str] = None) -> None:
+    """Invalidate one game's cached inventory, or all inventories."""
+    with _FILES_CACHE_LOCK:
+        if game_key is None:
+            _FILES_CACHE.clear()
+        else:
+            for key in tuple(_FILES_CACHE):
+                if key[0] == game_key:
+                    del _FILES_CACHE[key]
+
+
+def _cached_game_files(key: tuple) -> Optional[Dict[str, list]]:
+    with _FILES_CACHE_LOCK:
+        snapshot = _FILES_CACHE.get(key)
+    if snapshot is None:
+        return None
+    stamps, result = snapshot
+    try:
+        if any(game_scan._stat_key(path) != stamp for path, stamp in stamps):
+            return None
+    except OSError:
+        return None
+    with _FILES_CACHE_LOCK:
+        if _FILES_CACHE.get(key) is snapshot:
+            _FILES_CACHE.move_to_end(key)
+    # Callers may mutate the lists; the cache must never expose its own data.
+    return {name: list(entries) for name, entries in result.items()}
 
 
 def steam_appid(game) -> str:
@@ -145,31 +183,61 @@ def runtime_info(game, home: Optional[Path] = None) -> Dict[str, str]:
 
 
 def game_files(game, max_entries: int = 30_000, max_depth: int = 4) -> Dict[str, list]:
-    """One bounded walk over the game's folders: executable names and DXVK / d3d logs."""
+    """Bounded walk over game executables and log file names, cached by directory metadata.
+
+    Files changing contents do not affect this listing. Directory mtimes/ctimes
+    invalidate it when files appear, disappear or are renamed, including in a
+    nested folder. Very large or truncated trees are not cached.
+    """
+    key = (game.key, tuple(str(p) for p in game.folders), max_entries, max_depth)
+    cached = _cached_game_files(key)
+    if cached is not None:
+        return cached
     exes: List[str] = []
+    exe_names = set()
     logs: List[Path] = []
+    stamps = []
+    cacheable = True
     count = 0
     for top in game.folders:
         if not top.is_dir():
+            cacheable = False  # a missing root may appear without changing any visited dir
             continue
-        base = len(top.parts)
+        base_depth = str(top).count(os.sep)
         for dp, dns, fns in os.walk(top, followlinks=False):
+            if len(stamps) < _FILES_DIR_LIMIT:
+                try:
+                    stamps.append((dp, game_scan._stat_key(dp)))
+                except OSError:
+                    cacheable = False
+            else:
+                cacheable = False
             count += len(dns) + len(fns)
             if count > max_entries:
+                cacheable = False
                 dns[:] = []
                 break
-            depth = len(Path(dp).parts) - base
+            depth = dp.count(os.sep) - base_depth
             dns[:] = [d for d in dns if d.lower() not in _SKIP and depth < max_depth]
             for f in fns:
                 low = f.lower()
                 if low.endswith(".exe") and not low.startswith(("unins", "crashreport", "vc_redist",
                                                                  "dxsetup", "ue4prereq", "dotnet")):
                     stem = f[:-4]
-                    if stem not in exes:
+                    if stem not in exe_names:
+                        exe_names.add(stem)
                         exes.append(stem)
                 elif low.endswith(".log") and (_DXVK_LOG.search(f) or "vkd3d" in low):
                     logs.append(Path(dp) / f)
-    return {"exes": exes, "dxvk_logs": logs}
+    result = {"exes": exes, "dxvk_logs": logs}
+    if cacheable and stamps:
+        snapshot = (stamps, {k: list(v) for k, v in result.items()})
+        with _FILES_CACHE_LOCK:
+            _FILES_CACHE[key] = snapshot
+            _FILES_CACHE.move_to_end(key)
+            while len(_FILES_CACHE) > _FILES_CACHE_LIMIT:
+                _FILES_CACHE.popitem(last=False)
+    return result
 
 
 def _mtime(p: Path) -> float:

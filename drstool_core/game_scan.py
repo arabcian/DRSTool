@@ -67,9 +67,9 @@ _DLL_CACHE: OrderedDict[tuple, tuple] = OrderedDict()
 _DLL_CACHE_LOCK = threading.RLock()
 
 
-def _stat_key(path: Path) -> tuple:
+def _stat_key(path: Path | str) -> tuple:
     """Directory/file identity + metadata; detects in-place DLL replacement too."""
-    st = path.lstat()
+    st = os.stat(path, follow_symlinks=False)
     return (st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino, st.st_dev, st.st_mode)
 
 
@@ -92,10 +92,12 @@ def _cached_dll_scan(key: tuple) -> Optional['GameDlls']:
     dirs, files, result = snapshot
     try:
         for path, stamp in dirs:
-            if _stat_key(Path(path)) != stamp:
+            if _stat_key(path) != stamp:
                 return None
         for path, stamp in files:
-            if _stat_key(Path(path)) != stamp or Path(path).is_symlink():
+            # lstat's st_mode is already in the snapshot: an extra is_symlink()
+            # issues another filesystem call for each DLL on every warm scan.
+            if _stat_key(path) != stamp:
                 return None
     except OSError:
         return None
@@ -186,9 +188,10 @@ def scan_steam(home: Optional[Path] = None) -> List[GameEntry]:
                     continue
                 seen.add(appid)
                 pfx = lib / "compatdata" / appid / "pfx"
+                valid_prefix = _is_prefix(pfx)
                 out.append(GameEntry("Steam", f"steam:{appid}", name, [folder],
-                                     pfx if _is_prefix(pfx) else None,
-                                     "Proton" if _is_prefix(pfx) else ""))
+                                     pfx if valid_prefix else None,
+                                     "Proton" if valid_prefix else ""))
     return out
 
 
@@ -485,15 +488,16 @@ def find_dlls(game: GameEntry, max_entries: int = MAX_ENTRIES,
     res = GameDlls()
     dir_stamps = []
     seen_files = set()
+    watched_files = set()  # OptiScaler proxies are not FoundDll objects.
     count = 0
     for top in game.folders:
         if not top.is_dir():
             continue
-        top_depth = len(top.parts)
+        top_depth = str(top).count(os.sep)
         for dp, dns, fns in os.walk(top, followlinks=False):
             try:
                 if len(dir_stamps) <= _DLL_DIR_LIMIT:
-                    dir_stamps.append((dp, _stat_key(Path(dp))))
+                    dir_stamps.append((dp, _stat_key(dp)))
             except OSError:
                 pass
             count += len(dns) + len(fns)
@@ -501,8 +505,8 @@ def find_dlls(game: GameEntry, max_entries: int = MAX_ENTRIES,
                 res.truncated = True
                 dns[:] = []
                 break
-            depth = len(Path(dp).parts) - top_depth
-            in_drive_c = Path(dp).name.lower() == "drive_c"
+            depth = dp.count(os.sep) - top_depth
+            in_drive_c = os.path.basename(dp).lower() == "drive_c"
             dns[:] = [d for d in dns if d.lower() not in _SKIP_DIRS and depth < MAX_DEPTH
                       and not (in_drive_c and d.lower() == "windows")
                       and not os.path.islink(os.path.join(dp, d))]
@@ -515,8 +519,12 @@ def find_dlls(game: GameEntry, max_entries: int = MAX_ENTRIES,
                 if stem in _ANTI_CHEAT and f not in res.anti_cheat:
                     res.anti_cheat.append(f)
             if "optiscaler.ini" in low:
-                # OptiScaler.dll is renamed to one of these proxy names next to its ini
+                # OptiScaler.dll is renamed to one of these proxy names next to its ini.
+                # Track both files so an in-place proxy update also invalidates the cache.
+                watched_files.add(Path(dp) / low["optiscaler.ini"])
                 proxy = next((low[n] for n in _OPTISCALER_PROXIES if n in low), None)
+                if proxy:
+                    watched_files.add(Path(dp) / proxy)
                 ver = pe_version.read_version(Path(dp) / proxy) if proxy else None
                 res.optiscaler.append((dp, pe_version.version_str(ver) if ver else ""))
             for kind, fname in DLSS_FILES.items():
@@ -543,7 +551,8 @@ def find_dlls(game: GameEntry, max_entries: int = MAX_ENTRIES,
     res.dlls.sort(key=lambda d: (KINDS.index(d.kind), str(d.path)))
     if not res.truncated and len(dir_stamps) <= _DLL_DIR_LIMIT:
         try:
-            found = {d.path for d in res.dlls}
+            found = set(watched_files)
+            found.update(d.path for d in res.dlls)
             for d in res.dlls:
                 found.update(d.group)
             file_stamps = [(str(path), _stat_key(path)) for path in sorted(found)]

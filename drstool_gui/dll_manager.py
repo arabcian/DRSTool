@@ -3,6 +3,7 @@
 
 import logging
 import bisect
+from collections import OrderedDict
 import hashlib as _hashlib
 import json
 import os
@@ -74,19 +75,30 @@ def _vcmp(a: tuple, b: tuple) -> int:
     return (a2 > b2) - (a2 < b2)
 
 
-_DLL_VER_CACHE: Dict[tuple, Optional[str]] = {}
+_DLL_VER_CACHE: OrderedDict[tuple, Optional[str]] = OrderedDict()
+_DLL_VER_CACHE_LIMIT = 512
+_DLL_VER_CACHE_LOCK = threading.RLock()
 
 
 def scan_dll_version(path: Path, comp: dict) -> Optional[str]:
-    """Cached wrapper: many games share one prefix, and a full scan of a 7 MB DXVK DLL is not free."""
+    """Bounded metadata cache for costly DLL marker scans (thread-safe)."""
     try:
         st = path.stat()
-        key = (str(path), st.st_mtime_ns, st.st_size, comp["id"])
+        key = (str(path), st.st_mtime_ns, st.st_ctime_ns, st.st_size,
+               st.st_ino, st.st_dev, comp["id"])
     except OSError:
         return _scan_dll_version(path, comp)
-    if key not in _DLL_VER_CACHE:
-        _DLL_VER_CACHE[key] = _scan_dll_version(path, comp)
-    return _DLL_VER_CACHE[key]
+    with _DLL_VER_CACHE_LOCK:
+        if key in _DLL_VER_CACHE:
+            _DLL_VER_CACHE.move_to_end(key)
+            return _DLL_VER_CACHE[key]
+    version = _scan_dll_version(path, comp)
+    with _DLL_VER_CACHE_LOCK:
+        _DLL_VER_CACHE[key] = version
+        _DLL_VER_CACHE.move_to_end(key)
+        while len(_DLL_VER_CACHE) > _DLL_VER_CACHE_LIMIT:
+            _DLL_VER_CACHE.popitem(last=False)
+    return version
 
 
 def _scan_dll_version(path: Path, comp: dict) -> Optional[str]:
@@ -185,7 +197,16 @@ def prefix_sysdirs(prefix: Path):
     return win.is_dir(), s32, (s64 if s64.is_dir() else None)
 
 
-def detect_installed(prefix: Path, comp: dict) -> dict:
+def read_prefix_manifest(prefix: Path) -> dict:
+    """Load the doctor manifest once, including when several components share a prefix."""
+    try:
+        data = json.loads((prefix / _PD_MANIFEST).read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def detect_installed(prefix: Path, comp: dict, *, manifest_data: Optional[dict] = None) -> dict:
     """-> {"state": none|ok|mixed|unknown, "version": str, "source": manifest|scan, "files": [...]}"""
     ok, s32, s64 = prefix_sysdirs(prefix)
     files = []
@@ -196,12 +217,11 @@ def detect_installed(prefix: Path, comp: dict) -> dict:
             p = d / f"{dll}.dll"
             if p.is_file():
                 files.append((f"{tag}/{dll}.dll", p))
-    manifest = {}
-    try:
-        manifest = json.loads((prefix / _PD_MANIFEST).read_text()).get(comp["id"], {})
-    except Exception:
-        _log.debug("ignored error", exc_info=True)
-        pass
+    if manifest_data is None:
+        manifest_data = read_prefix_manifest(prefix)
+    manifest = manifest_data.get(comp["id"], {})
+    if not isinstance(manifest, dict):
+        manifest = {}
     res = {"state": "none", "version": "", "source": "", "files": [r for r, _ in files]}
     if not files:
         return res
@@ -579,6 +599,7 @@ class _DllScanWorker(QThread):
         # Many games share one prefix (every Lutris game on ~/.wine): inspect it once per scan
         # instead of re-reading and re-hashing the same DLLs for each game.
         seen_pfx: Dict[tuple, dict] = {}
+        manifests: Dict[str, dict] = {}
         for i, g in enumerate(games):
             if self._cancel.is_set():
                 break
@@ -590,11 +611,15 @@ class _DllScanWorker(QThread):
                 dlls = game_scan.GameDlls()
             pref: Dict[str, dict] = {}
             if g.prefix is not None and g.prefix_manager != "Proton":
+                prefix_key = str(g.prefix)
+                if prefix_key not in manifests:
+                    manifests[prefix_key] = read_prefix_manifest(g.prefix)
                 for c in PD_COMPONENTS:
                     try:
-                        k = (str(g.prefix), c["id"])
+                        k = (prefix_key, c["id"])
                         if k not in seen_pfx:
-                            seen_pfx[k] = detect_installed(g.prefix, c)
+                            seen_pfx[k] = detect_installed(
+                                g.prefix, c, manifest_data=manifests[prefix_key])
                         pref[c["id"]] = seen_pfx[k]
                     except Exception as ex:               # noqa: BLE001
                         errors.append(f"{g.name} ({c['name']}): {ex}")
@@ -1094,6 +1119,8 @@ class DllManagerWidget(QWidget):
             self._tree.clear()
             self._states.clear()
             self._items.clear()
+        # Sorting a growing QTreeWidget on every new game is quadratic.
+        self._tree.setSortingEnabled(False)
         w = _DllScanWorker(self._custom(), only, self, force_full=force_full)
         self._scan_worker = w
         w.game_ready.connect(self._on_game)
@@ -1113,7 +1140,6 @@ class DllManagerWidget(QWidget):
     def _on_game(self, st: DllGameState):
         key = st.game.key
         self._states[key] = st
-        self._tree.setSortingEnabled(False)
         self._tree.blockSignals(True)
         it = self._items.get(key)
         if it is None:
@@ -1138,7 +1164,6 @@ class DllManagerWidget(QWidget):
             it.addChild(child)
         self._paint(it, st)
         self._tree.blockSignals(False)
-        self._tree.setSortingEnabled(True)
         self._apply_filter_item(it)
 
     def _paint(self, it: QTreeWidgetItem, st: DllGameState):
@@ -1169,6 +1194,8 @@ class DllManagerWidget(QWidget):
         return out
 
     def _on_scan_done(self, n: int, errors: list):
+        # One sort for the whole batch; keep normal user sorting after completion.
+        self._tree.setSortingEnabled(True)
         for e in errors[:20]:
             self._say("warn", e)
         with_dlls = sum(1 for s in self._states.values() if s.dlls.dlls or s.prefix)

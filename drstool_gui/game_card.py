@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from drstool_core import game_info
 
 from .base import _CORE_ERR, APP_ID, game_scan, winetricks
-from .dll_manager import detect_installed, PD_COMPONENTS
+from .dll_manager import detect_installed, PD_COMPONENTS, read_prefix_manifest
 from .frametime import load_frametimes
 from . import game_hints as _gh
 from .game_hints import _HINT_CACHE_VER, _hints_cache_path, _HintWorker, pick_appid
@@ -92,7 +92,7 @@ def default_target(game) -> Optional[dict]:
     return None
 
 
-def link_status(link: dict, profiles: dict) -> tuple:
+def link_status(link: dict, profiles: dict, fingerprints: Optional[dict] = None) -> tuple:
     """-> (code, text) with code ok | behind | never | noprofile | missing | none."""
     prof = link.get("profile")
     if not prof:
@@ -101,7 +101,13 @@ def link_status(link: dict, profiles: dict) -> tuple:
         return "missing", f"profile “{prof}” no longer exists"
     if not link.get("fp") or not link.get("applied_at"):
         return "never", "linked — not written to the game yet"
-    if link["fp"] != profile_fp(profiles[prof]):
+    if fingerprints is None:
+        current_fp = profile_fp(profiles[prof])
+    else:
+        if prof not in fingerprints:
+            fingerprints[prof] = profile_fp(profiles[prof])
+        current_fp = fingerprints[prof]
+    if link["fp"] != current_fp:
         return "behind", "the profile changed since the last write"
     return "ok", "game is up to date with the profile"
 
@@ -168,8 +174,9 @@ class _CardWorker(QThread):
                "anti_cheat": list(found.anti_cheat), "truncated": found.truncated, "prefix": {},
                "optiscaler": list(found.optiscaler)}
         if g.prefix is not None:
+            manifest = read_prefix_manifest(g.prefix)
             for c in PD_COMPONENTS:
-                st = detect_installed(g.prefix, c)
+                st = detect_installed(g.prefix, c, manifest_data=manifest)
                 out["prefix"][c["name"]] = (st["state"], st["version"])
         return out
 
@@ -236,7 +243,7 @@ def _ver(v: str) -> tuple:
     return tuple(int(x) for x in re.findall(r"\d+", v or ""))
 
 
-def _preset_test(code: str, links: dict, profiles: dict):
+def _preset_test(code: str, links: dict, profiles: dict, fingerprints: Optional[dict] = None):
     """Predicate on game keys for a Games-list preset filter."""
     if not code:
         return lambda _k: True
@@ -244,7 +251,7 @@ def _preset_test(code: str, links: dict, profiles: dict):
     if code == "noprofile":
         return lambda k: not ln(k).get("profile")
     if code == "behind":
-        return lambda k: link_status(ln(k), profiles)[0] in ("behind", "never")
+        return lambda k: link_status(ln(k), profiles, fingerprints)[0] in ("behind", "never")
     if code == "ac":
         return lambda k: bool(ln(k).get("ac"))
     if code == "olddlss":
@@ -349,20 +356,26 @@ class GameListWidget(QWidget):
         cur_key = cur.data(Qt.UserRole) if cur else None
         links = LINKS.all()
         profiles = self.sm.get_profiles()
-        keep = _preset_test(self._preset.currentData(), links, profiles)
+        fingerprints = {}  # local to refresh: no stale hashes after a profile edit
+        keep = _preset_test(self._preset.currentData(), links, profiles, fingerprints)
         self.list.blockSignals(True)
         self.list.clear()
-        for launcher in _LAUNCHERS:
-            rows = [g for g in self.games if g.launcher == launcher and keep(g.key)
-                    and (not self._filter or self._filter in g.name.casefold()
-                         or self._filter in str((links.get(g.key) or {}).get("profile") or "").casefold())]
+        groups = {launcher: [] for launcher in _LAUNCHERS}
+        for g in self.games:
+            if g.launcher not in groups or not keep(g.key):
+                continue
+            if self._filter and (self._filter not in g.name.casefold() and
+                                self._filter not in str((links.get(g.key) or {}).get("profile") or "").casefold()):
+                continue
+            groups[g.launcher].append(g)
+        for launcher, rows in groups.items():
             if not rows:
                 continue
             self.list.addItem(make_header_item(launcher, sum(1 for g in rows if (links.get(g.key) or {})
                                                              .get("profile"))))
             for g in rows:
                 ln = links.get(g.key) or {}
-                code, why = link_status(ln, profiles)
+                code, why = link_status(ln, profiles, fingerprints)
                 prof = ln.get("profile") or ""
                 val = ("⟳ " if code in ("behind", "never") else "") + prof
                 it = make_list_item(g.name, g.key, is_set=bool(prof), value=val)

@@ -83,18 +83,22 @@ class SettingsListWidget(QListWidget):
         for i in range(self.count()):
             item = self.item(i)
             if item.data(ROLE_KIND) == "header":
-                if header is not None:
+                if header is not None and header.data(ROLE_COUNT) != count:
                     header.setData(ROLE_COUNT, count)
                 header, count = item, 0
                 continue
             sid = item.data(Qt.UserRole)
             cur = current_state.get(sid)
-            item.setData(ROLE_SET, cur is not None)
+            is_set = cur is not None
+            if item.data(ROLE_SET) != is_set:
+                item.setData(ROLE_SET, is_set)
             s = self._by_id.get(sid)
-            item.setData(ROLE_VALUE, _fmt_drs_value(s, cur) if (s and cur is not None) else "")
+            value = _fmt_drs_value(s, cur) if (s and is_set) else ""
+            if item.data(ROLE_VALUE) != value:
+                item.setData(ROLE_VALUE, value)
             if cur is not None:
                 count += 1
-        if header is not None:
+        if header is not None and header.data(ROLE_COUNT) != count:
             header.setData(ROLE_COUNT, count)
 
     def _on_item_clicked(self, item: QListWidgetItem):

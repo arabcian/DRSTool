@@ -1,0 +1,76 @@
+DRSTool – Performans İyileştirmeleri (11 Kasım 2026)
+=================================================
+
+Bu sürüm kullanıcının DRSTool-experimental(2).zip kaynak kodu üzerine
+uygulanmıştır. Mevcut uygulama özellikleri ve DLL güncelleme mekanizmasının
+işlevsel davranışı korunmaya çalışılmıştır; kaynak kodu doğrudan değiştirilmiştir.
+
+YAPILAN DEĞİŞİKLİKLER
+
+1) drstool_core/game_info.py
+   - game_files() için metadata kontrollü, 64 girişli LRU envanter önbelleği.
+   - Klasör ekleme, dosya ekleme/silme ve ad değiştirme zaman damgalarıyla
+     önbelleği geçersizleştiriyor; eksik klasörler ve sınırda kesilen taramalar
+     önbelleğe alınmıyor.
+   - Dosya listeleri kopyayla döndürülüyor; arayüzün veri değiştirmesi önbelleği
+     bozmaz. Aynı ada sahip .exe dosyalarının tespitinde set kullanılıyor.
+   - clear_game_files_cache(game_key) ile isteğe bağlı önbellek temizleme.
+
+2) drstool_core/game_scan.py
+   - Tekrarlanan prefix varlığı kontrolü kaldırıldı.
+   - Dosya/katalog yol metadata kontrolünde gereksiz Path ve ek is_symlink
+     çağrıları azaltıldı. Klasör derinliği hesaplama hızlandırıldı.
+   - OptiScaler .ini ve proxy DLL değişiklikleri de önbellek geçersizleştirme
+     kontrolüne eklendi (eski kodda bu dosyalar izlenmiyordu).
+
+3) drstool_gui/dll_manager.py ve drstool_gui/game_card.py
+   - DLL sürüm tespiti önbelleği 512 girişli, thread-safe LRU yapısına
+     dönüştürüldü. ctime, inode ve aygıt kimliği sürüm geçersizleştirmesinde
+     hesaba katılıyor. Sonsuz önbellek büyümesi önlendi.
+   - Bir prefix'in .drstool-doctor.json manifest dosyası, o tarama içindeki
+     bileşenler için tek kez okunuyor.
+   - DLL Manager oyun listesindeki sıralama her oyun eklenirken değil,
+     tarama tamamlandığında tek sefer yapılıyor.
+
+4) drstool_gui/settings_list.py ve drstool_gui/env_widgets.py
+   - Qt liste öğelerinde yalnızca değişen renk/değer/sayaç bilgisi setData ile
+     güncelleniyor; her ayar değişikliğinde tüm öğeler için gereksiz
+     dataChanged/yeniden çizim yükü azaltıldı.
+
+5) drstool_gui/game_card.py
+   - Oyun listesi filtreleri, tüm oyunları her launcher için ayrı tekrar
+     dolaşmak yerine tek geçişte gruplandırıyor.
+   - Aynı profili kullanan oyunların profil fingerprint'i her yenilemede
+     profilden yalnızca bir kez hesaplanıyor. Önbellek sadece o yenilemeye
+     özel olduğu için profil düzenlemelerinde bayat fingerprint kalmıyor.
+
+DOĞRULAMA
+
+* Python kaynakları: python -m compileall -q drstool_core drstool_gui tests
+* Qt gerektirmeyen testler: 126 passed, 5 skipped, 8 subtests passed.
+* Paketleme: pip wheel --no-index --no-deps --no-build-isolation .
+  başarıyla tamamlandı.
+* PySide6 bu inceleme ortamında kurulu olmadığından Qt/GUI runtime testlerinin
+  tamamı çalıştırılamadı. Gentoo ortamında görsel/işlevsel doğrulama önerilir.
+
+ÖLÇÜM (sentetik, uygulamanın FPS'si değildir)
+
+Ortak test ağacı: 1.200 klasör, 7.200 adet .pak, 12 adet .exe.
+Aynı ağaçta eski ve yeni kod, ayrı Python işlemlerinde karşılaştırıldı.
+Her işlev arka arkaya 18 kez çağrıldı. 'Sıcak' sonuç: 5–18. çağrıların
+medyanı. Dosya sistemi/CPU/Gentoo kurulumu farklı sonuç verebilir.
+
+                    Orijinal     İyileştirilmiş       Kazanç
+Oyun dosya envanteri  21,455 ms    1,843 ms           ~11,6x
+DLL taraması           7,817 ms    1,678 ms            ~4,7x
+
+Yeniden çalıştırmada medyanlar sırasıyla 21,364 -> 2,029 ms ve
+7,982 -> 1,749 ms olarak ölçüldü.
+
+NOTLAR
+
+- Oyun FPS, DLSS performansı veya GPU donanım parametreleri değiştirilmedi.
+- Her taramada metadata doğrulaması yapılıyor; veri güncelliği pahasına
+  süresiz bir sonuç önbelleği kullanılmıyor.
+- Derleme başarılı olsa da gerçek Qt GUI davranışını kullanıcının
+  PySide6 yüklü sisteminde test etmesi uygun olacaktır.

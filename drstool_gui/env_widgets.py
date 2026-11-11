@@ -226,22 +226,29 @@ class EnvVarsWidget(QListWidget):
         for i in range(self.count()):
             item = self.item(i)
             if item.data(ROLE_KIND) == "header":
-                if header is not None:
+                if header is not None and header.data(ROLE_COUNT) != count:
                     header.setData(ROLE_COUNT, count)
                 header, count = item, 0
                 continue
             name = item.data(Qt.UserRole)
             if name == self.GAMESCOPE_KEY:
-                item.setData(ROLE_SET, self._gamescope_on)
-                item.setData(ROLE_VALUE, "on" if self._gamescope_on else "CLI builder")
+                value = "on" if self._gamescope_on else "CLI builder"
+                if item.data(ROLE_SET) != self._gamescope_on:
+                    item.setData(ROLE_SET, self._gamescope_on)
+                if item.data(ROLE_VALUE) != value:
+                    item.setData(ROLE_VALUE, value)
                 count += 1 if self._gamescope_on else 0
                 continue
             val = self._values.get(name)
-            item.setData(ROLE_SET, val is not None)
-            item.setData(ROLE_VALUE, val or "")
+            is_set = val is not None
+            value = val or ""
+            if item.data(ROLE_SET) != is_set:
+                item.setData(ROLE_SET, is_set)
+            if item.data(ROLE_VALUE) != value:
+                item.setData(ROLE_VALUE, value)
             if val is not None:
                 count += 1
-        if header is not None:
+        if header is not None and header.data(ROLE_COUNT) != count:
             header.setData(ROLE_COUNT, count)
 
     def _on_item_clicked(self, item):
