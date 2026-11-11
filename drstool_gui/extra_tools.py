@@ -44,8 +44,14 @@ QTabBar::tab:hover:!selected {{ color:{T['text2']}; border-bottom:2px solid {T['
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # Navigation lives in the left sidebar (ExtraToolsSidebarWidget); the
+        # tab strip itself would overflow with this many tools.
+        # Styled and put into the tree while still empty: with an application
+        # stylesheet both steps re-style the whole subtree below them.
         tabs = QTabWidget()
-        tabs.setStyleSheet(self._TAB_SS)
+        tabs.tabBar().hide()
+        tabs.setStyleSheet("QTabWidget::pane { border:none; }")
+        layout.addWidget(tabs)
 
         # Tabs are built on first visit (lazy): constructing all 15 tool pages at
         # startup cost ~1.7 s of Qt style polishing for pages nobody had opened.
@@ -53,11 +59,11 @@ QTabBar::tab:hover:!selected {{ color:{T['text2']}; border-bottom:2px solid {T['
         self._lazy: Dict[str, tuple] = {}      # title -> (page, attr, factory)
         self._lazy_attr: Dict[str, str] = {}   # attr  -> title
 
-        def scrolled(w):
+        def scrolled(page):
             sc = QScrollArea()
             sc.setWidgetResizable(True)
-            sc.setWidget(w)
             sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+            page.layout().addWidget(sc)
             return sc
 
         def lazy(title, attr, factory, wrap=None):
@@ -92,20 +98,22 @@ QTabBar::tab:hover:!selected {{ color:{T['text2']}; border-bottom:2px solid {T['
         tabs.currentChanged.connect(lambda i: self._build_lazy(tabs.tabText(i)))
         self._build_lazy(tabs.tabText(tabs.currentIndex()))
 
-        # Navigation lives in the left sidebar (ExtraToolsSidebarWidget); the
-        # tab strip itself would overflow with this many tools.
-        tabs.tabBar().hide()
-        tabs.setStyleSheet("QTabWidget::pane { border:none; }")
-        layout.addWidget(tabs)
-
     def _build_lazy(self, title: str):
         ent = self._lazy.pop(title, None)
         if ent is None:
             return None
         page, attr, factory, wrap = ent
-        w = factory()
-        object.__setattr__(self, attr, w)
-        page.layout().addWidget(wrap(w) if wrap else w)
+        # The page is born under its final parent: adding a finished page to the
+        # tree afterwards re-styles every widget in it once more.
+        if wrap:
+            sc = wrap(page)
+            w = factory(sc.viewport())
+            object.__setattr__(self, attr, w)
+            sc.setWidget(w)
+        else:
+            w = factory(page)
+            object.__setattr__(self, attr, w)
+            page.layout().addWidget(w)
         return w
 
     def __getattr__(self, name):

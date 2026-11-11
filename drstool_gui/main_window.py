@@ -256,6 +256,7 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         # with no visible handle to drag it back.
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(4)
+        main_layout.addWidget(splitter, 1)
 
         # ===== Sidebar =====
         sidebar = QWidget()
@@ -264,6 +265,7 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         sidebar.setStyleSheet(f"#sidebar {{ background:{T['bg']}; }}")
         sidebar.setMinimumWidth(260)
         sidebar.setMaximumWidth(900)
+        splitter.addWidget(sidebar)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(10, 12, 6, 8)
         sidebar_layout.setSpacing(8)
@@ -345,60 +347,20 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         self._profiles_widget.profile_loaded.connect(self._on_profile_loaded)
         profiles_scroll = QScrollArea()
         profiles_scroll.setWidgetResizable(True)
-        profiles_scroll.setWidget(self._profiles_widget)
         profiles_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
         self._sidebar_stack.addWidget(profiles_scroll)
+        profiles_scroll.setWidget(self._profiles_widget)
 
         # Page 5: Extra Tools sidebar (orientation text for both sub-tools)
         self._flm_sidebar = ExtraToolsSidebarWidget()
         self._sidebar_stack.addWidget(self._flm_sidebar)
-
-        self._lutris_sync_widget = LutrisSyncWidget(self.settings_manager)
-        self._env_widget.env_changed.connect(self._lutris_sync_widget._update_preview)
-        lutris_scroll = QScrollArea()
-        lutris_scroll.setWidgetResizable(True)
-        lutris_scroll.setWidget(self._lutris_sync_widget)
-        lutris_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
-
-        # Launcher sync tabs: runnable line + Lutris + Steam + Heroic + Bottles
-        self._launch_line = LaunchLineWidget()
-        self._steam_sync = LauncherSyncWidget(SteamBackend())
-        self._heroic_sync = LauncherSyncWidget(HeroicBackend())
-        self._bottles_sync = LauncherSyncWidget(BottlesBackend())
-        self._sync_tabs = QTabWidget()
-        self._sync_tabs.setStyleSheet(ExtraToolsWidget._TAB_SS)
-        self._sync_tabs.addTab(self._launch_line, "Launch line")
-        self._sync_tabs.addTab(lutris_scroll, "Lutris")
-        for _w, _t in ((self._steam_sync, "Steam"), (self._heroic_sync, "Heroic"),
-                       (self._bottles_sync, "Bottles")):
-            _sc = QScrollArea()
-            _sc.setWidgetResizable(True)
-            _sc.setWidget(_w)
-            _sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
-            self._sync_tabs.addTab(_sc, _t)
-        self._history = HistoryWidget(self.settings_manager)
-        self._nip_import = NipImportWidget(self.settings_manager)
-        self._dxvk_conf = DxvkConfWidget()
-        self._shortcut = ShortcutWidget()
-        self._steam_shortcuts = SteamShortcutsWidget()
-        _ssc = QScrollArea()
-        _ssc.setWidgetResizable(True)
-        _ssc.setWidget(self._steam_shortcuts)
-        _ssc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
-        self._sync_tabs.addTab(self._dxvk_conf, "dxvk.conf")
-        self._sync_tabs.addTab(self._shortcut, "Shortcut")
-        self._sync_tabs.addTab(_ssc, "Add to Steam")
-        self._sync_tabs.addTab(self._history, "History")
-        self._sync_tabs.addTab(self._nip_import, "Import .nip")
-        self._sync_tabs.currentChanged.connect(lambda _i: self._refresh_sync_previews())
-
-        splitter.addWidget(sidebar)
 
         # ===== Right side (editor area) =====
         editor = QWidget()
         editor.setObjectName("editorPane")
         editor.setAttribute(Qt.WA_StyledBackground, True)
         editor.setStyleSheet(f"#editorPane {{ background:#0e1015; border-left:1px solid {T['border']}; }}")
+        splitter.addWidget(editor)
         editor_layout = QVBoxLayout(editor)
         editor_layout.setContentsMargins(28, 20, 28, 16)
         editor_layout.setSpacing(0)
@@ -427,23 +389,58 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         self._right_stack.addWidget(self._env_editor)
 
         # Page 4: Gamescope CLI-flag builder (real argv flags, not env vars)
-        self._gamescope = GamescopeFlagsWidget()
         gamescope_scroll = QScrollArea()
         gamescope_scroll.setWidgetResizable(True)
-        gamescope_scroll.setWidget(self._gamescope)
         gamescope_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
         self._right_stack.addWidget(gamescope_scroll)
+        self._gamescope = GamescopeFlagsWidget(gamescope_scroll.viewport())
+        gamescope_scroll.setWidget(self._gamescope)
 
         # Page 5: Extra Tools panel (vk_flip_meter + lutris-game-tune sub-tabs)
-        self._extra_tools = ExtraToolsWidget()
+        self._extra_tools = ExtraToolsWidget(self._right_stack)
         self._right_stack.addWidget(self._extra_tools)
         self._flm_sidebar.bind(self._extra_tools)
 
         # Page 6: Lutris Sync (Profiles tab)
+        # Built top-down (container into the tree, stylesheet, then content): with an
+        # application stylesheet every reparent re-styles the whole subtree being moved.
+        self._sync_tabs = QTabWidget()
+        self._sync_tabs.setStyleSheet(ExtraToolsWidget._TAB_SS)
         self._right_stack.addWidget(self._sync_tabs)
 
+        def _scrolled_tab(widget, title):
+            sc = QScrollArea()
+            sc.setWidgetResizable(True)
+            sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+            self._sync_tabs.addTab(sc, title)
+            sc.setWidget(widget)
+
+        # Launcher sync tabs: runnable line + Lutris + Steam + Heroic + Bottles
+        self._launch_line = LaunchLineWidget()
+        self._sync_tabs.addTab(self._launch_line, "Launch line")
+        self._lutris_sync_widget = LutrisSyncWidget(self.settings_manager)
+        self._env_widget.env_changed.connect(self._lutris_sync_widget._update_preview)
+        _scrolled_tab(self._lutris_sync_widget, "Lutris")
+        self._steam_sync = LauncherSyncWidget(SteamBackend())
+        self._heroic_sync = LauncherSyncWidget(HeroicBackend())
+        self._bottles_sync = LauncherSyncWidget(BottlesBackend())
+        for _w, _t in ((self._steam_sync, "Steam"), (self._heroic_sync, "Heroic"),
+                       (self._bottles_sync, "Bottles")):
+            _scrolled_tab(_w, _t)
+        self._dxvk_conf = DxvkConfWidget()
+        self._sync_tabs.addTab(self._dxvk_conf, "dxvk.conf")
+        self._shortcut = ShortcutWidget()
+        self._sync_tabs.addTab(self._shortcut, "Shortcut")
+        self._steam_shortcuts = SteamShortcutsWidget()
+        _scrolled_tab(self._steam_shortcuts, "Add to Steam")
+        self._history = HistoryWidget(self.settings_manager)
+        self._sync_tabs.addTab(self._history, "History")
+        self._nip_import = NipImportWidget(self.settings_manager)
+        self._sync_tabs.addTab(self._nip_import, "Import .nip")
+        self._sync_tabs.currentChanged.connect(lambda _i: self._refresh_sync_previews())
+
         # Page 7: Game card (Games tab)
-        self._game_card = GameCardWidget(self.settings_manager)
+        self._game_card = GameCardWidget(self.settings_manager, self._right_stack)
         self._right_stack.addWidget(self._game_card)
         self._games_list.game_selected.connect(self._open_game)
 
@@ -453,12 +450,10 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
 
         self._right_stack.setCurrentIndex(self.PAGE_EMPTY)
 
-        splitter.addWidget(editor)
         # setSizes() must run after both panes are in the splitter.
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([340, 900])
-        main_layout.addWidget(splitter, 1)
         main_layout.addWidget(self._output_bar)
 
         # Status bar

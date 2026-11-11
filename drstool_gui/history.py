@@ -115,10 +115,10 @@ class HistoryWidget(QWidget):
         lay.setContentsMargins(4, 8, 4, 4)
         tabs = QTabWidget()
         tabs.setStyleSheet(ExtraToolsWidget._TAB_SS)
+        lay.addWidget(tabs)      # before the pages: a reparent re-styles the whole subtree
         tabs.addTab(self._build_snapshots(), "Profile history")
         tabs.addTab(self._build_files(), "Config backups")
         tabs.addTab(self._build_compare(), "Compare profiles")
-        lay.addWidget(tabs)
         self.sm.profiles_changed.connect(self._on_profiles_changed)
         self._reload_snapshots()
         self._scan_lutris()

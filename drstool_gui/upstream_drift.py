@@ -531,8 +531,8 @@ _DRIFT_LABEL = {"new": "NEW", "fork": "FORK", "gone": "gone"}
 
 
 class UpstreamDriftWidget(QWidget):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self._rows: List[dict] = []
         self._worker: Optional[_DriftWorker] = None
         lay = QVBoxLayout(self)

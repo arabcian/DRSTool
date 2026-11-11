@@ -206,8 +206,11 @@ class MangoHudBuilder(QWidget):
         root.setSpacing(10)
 
         # left: options
+        # Top-down: a widget moved into the tree later is re-styled together with all its children.
         left = QVBoxLayout()
+        root.addLayout(left, 3)
         top = QHBoxLayout()
+        left.addLayout(top)
         self._filter = QLineEdit()
         self._filter.setPlaceholderText("Filter options…")
         self._filter.setClearButtonEnabled(True)
@@ -221,12 +224,13 @@ class MangoHudBuilder(QWidget):
         b = _tool_btn("Clear")
         b.clicked.connect(lambda: self._load({}))
         top.addWidget(b)
-        left.addLayout(top)
 
         sc = QScrollArea()
         sc.setWidgetResizable(True)
         sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
         host = QWidget()
+        sc.setWidget(host)
+        left.addWidget(sc, 1)
         grid = QGridLayout(host)
         grid.setContentsMargins(4, 4, 8, 4)
         grid.setHorizontalSpacing(10)
@@ -269,9 +273,6 @@ class MangoHudBuilder(QWidget):
             self._rows[key] = (cb, ed, kind, dflt)
             self._row_widgets[key] = [w for w in (cb, ed, d) if w is not None]
             r += 1
-        sc.setWidget(host)
-        left.addWidget(sc, 1)
-        root.addLayout(left, 3)
 
         # right: preview + actions
         right = QVBoxLayout()
@@ -463,11 +464,15 @@ class VkBasaltBuilder(QWidget):
         root = QHBoxLayout(self)
         root.setContentsMargins(4, 8, 4, 4)
         root.setSpacing(10)
+        # Top-down: a widget moved into the tree later is re-styled together with all its children.
         left = QVBoxLayout()
+        root.addLayout(left, 3)
         sc = QScrollArea()
         sc.setWidgetResizable(True)
         sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
         host = QWidget()
+        sc.setWidget(host)
+        left.addWidget(sc, 1)
         lay = QVBoxLayout(host)
         lay.setContentsMargins(4, 4, 8, 4)
         lay.addWidget(MangoHudBuilder._cap("EFFECTS  (drag to reorder; checked ones run top→bottom)"))
@@ -544,9 +549,6 @@ class VkBasaltBuilder(QWidget):
         self._extra.textChanged.connect(self._refresh)
         lay.addWidget(self._extra)
         lay.addStretch(1)
-        sc.setWidget(host)
-        left.addWidget(sc, 1)
-        root.addLayout(left, 3)
 
         right = QVBoxLayout()
         right.addWidget(MangoHudBuilder._cap("vkBasalt.conf"))

@@ -609,6 +609,8 @@ class LgtuneWidget(QWidget):
             "System-wide Settings  —  /etc/lutris-game-tune.conf  (root-owned)"
         )
         self._settings_group.setStyleSheet(_TOOL_GROUP_SS)
+        # Into the tree before it is filled: a widget moved in later is re-styled with all its children.
+        layout.addWidget(self._settings_group)
         settings_layout = QVBoxLayout(self._settings_group)
         settings_layout.setSpacing(10)
 
@@ -617,6 +619,7 @@ class LgtuneWidget(QWidget):
         grid = QGridLayout()
         grid.setSpacing(6)
         grid.setColumnStretch(1, 1)
+        settings_layout.addLayout(grid)
 
         for row_idx, entry in enumerate(LGTUNE_KEYS):
             key, wtype, default, label, desc, *rest = entry
@@ -729,8 +732,6 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
                       "PRE time until the driver is bound."
                 )
 
-        settings_layout.addLayout(grid)
-
         # Save / status / log button row
         action_row = QHBoxLayout()
         action_row.setSpacing(6)
@@ -756,8 +757,6 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
         save_note.setTextFormat(Qt.RichText)
         save_note.setStyleSheet("color:#7b8496; font-size:13px; font-style:italic;")
         settings_layout.addWidget(save_note)
-
-        layout.addWidget(self._settings_group)
 
         # ── Console ───────────────────────────────────────────────────────────
         console_hdr = QHBoxLayout()

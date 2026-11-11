@@ -1,0 +1,387 @@
+diff -ruN -x __pycache__ -x .ruff_cache a/drstool_gui/extra_tools.py DRSTool-experimental/drstool_gui/extra_tools.py
+--- a/drstool_gui/extra_tools.py	2026-11-11 04:06:54.647210994 +0300
++++ b/drstool_gui/extra_tools.py	2026-11-11 04:11:13.956257640 +0300
+@@ -44,8 +44,14 @@
+         layout.setContentsMargins(0, 0, 0, 0)
+         layout.setSpacing(0)
+ 
++        # Navigation lives in the left sidebar (ExtraToolsSidebarWidget); the
++        # tab strip itself would overflow with this many tools.
++        # Styled and put into the tree while still empty: with an application
++        # stylesheet both steps re-style the whole subtree below them.
+         tabs = QTabWidget()
+-        tabs.setStyleSheet(self._TAB_SS)
++        tabs.tabBar().hide()
++        tabs.setStyleSheet("QTabWidget::pane { border:none; }")
++        layout.addWidget(tabs)
+ 
+         # Tabs are built on first visit (lazy): constructing all 15 tool pages at
+         # startup cost ~1.7 s of Qt style polishing for pages nobody had opened.
+@@ -53,11 +59,11 @@
+         self._lazy: Dict[str, tuple] = {}      # title -> (page, attr, factory)
+         self._lazy_attr: Dict[str, str] = {}   # attr  -> title
+ 
+-        def scrolled(w):
++        def scrolled(page):
+             sc = QScrollArea()
+             sc.setWidgetResizable(True)
+-            sc.setWidget(w)
+             sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
++            page.layout().addWidget(sc)
+             return sc
+ 
+         def lazy(title, attr, factory, wrap=None):
+@@ -92,20 +98,22 @@
+         tabs.currentChanged.connect(lambda i: self._build_lazy(tabs.tabText(i)))
+         self._build_lazy(tabs.tabText(tabs.currentIndex()))
+ 
+-        # Navigation lives in the left sidebar (ExtraToolsSidebarWidget); the
+-        # tab strip itself would overflow with this many tools.
+-        tabs.tabBar().hide()
+-        tabs.setStyleSheet("QTabWidget::pane { border:none; }")
+-        layout.addWidget(tabs)
+-
+     def _build_lazy(self, title: str):
+         ent = self._lazy.pop(title, None)
+         if ent is None:
+             return None
+         page, attr, factory, wrap = ent
+-        w = factory()
+-        object.__setattr__(self, attr, w)
+-        page.layout().addWidget(wrap(w) if wrap else w)
++        # The page is born under its final parent: adding a finished page to the
++        # tree afterwards re-styles every widget in it once more.
++        if wrap:
++            sc = wrap(page)
++            w = factory(sc.viewport())
++            object.__setattr__(self, attr, w)
++            sc.setWidget(w)
++        else:
++            w = factory(page)
++            object.__setattr__(self, attr, w)
++            page.layout().addWidget(w)
+         return w
+ 
+     def __getattr__(self, name):
+diff -ruN -x __pycache__ -x .ruff_cache a/drstool_gui/gamescope.py DRSTool-experimental/drstool_gui/gamescope.py
+--- a/drstool_gui/gamescope.py	2026-11-11 04:06:54.647327347 +0300
++++ b/drstool_gui/gamescope.py	2026-11-11 04:08:24.935291867 +0300
+@@ -125,6 +125,9 @@
+         form_outer = QVBoxLayout(self._form_container)
+         form_outer.setContentsMargins(0, 0, 0, 0)
+         form_outer.setSpacing(8)
++        # Into the tree before it is filled: with an application stylesheet every
++        # reparent re-styles the whole subtree being moved.
++        outer.addWidget(self._form_container)
+ 
+         by_cat: Dict[str, List[GamescopeFlagDef]] = {}
+         for gf in GAMESCOPE_FLAGS:
+@@ -137,6 +140,7 @@
+                 "border:1px solid #2a3244; border-radius:3px; margin-top:8px; padding-top:8px;} "
+                 "QGroupBox::title{subcontrol-origin:margin; left:8px; padding:0 4px;}"
+             )
++            form_outer.addWidget(box)
+             grid = QFormLayout(box)
+             grid.setSpacing(4)
+             grid.setLabelAlignment(Qt.AlignRight)
+@@ -193,9 +197,6 @@
+                 self._controls[gf.flag] = ctrl
+                 grid.addRow(lbl, ctrl)
+ 
+-            form_outer.addWidget(box)
+-
+-        outer.addWidget(self._form_container)
+ 
+         # ── Live command preview ────────────────────────────────────────────
+         preview_lbl = QLabel("Preview")
+diff -ruN -x __pycache__ -x .ruff_cache a/drstool_gui/history.py DRSTool-experimental/drstool_gui/history.py
+--- a/drstool_gui/history.py	2026-11-11 04:06:54.647340225 +0300
++++ b/drstool_gui/history.py	2026-11-11 04:08:57.350750155 +0300
+@@ -115,10 +115,10 @@
+         lay.setContentsMargins(4, 8, 4, 4)
+         tabs = QTabWidget()
+         tabs.setStyleSheet(ExtraToolsWidget._TAB_SS)
++        lay.addWidget(tabs)      # before the pages: a reparent re-styles the whole subtree
+         tabs.addTab(self._build_snapshots(), "Profile history")
+         tabs.addTab(self._build_files(), "Config backups")
+         tabs.addTab(self._build_compare(), "Compare profiles")
+-        lay.addWidget(tabs)
+         self.sm.profiles_changed.connect(self._on_profiles_changed)
+         self._reload_snapshots()
+         self._scan_lutris()
+diff -ruN -x __pycache__ -x .ruff_cache a/drstool_gui/lgtune.py DRSTool-experimental/drstool_gui/lgtune.py
+--- a/drstool_gui/lgtune.py	2026-11-11 04:06:54.647413012 +0300
++++ b/drstool_gui/lgtune.py	2026-11-11 04:11:45.315822457 +0300
+@@ -609,6 +609,8 @@
+             "System-wide Settings  —  /etc/lutris-game-tune.conf  (root-owned)"
+         )
+         self._settings_group.setStyleSheet(_TOOL_GROUP_SS)
++        # Into the tree before it is filled: a widget moved in later is re-styled with all its children.
++        layout.addWidget(self._settings_group)
+         settings_layout = QVBoxLayout(self._settings_group)
+         settings_layout.setSpacing(10)
+ 
+@@ -617,6 +619,7 @@
+         grid = QGridLayout()
+         grid.setSpacing(6)
+         grid.setColumnStretch(1, 1)
++        settings_layout.addLayout(grid)
+ 
+         for row_idx, entry in enumerate(LGTUNE_KEYS):
+             key, wtype, default, label, desc, *rest = entry
+@@ -729,8 +732,6 @@
+                       "PRE time until the driver is bound."
+                 )
+ 
+-        settings_layout.addLayout(grid)
+-
+         # Save / status / log button row
+         action_row = QHBoxLayout()
+         action_row.setSpacing(6)
+@@ -757,8 +758,6 @@
+         save_note.setStyleSheet("color:#7b8496; font-size:13px; font-style:italic;")
+         settings_layout.addWidget(save_note)
+ 
+-        layout.addWidget(self._settings_group)
+-
+         # ── Console ───────────────────────────────────────────────────────────
+         console_hdr = QHBoxLayout()
+         console_lbl = QLabel("Output")
+diff -ruN -x __pycache__ -x .ruff_cache a/drstool_gui/main_window.py DRSTool-experimental/drstool_gui/main_window.py
+--- a/drstool_gui/main_window.py	2026-11-11 04:06:54.647552983 +0300
++++ b/drstool_gui/main_window.py	2026-11-11 04:08:57.351955231 +0300
+@@ -256,6 +256,7 @@
+         # with no visible handle to drag it back.
+         splitter.setChildrenCollapsible(False)
+         splitter.setHandleWidth(4)
++        main_layout.addWidget(splitter, 1)
+ 
+         # ===== Sidebar =====
+         sidebar = QWidget()
+@@ -264,6 +265,7 @@
+         sidebar.setStyleSheet(f"#sidebar {{ background:{T['bg']}; }}")
+         sidebar.setMinimumWidth(260)
+         sidebar.setMaximumWidth(900)
++        splitter.addWidget(sidebar)
+         sidebar_layout = QVBoxLayout(sidebar)
+         sidebar_layout.setContentsMargins(10, 12, 6, 8)
+         sidebar_layout.setSpacing(8)
+@@ -345,60 +347,20 @@
+         self._profiles_widget.profile_loaded.connect(self._on_profile_loaded)
+         profiles_scroll = QScrollArea()
+         profiles_scroll.setWidgetResizable(True)
+-        profiles_scroll.setWidget(self._profiles_widget)
+         profiles_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+         self._sidebar_stack.addWidget(profiles_scroll)
++        profiles_scroll.setWidget(self._profiles_widget)
+ 
+         # Page 5: Extra Tools sidebar (orientation text for both sub-tools)
+         self._flm_sidebar = ExtraToolsSidebarWidget()
+         self._sidebar_stack.addWidget(self._flm_sidebar)
+ 
+-        self._lutris_sync_widget = LutrisSyncWidget(self.settings_manager)
+-        self._env_widget.env_changed.connect(self._lutris_sync_widget._update_preview)
+-        lutris_scroll = QScrollArea()
+-        lutris_scroll.setWidgetResizable(True)
+-        lutris_scroll.setWidget(self._lutris_sync_widget)
+-        lutris_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+-
+-        # Launcher sync tabs: runnable line + Lutris + Steam + Heroic + Bottles
+-        self._launch_line = LaunchLineWidget()
+-        self._steam_sync = LauncherSyncWidget(SteamBackend())
+-        self._heroic_sync = LauncherSyncWidget(HeroicBackend())
+-        self._bottles_sync = LauncherSyncWidget(BottlesBackend())
+-        self._sync_tabs = QTabWidget()
+-        self._sync_tabs.setStyleSheet(ExtraToolsWidget._TAB_SS)
+-        self._sync_tabs.addTab(self._launch_line, "Launch line")
+-        self._sync_tabs.addTab(lutris_scroll, "Lutris")
+-        for _w, _t in ((self._steam_sync, "Steam"), (self._heroic_sync, "Heroic"),
+-                       (self._bottles_sync, "Bottles")):
+-            _sc = QScrollArea()
+-            _sc.setWidgetResizable(True)
+-            _sc.setWidget(_w)
+-            _sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+-            self._sync_tabs.addTab(_sc, _t)
+-        self._history = HistoryWidget(self.settings_manager)
+-        self._nip_import = NipImportWidget(self.settings_manager)
+-        self._dxvk_conf = DxvkConfWidget()
+-        self._shortcut = ShortcutWidget()
+-        self._steam_shortcuts = SteamShortcutsWidget()
+-        _ssc = QScrollArea()
+-        _ssc.setWidgetResizable(True)
+-        _ssc.setWidget(self._steam_shortcuts)
+-        _ssc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+-        self._sync_tabs.addTab(self._dxvk_conf, "dxvk.conf")
+-        self._sync_tabs.addTab(self._shortcut, "Shortcut")
+-        self._sync_tabs.addTab(_ssc, "Add to Steam")
+-        self._sync_tabs.addTab(self._history, "History")
+-        self._sync_tabs.addTab(self._nip_import, "Import .nip")
+-        self._sync_tabs.currentChanged.connect(lambda _i: self._refresh_sync_previews())
+-
+-        splitter.addWidget(sidebar)
+-
+         # ===== Right side (editor area) =====
+         editor = QWidget()
+         editor.setObjectName("editorPane")
+         editor.setAttribute(Qt.WA_StyledBackground, True)
+         editor.setStyleSheet(f"#editorPane {{ background:#0e1015; border-left:1px solid {T['border']}; }}")
++        splitter.addWidget(editor)
+         editor_layout = QVBoxLayout(editor)
+         editor_layout.setContentsMargins(28, 20, 28, 16)
+         editor_layout.setSpacing(0)
+@@ -427,23 +389,58 @@
+         self._right_stack.addWidget(self._env_editor)
+ 
+         # Page 4: Gamescope CLI-flag builder (real argv flags, not env vars)
+-        self._gamescope = GamescopeFlagsWidget()
+         gamescope_scroll = QScrollArea()
+         gamescope_scroll.setWidgetResizable(True)
+-        gamescope_scroll.setWidget(self._gamescope)
+         gamescope_scroll.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+         self._right_stack.addWidget(gamescope_scroll)
++        self._gamescope = GamescopeFlagsWidget(gamescope_scroll.viewport())
++        gamescope_scroll.setWidget(self._gamescope)
+ 
+         # Page 5: Extra Tools panel (vk_flip_meter + lutris-game-tune sub-tabs)
+-        self._extra_tools = ExtraToolsWidget()
++        self._extra_tools = ExtraToolsWidget(self._right_stack)
+         self._right_stack.addWidget(self._extra_tools)
+         self._flm_sidebar.bind(self._extra_tools)
+ 
+         # Page 6: Lutris Sync (Profiles tab)
++        # Built top-down (container into the tree, stylesheet, then content): with an
++        # application stylesheet every reparent re-styles the whole subtree being moved.
++        self._sync_tabs = QTabWidget()
++        self._sync_tabs.setStyleSheet(ExtraToolsWidget._TAB_SS)
+         self._right_stack.addWidget(self._sync_tabs)
+ 
++        def _scrolled_tab(widget, title):
++            sc = QScrollArea()
++            sc.setWidgetResizable(True)
++            sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
++            self._sync_tabs.addTab(sc, title)
++            sc.setWidget(widget)
++
++        # Launcher sync tabs: runnable line + Lutris + Steam + Heroic + Bottles
++        self._launch_line = LaunchLineWidget()
++        self._sync_tabs.addTab(self._launch_line, "Launch line")
++        self._lutris_sync_widget = LutrisSyncWidget(self.settings_manager)
++        self._env_widget.env_changed.connect(self._lutris_sync_widget._update_preview)
++        _scrolled_tab(self._lutris_sync_widget, "Lutris")
++        self._steam_sync = LauncherSyncWidget(SteamBackend())
++        self._heroic_sync = LauncherSyncWidget(HeroicBackend())
++        self._bottles_sync = LauncherSyncWidget(BottlesBackend())
++        for _w, _t in ((self._steam_sync, "Steam"), (self._heroic_sync, "Heroic"),
++                       (self._bottles_sync, "Bottles")):
++            _scrolled_tab(_w, _t)
++        self._dxvk_conf = DxvkConfWidget()
++        self._sync_tabs.addTab(self._dxvk_conf, "dxvk.conf")
++        self._shortcut = ShortcutWidget()
++        self._sync_tabs.addTab(self._shortcut, "Shortcut")
++        self._steam_shortcuts = SteamShortcutsWidget()
++        _scrolled_tab(self._steam_shortcuts, "Add to Steam")
++        self._history = HistoryWidget(self.settings_manager)
++        self._sync_tabs.addTab(self._history, "History")
++        self._nip_import = NipImportWidget(self.settings_manager)
++        self._sync_tabs.addTab(self._nip_import, "Import .nip")
++        self._sync_tabs.currentChanged.connect(lambda _i: self._refresh_sync_previews())
++
+         # Page 7: Game card (Games tab)
+-        self._game_card = GameCardWidget(self.settings_manager)
++        self._game_card = GameCardWidget(self.settings_manager, self._right_stack)
+         self._right_stack.addWidget(self._game_card)
+         self._games_list.game_selected.connect(self._open_game)
+ 
+@@ -453,12 +450,10 @@
+ 
+         self._right_stack.setCurrentIndex(self.PAGE_EMPTY)
+ 
+-        splitter.addWidget(editor)
+         # setSizes() must run after both panes are in the splitter.
+         splitter.setStretchFactor(0, 0)
+         splitter.setStretchFactor(1, 1)
+         splitter.setSizes([340, 900])
+-        main_layout.addWidget(splitter, 1)
+         main_layout.addWidget(self._output_bar)
+ 
+         # Status bar
+diff -ruN -x __pycache__ -x .ruff_cache a/drstool_gui/overlay_builders.py DRSTool-experimental/drstool_gui/overlay_builders.py
+--- a/drstool_gui/overlay_builders.py	2026-11-11 04:06:54.647618819 +0300
++++ b/drstool_gui/overlay_builders.py	2026-11-11 04:11:40.273806816 +0300
+@@ -206,8 +206,11 @@
+         root.setSpacing(10)
+ 
+         # left: options
++        # Top-down: a widget moved into the tree later is re-styled together with all its children.
+         left = QVBoxLayout()
++        root.addLayout(left, 3)
+         top = QHBoxLayout()
++        left.addLayout(top)
+         self._filter = QLineEdit()
+         self._filter.setPlaceholderText("Filter options…")
+         self._filter.setClearButtonEnabled(True)
+@@ -221,12 +224,13 @@
+         b = _tool_btn("Clear")
+         b.clicked.connect(lambda: self._load({}))
+         top.addWidget(b)
+-        left.addLayout(top)
+ 
+         sc = QScrollArea()
+         sc.setWidgetResizable(True)
+         sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+         host = QWidget()
++        sc.setWidget(host)
++        left.addWidget(sc, 1)
+         grid = QGridLayout(host)
+         grid.setContentsMargins(4, 4, 8, 4)
+         grid.setHorizontalSpacing(10)
+@@ -269,9 +273,6 @@
+             self._rows[key] = (cb, ed, kind, dflt)
+             self._row_widgets[key] = [w for w in (cb, ed, d) if w is not None]
+             r += 1
+-        sc.setWidget(host)
+-        left.addWidget(sc, 1)
+-        root.addLayout(left, 3)
+ 
+         # right: preview + actions
+         right = QVBoxLayout()
+@@ -463,11 +464,15 @@
+         root = QHBoxLayout(self)
+         root.setContentsMargins(4, 8, 4, 4)
+         root.setSpacing(10)
++        # Top-down: a widget moved into the tree later is re-styled together with all its children.
+         left = QVBoxLayout()
++        root.addLayout(left, 3)
+         sc = QScrollArea()
+         sc.setWidgetResizable(True)
+         sc.setStyleSheet(SCROLLABLE_CONTROL_QSS)
+         host = QWidget()
++        sc.setWidget(host)
++        left.addWidget(sc, 1)
+         lay = QVBoxLayout(host)
+         lay.setContentsMargins(4, 4, 8, 4)
+         lay.addWidget(MangoHudBuilder._cap("EFFECTS  (drag to reorder; checked ones run top→bottom)"))
+@@ -544,9 +549,6 @@
+         self._extra.textChanged.connect(self._refresh)
+         lay.addWidget(self._extra)
+         lay.addStretch(1)
+-        sc.setWidget(host)
+-        left.addWidget(sc, 1)
+-        root.addLayout(left, 3)
+ 
+         right = QVBoxLayout()
+         right.addWidget(MangoHudBuilder._cap("vkBasalt.conf"))
+diff -ruN -x __pycache__ -x .ruff_cache a/drstool_gui/upstream_drift.py DRSTool-experimental/drstool_gui/upstream_drift.py
+--- a/drstool_gui/upstream_drift.py	2026-11-11 04:06:54.647868415 +0300
++++ b/drstool_gui/upstream_drift.py	2026-11-11 04:11:13.957268018 +0300
+@@ -531,8 +531,8 @@
+ 
+ 
+ class UpstreamDriftWidget(QWidget):
+-    def __init__(self):
+-        super().__init__()
++    def __init__(self, parent=None):
++        super().__init__(parent)
+         self._rows: List[dict] = []
+         self._worker: Optional[_DriftWorker] = None
+         lay = QVBoxLayout(self)

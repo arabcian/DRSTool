@@ -125,6 +125,9 @@ class GamescopeFlagsWidget(QWidget):
         form_outer = QVBoxLayout(self._form_container)
         form_outer.setContentsMargins(0, 0, 0, 0)
         form_outer.setSpacing(8)
+        # Into the tree before it is filled: with an application stylesheet every
+        # reparent re-styles the whole subtree being moved.
+        outer.addWidget(self._form_container)
 
         by_cat: Dict[str, List[GamescopeFlagDef]] = {}
         for gf in GAMESCOPE_FLAGS:
@@ -137,6 +140,7 @@ class GamescopeFlagsWidget(QWidget):
                 "border:1px solid #2a3244; border-radius:3px; margin-top:8px; padding-top:8px;} "
                 "QGroupBox::title{subcontrol-origin:margin; left:8px; padding:0 4px;}"
             )
+            form_outer.addWidget(box)
             grid = QFormLayout(box)
             grid.setSpacing(4)
             grid.setLabelAlignment(Qt.AlignRight)
@@ -193,9 +197,6 @@ class GamescopeFlagsWidget(QWidget):
                 self._controls[gf.flag] = ctrl
                 grid.addRow(lbl, ctrl)
 
-            form_outer.addWidget(box)
-
-        outer.addWidget(self._form_container)
 
         # ── Live command preview ────────────────────────────────────────────
         preview_lbl = QLabel("Preview")
