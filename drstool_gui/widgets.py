@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QSizePolicy,
+    QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QSizePolicy,
     QStyle, QStyledItemDelegate, QVBoxLayout, QWidget,
 )
 
@@ -467,6 +467,11 @@ class NavSegment(QFrame):
         lay.setContentsMargins(3, 3, 3, 3)
         lay.setSpacing(2)
         self._tabs = []
+        # Top-level tabs are mutually exclusive. Without a button group a click
+        # briefly leaves the previous tab checked too; _place() would then find
+        # the old tab first and draw the indicator in the wrong place.
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
         self._pill = QFrame(self)
         self._pill.setObjectName("navPill")
         self._pill.setAttribute(Qt.WA_TransparentForMouseEvents)
@@ -484,12 +489,13 @@ class NavSegment(QFrame):
 
     def add_tab(self, tab: "NavTab"):
         self._tabs.append(tab)
+        self._group.addButton(tab)
         self.layout().addWidget(tab)
         tab.toggled.connect(lambda on: on and self._place(True))
         tab.installEventFilter(self)
 
     def _place(self, animate: bool):
-        tab = next((t for t in self._tabs if t.isChecked()), None)
+        tab = self._group.checkedButton()
         if tab is None:
             self._pill.hide()
             return

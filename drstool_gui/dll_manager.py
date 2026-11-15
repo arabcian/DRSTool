@@ -865,8 +865,9 @@ class DllManagerWidget(QWidget):
             "replaced file is backed up and can be restored. Proton prefixes are kept in sync by Proton "
             "itself and are left alone. Launchers may put the original files back on a game update or "
             "“verify files”; games with anti-cheat may refuse modified DLLs (they are never selected "
-            "automatically). Games that say “… .dll not found”: select them and use "
-            "<b>Windows libraries…</b> to install the missing Visual C++ / DirectX / .NET runtime."))
+            "automatically). Games that say “… .dll not found”: check one game or click "
+            "its row, then use <b>Windows libraries…</b> to install the missing "
+            "Visual C++ / DirectX / .NET runtime into that game's Wine prefix."))
         if _CORE_ERR:
             lay.addWidget(_desc_label("⚠ " + _CORE_ERR))
             lay.addStretch(1)
@@ -889,8 +890,9 @@ class DllManagerWidget(QWidget):
         top.addWidget(self._online_btn)
         self._tricks_btn = _tool_btn("⊞  Windows libraries…", bold=True)
         self._tricks_btn.setToolTip(
-            "Select a game, then install Visual C++ runtimes, DirectX / D3DX, .NET, codecs and every other "
-            "winetricks library into its Wine prefix (winetricks, or protontricks for Steam games)")
+            "Check ONE game or click its row, then install Visual C++ runtimes, DirectX / D3DX, "
+            ".NET and other winetricks libraries into that game's Wine prefix. "
+            "One game is enough (protontricks is used for Steam/Proton prefixes).")
         self._tricks_btn.clicked.connect(self._open_tricks)
         top.addWidget(self._tricks_btn)
         add = _tool_btn("Add folder…")
@@ -910,7 +912,7 @@ class DllManagerWidget(QWidget):
         top.addWidget(self._filter)
         self._show = QComboBox()
         self._show.setStyleSheet(_COMBO_QSS)
-        for t in ("Games with DLLs", "Updates available", "All games"):
+        for t in ("Games with DLLs / prefixes", "Updates available", "All games"):
             self._show.addItem(t)
         self._show.currentIndexChanged.connect(lambda _i: self._apply_filter())
         top.addWidget(self._show)
@@ -1047,10 +1049,27 @@ class DllManagerWidget(QWidget):
     def _busy(self) -> bool:
         return any(w is not None and w.isRunning() for w in (self._worker, self._scan_worker))
 
+    def _tricks_target_state(self) -> Optional[DllGameState]:
+        """One ticked game is enough, even if Qt's currentItem is elsewhere.
+
+        Checkboxes are also used for batch DLL updates. With several checked
+        games, the highlighted row only identifies a safe, unambiguous target
+        if it belongs to that set. With no checks, a highlighted row works.
+        """
+        selected = self._checked_states()
+        if len(selected) == 1:
+            return selected[0]
+        current = self._current_state()
+        if not selected or (current is not None and current in selected):
+            return current
+        return None
+
     def _open_tricks(self):
-        st = self._current_state()
+        if self._busy():
+            return
+        st = self._tricks_target_state()
         if st is None:
-            toast("Click a game in the list first — its Wine prefix gets the libraries", "info")
+            toast("Check one game or highlight one of the checked rows to select its Wine prefix", "info")
             return
         if st.game.prefix is None:
             toast(f"{st.game.name} has no Wine prefix (native game?) — nothing to install into", "warn")
@@ -1217,7 +1236,10 @@ class DllManagerWidget(QWidget):
         mode = self._show.currentIndex()
         hide = bool(t) and t not in st.game.name.casefold()
         if mode == 0:
-            hide = hide or not (st.dlls.dlls or any(v.get("state") != "none" for v in st.prefix.values()))
+            # A prefix may have no DXVK/DLSS DLLs at all yet still need
+            # winetricks libraries. Keep these games visible in the default view.
+            hide = hide or not (st.dlls.dlls or st.game.prefix is not None or
+                                any(v.get("state") != "none" for v in st.prefix.values()))
         elif mode == 1:
             hide = hide or self._plan_size_all(st) == 0
         it.setHidden(hide)

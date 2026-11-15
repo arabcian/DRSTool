@@ -523,6 +523,20 @@ class GuiTests(unittest.TestCase):
             if time.time() - t0 > timeout:
                 self.fail("timed out")
 
+    def test_main_nav_single_click_keeps_page_and_highlight_in_sync(self):
+        w = self.win
+        prior = w._sidebar_stack.currentIndex()
+        try:
+            for index in (w.TAB_TOOLS, w.TAB_DRS, w.TAB_GAMES, w.TAB_ENV, w.TAB_ARCH):
+                w._nav_tabs[index].click()
+                self.pump()
+                self.assertEqual(w._sidebar_stack.currentIndex(), index)
+                self.assertEqual([i for i, t in enumerate(w._nav_tabs) if t.isChecked()], [index])
+                self.assertIs(w._nav_seg._group.checkedButton(), w._nav_tabs[index])
+        finally:
+            w._switch_tab(prior)
+            self.pump()
+
     def test_nav_tabs_never_overlap_in_a_narrow_window(self):
         w = self.win
         try:
@@ -1367,13 +1381,42 @@ class UiPolishTests(unittest.TestCase):
         seg.show()
         self.pump()
         self.assertEqual(seg._pill.geometry(), tabs[0].geometry())
-        tabs[0].setChecked(False)
-        tabs[2].setChecked(True)
+        tabs[2].click()                             # one click is enough
+        self.assertFalse(tabs[0].isChecked())
+        self.assertTrue(tabs[2].isChecked())
+        self.assertEqual(sum(t.isChecked() for t in tabs), 1)
         self.pump(0.4)                                   # the slide is 190 ms
         self.assertEqual(seg._pill.geometry(), tabs[2].geometry())
+        tabs[0].click()                             # switching to the left must also work
+        self.assertEqual(sum(t.isChecked() for t in tabs), 1)
+        self.pump(0.4)
+        self.assertEqual(seg._pill.geometry(), tabs[0].geometry())
+        tabs[2].click()
+        self.pump(0.4)
         tabs[2].set_badge("12")                          # the tab grows: the pill follows
         self.pump(0.05)
         self.assertEqual(seg._pill.geometry(), tabs[2].geometry())
+        seg.close()
+
+    def test_nav_selection_is_exclusive_in_both_directions(self):
+        from drstool_gui.widgets import NavSegment, NavTab
+        seg = NavSegment()
+        tabs = [NavTab(t) for t in ("Settings", "Games", "Tools")]
+        for tab in tabs:
+            seg.add_tab(tab)
+        seg.resize(360, 40)
+        seg.show()
+        tabs[0].setChecked(True)
+        self.pump(0.02)
+        for index in (2, 1, 0, 2, 0):
+            tabs[index].click()
+            self.assertIs(seg._group.checkedButton(), tabs[index])
+            self.assertEqual([i for i, tab in enumerate(tabs) if tab.isChecked()], [index])
+            self.pump(0.25)
+            self.assertEqual(seg._pill.geometry(), tabs[index].geometry())
+        # An active tab must not be toggled off by clicking it again.
+        tabs[0].click()
+        self.assertEqual([i for i, tab in enumerate(tabs) if tab.isChecked()], [0])
         seg.close()
 
     def test_nav_tabs_compact_levels(self):
@@ -1390,8 +1433,7 @@ class UiPolishTests(unittest.TestCase):
         seg.set_compact(2)                               # only the checked tab keeps its title
         self.assertLess(tabs[0].minimumWidth(), full[0])
         self.assertEqual(tabs[1].minimumWidth(), full[1])
-        tabs[1].setChecked(False)
-        tabs[0].setChecked(True)                         # the title moves with the selection
+        tabs[0].click()                              # the title moves with the selection
         self.assertEqual(tabs[0].minimumWidth(), full[0])
         self.assertLess(tabs[1].minimumWidth(), full[1])
         seg.set_compact(3)                               # no titles at all
@@ -1457,6 +1499,81 @@ class UiPolishTests(unittest.TestCase):
         es.set_content("\u25c8", "Title", "Hint")
         self.assertEqual(es._title.text(), "Title")
         es.close()
+
+
+@unittest.skipUnless(HAVE_QT, "PySide6 not installed")
+class DllManagerSelectionTests(unittest.TestCase):
+    """A single tick must install to that game's prefix, not the previously active row."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        from PySide6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        from types import SimpleNamespace
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QTreeWidgetItem
+        from drstool_gui.dll_manager import DllGameState, DllManagerWidget
+        self.Qt = Qt
+        self._tmp = tempfile.TemporaryDirectory(prefix="drstool-dll-target-")
+        # No scan should run: the fixture provides the found games directly.
+        with mock.patch("drstool_gui.dll_manager.QTimer.singleShot"):
+            self.widget = DllManagerWidget()
+        self.states = []
+        self.items = []
+        for i in range(3):
+            pfx = Path(self._tmp.name) / f"game{i}" / "pfx"
+            (pfx / "drive_c" / "windows").mkdir(parents=True)
+            game = SimpleNamespace(key=f"game-{i}", name=f"Test game {i}",
+                                   prefix=pfx, prefix_manager="Wine", launcher="Custom")
+            st = DllGameState(game, SimpleNamespace(dlls=[], anti_cheat=[], truncated=False))
+            it = QTreeWidgetItem([game.name])
+            it.setData(0, Qt.UserRole, game.key)
+            it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+            it.setCheckState(0, Qt.Unchecked)
+            self.widget._states[game.key] = st
+            self.widget._items[game.key] = it
+            self.widget._tree.addTopLevelItem(it)
+            self.states.append(st)
+            self.items.append(it)
+
+    def tearDown(self):
+        self.widget.close()
+        self.widget.deleteLater()
+        self._tmp.cleanup()
+
+    def test_one_checked_game_wins_over_stale_current_row(self):
+        self.widget._tree.setCurrentItem(self.items[0])
+        self.items[2].setCheckState(0, self.Qt.Checked)
+        self.assertIs(self.widget._tricks_target_state(), self.states[2])
+        with mock.patch("drstool_gui.winetricks_dialog.WinetricksDialog") as cls, \
+             mock.patch.object(self.widget, "scan") as scan:
+            self.widget._open_tricks()
+            cls.assert_called_once_with(self.states[2].game.prefix,
+                                        self.states[2].game.name, self.widget)
+            cls.return_value.exec.assert_called_once()
+            scan.assert_called_once_with(only=[self.states[2].game])
+
+    def test_row_selection_without_ticks_is_sufficient(self):
+        self.widget._tree.setCurrentItem(self.items[1])
+        self.assertIs(self.widget._tricks_target_state(), self.states[1])
+
+    def test_multi_checked_games_require_the_target_row_to_be_highlighted(self):
+        self.items[0].setCheckState(0, self.Qt.Checked)
+        self.items[2].setCheckState(0, self.Qt.Checked)
+        self.widget._tree.setCurrentItem(self.items[1])
+        self.assertIsNone(self.widget._tricks_target_state())
+        self.widget._tree.setCurrentItem(self.items[2])
+        self.assertIs(self.widget._tricks_target_state(), self.states[2])
+
+    def test_prefix_without_dxvk_stays_visible_for_windows_libraries(self):
+        self.widget._apply_filter_item(self.items[0])
+        self.assertFalse(self.items[0].isHidden())
+        self.states[0].game.prefix = None
+        self.widget._apply_filter_item(self.items[0])
+        self.assertTrue(self.items[0].isHidden())
 
 
 @unittest.skipUnless(HAVE_QT, "PySide6 not installed")

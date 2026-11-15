@@ -1276,8 +1276,10 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         self._tab_right_memory[prev] = self._right_stack.currentIndex()
 
         self._sidebar_stack.setCurrentIndex(idx)
-        for i, btn in enumerate(self._nav_tabs):
-            btn.setChecked(i == idx)
+        # Select the destination in one operation. The exclusive NavSegment
+        # group unchecks the previous button, so the pill and page cannot
+        # disagree even when moving to a tab left of the active tab.
+        self._nav_tabs[idx].setChecked(True)
 
         # The filter only applies to the long lists.
         filterable = idx in (self.TAB_DRS, self.TAB_ENV, self.TAB_GAMES)
