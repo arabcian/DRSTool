@@ -7,7 +7,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tests"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import _home  # noqa: E402,F401 - fake HOME before drstool_gui (and with it QSettings) is loaded
 
 try:
     from drstool_gui import state
@@ -44,6 +47,55 @@ class LayerTests(unittest.TestCase):
         self.assertEqual(half["env"], {"A": "1"})
         self.assertFalse(half["settings"] or half["gs_on"])
         self.assertEqual(half["arch"], st["arch"])
+
+
+@unittest.skipIf(state is None, "PySide6 not installed")
+class RunCommandTests(unittest.TestCase):
+    """drstool --run PROFILE -- COMMAND"""
+    prof = {"settings": {"0x10E41DF3": "0x1"}, "arch": "AD100",
+            "env_vars": {"DXVK_HUD": "a b'c $HOME", "EMPTY": ""},
+            "gamescope_enabled": True,
+            "gamescope_flags": {"-W": "1920", "--hdr-enabled": "", "mangohud": "mangohud --dlsym"}}
+
+    def test_env_is_literal_and_wrappers_come_first(self):
+        from drstool_gui import cli
+        env, argv = cli.run_argv(self.prof, ["game.exe", "--", "-dx12"])
+        self.assertEqual(env, {"DXVK_NVAPI_GPU_ARCH": "AD100", "DXVK_NVAPI_DRS_SETTINGS": "0x10E41DF3=0x1",
+                               "DXVK_HUD": "a b'c $HOME"})
+        self.assertEqual(argv, ["gamescope", "--output-width", "1920", "--hdr-enabled", "--",
+                                "mangohud", "--dlsym", "game.exe", "--", "-dx12"])
+        self.assertEqual(cli.run_argv({"env_vars": {"A": "1"}}, ["x"]), ({"A": "1"}, ["x"]))
+
+    def _exec(self, argv, profiles):
+        from unittest import mock
+        from drstool_gui import cli
+        sm = mock.Mock()
+        sm.get_profiles.return_value = profiles
+        with mock.patch.object(cli, "SettingsManager", return_value=sm), \
+                mock.patch.object(cli.os, "execvpe") as ex, mock.patch.object(cli.sys, "stderr"):
+            try:
+                cli.cli_exec(argv)
+            except SystemExit as stop:
+                return stop.code, ex
+        return None, ex
+
+    def test_exec_resolves_the_profile_and_keeps_the_environment(self):
+        os.environ["DRSTOOL_TEST_KEEP"] = "kept"
+        self.addCleanup(os.environ.pop, "DRSTOOL_TEST_KEEP", None)
+        code, ex = self._exec(["--run", "my", "--", "true", "--lint"], {"My Game": {"env_vars": {"A": "1"}}})
+        self.assertIsNone(code)
+        file, argv, env = ex.call_args.args
+        self.assertEqual((file, argv), ("true", ["true", "--lint"]))
+        self.assertEqual((env["A"], env["DRSTOOL_TEST_KEEP"]), ("1", "kept"))
+
+    def test_bad_usage_and_unknown_profile_never_exec(self):
+        for argv in (["--run", "P"], ["--run", "P", "true"], ["--run", "P", "--"], ["--run", "nope", "--", "true"]):
+            code, ex = self._exec(argv, {"P": {"env_vars": {"A": "1"}}})
+            self.assertEqual(code, 2, argv)
+            ex.assert_not_called()
+        code, ex = self._exec(["--lint", "P"], {})          # not ours: falls through to the normal CLI
+        self.assertIsNone(code)
+        ex.assert_not_called()
 
 
 class PerfHistoryTests(unittest.TestCase):

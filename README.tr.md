@@ -92,7 +92,7 @@ Senkronizasyon sekmeleri geçerli yapılandırmayı oyunun başlatıldığı yer
 
 | Sekme | Ne yapar |
 |---|---|
-| **Launch line** | Çalıştırılabilir `env … gamescope … -- <komut>` satırı. İsteğe bağlı **umu-launcher** modu komutu `umu-run <exe>` olarak sarar ve `PROTONPATH` (GE-Proton / UMU-Latest / kurulu bir Proton), `GAMEID`, `STORE` ve `WINEPREFIX` ekler. Kabuk betiği olarak kaydedilebilir |
+| **Launch line** | Çalıştırılabilir `env … gamescope … -- <komut>` satırı. İsteğe bağlı **umu-launcher** modu komutu `umu-run <exe>` olarak sarar ve `PROTONPATH` (GE-Proton / UMU-Latest / kurulu bir Proton), `GAMEID`, `STORE` ve `WINEPREFIX` ekler. Kabuk betiği olarak kaydedilebilir. *Copy live line* bunun yerine `drstool --run PROFIL -- %command%` verir (bkz. Komut satırı) |
 | **Lutris** | Bir oyunun YAML'ını okur ve yazar (`system.*` anahtarları, ortam değişkenleri, Gamescope seçenekleri, Lutris Game Tune komutları) ve geri alır ("Seçili oyundan yükle"). Yalnızca DRSTool'un yönettiği anahtarlar değişir; elle yazılmış anahtarlar korunur ve onay penceresi silinecek her şeyi listeler |
 | **Steam** | Kurulu bir oyunun başlatma seçeneklerini `localconfig.vdf` içine yazar; isteğe bağlı olarak **oyun başına Proton sürümünü** de (`config.vdf` içindeki `CompatToolMapping`): GE-Proton, Proton-CachyOS ve resmi Valve sürümleri listelenir, "Steam default" override'ı kaldırır. Steam kapalı olmalıdır; yazmadan önce geri okuma kontrolü yapılır |
 | **Heroic / Bottles** | Ortam değişkenlerini ve sarmalayıcıları başlatıcının kendi oyun yapılandırmasına yazar |
@@ -140,6 +140,7 @@ Seçenek verilmezse `drstool` GUI'yi başlatır. Aşağıdaki seçenekler başs�
 | `drstool --import-nip DOSYA [--nip-profile AD] [--into PROFIL \| --save-as AD]` | Profile Inspector `.nip` dosyasını `DXVK_NVAPI_DRS_SETTINGS`'e çevirir; isteğe bağlı olarak kayıtlı bir profile birleştirir veya yeni profil olarak saklar |
 | `drstool --share PROFIL` | profilin paylaşım kodunu (`DRSTOOL1:…`) yazdırır |
 | `drstool --import-share KOD\|- [--save-as AD] [--include-flagged]` | paylaşım kodunu çözer (`-` stdin'den okur), içeriğini ve bu makine için lint sonucunu yazdırır; `--save-as` kaydeder |
+| `drstool --run PROFIL -- KOMUT [ARG…]` | KOMUT'u kayıtlı profil uygulanmış olarak çalıştırır: ortam değişkenleri ve önüne gamescope / MangoHud sarmalayıcısı. Profil her başlatmada okunur; bir kez ayarlayın (Steam launch options: `drstool --run AD -- %command%`; Lutris: komut öneki `drstool --run AD --`), DRSTool'da kaydedilen sonraki değişiklikler yeniden senkronlamadan bir sonraki açılışta geçerli olur — Steam için bu, Steam'i kapatmaya gerek kalmaması demektir. `--run` ilk seçenek olmalıdır; başlatıcının `PATH`'inde `drstool` bulunmalıdır. Profil yoksa komut başlatılmaz (çıkış kodu 2) |
 | `drstool --profile PROFIL` | GUI'yi o profil yüklü açar |
 
 Çıkış kodu: 0 tamam, 1 lint hatası / yazma başarısız, 2 hatalı argüman veya bulunamadı.

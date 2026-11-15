@@ -56,8 +56,8 @@ def patch_name(ns, name, **kw):
             stack.enter_context(mock.patch.object(mod, name, **kw))
         yield
 
-_TMP = tempfile.TemporaryDirectory(prefix="drstool-gui-")
-HOME = Path(_TMP.name)
+sys.path.insert(0, str(ROOT / "tests"))
+from _home import HOME  # noqa: E402 - shared with the other modules that load drstool_gui
 
 
 def fake_dll(path: Path, ver=(310, 1, 0, 0), extra=b"") -> Path:
@@ -522,6 +522,18 @@ class GuiTests(unittest.TestCase):
             time.sleep(0.01)
             if time.time() - t0 > timeout:
                 self.fail("timed out")
+
+    def test_launch_line_copies_a_live_line_for_the_saved_profile(self):
+        w, ll = self.win, self.win._launch_line
+        clip = self.m.QApplication.clipboard()
+        clip.setText("untouched")
+        with mock.patch.object(w.settings_manager, "get_current_profile", return_value=None):
+            ll._copy_live()
+        self.assertEqual(clip.text(), "untouched")           # no saved profile: nothing to point at
+        self.assertIn("profile first", ll._status.text())
+        with mock.patch.object(w.settings_manager, "get_current_profile", return_value="My Game's"):
+            ll._copy_live()
+        self.assertEqual(clip.text(), "drstool --run 'My Game'\"'\"'s' -- %command%")
 
     def test_main_nav_single_click_keeps_page_and_highlight_in_sync(self):
         w = self.win

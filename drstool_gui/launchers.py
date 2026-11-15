@@ -4,6 +4,7 @@ import logging
 import json
 import os
 import re
+import shlex
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -801,6 +802,13 @@ class LaunchLineWidget(QWidget):
         b3 = _tool_btn("Save as launcher script…")
         b3.clicked.connect(self._save_script)
         row.addWidget(b3)
+        b4 = _tool_btn("Copy live line")
+        b4.setToolTip("drstool --run PROFILE -- <command>\n"
+                      "Reads the saved profile every time the game starts, so later edits apply\n"
+                      "without pasting the line or syncing the launcher again.\n"
+                      "Needs a saved profile, and `drstool` on the PATH the launcher uses.")
+        b4.clicked.connect(self._copy_live)
+        row.addWidget(b4)
         row.addStretch(1)
         lay.addLayout(row)
         self._status = QLabel("")
@@ -845,6 +853,16 @@ class LaunchLineWidget(QWidget):
     def _copy_steam(self):
         QApplication.clipboard().setText(self.build_line("%command%", steam=True))
         self._status.setText("Copied Steam launch options.")
+
+    def _copy_live(self):
+        w = self.window()
+        name = w.settings_manager.get_current_profile() if hasattr(w, "settings_manager") else None
+        if not name:
+            self._status.setText("⚠ Save this configuration as a profile first: the live line names a profile.")
+            return
+        cmd = self._cmd.text().strip() or "%command%"
+        QApplication.clipboard().setText(f"drstool --run {shlex.quote(name)} -- {cmd}")
+        self._status.setText(f'Copied. The game reads the saved profile "{name}" at every start.')
 
     def _save_script(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save launcher script",

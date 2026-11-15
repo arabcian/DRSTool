@@ -19,7 +19,7 @@ from .main_window import MainWindow
 from .nip_import import decode_nip_bytes, NipImportWidget, parse_nip
 from .profile_io import lint_profile, profile_share_code
 from .settings_manager import SettingsManager
-from .state import _flat_profile
+from .state import _flat_profile, state_from_profile, state_payload
 from .sysinfo import SYSHUB
 
 
@@ -60,8 +60,61 @@ def _cli_parse(argv):
                                                           "prints the content and the lint result, saves with --save-as")
     g.add_argument("--include-flagged", action="store_true",
                    help="--import-share: also keep variables flagged as sensitive (LD_PRELOAD, layer paths, …)")
+    g.add_argument("--run", metavar="PROFILE", help="run a command with a saved profile applied: "
+                                                    "drstool --run PROFILE -- COMMAND [ARG…] "
+                                                    "(e.g. as Steam launch options: drstool --run NAME -- %%command%%)")
     ap.add_argument("--profile", metavar="PROFILE", help="GUI: start with this profile loaded")
-    return ap.parse_known_args(argv)
+    a, rest = ap.parse_known_args(argv)
+    if a.run:                                     # the valid form never gets here (cli_exec ran first)
+        ap.error(_RUN_USAGE)
+    return a, rest
+
+
+_RUN_USAGE = "usage: drstool --run PROFILE -- COMMAND [ARG…]"
+
+
+def _resolve_profile(profiles, name, err):
+    """Exact name, else case-insensitive, else a unique substring; None (after err()) otherwise."""
+    if name in profiles:
+        return name
+    low = [n for n in profiles if n.casefold() == name.casefold()]
+    sub = low or [n for n in profiles if name.casefold() in n.casefold()]
+    if len(sub) == 1:
+        return sub[0]
+    err(f'"{name}" is ambiguous: ' + ", ".join(sub) if sub else f'no such profile "{name}" (see --list-profiles)')
+    return None
+
+
+def run_argv(profile, command) -> tuple:
+    """(environment to add, argv) that runs `command` the way the profile's launch line would."""
+    p = state_payload(state_from_profile(profile))
+    env = {k: v for k, v in p["env"].items() if v != ""}      # like the editor: an empty value is "not set"
+    return env, shlex.split(p["gs_cmd"]) + list(command)
+
+
+def cli_exec(argv) -> None:
+    """`drstool --run PROFILE -- COMMAND…`: replace this process with COMMAND, with the saved
+    profile's environment and gamescope / MangoHud wrapper. The profile is read at every start,
+    so edits saved in DRSTool apply on the next launch without syncing the launcher again.
+    No QApplication is created: nothing of DRSTool's Qt setup reaches the game."""
+    if not argv or argv[0] != "--run":
+        return
+
+    def err(msg):
+        print(f"drstool: {msg}", file=sys.stderr)
+    if len(argv) < 4 or argv[2] != "--":
+        err(_RUN_USAGE)
+        sys.exit(2)
+    profiles = SettingsManager().get_profiles()
+    name = _resolve_profile(profiles, argv[1], err)
+    if not name:
+        sys.exit(2)
+    env, cmd = run_argv(profiles[name], argv[3:])
+    try:
+        os.execvpe(cmd[0], cmd, {**os.environ, **env})
+    except OSError as ex:
+        err(f"cannot run {cmd[0]}: {ex.strerror}")
+        sys.exit(2)
 
 
 def _cli_wants(a) -> bool:
@@ -85,14 +138,7 @@ def _cli_dispatch(a) -> int:
     profiles = sm.get_profiles()
 
     def resolve(name):
-        if name in profiles:
-            return name
-        low = [n for n in profiles if n.casefold() == name.casefold()]
-        sub = low or [n for n in profiles if name.casefold() in n.casefold()]
-        if len(sub) == 1:
-            return sub[0]
-        err(f'"{name}" is ambiguous: ' + ", ".join(sub) if sub else f'no such profile "{name}" (see --list-profiles)')
-        return None
+        return _resolve_profile(profiles, name, err)
 
     win_box: list = []
 

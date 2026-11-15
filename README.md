@@ -90,7 +90,7 @@ The sync tabs write the current configuration to wherever the game is started fr
 
 | Tab | What it does |
 |---|---|
-| **Launch line** | A runnable `env … gamescope … -- <command>` line. Optional **umu-launcher** mode wraps the command as `umu-run <exe>` and adds `PROTONPATH` (GE-Proton / UMU-Latest / an installed Proton), `GAMEID`, `STORE` and `WINEPREFIX`. Can be saved as a shell script |
+| **Launch line** | A runnable `env … gamescope … -- <command>` line. Optional **umu-launcher** mode wraps the command as `umu-run <exe>` and adds `PROTONPATH` (GE-Proton / UMU-Latest / an installed Proton), `GAMEID`, `STORE` and `WINEPREFIX`. Can be saved as a shell script. *Copy live line* gives `drstool --run PROFILE -- %command%` instead (see Command line) |
 | **Lutris** | Reads and writes a game's YAML (`system.*` keys, env vars, Gamescope options, Lutris Game Tune commands) and imports it back ("Load from selected game"). Only keys DRSTool manages are changed; hand-written keys are preserved and the confirmation dialog lists everything that will be removed |
 | **Steam** | Writes the launch options of an installed game into `localconfig.vdf` and, optionally, the **per-game Proton build** (`CompatToolMapping` in `config.vdf`): GE-Proton, Proton-CachyOS and official Valve builds are listed, "Steam default" removes the override. Steam must be closed; a read-back check runs before anything is written |
 | **Heroic / Bottles** | Writes env vars and wrappers into the launcher's own per-game config |
@@ -138,6 +138,7 @@ Without options `drstool` starts the GUI. These options run headless (offscreen 
 | `drstool --import-nip FILE [--nip-profile NAME] [--into PROFILE \| --save-as NAME]` | convert a Profile Inspector `.nip` to `DXVK_NVAPI_DRS_SETTINGS`; optionally merge it into a saved profile or store it as a new one |
 | `drstool --share PROFILE` | print the profile's share code (`DRSTOOL1:…`) |
 | `drstool --import-share CODE\|- [--save-as NAME] [--include-flagged]` | decode a share code (`-` reads stdin), print its content and the lint result for this machine; `--save-as` stores it |
+| `drstool --run PROFILE -- COMMAND [ARG…]` | run COMMAND with the saved profile applied: its environment, and its gamescope / MangoHud wrapper in front. The profile is read at every start, so set it once (Steam launch options: `drstool --run NAME -- %command%`; Lutris: command prefix `drstool --run NAME --`) and later edits saved in DRSTool apply on the next launch without syncing again — for Steam that also means without closing it. `--run` must be the first option; the launcher needs `drstool` on its `PATH`. If the profile is missing the command is not started (exit status 2) |
 | `drstool --profile PROFILE` | start the GUI with that profile loaded |
 
 Exit status: 0 ok, 1 lint errors / failed write, 2 bad arguments or not found.

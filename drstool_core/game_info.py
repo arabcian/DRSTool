@@ -218,8 +218,9 @@ def game_files(game, max_entries: int = 30_000, max_depth: int = 4) -> Dict[str,
                 dns[:] = []
                 break
             depth = dp.count(os.sep) - base_depth
-            dns[:] = [d for d in dns if d.lower() not in _SKIP and depth < max_depth]
-            for f in fns:
+            # Sorted: readdir order is arbitrary (hash order on ext4), and the exe list is shown as-is.
+            dns[:] = sorted(d for d in dns if d.lower() not in _SKIP and depth < max_depth)
+            for f in sorted(fns):
                 low = f.lower()
                 if low.endswith(".exe") and not low.startswith(("unins", "crashreport", "vc_redist",
                                                                  "dxsetup", "ue4prereq", "dotnet")):
