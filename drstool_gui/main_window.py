@@ -5,11 +5,11 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
-from PySide6.QtCore import QPoint, QSettings, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QSettings, Qt, QTimer
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMainWindow,
-    QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSplitter, QStackedWidget,
+    QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSplitter,
     QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -47,6 +47,7 @@ from .lookup import (
     env_def,
 )
 from .lutris_sync import LutrisSyncWidget
+from .motion import FadeStack
 from .nip_import import NipImportWidget
 from .output_bar import OutputBarWidget
 from .palette import CommandPalette
@@ -66,7 +67,7 @@ from .tasks import TASKS
 from .theme import btn_ss, pill_ss, SCROLLABLE_CONTROL_QSS, T
 from .toasts import _install_toasts, toast, ToastStatusBar
 from .tool_ui import ExtraToolsSidebarWidget
-from .widgets import _fmt_drs_value, BrandMark, EmptyState, NavTab
+from .widgets import _fmt_drs_value, BrandMark, EmptyState, NavSegment, NavTab
 
 _log = logging.getLogger(__name__)
 
@@ -132,25 +133,21 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         # labels were clipped ("S Settin", "PU Arch"). Now a full-width bar
         # with live badges (how many things each tab contributes).
         nav = QWidget()
+        nav.installEventFilter(self)                   # LayoutRequest -> _fit_nav
+        self._nav_sig = None
         nav.setObjectName("navBar")
         nav.setAttribute(Qt.WA_StyledBackground, True)
         nav.setStyleSheet(f"#navBar {{ background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
                           f" stop:0 #11141a, stop:1 {T['bg']}); border-bottom:1px solid {T['border']}; }}")
         nav.setFixedHeight(56)
-        nav_layout = QHBoxLayout(nav)
+        nav_layout = self._nav_layout = QHBoxLayout(nav)
         nav_layout.setContentsMargins(16, 0, 14, 0)
         nav_layout.setSpacing(0)
         self._brand = BrandMark()
         nav_layout.addWidget(self._brand)
         nav_layout.addSpacing(18)
 
-        seg = QFrame()
-        seg.setObjectName("navSeg")
-        seg.setStyleSheet(f"#navSeg {{ background:{T['sunken']}; border:1px solid {T['border']};"
-                          " border-radius:10px; }")
-        seg_l = QHBoxLayout(seg)
-        seg_l.setContentsMargins(3, 3, 3, 3)
-        seg_l.setSpacing(2)
+        seg = self._nav_seg = NavSegment()
 
         self._settings_tab = NavTab(tr("DRS Settings"), "\u25c8")
         self._arch_tab = NavTab(tr("GPU Arch"), "\u25a3")
@@ -166,8 +163,10 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
                           self._games_tab, self._profiles_tab, self._flm_tab]
         for idx, btn in enumerate(self._nav_tabs):
             btn.clicked.connect(lambda _c=False, i=idx: self._switch_tab(i))
-            btn.setToolTip((btn.toolTip() + "\n" if btn.toolTip() else "") + f"Ctrl+{idx + 1}")
-            seg_l.addWidget(btn)
+            # the title is part of the tooltip: a narrow window hides it (NavTab.set_compact)
+            btn.setToolTip(btn._title.text() + "\n" + (btn.toolTip() + "\n" if btn.toolTip() else "")
+                           + f"Ctrl+{idx + 1}")
+            seg.add_tab(btn)
         self._settings_tab.setChecked(True)
         seg.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         nav_layout.addWidget(seg, 0, Qt.AlignVCenter)
@@ -318,7 +317,7 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         _cl.addStretch(1)
         sidebar_layout.addWidget(self._chips)
 
-        self._sidebar_stack = QStackedWidget()
+        self._sidebar_stack = FadeStack()
         sidebar_layout.addWidget(self._sidebar_stack)
 
         # Page 0: Settings list
@@ -367,12 +366,15 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         editor_layout.setContentsMargins(28, 20, 28, 16)
         editor_layout.setSpacing(0)
 
-        self._right_stack = QStackedWidget()
+        self._right_stack = FadeStack()
         editor_layout.addWidget(self._right_stack)
 
         # Page 0: Empty state (text depends on the active tab)
         self._placeholder = EmptyState()
         self._placeholder.set_content("\u25c8", *self.EMPTY_HINTS[0].split("\n", 1))
+        self._placeholder.action.connect(
+            lambda k: {"palette": self._open_palette, "filter": self._focus_search,
+                       "import": self.open_import_dialog, "recipes": self.open_recipes}[k]())
         self._right_stack.addWidget(self._placeholder)
 
         # Page 1: Setting editor
@@ -1142,7 +1144,30 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
     def resizeEvent(self, e):             # noqa: N802
         super().resizeEvent(e)
         if hasattr(self, "_brand"):
-            self._brand.set_compact(self.width() < 1420)
+            self._fit_nav()
+
+    def eventFilter(self, obj, ev):       # noqa: N802
+        # A badge, the profile chip or the lint pill changed width: the nav bar may need another step.
+        if ev.type() == QEvent.LayoutRequest and obj is self._nav_layout.parentWidget():
+            self._fit_nav()
+        return super().eventFilter(obj, ev)
+
+    def _fit_nav(self):
+        """Shrink the nav bar step by step until it fits the window: wordmark off, then the tabs'
+        glyphs, then their titles. (It used to be squeezed instead, so the tabs overlapped.)"""
+        lay = self._nav_layout
+        rest = tuple(lay.itemAt(i).minimumSize().width() for i in range(lay.count())
+                     if lay.itemAt(i).widget() not in (self._brand, self._nav_seg))
+        sig = (self.width(), rest, tuple((t._badge.text(), t.isChecked()) for t in self._nav_tabs))
+        if sig == self._nav_sig:                      # our own steps post LayoutRequests too
+            return
+        self._nav_sig = sig
+        for brand_compact, level in ((False, 0), (True, 0), (True, 1), (True, 2), (True, 3), (True, 4)):
+            self._brand.set_compact(brand_compact)
+            self._nav_seg.set_compact(level)
+            self._nav_seg.updateGeometry()            # drop the layout's cached size of the segment
+            if self._nav_layout.minimumSize().width() <= self.width():
+                break
 
     def closeEvent(self, event):          # noqa: N802
         restart = self._restart_pending
@@ -1258,6 +1283,7 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         filterable = idx in (self.TAB_DRS, self.TAB_ENV, self.TAB_GAMES)
         self._search.setEnabled(filterable)
         self._search.setVisible(filterable)
+        self._placeholder.set_action_visible("filter", filterable)
         self._chips.setVisible(idx in (self.TAB_DRS, self.TAB_ARCH, self.TAB_ENV))
 
         # Re-apply whatever is typed in the search box to the list we just

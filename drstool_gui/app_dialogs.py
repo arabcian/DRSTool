@@ -141,6 +141,9 @@ class AppearanceDialog(QDialog):
         self._restore = QCheckBox("Restore the last profile and selections on start")
         self._restore.setChecked(ap["restore"])
         lay.addWidget(self._restore)
+        self._animations = QCheckBox("Animations (sliding tab marker, page fade, notifications)")
+        self._animations.setChecked(ap["animations"])
+        lay.addWidget(self._animations)
         note = QLabel("Theme, accent, density and scale are read at start-up, so they apply after a restart. "
                       "The accent also colours “ok” states, which are green by default.")
         note.setWordWrap(True)
@@ -172,6 +175,7 @@ class AppearanceDialog(QDialog):
         self._scale.setValue(100)
         self._language.setCurrentIndex(self._language.findData("auto"))
         self._restore.setChecked(True)
+        self._animations.setChecked(True)
 
     def _save(self, restart: bool):
         ap = APPEARANCE
@@ -186,11 +190,13 @@ class AppearanceDialog(QDialog):
             for k, v in new.items():
                 qs.setValue(f"appearance/{k}", v)
             qs.setValue("appearance/restore_session", self._restore.isChecked())
+            qs.setValue("appearance/animations", self._animations.isChecked())
             qs.setValue("appearance/language", new_language)
             qs.sync()
         except Exception:
             _log.debug("ignored error", exc_info=True)
             pass
+        ap["animations"] = self._animations.isChecked()          # read live, no restart needed
         self.restart_requested = restart and self.needs_restart
         self.accept()
 

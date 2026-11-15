@@ -163,6 +163,7 @@ class EnvVarsWidget(QListWidget):
         # typing in the search box — block them for the rebuild.
         self.blockSignals(True)
         self.clear()
+        self.setProperty("filterText", filter_text)      # SidebarDelegate marks the match
         filter_lower = filter_text.lower()
 
         for cat_label, env_list in self._all_categories():

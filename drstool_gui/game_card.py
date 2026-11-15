@@ -27,6 +27,7 @@ from .base import _CORE_ERR, APP_ID, game_scan, winetricks
 from .dll_manager import detect_installed, PD_COMPONENTS, read_prefix_manifest
 from .frametime import load_frametimes
 from . import game_hints as _gh
+from .i18n import tr
 from .game_hints import _HINT_CACHE_VER, _hints_cache_path, _HintWorker, pick_appid
 from .launchers import SteamBackend
 from .links import LINKS, profile_fp
@@ -322,6 +323,7 @@ class GameListWidget(QWidget):
             v = [v] if v else []
         custom = [str(x) for x in (v or [])]
         self._count.setText("finding games …")
+        self.list.empty_hint.set_text(tr("Finding games …"))
         self._rescan_btn.setEnabled(False)
         w = _GameScanWorker(custom, self)
         self._worker = w
@@ -333,6 +335,11 @@ class GameListWidget(QWidget):
     def _on_scanned(self, res):
         self.games = list(res.games)
         self._by_key = {g.key: g for g in self.games}
+        if self.games:
+            self.list.empty_hint.set_text(tr("Nothing matches"), tr("Clear the filter or pick “All games”"))
+        else:
+            self.list.empty_hint.set_text(
+                tr("No games found"), tr("Rescan, or add game folders in Extra Tools › DLL Manager"))
         self.refresh()
         self.scanned.emit()
         tail = f"  ·  {len(res.errors)} launcher error(s)" if res.errors else ""
@@ -360,6 +367,7 @@ class GameListWidget(QWidget):
         keep = _preset_test(self._preset.currentData(), links, profiles, fingerprints)
         self.list.blockSignals(True)
         self.list.clear()
+        self.list.setProperty("filterText", self._filter)
         groups = {launcher: [] for launcher in _LAUNCHERS}
         for g in self.games:
             if g.launcher not in groups or not keep(g.key):

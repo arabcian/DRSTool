@@ -8,15 +8,15 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QObject, QRect, QSize, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QSizePolicy,
+    QApplication, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QSizePolicy,
     QStyle, QStyledItemDelegate, QVBoxLayout, QWidget,
 )
 
 from .base import APP_TITLE
-from .theme import _tc, APPEARANCE, DENSITY_ROWS, T
+from .theme import _tc, ACCENT_RGB, animations_on, APPEARANCE, DENSITY_ROWS, T
 
 if TYPE_CHECKING:
     from drstool_core.models import Setting
@@ -162,10 +162,18 @@ class SidebarDelegate(QStyledItemDelegate):
             p.drawText(QRect(pad_l, card.top(), 14, card.height()), Qt.AlignLeft | Qt.AlignVCenter, "\u2605")
             text_x += 16
             name_w -= 16
+        shown_name = nfm.elidedText(name, Qt.ElideRight, max(0, name_w))
+        flt = str(option.widget.property("filterText") or "") if option.widget is not None else ""
+        hit = shown_name.casefold().find(flt.casefold()) if flt else -1
+        if hit >= 0:                       # mark the part of the name the filter matched
+            x = text_x + nfm.horizontalAdvance(shown_name[:hit])
+            w = nfm.horizontalAdvance(shown_name[hit:hit + len(flt)])
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(*ACCENT_RGB, 70))
+            p.drawRoundedRect(QRect(x - 1, card.center().y() - 8, w + 2, 17), 3, 3)
         p.setPen(color)
         p.drawText(QRect(text_x, card.top(), max(0, name_w), card.height()),
-                   Qt.AlignLeft | Qt.AlignVCenter,
-                   nfm.elidedText(name, Qt.ElideRight, max(0, name_w)))
+                   Qt.AlignLeft | Qt.AlignVCenter, shown_name)
         p.restore()
 
 
@@ -173,6 +181,51 @@ SIDEBAR_LIST_QSS = f"""
 QListWidget {{ background:{T['bg']}; border:none; outline:none; }}
 QListWidget::item {{ border:none; }}
 """
+
+
+class ListEmptyHint(QWidget):
+    """Centred note shown inside a list while it has no rows (filter without a match, no games
+    found …) instead of a blank pane. Plain-text labels, so UXFilter translates the defaults."""
+
+    def __init__(self, lw: QListWidget, title: str, sub: str = ""):
+        super().__init__(lw.viewport())
+        self._lw = lw
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        glyph = QLabel("\u2315")
+        glyph.setStyleSheet(f"color:{T['faint']}; font-size:22px; background:transparent;")
+        self._title = QLabel()
+        self._title.setStyleSheet(f"color:{T['text2']}; font-size:13px; font-weight:600; background:transparent;")
+        self._sub = QLabel()
+        self._sub.setStyleSheet(f"color:{T['muted']}; font-size:11px; background:transparent;")
+        for lbl in (glyph, self._title, self._sub):
+            lbl.setAlignment(Qt.AlignHCenter)
+            lbl.setWordWrap(True)
+            lay.addWidget(lbl)
+        lay.addStretch(1)
+        self.set_text(title, sub)
+        m = lw.model()
+        for sig in (m.rowsInserted, m.rowsRemoved, m.modelReset):
+            sig.connect(self._sync)
+        lw.viewport().installEventFilter(self)
+        self._sync()
+
+    def set_text(self, title: str, sub: str = ""):
+        self._title.setText(title)
+        self._sub.setText(sub)
+        self._sub.setVisible(bool(sub))
+
+    def _sync(self, *_):
+        vp = self._lw.viewport()
+        self.setGeometry(16, 36, max(0, vp.width() - 32), max(0, vp.height() - 36))
+        self.setVisible(self._lw.count() == 0)
+
+    def eventFilter(self, obj, ev):           # noqa: N802
+        if ev.type() == QEvent.Resize:
+            self._sync()
+        return False
 
 
 def setup_sidebar_list(lw: QListWidget) -> None:
@@ -184,6 +237,7 @@ def setup_sidebar_list(lw: QListWidget) -> None:
     lw.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
     lw.setVerticalScrollMode(QListWidget.ScrollPerPixel)
     lw.setStyleSheet(SIDEBAR_LIST_QSS)
+    lw.empty_hint = ListEmptyHint(lw, "Nothing matches", "Clear the filter or the chips above")
 
 
 def make_header_item(text: str, count: int = 0) -> QListWidgetItem:
@@ -314,6 +368,7 @@ class NavTab(QPushButton):
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.NoFocus)
+        self._compact = 0
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 0, 12, 0)
         lay.setSpacing(7)
@@ -333,15 +388,29 @@ class NavTab(QPushButton):
         self.setStyleSheet(f"""
 QPushButton {{ background:transparent; border:1px solid transparent; border-radius:8px; }}
 QPushButton:hover {{ background:{T['hover']}; }}
-QPushButton:checked {{ background:{T['overlay']}; border:1px solid {T['border_hi']}; }}
-""")
+""")                                     # the checked pill is NavSegment's sliding indicator
         self.toggled.connect(self._restyle)
         self._restyle(False)
         self._fit()
 
     def set_badge(self, text: str):
         self._badge.setText(text)
-        self._badge.setVisible(bool(text))
+        self._badge.setVisible(bool(text) and self._compact < 4)
+        self._fit()
+
+    def set_compact(self, level: int):
+        """Narrow window, in steps. 1: titles without glyphs. 2: only the checked tab keeps its
+        title, the others show glyph + badge. 3: no titles at all (the tooltip names the tab).
+        4: no badges either."""
+        if level != self._compact:
+            self._compact = level
+            self._apply_compact()
+
+    def _apply_compact(self):
+        level = self._compact
+        self._glyph.setVisible(bool(self._glyph.text()) and level != 1)
+        self._title.setVisible(level <= 1 or (level == 2 and self.isChecked()))
+        self._badge.setVisible(bool(self._badge.text()) and level < 4)
         self._fit()
 
     def _fit(self):
@@ -350,10 +419,12 @@ QPushButton:checked {{ background:{T['overlay']}; border:1px solid {T['border_hi
         f = QFont(self.font())
         f.setPixelSize(12)
         f.setWeight(QFont.DemiBold)
-        w = 28 + QFontMetrics(f).horizontalAdvance(self._title.text()) + 6
-        if self._glyph.isVisibleTo(self) or self._glyph.text():
+        w = 28
+        if not self._title.isHidden():
+            w += QFontMetrics(f).horizontalAdvance(self._title.text()) + 6
+        if not self._glyph.isHidden():
             w += 24
-        if self._badge.text():
+        if not self._badge.isHidden():
             fb = QFont(f)
             fb.setPixelSize(10)
             fb.setFamilies(["JetBrains Mono", "Fira Code", "DejaVu Sans Mono"])
@@ -369,6 +440,8 @@ QPushButton:checked {{ background:{T['overlay']}; border:1px solid {T['border_hi
         return self.sizeHint()
 
     def _restyle(self, checked: bool):
+        if self._compact == 2:
+            self._apply_compact()
         self._glyph.setStyleSheet(
             f"color:{T['accent_hi'] if checked else T['faint']}; font-size:13px; background:transparent;")
         self._title.setStyleSheet(
@@ -379,6 +452,66 @@ QPushButton:checked {{ background:{T['overlay']}; border:1px solid {T['border_hi
             f" background:{T['accent'] if checked else T['raised']};"
             " border-radius:8px; padding:0 6px; font-size:10px; font-weight:800;"
             f" font-family:{T['mono']};")
+
+
+class NavSegment(QFrame):
+    """The segmented container of the top NavTabs. Draws the selection pill itself and slides
+    it to the newly checked tab instead of the pill jumping."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("navSeg")
+        self.setStyleSheet(f"#navSeg {{ background:{T['sunken']}; border:1px solid {T['border']};"
+                           " border-radius:10px; }")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(3, 3, 3, 3)
+        lay.setSpacing(2)
+        self._tabs = []
+        self._pill = QFrame(self)
+        self._pill.setObjectName("navPill")
+        self._pill.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._pill.setStyleSheet(
+            f"#navPill {{ background:{T['overlay']}; border:1px solid {T['border_hi']};"
+            f" border-bottom:2px solid {T['accent']}; border-radius:8px; }}")
+        self._pill.hide()
+        self._anim = QPropertyAnimation(self._pill, b"geometry", self)
+        self._anim.setDuration(190)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+
+    def set_compact(self, level: int):
+        for t in self._tabs:
+            t.set_compact(level)
+
+    def add_tab(self, tab: "NavTab"):
+        self._tabs.append(tab)
+        self.layout().addWidget(tab)
+        tab.toggled.connect(lambda on: on and self._place(True))
+        tab.installEventFilter(self)
+
+    def _place(self, animate: bool):
+        tab = next((t for t in self._tabs if t.isChecked()), None)
+        if tab is None:
+            self._pill.hide()
+            return
+        self._pill.lower()
+        target = tab.geometry()
+        self._anim.stop()
+        if animate and animations_on() and self._pill.isVisible() and self.isVisible():
+            self._anim.setStartValue(self._pill.geometry())
+            self._anim.setEndValue(target)
+            self._anim.start()
+        else:
+            self._pill.setGeometry(target)
+        self._pill.show()
+
+    def eventFilter(self, obj, ev):           # noqa: N802
+        # A badge appearing or the window resizing moves the tabs: follow without animating.
+        if ev.type() in (QEvent.Move, QEvent.Resize) and obj.isChecked():
+            if self._anim.state() != QPropertyAnimation.Running:
+                self._place(False)
+            else:
+                self._anim.setEndValue(obj.geometry())
+        return False
 
 
 class BrandMark(QWidget):
@@ -436,8 +569,57 @@ class BrandMark(QWidget):
         p.end()
 
 
+class _ActionCard(QPushButton):
+    """Quick-action tile of the empty state: glyph, label and its shortcut as a keycap."""
+
+    def __init__(self, glyph: str, label: str, key: str, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumWidth(112)                 # four of them still fit the smallest window
+        self.setMaximumWidth(168)
+        self.setAccessibleName(label)
+        self.setStyleSheet(
+            # the height has to be set here: APP_QSS gives every QPushButton a min-height
+            f"QPushButton{{background:{T['surface']};border:1px solid {T['border']};border-radius:10px;"
+            "min-height:76px;max-height:76px;padding:0;}"
+            f"QPushButton:hover{{background:{T['raised']};border-color:{T['accent_dim']};}}"
+            f"QPushButton:pressed{{background:{T['hover']};}}")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 10, 10)
+        lay.setSpacing(4)
+        top = QHBoxLayout()
+        g = QLabel(glyph)
+        g.setStyleSheet(f"color:{T['accent']}; font-size:16px; background:transparent;")
+        k = QLabel(key)
+        k.setStyleSheet(
+            f"color:{T['text2']}; background:{T['raised']}; border:1px solid {T['border_hi']};"
+            f" border-bottom:2px solid {T['border_hi']}; border-radius:4px; padding:0 5px;"
+            f" font-family:{T['mono']}; font-size:10px;")
+        top.addWidget(g)
+        top.addStretch(1)
+        top.addWidget(k)
+        lay.addLayout(top)
+        lay.addStretch(1)
+        t = QLabel(label)
+        t.setWordWrap(True)
+        t.setStyleSheet(f"color:{T['text']}; font-size:12px; font-weight:600; background:transparent;")
+        lay.addWidget(t)
+        for w in (g, k, t):
+            w.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    def sizeHint(self):                   # noqa: N802
+        return QSize(168, 78)
+
+
 class EmptyState(QWidget):
-    """Centered placeholder: big glyph, title, hint and keycap shortcuts."""
+    """Centered placeholder: big accent-tinted glyph tile, title, hint and quick-action cards.
+    A card emits `action` with its id; the main window runs it."""
+    action = Signal(str)
+
+    ACTIONS = (("palette", "\u2315", "Search everything", "Ctrl+K"),
+               ("filter", "\u2261", "Filter this list", "Ctrl+F"),
+               ("import", "\u21e9", "Import a launch line", "Ctrl+Shift+V"),
+               ("recipes", "\u2726", "Browse recipes", "Ctrl+R"))
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -447,8 +629,8 @@ class EmptyState(QWidget):
         self._glyph.setAlignment(Qt.AlignCenter)
         self._glyph.setFixedSize(64, 64)
         self._glyph.setStyleSheet(
-            f"background:{T['surface']}; border:1px solid {T['border_hi']}; border-radius:16px;"
-            f" color:{T['accent']}; font-size:26px;")
+            f"background:{T['accent_bg']}; border:1px solid {T['accent_dim']}; border-radius:16px;"
+            f" color:{T['accent_hi']}; font-size:26px;")
         row = QHBoxLayout()
         row.addStretch(1)
         row.addWidget(self._glyph)
@@ -457,35 +639,36 @@ class EmptyState(QWidget):
         outer.addSpacing(14)
         self._title = QLabel()
         self._title.setAlignment(Qt.AlignCenter)
-        self._title.setStyleSheet(f"color:{T['text']}; font-size:15px; font-weight:700;")
+        self._title.setStyleSheet(f"color:{T['text']}; font-size:17px; font-weight:700; background:transparent;")
         outer.addWidget(self._title)
         self._hint = QLabel()
         self._hint.setAlignment(Qt.AlignCenter)
         self._hint.setWordWrap(True)
-        self._hint.setStyleSheet(f"color:{T['muted']}; font-size:12px;")
+        self._hint.setStyleSheet(f"color:{T['muted']}; font-size:12px; background:transparent;")
         outer.addWidget(self._hint)
-        outer.addSpacing(16)
-        self._keys = QLabel()
-        self._keys.setAlignment(Qt.AlignCenter)
-        self._keys.setTextFormat(Qt.RichText)
-        outer.addWidget(self._keys)
+        outer.addSpacing(22)
+        cards = QHBoxLayout()
+        cards.setSpacing(10)
+        cards.addStretch(1)
+        self._cards = {}
+        for key, glyph, label, shortcut in self.ACTIONS:
+            c = _ActionCard(glyph, label, shortcut)      # plain QLabel text: UXFilter translates it
+            c.clicked.connect(lambda _c=False, k=key: self.action.emit(k))
+            cards.addWidget(c)
+            self._cards[key] = c
+        cards.addStretch(1)
+        outer.addLayout(cards)
         outer.addStretch(2)
         self.set_content("◆", "", "")
 
-    @staticmethod
-    def _kbd(k: str) -> str:
-        return (f'<span style="background:{T["raised"]}; color:{T["text"]}; font-family:monospace;'
-                f' font-size:11px;">&nbsp;{k}&nbsp;</span>')
-
-    def set_content(self, glyph: str, title: str, hint: str,
-                    keys=(("Ctrl+K", "search everything"), ("Ctrl+F", "filter"),
-                          ("Ctrl+Shift+V", "import a launch line"), ("Ctrl+R", "recipes"))):
+    def set_content(self, glyph: str, title: str, hint: str):
         self._glyph.setText(glyph)
         self._title.setText(title)
         self._title.setVisible(bool(title))
         self._hint.setText(hint)
-        parts = [f'{self._kbd(k)}&nbsp;<span style="color:{T["muted"]}">{d}</span>' for k, d in keys]
-        self._keys.setText("&nbsp;&nbsp;&nbsp;&nbsp;".join(parts))
+
+    def set_action_visible(self, key: str, on: bool):
+        self._cards[key].setVisible(on)
 
     # Old code called setText()/text() on the QLabel placeholder.
     def setText(self, text: str):         # noqa: N802

@@ -98,7 +98,8 @@ DENSITY_ROWS = {"compact": (25, 30, 42), "default": (30, 34, 50), "spacious": (3
 
 
 def _load_appearance() -> dict:
-    ap = {"theme": "dark", "accent": "green", "density": "default", "scale": 100, "restore": True}
+    ap = {"theme": "dark", "accent": "green", "density": "default", "scale": 100, "restore": True,
+          "animations": True}
     try:
         qs = QSettings(APP_ID, APP_ID)
         for k in ("theme", "accent", "density"):
@@ -114,6 +115,9 @@ def _load_appearance() -> dict:
         v = qs.value("appearance/restore_session")
         if v not in (None, ""):
             ap["restore"] = str(v).lower() not in ("false", "0", "no")
+        v = qs.value("appearance/animations")
+        if v not in (None, ""):
+            ap["animations"] = str(v).lower() not in ("false", "0", "no")
     except Exception:
         _log.debug("ignored error", exc_info=True)
         pass
@@ -128,6 +132,13 @@ def _load_appearance() -> dict:
 
 
 APPEARANCE = _load_appearance()
+
+
+def animations_on() -> bool:
+    """Appearance > Animations. Read live: the dialog flips it without a restart."""
+    return bool(APPEARANCE["animations"])
+
+
 _LIGHT = APPEARANCE["theme"] == "light"
 _ACC = ACCENT_PRESETS[APPEARANCE["accent"]]
 _NEEDS_RESTYLE = _LIGHT or APPEARANCE["accent"] != "green"

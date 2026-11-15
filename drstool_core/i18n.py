@@ -185,6 +185,16 @@ TR.update({
     'Already gone.': 'Zaten kaldırılmış.',
     'Remove this variable from the launch string': 'Bu değişkeni başlatma komutundan kaldır',
     'Restore the last profile and selections on start': 'Başlangıçta son profili ve seçimleri geri yükle',
+    'Animations (sliding tab marker, page fade, notifications)':
+        'Animasyonlar (kayan sekme işareti, sayfa geçişi, bildirimler)',
+    'Search everything': 'Her şeyi ara', 'Filter this list': 'Bu listeyi filtrele',
+    'Import a launch line': 'Başlatma satırı içe aktar', 'Browse recipes': 'Hazır ayarlara göz at',
+    'Nothing matches': 'Eşleşen kayıt yok',
+    'Clear the filter or the chips above': 'Filtreyi veya üstteki süzgeçleri temizleyin',
+    'Clear the filter or pick “All games”': 'Filtreyi temizleyin veya “All games” seçeneğini seçin',
+    'No games found': 'Oyun bulunamadı', 'Finding games …': 'Oyunlar aranıyor …',
+    'Rescan, or add game folders in Extra Tools › DLL Manager':
+        'Yeniden tarayın veya Ek Araçlar › DLL Yöneticisi’nden oyun klasörü ekleyin',
     '✓ Installed in this prefix': '✓ Bu prefix içinde kurulu',
     '☑ Selected': '☑ Seçildi', 'Install selected': 'Seçileni kur',
     'Windows libraries': 'Windows kütüphaneleri',

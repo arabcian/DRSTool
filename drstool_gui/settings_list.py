@@ -41,6 +41,7 @@ class SettingsListWidget(QListWidget):
         # Block selection signals for the rebuild (see EnvVarsWidget.populate).
         self.blockSignals(True)
         self.clear()
+        self.setProperty("filterText", filter_text)      # SidebarDelegate marks the match
         self._by_id = {s.id: s for s in settings}
         filter_lower = filter_text.lower()
 

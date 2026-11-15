@@ -523,6 +523,36 @@ class GuiTests(unittest.TestCase):
             if time.time() - t0 > timeout:
                 self.fail("timed out")
 
+    def test_nav_tabs_never_overlap_in_a_narrow_window(self):
+        w = self.win
+        try:
+            for width in (980, 1150, 1700):
+                w.resize(width, 900)
+                self.pump()
+                rects = [t.geometry() for t in w._nav_tabs]
+                for a, b in zip(rects, rects[1:]):
+                    self.assertLessEqual(a.right(), b.left(), f"tabs overlap at {width}px")
+                self.assertLessEqual(w._nav_layout.minimumSize().width(), width)
+            self.assertFalse(any(t._title.isHidden() for t in w._nav_tabs))     # wide: full titles
+        finally:
+            w.resize(1400, 900)
+            self.pump()
+
+    def test_toasts_stack_above_the_output_bar(self):
+        w = self.win
+        self.m.toast("first polish toast", "ok")
+        self.m.toast("second polish toast", "warn")
+        self.pump()
+        import drstool_gui.toasts as toasts_mod
+        host = toasts_mod.TOASTS
+        mine = [t for t in host._toasts if "polish toast" in t.text]
+        self.assertEqual(len(mine), 2)
+        bar_top = w._output_bar.mapTo(w, w._output_bar.rect().topLeft()).y()
+        self.assertLess(mine[0].geometry().bottom(), mine[1].geometry().top())   # newest lowest
+        self.assertLess(mine[1].geometry().bottom(), bar_top)
+        for t in mine:
+            t.dismiss()
+
     def tearDown(self):
         self.pump()
         if self.errors:
@@ -1307,6 +1337,126 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(next(s for s in m.DRIFT_SOURCES if s["key"] == "user-me-my-dxvk")["base"], "dxvk")
         dlg.deleteLater()
         w.deleteLater()
+
+
+@unittest.skipUnless(HAVE_QT, "PySide6 not installed")
+class UiPolishTests(unittest.TestCase):
+    """Sliding nav pill + compact tabs, page cross-fade, list empty hint, empty-state cards."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        from PySide6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def pump(self, seconds=0.0):
+        end = time.time() + seconds
+        while True:
+            self.app.processEvents()
+            if time.time() >= end:
+                break
+            time.sleep(0.01)
+
+    def test_nav_pill_follows_the_checked_tab(self):
+        from drstool_gui.widgets import NavSegment, NavTab
+        seg = NavSegment()
+        tabs = [NavTab(t, "\u25c8") for t in ("One", "Second tab", "Third")]
+        for t in tabs:
+            seg.add_tab(t)
+        tabs[0].setChecked(True)
+        seg.show()
+        self.pump()
+        self.assertEqual(seg._pill.geometry(), tabs[0].geometry())
+        tabs[0].setChecked(False)
+        tabs[2].setChecked(True)
+        self.pump(0.4)                                   # the slide is 190 ms
+        self.assertEqual(seg._pill.geometry(), tabs[2].geometry())
+        tabs[2].set_badge("12")                          # the tab grows: the pill follows
+        self.pump(0.05)
+        self.assertEqual(seg._pill.geometry(), tabs[2].geometry())
+        seg.close()
+
+    def test_nav_tabs_compact_levels(self):
+        from drstool_gui.widgets import NavSegment, NavTab
+        seg = NavSegment()
+        tabs = [NavTab(t, "\u25c8") for t in ("One", "Second tab")]
+        for t in tabs:
+            seg.add_tab(t)
+        tabs[1].setChecked(True)
+        full = [t.minimumWidth() for t in tabs]
+        seg.set_compact(1)                               # titles without glyphs
+        self.assertTrue(all(t._glyph.isHidden() and not t._title.isHidden() for t in tabs))
+        self.assertTrue(all(t.minimumWidth() < f for t, f in zip(tabs, full)))
+        seg.set_compact(2)                               # only the checked tab keeps its title
+        self.assertLess(tabs[0].minimumWidth(), full[0])
+        self.assertEqual(tabs[1].minimumWidth(), full[1])
+        tabs[1].setChecked(False)
+        tabs[0].setChecked(True)                         # the title moves with the selection
+        self.assertEqual(tabs[0].minimumWidth(), full[0])
+        self.assertLess(tabs[1].minimumWidth(), full[1])
+        seg.set_compact(3)                               # no titles at all
+        self.assertTrue(all(t._title.isHidden() and not t._glyph.isHidden() for t in tabs))
+        seg.set_compact(0)
+        self.assertEqual([t.minimumWidth() for t in tabs], full)
+
+    def test_fade_stack_switches_at_once_and_removes_its_veil(self):
+        from PySide6.QtWidgets import QLabel
+        from drstool_gui import theme
+        from drstool_gui.motion import FadeStack
+        st = FadeStack()
+        for text in ("a", "b", "c"):
+            st.addWidget(QLabel(text))
+        st.resize(200, 100)
+        st.setCurrentIndex(1)                            # hidden: plain switch
+        self.assertIsNone(st._veil)
+        st.show()
+        self.pump()
+        st.setCurrentIndex(2)
+        self.assertEqual(st.currentIndex(), 2)           # the page itself changes synchronously
+        self.assertIsNotNone(st._veil)
+        st.setCurrentWidget(st.widget(0))                # a second switch mid-fade replaces the veil
+        self.assertEqual(st.currentIndex(), 0)
+        self.pump(0.4)
+        self.assertIsNone(st._veil)
+        with mock.patch.dict(theme.APPEARANCE, {"animations": False}):
+            st.setCurrentIndex(1)
+            self.assertIsNone(st._veil)
+        self.assertEqual(st.count(), 3)                  # the veil never becomes a page
+        st.close()
+
+    def test_empty_list_shows_a_hint(self):
+        from PySide6.QtWidgets import QListWidget
+        from drstool_gui.widgets import make_list_item, setup_sidebar_list
+        lw = QListWidget()
+        setup_sidebar_list(lw)
+        lw.resize(300, 400)
+        lw.show()
+        self.pump()
+        self.assertTrue(lw.empty_hint.isVisible())
+        lw.addItem(make_list_item("DLSS-SR Preset", "x"))
+        self.assertFalse(lw.empty_hint.isVisible())
+        lw.setProperty("filterText", "dlss")             # the delegate paints the match mark
+        lw.grab()
+        lw.clear()
+        self.assertTrue(lw.empty_hint.isVisible())
+        lw.empty_hint.set_text("No games found", "Rescan")
+        self.assertEqual(lw.empty_hint._title.text(), "No games found")
+        lw.close()
+
+    def test_empty_state_cards_emit_their_action(self):
+        from drstool_gui.widgets import EmptyState
+        es = EmptyState()
+        got = []
+        es.action.connect(got.append)
+        for key in ("palette", "filter", "import", "recipes"):
+            es._cards[key].click()
+        self.assertEqual(got, ["palette", "filter", "import", "recipes"])
+        es.show()
+        es.set_action_visible("filter", False)
+        self.assertFalse(es._cards["filter"].isVisible())
+        es.set_content("\u25c8", "Title", "Hint")
+        self.assertEqual(es._title.text(), "Title")
+        es.close()
 
 
 @unittest.skipUnless(HAVE_QT, "PySide6 not installed")

@@ -8,13 +8,15 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import QEvent, QObject, QProcess, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QEasingCurve, QEvent, QObject, QPoint, QProcess, QPropertyAnimation, Qt, QTimer, Signal,
+)
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStatusBar, QToolButton,
 )
 
 from .base import _PENDING_BAKS
-from .theme import btn_ss, T
+from .theme import animations_on, btn_ss, T
 
 _log = logging.getLogger(__name__)
 
@@ -56,6 +58,7 @@ class _Toast(QFrame):
     def __init__(self, text: str, kind: str, action, parent, timeout: int):
         super().__init__(parent)
         self.text, self.action = text, action
+        self.slide = None
         self.setObjectName("toast")
         self.setAttribute(Qt.WA_StyledBackground, True)
         col = {"ok": T["accent"], "warn": T["warn"], "error": T["danger"]}.get(kind, T["info"])
@@ -121,7 +124,9 @@ class _Toast(QFrame):
 
 
 class ToastHost(QObject):
-    """Stacks toasts in the top-right corner of the main window, under the nav bar."""
+    """Stacks toasts in the bottom-right corner of the editor area, growing upwards from the
+    launch-string bar. (They used to sit top-right, on top of the editor's value badge and
+    Remove button.)"""
     MAX = 4
 
     def __init__(self, win: QMainWindow):
@@ -145,6 +150,13 @@ class ToastHost(QObject):
             self._remove(self._toasts[0])
         t.show()
         self._layout()
+        if animations_on() and self._win.isVisible():       # slide in from the right edge
+            a = t.slide = QPropertyAnimation(t, b"pos", t)
+            a.setDuration(180)
+            a.setEasingCurve(QEasingCurve.OutCubic)
+            a.setStartValue(t.pos() + QPoint(28, 0))
+            a.setEndValue(t.pos())
+            a.start()
 
     def _remove(self, t: "_Toast"):
         if t in self._toasts:
@@ -155,12 +167,16 @@ class ToastHost(QObject):
 
     def _layout(self):
         w = self._win
-        y = 66
-        for t in self._toasts:
+        bar = getattr(w, "_output_bar", None)
+        y = (bar.mapTo(w, QPoint(0, 0)).y() if bar is not None else w.height() - 30) - 12
+        for t in reversed(self._toasts):                    # newest at the bottom
+            if t.slide is not None:
+                t.slide.stop()                              # it would end on the old spot
             t.adjustSize()
-            t.move(max(8, w.width() - t.width() - 16), y)
+            y -= t.height()
+            t.move(max(8, w.width() - t.width() - 16), max(66, y))
             t.raise_()
-            y += t.height() + 8
+            y -= 8
 
     def eventFilter(self, obj, ev):           # noqa: N802
         if obj is self._win and ev.type() == QEvent.Resize:
