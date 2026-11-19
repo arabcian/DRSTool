@@ -8,6 +8,8 @@ ask for most often on top. A caller that knows what is missing (a log that says
 import logging
 import os
 import subprocess
+import signal
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -38,23 +40,72 @@ class _TricksWorker(QThread):
         super().__init__(parent)
         self._argv, self._env = argv, env
         self._proc = None
+        self._cancel = threading.Event()
+        self._guard = threading.Lock()
+        self._stopper_started = False
+
+    @staticmethod
+    def _signal_group(proc, sig):
+        if proc.poll() is not None:
+            return
+        try:
+            os.killpg(proc.pid, sig)  # Popen creates a new session below
+        except ProcessLookupError:
+            pass
+        except OSError:
+            # Fallback if POSIX process-group signalling is unavailable.
+            try:
+                proc.send_signal(sig)
+            except ProcessLookupError:
+                pass
+
+    def _stop_process_group(self, proc):
+        self._signal_group(proc, signal.SIGTERM)
+        # Non-blocking for the GUI: escalation happens in a daemon helper.
+        if proc.poll() is None:
+            try:
+                proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                pass
+        # The parent may already have exited while a child still owns stdout.
+        # Kill the entire group even if only a descendant is left.
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            self._signal_group(proc, signal.SIGKILL)
 
     def cancel(self):
-        if self._proc is not None and self._proc.poll() is None:
-            self._proc.terminate()
+        self._cancel.set()
+        with self._guard:
+            proc = self._proc
+            if proc is not None and not self._stopper_started:
+                self._stopper_started = True
+                threading.Thread(target=self._stop_process_group, args=(proc,),
+                                 daemon=True, name="drstool-winetricks-cancel").start()
 
     def run(self):
         try:
-            self._proc = subprocess.Popen(
+            proc = subprocess.Popen(
                 self._argv, env={**os.environ, **self._env}, stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
+                start_new_session=True)
         except OSError as ex:
             self.line.emit(f"✗ could not start: {ex}")
             self.done.emit(-1)
             return
-        for raw in self._proc.stdout:
-            self.line.emit(raw.rstrip())
-        self.done.emit(self._proc.wait())
+        with self._guard:
+            self._proc = proc
+        if self._cancel.is_set():
+            self.cancel()
+        try:
+            for raw in proc.stdout:
+                self.line.emit(raw.rstrip())
+        finally:
+            proc.stdout.close()
+            rc = proc.wait()
+            self.done.emit(rc)
 
 
 class WinetricksDialog(QDialog):
@@ -68,6 +119,7 @@ class WinetricksDialog(QDialog):
         self.setMinimumWidth(560)
         self._prefix = Path(prefix)
         self._worker: Optional[_TricksWorker] = None
+        self._pending_close: Optional[int] = None
         self._entries: List[dict] = winetricks.catalog()
         self._by_verb: Dict[str, dict] = {e["verb"]: e for e in self._entries}
         self._cat_title: Dict[str, str] = {c["id"]: c["title"] for c in winetricks.categories()}
@@ -338,6 +390,7 @@ class WinetricksDialog(QDialog):
         self._worker = _TricksWorker(p.argv, p.env, self)
         self._worker.line.connect(self._log.appendPlainText)
         self._worker.done.connect(self._finished)
+        self._worker.finished.connect(self._finish_pending_close)
         self._worker.start()
         self._sync()
 
@@ -350,14 +403,25 @@ class WinetricksDialog(QDialog):
             self._paint(it, self._by_verb[v])
         self._sync()
 
+    def _finish_pending_close(self):
+        if self._pending_close is not None:
+            result = self._pending_close
+            self._pending_close = None
+            super().done(result)
+        else:
+            self._sync()
+
     def closeEvent(self, ev):                            # noqa: N802
         if self._worker is not None and self._worker.isRunning():
+            ev.ignore()  # keep the QThread owner alive until the process group exits
+            self._pending_close = QDialog.Rejected
             self._worker.cancel()
-            self._worker.wait(5000)
+            return
         super().closeEvent(ev)
 
     def done(self, r):                                   # reject()/Close must stop a running install too
         if self._worker is not None and self._worker.isRunning():
+            self._pending_close = r
             self._worker.cancel()
-            self._worker.wait(5000)
+            return
         super().done(r)

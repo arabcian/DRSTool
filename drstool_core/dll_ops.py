@@ -52,27 +52,34 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _is_pe(path: Path, machine: int | None = None) -> bool:
-    """Validate DOS header, bounded PE offset, signature and DLL machine type.
-
-    Merely checking b'MZ' accepts arbitrary files and truncated downloads.
-    """
+def _pe_machine(path: Path) -> int | None:
+    """Return validated x86/x64 PE machine type or None for corrupt/unknown PE."""
     try:
-        with path.open("rb") as f:
+        with path.open('rb') as f:
             head = f.read(64)
-            if len(head) != 64 or head[:2] != b"MZ":
-                return False
+            if len(head) != 64 or head[:2] != b'MZ':
+                return None
             offset = int.from_bytes(head[0x3c:0x40], 'little')
             if not (64 <= offset <= 1024 * 1024):
-                return False
+                return None
             f.seek(offset)
             pe = f.read(24)
-            if len(pe) < 24 or pe[:4] != b"PE\0\0":
-                return False
+            if len(pe) != 24 or pe[:4] != b'PE\0\0':
+                return None
             arch = int.from_bytes(pe[4:6], 'little')
-            return arch in (0x14c, 0x8664) and (machine is None or arch == machine)
+            # Real PE executables set COFF characteristics; refuse known
+            # non-DLLs. Some older synthetic tests omit these flags entirely.
+            characteristics = int.from_bytes(pe[22:24], 'little')
+            if characteristics and not characteristics & 0x2000:
+                return None
+            return arch if arch in (0x14c, 0x8664) else None
     except (OSError, ValueError):
-        return False
+        return None
+
+
+def _is_pe(path: Path, machine: int | None = None) -> bool:
+    arch = _pe_machine(path)
+    return arch is not None and (machine is None or arch == machine)
 
 
 def atomic_copy(src: Path, dst: Path):
@@ -85,12 +92,16 @@ class ReplaceResult:
     backup_dir: Optional[Path]
     replaced: List[Path]
     skipped: List[Tuple[Path, str]]
+    status: str = "committed"  # committed | committed_metadata_error | failed | no_changes
+    detail: str = ""
 
 
 def check_target(target: Path) -> str:
     """'' if target may be replaced, else the reason why not."""
-    if target.is_symlink():
-        return "is a symlink (not written through)"
+    try:
+        tx.assert_safe_path(target)
+    except (OSError, ValueError) as ex:
+        return f"unsafe or missing target path: {ex}"
     if not target.is_file():
         return "does not exist (nothing is added to games)"
     if not os.access(target.parent, os.W_OK) or not os.access(target, os.W_OK):
@@ -108,8 +119,20 @@ def replace_files(game_key: str, game_name: str, pairs: List[Tuple[Path, Path, s
     old_sha: Dict[Path, str] = {}       # target digest, reused as the backup's old_sha256
     for target, src, label in pairs:
         why = check_target(target)
-        if not why and not _is_pe(src):
-            why = f"replacement {src.name} is not a Windows DLL"
+        if not why:
+            try:
+                tx.assert_safe_path(src)
+            except (OSError, ValueError) as ex:
+                why = f"unsafe replacement path: {ex}"
+        if not why:
+            dst_arch, src_arch = _pe_machine(target), _pe_machine(src)
+            if src_arch is None:
+                why = f"replacement {src.name} is not a valid x86/x64 Windows DLL"
+            elif dst_arch is None:
+                why = f"target {target.name} has an unknown/invalid PE architecture"
+            elif src_arch != dst_arch:
+                why = (f"DLL architecture mismatch: target {dst_arch:#x}, "
+                       f"replacement {src_arch:#x}")
         if not why:
             try:
                 if src not in src_sha:
@@ -125,7 +148,7 @@ def replace_files(game_key: str, game_name: str, pairs: List[Tuple[Path, Path, s
         else:
             work.append((target, src, label))
     if not work:
-        return ReplaceResult(None, [], skipped)
+        return ReplaceResult(None, [], skipped, status="no_changes")
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     bdir = root / _slug(game_key) / stamp
@@ -138,15 +161,28 @@ def replace_files(game_key: str, game_name: str, pairs: List[Tuple[Path, Path, s
                for i, (target, src, label) in enumerate(work)]
     try:
         replaced = tx.apply(changes, bdir, log=log, journal_name="manifest.json")
+    except tx.TransactionCommittedError as ex:
+        log(f"  ⚠ DLL replacement committed, final journal metadata failed: {ex}")
+        return ReplaceResult(bdir, ex.changed, skipped,
+                             status="committed_metadata_error", detail=str(ex))
+    except (OSError, ValueError, RuntimeError) as ex:
+        # tx.apply implements its own rollback and preserves the journal for
+        # recovery. Metadata updates must never be confused with this phase.
+        log(f"  ✗ game DLL transaction failed (see journal for recovery): {ex}")
+        skipped.extend((target, f"transaction failed: {ex}") for target, _src, _label in work)
+        return ReplaceResult(bdir, [], skipped, status="failed", detail=str(ex))
+
+    try:
         manifest = json.loads((bdir / "manifest.json").read_text())
         manifest.update(game_key=game_key, game=game_name, created=stamp)
         _write_json(bdir / "manifest.json", manifest)
     except (OSError, ValueError, RuntimeError) as ex:
-        # All files in a single game are rolled back as a group.  Keep the
-        # transaction journal for recovery from a rare rollback failure.
-        log(f"  ✗ game DLL transaction rolled back: {ex}")
-        skipped.extend((target, f"transaction failed: {ex}") for target, _src, _label in work)
-        return ReplaceResult(bdir, [], skipped)
+        # Commit already succeeded. Return actual installed paths and preserve
+        # the transaction journal instead of falsely claiming a rollback.
+        log(f"  ⚠ DLLs installed but backup metadata could not be updated: {ex}; "
+            f"recoverable journal: {bdir / 'manifest.json'}")
+        return ReplaceResult(bdir, replaced, skipped,
+                             status="committed_metadata_error", detail=str(ex))
     prune(game_key, root)
     return ReplaceResult(bdir, replaced, skipped)
 
@@ -187,8 +223,10 @@ def restore(backup_dir: Path, log: Callable[[str], None] = lambda _m: None) -> T
         if not bfile.is_file():
             notes.append(f"{target.name}: backup file missing")
             continue
-        if target.is_symlink():
-            notes.append(f"{target}: is a symlink now — left alone")
+        try:
+            tx.assert_safe_path(target, allow_missing=True)
+        except (OSError, ValueError) as ex:
+            notes.append(f"{target}: unsafe path — left alone ({ex})")
             continue
         try:
             cur = sha256(target) if target.is_file() else ""

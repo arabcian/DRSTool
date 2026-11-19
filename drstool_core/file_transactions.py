@@ -10,7 +10,8 @@ import fcntl
 from contextlib import contextmanager
 import os
 import shutil
-import tempfile
+import stat
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -42,21 +43,126 @@ def _sync_dir(path: Path):
         pass
 
 
-def atomic_copy(src: Path, dst: Path):
-    if dst.is_symlink() or src.is_symlink():
-        raise ValueError(f'symlink file swap rejected: {dst}')
-    fd, tmp = tempfile.mkstemp(prefix='.drstool-', suffix='.tmp', dir=dst.parent)
+def _safe_parent(path: Path):
+    """Open every directory component without following directory symlinks.
+
+    The returned fd pins the parent directory across the final rename, even
+    when another process changes a path component concurrently. The caller
+    owns this descriptor. Use lexical, not resolved, components here.
+    """
+    absolute = Path(os.path.abspath(path))
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open('/', flags)
     try:
-        with os.fdopen(fd, 'wb') as out, src.open('rb') as inp:
-            shutil.copyfileobj(inp, out, 1 << 20)
-            out.flush()
-            os.fsync(out.fileno())
-        shutil.copymode(dst if dst.exists() else src, tmp)
-        os.replace(tmp, dst)
-        _sync_dir(dst.parent)
+        for part in absolute.parent.parts[1:]:
+            nxt = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def assert_safe_path(path: Path, *, allow_missing: bool = False):
+    """Reject symlinks anywhere in the path (including parent directories)."""
+    fd = _safe_parent(path)
+    try:
+        try:
+            info = os.stat(path.name, dir_fd=fd, follow_symlinks=False)
+        except FileNotFoundError:
+            if allow_missing:
+                return
+            raise
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f'not a regular file (or symlink): {path}')
     finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+        os.close(fd)
+
+
+def atomic_copy(src: Path, dst: Path):
+    """Copy through anchored dirfds and rename without following symlinks.
+
+    Both parent paths are opened component-by-component with O_NOFOLLOW;
+    destination lookup and os.replace use that same pinned parent descriptor.
+    """
+    src = Path(src)
+    dst = Path(dst)
+    sfd = _safe_parent(src)
+    dfd = None
+    name = None
+    try:
+        dfd = _safe_parent(dst)
+        source = os.open(src.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=sfd)
+        try:
+            if not stat.S_ISREG(os.fstat(source).st_mode):
+                raise ValueError(f'unsafe source: {src}')
+            try:
+                old_stat = os.stat(dst.name, dir_fd=dfd, follow_symlinks=False)
+            except FileNotFoundError:
+                old_stat = None
+            if old_stat is not None and not stat.S_ISREG(old_stat.st_mode):
+                raise ValueError(f'unsafe destination: {dst}')
+            name = f'.drstool-{uuid.uuid4().hex}.tmp'
+            temp = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                           0o600, dir_fd=dfd)
+            try:
+                with os.fdopen(os.dup(source), 'rb') as inp, os.fdopen(temp, 'wb') as out:
+                    shutil.copyfileobj(inp, out, 1 << 20)
+                    os.fchmod(out.fileno(), stat.S_IMODE((old_stat or os.fstat(source)).st_mode))
+                    out.flush()
+                    os.fsync(out.fileno())
+            except BaseException:
+                # fdopen owns temp even if the copy fails
+                raise
+            # Refuse concurrent replacement, including symlink substitution.
+            try:
+                now = os.stat(dst.name, dir_fd=dfd, follow_symlinks=False)
+            except FileNotFoundError:
+                now = None
+            if ((old_stat is None) != (now is None) or
+                    (old_stat is not None and
+                     (old_stat.st_dev, old_stat.st_ino, old_stat.st_size,
+                      old_stat.st_mtime_ns, old_stat.st_ctime_ns) !=
+                     (now.st_dev, now.st_ino, now.st_size,
+                      now.st_mtime_ns, now.st_ctime_ns))):
+                raise RuntimeError(f'target changed during replacement: {dst}')
+            os.replace(name, dst.name, src_dir_fd=dfd, dst_dir_fd=dfd)
+            name = None
+            os.fsync(dfd)
+        finally:
+            os.close(source)
+    finally:
+        if name is not None and dfd is not None:
+            try:
+                os.unlink(name, dir_fd=dfd)
+            except FileNotFoundError:
+                pass
+        if dfd is not None:
+            os.close(dfd)
+        os.close(sfd)
+
+
+class TransactionCommittedError(RuntimeError):
+    """Files committed, but recording the final commit state failed."""
+
+    def __init__(self, journal: Path, changed: list[Path], cause: Exception):
+        self.journal, self.changed = journal, list(changed)
+        super().__init__(f"files changed successfully; final journal update failed: {cause}; "
+                         f"journal retained at {journal}")
+
+
+def safe_unlink(path: Path):
+    """Unlink a regular file through an anchored directory, never a symlink."""
+    fd = _safe_parent(path)
+    try:
+        old = os.stat(path.name, dir_fd=fd, follow_symlinks=False)
+        if not stat.S_ISREG(old.st_mode):
+            raise ValueError(f'unsafe unlink target: {path}')
+        os.unlink(path.name, dir_fd=fd)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 @dataclass
@@ -92,7 +198,9 @@ def apply(changes: Iterable[Change], backup: Path, *, log: Callable[[str], None]
         if str(target) in seen:
             raise ValueError(f'duplicate transaction target: {target}')
         seen.add(str(target))
-        if target.is_symlink() or src.is_symlink() or not src.is_file():
+        assert_safe_path(src)
+        assert_safe_path(target, allow_missing=True)
+        if not src.is_file():
             raise ValueError(f'unsafe replacement: {target}')
         if not target.parent.is_dir():
             raise FileNotFoundError(f'missing destination directory: {target.parent}')
@@ -120,6 +228,7 @@ def apply(changes: Iterable[Change], backup: Path, *, log: Callable[[str], None]
     changed = []
     try:
         for c, e in zip(change_list, new_entries):
+            assert_safe_path(c.target, allow_missing=True)
             current = sha256(c.target) if c.target.is_file() else ''
             if c.target.is_symlink() or current != e['old_sha256']:
                 raise RuntimeError(f'target modified concurrently: {c.target}')
@@ -134,11 +243,12 @@ def apply(changes: Iterable[Change], backup: Path, *, log: Callable[[str], None]
         for e in reversed(new_entries):
             t = Path(e['target'])
             try:
-                if not t.is_symlink() and t.is_file() and sha256(t) == e['new_sha256']:
+                assert_safe_path(t, allow_missing=True)
+                if t.is_file() and sha256(t) == e['new_sha256']:
                     if e['old_sha256']:
                         atomic_copy(backup / 'files' / e['backup'], t)
                     else:
-                        t.unlink()
+                        safe_unlink(t)
             except (OSError, ValueError):
                 log(f'  ⚠ automatic rollback failed: {t}; backup preserved')
         journal['state'] = 'recovery-needed' if any(
@@ -147,7 +257,12 @@ def apply(changes: Iterable[Change], backup: Path, *, log: Callable[[str], None]
         atomic_write_json(path, journal)
         raise
     journal['state'] = 'committed'
-    atomic_write_json(path, journal)
+    try:
+        atomic_write_json(path, journal)
+    except (OSError, ValueError, RuntimeError) as ex:
+        # All files have been atomically replaced and individually checked.
+        # The earlier prepared/applied journal still supports recovery.
+        raise TransactionCommittedError(path, changed, ex) from ex
     return changed
 
 
@@ -160,10 +275,8 @@ def restore(backup: Path, *, journal_name: str = 'transaction.json',
     for e in reversed(journal['entries']):
         target = Path(e['target'])
         original = backup / 'files' / e['backup'] if e.get('backup') else None
-        if target.is_symlink():
-            notes.append(f'{target}: symlink detected; untouched')
-            continue
         try:
+            assert_safe_path(target, allow_missing=True)
             current = sha256(target) if target.is_file() else ''
             if current == e['old_sha256']:
                 continue
@@ -176,7 +289,8 @@ def restore(backup: Path, *, journal_name: str = 'transaction.json',
                     continue
                 atomic_copy(original, target)
             elif target.is_file():
-                target.unlink()
+                # Destination is validated immediately before unlink.
+                safe_unlink(target)
             restored += 1
             log(f'  ↺ {target}')
         except (OSError, ValueError) as ex:

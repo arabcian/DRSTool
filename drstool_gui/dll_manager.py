@@ -225,11 +225,18 @@ def detect_installed(prefix: Path, comp: dict, *, manifest_data: Optional[dict] 
     res = {"state": "none", "version": "", "source": "", "files": [r for r, _ in files]}
     if not files:
         return res
-    # authoritative: DRSTool put these exact files there
+    # A provenance record is authoritative only if it covers every present
+    # component DLL. Checking just the intersection falsely reports an
+    # unrelated/partly overwritten installation as healthy.
     mf = manifest.get("files") or {}
-    if mf and all(rel in mf and _sha256(p) == mf[rel] for rel, p in files if rel in mf) \
-            and any(rel in mf for rel, _ in files):
-        res.update(state="ok", version=manifest.get("version", ""), source="manifest")
+    if isinstance(mf, dict) and mf:
+        if (set(mf) == {rel for rel, _ in files}
+                and all(isinstance(mf[rel], str) and _sha256(p) == mf[rel]
+                        for rel, p in files)):
+            res.update(state="ok", version=manifest.get("version", ""), source="manifest")
+        else:
+            res.update(state="mixed", version=manifest.get("version", "") or "?",
+                       source="manifest-incomplete")
         return res
     versions, other = set(), 0
     for rel, p in files:
@@ -402,13 +409,19 @@ def apply_component_update(prefix: Path, comp: dict, rel: dict, backup_root: Pat
                 if not dll_ops._is_pe(f, machine):
                     raise RuntimeError(f'invalid or wrong-architecture DLL: {f}')
                 target = dst / f.name
-                if target.is_symlink():
-                    raise RuntimeError(f'symlink destination refused: {target}')
+                tx.assert_safe_path(target, allow_missing=True)
+                if target.is_file():
+                    installed_machine = dll_ops._pe_machine(target)
+                    if installed_machine != machine:
+                        raise RuntimeError(f'unknown or wrong-architecture prefix DLL: {target}')
                 changes.append(tx.Change(target, f, f'{sub}/{f.name}', f'{comp["name"]} {rel.get("tag_name", "")}'))
         if not changes:
             raise RuntimeError('archive contained no installable component DLLs')
-        tx.apply(changes, backup_root, log=log,
-                 journal_name=f'prefix-{comp["id"]}.json')
+        try:
+            tx.apply(changes, backup_root, log=log,
+                     journal_name=f'prefix-{comp["id"]}.json')
+        except tx.TransactionCommittedError as ex:
+            log(f"  ⚠ DLLs committed, final journal update failed: {ex}")
         # The provenance manifest is only updated AFTER every DLL has been committed.
         mpath = prefix / _PD_MANIFEST
         try:
@@ -418,7 +431,13 @@ def apply_component_update(prefix: Path, comp: dict, rel: dict, backup_root: Pat
         man[comp['id']] = {'version': str(rel.get('tag_name', '')).lstrip('v'),
                            'files': {f'{Path(c.backup_name)}': _sha256(c.target) for c in changes},
                            'updated': datetime.now().isoformat(timespec='seconds')}
-        tx.atomic_write_json(mpath, man)
+        try:
+            tx.atomic_write_json(mpath, man)
+        except (OSError, RuntimeError, ValueError) as ex:
+            # tx.apply already committed and has a self-sufficient journal.
+            # Never count the operation as failed/rolled back in the GUI.
+            log(f"  ⚠ {len(changes)} DLLs installed; provenance manifest update failed: {ex}; "
+                f"backup retained at {backup_root}")
         return len(changes)
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -442,6 +461,33 @@ DLLM_COLS = [("dlss", "DLSS SR"), ("dlssd", "DLSS RR"), ("dlssg", "DLSS FG"), ("
 _DLLM_PD = {c["id"]: c for c in PD_COMPONENTS}
 
 
+class PrefixRestoreError(RuntimeError):
+    """A partial restore: safe backups remain intact and can be retried."""
+
+    def __init__(self, backup: Path, restored: int, notes: list[str]):
+        self.backup, self.restored, self.notes = backup, restored, notes
+        super().__init__(f"{restored} file(s) restored; backup retained at {backup}; "
+                         + "; ".join(notes))
+
+
+def prefix_backup_contents(backup: Path) -> List[str]:
+    """Display DLLs from current transaction journals and legacy backup layouts."""
+    files: set[str] = set()
+    for journal in backup.glob('prefix-*.json'):
+        try:
+            data = json.loads(journal.read_text(encoding='utf-8'))
+            for entry in data.get('entries', []):
+                target = Path(str(entry.get('target', '')))
+                if target.suffix.lower() == '.dll':
+                    files.add(f'{target.parent.name}/{target.name}')
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    for base in (backup, backup / 'files'):
+        for sub in ('system32', 'syswow64'):
+            files.update(f'{sub}/{f.name}' for f in (base / sub).glob('*.dll'))
+    return sorted(files)
+
+
 def restore_prefix_backup(prefix: Path) -> tuple:
     """Copy the newest .drstool-backup/<stamp> DLLs back into the prefix. -> (files, stamp)."""
     bdir = prefix / ".drstool-backup"
@@ -458,7 +504,9 @@ def restore_prefix_backup(prefix: Path) -> tuple:
             problems.extend(notes)
         if problems:
             # Preserve the backup so the user can resolve external edits.
-            raise RuntimeError('restore left externally modified files untouched: ' + '; '.join(problems))
+            if n:
+                (prefix / _PD_MANIFEST).unlink(missing_ok=True)
+            raise PrefixRestoreError(last, n, problems)
         shutil.rmtree(last)
         # The manifest stores the last applied versions; after restoration a
         # rescan discovers the actual DLLs rather than trusting stale metadata.
@@ -469,9 +517,8 @@ def restore_prefix_backup(prefix: Path) -> tuple:
     for sub in ("system32", "syswow64"):
         for f in (last / sub).glob("*.dll") if (last / sub).is_dir() else []:
             dst = win / sub / f.name
-            if dst.is_symlink():          # copy2 would write through the link (into Proton's dist)
-                dst.unlink()
-            shutil.copy2(f, dst)
+            # The legacy format also needs the newer symlink/dirfd protections.
+            tx.atomic_copy(f, dst)
             n += 1
     try:                                       # files that update created: there was no original
         added = json.loads((last / _PD_ADDED).read_text())
@@ -481,7 +528,7 @@ def restore_prefix_backup(prefix: Path) -> tuple:
         sub, _, name = str(rel).partition("/")
         if sub in ("system32", "syswow64") and name and "/" not in name and name != "..":
             try:
-                (win / sub / name).unlink()
+                tx.safe_unlink(win / sub / name)
                 n += 1
             except OSError:
                 pass
@@ -506,7 +553,9 @@ class DllGameState:
 
 def dllm_prefix_updatable(st: DllGameState) -> bool:
     g = st.game
-    return g.prefix is not None and g.prefix_manager != "Proton"
+    # Steam/Proton and Bottles own their runtime components. DRSTool does not
+    # overwrite their DLLs implicitly; users can manage these in the launcher.
+    return g.prefix is not None and g.prefix_manager not in ("Proton", "Bottles")
 
 
 def dllm_plan(st: DllGameState, targets: Dict[str, object], install_missing: bool = False) -> dict:
@@ -520,7 +569,9 @@ def dllm_plan(st: DllGameState, targets: Dict[str, object], install_missing: boo
             continue
         tv = pe_version.parse_version(b.version)
         for d in st.dlls.of(kind):
-            if not d.version or pe_version.compare(d.version, tv) != 0:
+            # Unknown versions require an explicit manual decision; normal
+            # "update" never silently downgrades a newer DLL.
+            if d.version and tv and pe_version.compare(d.version, tv) < 0:
                 files.append((d, b))
     prefix = []
     if dllm_prefix_updatable(st):
@@ -535,7 +586,8 @@ def dllm_plan(st: DllGameState, targets: Dict[str, object], install_missing: boo
                 continue
             have, latest = _vtuple(inst.get("version", "")), _vtuple(rel.get("tag_name", ""))
             dev = bool(re.search(r"-\d+-g[0-9a-f]+", inst.get("version", "")))
-            if inst["state"] != "ok" or not have or (latest and _vcmp(have, latest) < 0 and not dev):
+            # Mixed/unknown installations are not safe automatic upgrades.
+            if inst["state"] == "ok" and have and latest and _vcmp(have, latest) < 0 and not dev:
                 prefix.append(cid)
     return {"files": files, "prefix": prefix}
 
@@ -552,20 +604,22 @@ def dllm_cell(st: DllGameState, cid: str, targets: Dict[str, object]) -> tuple:
         if b is None:
             return txt, "unknown"
         tv = pe_version.parse_version(b.version)
-        old = any(not d.version or pe_version.compare(d.version, tv) < 0 for d in found)
+        if not tv or any(not d.version for d in found):
+            return txt, "unknown"
+        old = any(pe_version.compare(d.version, tv) < 0 for d in found)
         return txt, ("old" if old else "ok")
     g = st.game
     if g.prefix is None:
         return "—", "none"
     if not dllm_prefix_updatable(st):
-        return "Proton", "managed"
+        return st.game.prefix_manager, "managed"
     inst = st.prefix.get(cid)
     if not inst or inst["state"] == "none":
         return "—", "none"
     if inst["state"] == "mixed":
-        return "mixed", "old"
+        return "mixed", "unknown"
     if inst["state"] == "unknown":
-        return "?", "old"
+        return "?", "unknown"
     rel = targets.get(cid)
     if not rel:
         return inst["version"], "unknown"
@@ -575,7 +629,7 @@ def dllm_cell(st: DllGameState, cid: str, targets: Dict[str, object]) -> tuple:
 class _DllScanWorker(QThread):
     game_ready = Signal(object)          # DllGameState
     progress = Signal(float, str)
-    done = Signal(int, object)           # games scanned, [errors]
+    done = Signal(int, int, bool, object) # scanned, total, cancelled, [errors]
 
     def __init__(self, custom: List[str], only: Optional[list] = None, parent=None,
                  force_full: bool = False):
@@ -596,6 +650,7 @@ class _DllScanWorker(QThread):
         else:
             games = list(self._only)
         n = len(games)
+        scanned = 0
         # Many games share one prefix (every Lutris game on ~/.wine): inspect it once per scan
         # instead of re-reading and re-hashing the same DLLs for each game.
         seen_pfx: Dict[tuple, dict] = {}
@@ -623,9 +678,12 @@ class _DllScanWorker(QThread):
                         pref[c["id"]] = seen_pfx[k]
                     except Exception as ex:               # noqa: BLE001
                         errors.append(f"{g.name} ({c['name']}): {ex}")
+            scanned += 1
             self.game_ready.emit(DllGameState(g, dlls, pref))
-        self.progress.emit(1.0, "")
-        self.done.emit(n, errors)
+        cancelled = self._cancel.is_set()
+        if not cancelled:
+            self.progress.emit(1.0, "")
+        self.done.emit(scanned, n, cancelled, errors)
 
 
 class _DllOnlineWorker(QThread):
@@ -735,6 +793,8 @@ class _DllUpdateWorker(QThread):
                 try:
                     res = dll_ops.replace_files(g.key, g.name, pairs, lambda m: self.log.emit("info", m))
                     replaced += len(res.replaced)
+                    if res.status == "committed_metadata_error":
+                        self.log.emit("warn", f"  ⚠ Files updated, backup metadata incomplete: {res.detail}")
                     failed += sum(1 for _p, why in res.skipped if why != "already this version")
                     if res.backup_dir is not None:
                         self.log.emit("info", f"  backup: {res.backup_dir}")
@@ -787,9 +847,9 @@ class DllRestoreDialog(QDialog):
         if pb is not None and pb.is_dir():
             stamps = sorted((x for x in pb.iterdir() if x.is_dir()), reverse=True)
             if stamps:
-                files = sorted({f.name for sub in ("system32", "syswow64")
-                                for f in (stamps[0] / sub).glob("*.dll")} if stamps else set())
-                it = QTreeWidgetItem([f"prefix · {stamps[0].name}", ", ".join(files)[:300]])
+                files = prefix_backup_contents(stamps[0])
+                it = QTreeWidgetItem([f"prefix · {stamps[0].name}",
+                                      ", ".join(files)[:300] or "(no DLL entries)"])
                 it.setData(0, Qt.UserRole, ("prefix", st.game.prefix))
                 it.setToolTip(0, "The newest prefix backup; restoring it makes the one before it the newest.")
                 self._list.addTopLevelItem(it)
@@ -827,8 +887,15 @@ class DllRestoreDialog(QDialog):
             else:
                 n, stamp = restore_prefix_backup(where)
                 self._log.appendPlainText(f"  restored {n} file(s) from {stamp}")
-        except (OSError, ValueError) as ex:
-            self._log.appendPlainText(f"✗ {ex}")
+        except PrefixRestoreError as ex:
+            self.restored = self.restored or ex.restored > 0
+            self._log.appendPlainText(f"⚠ Partial restore: {ex.restored} file(s) restored")
+            self._log.appendPlainText(f"  Backup retained: {ex.backup}")
+            for note in ex.notes:
+                self._log.appendPlainText(f"  – {note}")
+            return
+        except (OSError, ValueError, RuntimeError) as ex:
+            self._log.appendPlainText(f"✗ Restore failed: {ex}")
             return
         self._log.appendPlainText(f"✓ {n} file(s) restored")
         self.restored = self.restored or n > 0
@@ -1212,14 +1279,18 @@ class DllManagerWidget(QWidget):
                 out[cid] = combo.currentData()
         return out
 
-    def _on_scan_done(self, n: int, errors: list):
+    def _on_scan_done(self, n: int, total: int, cancelled: bool, errors: list):
         # One sort for the whole batch; keep normal user sorting after completion.
         self._tree.setSortingEnabled(True)
         for e in errors[:20]:
             self._say("warn", e)
         with_dlls = sum(1 for s in self._states.values() if s.dlls.dlls or s.prefix)
-        self._bar_lbl.setText(f"{n} game(s) scanned · {with_dlls} with DLLs DRSTool can update")
-        self._say("ok", f"scan finished: {len(self._states)} games, {with_dlls} with updatable DLLs")
+        if cancelled:
+            self._bar_lbl.setText(f"scan cancelled · {n}/{total} game(s) scanned")
+            self._say("warn", f"scan cancelled: {n}/{total} games scanned")
+        else:
+            self._bar_lbl.setText(f"{n} game(s) scanned · {with_dlls} with DLLs DRSTool can update")
+            self._say("ok", f"scan finished: {n} games, {with_dlls} with updatable DLLs")
         self._apply_filter()
         self._sync_buttons()
 

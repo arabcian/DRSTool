@@ -26,8 +26,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QProgressBar, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from drstool_core import safe_archive
-from drstool_core.file_transactions import atomic_write_json
+from drstool_core import safe_archive, tool_recovery
+from drstool_core.file_transactions import atomic_write_json, file_lock
 from drstool_core import launcher_paths, net
 from drstool_core.catalog import DATA_DIR
 
@@ -537,14 +537,23 @@ def tm_install(tool: TMTool, ver: TMVer, launcher: TMLauncher, force: bool, canc
         dest.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         raise RuntimeError(f"cannot create {dest}: {e.strerror or e}") from None
+    # A launcher may intentionally link its tools folder to another disk.
+    # Operate on the canonical directory so recovery journals remain usable.
+    dest = dest.resolve(strict=True)
     if not os.access(dest, os.W_OK):
         raise RuntimeError(f"no write permission for {dest}")
+    with file_lock(dest / '.drstool-tm-recovery'):
+        tool_recovery.recover(dest, log)
     have = tm_find_installed(dest, tool.name, ver.label)
     if have is not None and not force:
         raise RuntimeError(f"{tool.name} {ver.label} is already installed ({have.name}) — "
                            f"tick “Reinstall” to replace it")
-    for old in dest.glob(".drstool-tm-*"):                   # leftovers of a crashed run
-        if time.time() - old.stat().st_mtime > 86400:
+    # Never garbage-collect recovery journals. Only abandoned extraction dirs
+    # are disposable, and only after the recovery scan above.
+    for old in dest.glob(".drstool-tm-*"):
+        if (old.is_dir() and not old.is_symlink() and
+                not old.name.startswith('.drstool-tm-install-') and
+                time.time() - old.stat().st_mtime > 86400):
             shutil.rmtree(old, ignore_errors=True)
     if tool.src == "actions":
         log(f"  resolving CI artifact of run {ver.ref} …")
@@ -563,7 +572,7 @@ def tm_install(tool: TMTool, ver: TMVer, launcher: TMLauncher, force: bool, canc
     # Stable name per URL: an interrupted download is kept here and resumed next time.
     archive = cache / ("part-" + hashlib.sha256(ver.url.encode()).hexdigest()[:16] + "-"
                        + re.sub(r"[^\w.\-]", "_", ver.name or "x"))
-    stage = Path(tempfile.mkdtemp(prefix=".drstool-tm-", dir=dest))
+    stage = Path(tempfile.mkdtemp(prefix=".drstool-tm-stage-", dir=dest))
     ok = False
     try:
         log(f"  ↓ {ver.name or ver.url}" + (f"  ({ngx_human(ver.size)})" if ver.size else ""))
@@ -587,43 +596,54 @@ def tm_install(tool: TMTool, ver: TMVer, launcher: TMLauncher, force: bool, canc
                 raise RuntimeError(f'unsafe install folder: {folder}')
             if (dest / folder.name).exists() and not force:
                 raise RuntimeError(f'{dest / folder.name} already exists — tick “Reinstall” to replace it')
-        moved = []
-        renamed = []
-        try:
-            # Keep ALL old folders until the full set has been installed.
+        # A durable journal identifies the target and its original folder, so
+        # another process can recover even if this one is killed by SIGKILL.
+        # Lock only the final swap (not long network downloads).
+        with file_lock(dest / '.drstool-tm-recovery'):
+            tool_recovery.recover(dest, log)
+            # Check again after obtaining the lock; another install may have
+            # appeared while downloading the archive.
             for folder in dirs:
-                tgt = dest / folder.name
-                if tgt.exists() or tgt.is_symlink():
-                    bak = dest / f'.drstool-previous-{os.getpid()}-{folder.name}'
-                    if bak.exists():
-                        raise RuntimeError(f'previous failed install requires recovery: {bak}')
-                    os.replace(tgt, bak)
-                    renamed.append((tgt, bak))
-                os.replace(folder, tgt)
-                moved.append(tgt)
-            for tgt, bak in renamed:
+                target = dest / folder.name
+                if (target.exists() or target.is_symlink()) and not force:
+                    raise RuntimeError(f'{target} already exists — tick “Reinstall” to replace it')
+            journal_path = tool_recovery.create_journal(
+                dest, dirs, tool=tool.name, version=ver.label, main=main_name)
+            journal = json.loads(journal_path.read_text(encoding='utf-8'))
+            try:
+                for folder, entry in zip(dirs, journal['entries']):
+                    tgt = dest / entry['name']
+                    bak = dest / entry['backup']
+                    if entry['had_old']:
+                        os.replace(tgt, bak)
+                    os.replace(folder, tgt)
+                # Verify installed main directory and metadata *before*
+                # marking commit durable and deleting previous versions.
+                main_installed = dest / main_name
+                info = _tm_read_info(main_installed)
+                if (not main_installed.is_dir() or main_installed.is_symlink() or
+                        not info or info['compat_tool'] != tool.name or
+                        info['version'] != ver.label):
+                    raise RuntimeError('installed tool failed metadata validation')
+                journal['state'] = 'committed'
+                atomic_write_json(journal_path, journal)
+            except BaseException:
+                # The same recovery routine handles process exceptions and
+                # abrupt termination. Never discard a journal on failure.
                 try:
-                    if bak.is_dir() and not bak.is_symlink():
-                        shutil.rmtree(bak)
-                    else:
-                        bak.unlink()
-                except OSError as ex:
-                    # Cleanup must never turn a completed install into a
-                    # rollback after some older backups were deleted.
-                    log(f'  old version kept at {bak}: {ex}')
+                    tool_recovery.recover(dest, log)
+                except Exception as recovery_error:
+                    log(f'  ⚠ recovery pending: {recovery_error}; journal: {journal_path}')
+                raise
+            # A cleanup failure must not falsely roll back a committed tool.
+            try:
+                tool_recovery.recover(dest, log)
+            except (OSError, RuntimeError, ValueError) as ex:
+                log(f'  ⚠ Installed, but old-version cleanup pending: {ex}; '
+                    f'journal: {journal_path}')
             ok = True
-            return {"path": dest / main_name, "tool": tool.name, "version": ver.label,
-                    "note": "", "all": moved}
-        except BaseException:
-            for tgt in reversed(moved):
-                if tgt.is_symlink() or tgt.is_file():
-                    tgt.unlink()
-                else:
-                    shutil.rmtree(tgt)
-            for tgt, bak in reversed(renamed):
-                if bak.exists() or bak.is_symlink():
-                    os.replace(bak, tgt)
-            raise
+            return {'path': dest / main_name, 'tool': tool.name, 'version': ver.label,
+                    'note': '', 'all': [dest / d.name for d in dirs]}
 
     finally:
         if ok:
@@ -651,6 +671,10 @@ def tm_scan(launcher: TMLauncher) -> List[TMInstalled]:
     out: List[TMInstalled] = []
     for kinds, folder in launcher.dirs():
         try:
+            if folder.is_dir():
+                canonical = folder.resolve(strict=True)
+                with file_lock(canonical / '.drstool-tm-recovery'):
+                    tool_recovery.recover(canonical, _log.warning)
             subs = sorted((p for p in folder.iterdir() if p.is_dir() and not p.name.startswith(".")),
                           key=lambda p: p.name.lower())
         except OSError:
