@@ -17,11 +17,14 @@ from PySide6.QtCore import QSettings, Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QListWidget, QPushButton, QScrollArea, QSizePolicy, QTreeWidget, QTreeWidgetItem,
+    QInputDialog, QLineEdit, QListWidget, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
+    QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
 
 from drstool_core import game_info
+from drstool_core.performance_history import trend_report
+from drstool_core.session_recorder import SessionStore
 
 from .base import _CORE_ERR, APP_ID, game_scan, winetricks
 from .dll_manager import detect_installed, PD_COMPONENTS, read_prefix_manifest
@@ -158,7 +161,8 @@ class _CardWorker(QThread):
     def run(self):
         g, info = self._g, {}
         for name, fn in (("runtime", self._runtime), ("dlls", self._dlls), ("files", self._files),
-                         ("log", self._log), ("ft", self._ft), ("pdb", self._pdb)):
+                         ("log", self._log), ("ft", self._ft), ("pdb", self._pdb),
+                         ("sessions", self._sessions)):
             try:
                 info[name] = fn(info)
             except Exception as ex:        # noqa: BLE001 - one section must not hide the others
@@ -217,7 +221,11 @@ class _CardWorker(QThread):
         return {"path": str(p), "mtime": p.stat().st_mtime, "kind": d["kind"],
                 "avg": st.get("Average FPS"), "low1": st.get("1% low FPS"), "low01": st.get("0.1% low FPS"),
                 "p99": st.get("p99 frametime (ms)"), "stutters": st.get("Stutters (> 2× median)"),
-                "dur": st.get("Duration (s)"), "pinned": str(p) == pinned}
+                "dur": st.get("Duration (s)"), "pinned": str(p) == pinned,
+                "scene": self._link.get('frametime_scene', '') if str(p) == pinned else ''}
+
+    def _sessions(self, _info):
+        return SessionStore().recent(game_key=self._g.key, limit=12)
 
     def _pdb(self, _info):
         appid = self._link.get("appid") or game_info.steam_appid(self._g)
@@ -550,6 +558,12 @@ class GameCardWidget(QWidget):
         self.t_ft.add_button("Pick capture…", self._pick_capture, "ghost",
                              "Use this MangoHud / FLM_CSV file for the game (the newest capture wins)")
         self._ft_open = self.t_ft.add_button("Open in Frametime", self._open_frametime, "ghost")
+        self.t_ft.add_button("Compare runs…", self._compare_performance, "ghost",
+                             "Compare repeated captures grouped by profile, scene and runtime")
+
+        self.t_sessions = _Tile("Recorded sessions")
+        self.t_sessions.add_button("Recent sessions…", self._show_sessions, "ghost",
+                                   "Read-only session history created by drstool --record")
 
         self.t_log = _Tile("Last log errors")
         self._fix_btn = self.t_log.add_button("", lambda: self._open_tricks(self._fixes()), "primary")
@@ -573,7 +587,8 @@ class GameCardWidget(QWidget):
                                               "Download the ProtonDB summary (network)")
         self.t_pdb.add_button("Game hints", self._open_hints, "ghost")
 
-        self._tiles = [self.t_profile, self.t_runtime, self.t_dlls, self.t_ft, self.t_log, self.t_pdb]
+        self._tiles = [self.t_profile, self.t_runtime, self.t_dlls, self.t_ft,
+                       self.t_sessions, self.t_log, self.t_pdb]
         self._grid = QGridLayout()
         self._grid.setHorizontalSpacing(12)
         self._grid.setVerticalSpacing(12)
@@ -663,6 +678,7 @@ class GameCardWidget(QWidget):
         self._render_runtime(info.get("runtime") or {})
         self._render_dlls(info.get("dlls") or {})
         self._render_ft(info.get("ft") or {})
+        self._render_sessions(info.get("sessions") or [])
         self._render_log(info.get("log") or {})
         self._render_pdb(info.get("pdb") or {})
         self._equalize()
@@ -788,7 +804,15 @@ class GameCardWidget(QWidget):
         src = (f'<br><span style="color:{T["muted"]}">{_esc(Path(ft["path"]).name)}'
                f'{" (picked)" if ft.get("pinned") else ""} · {_esc(_when(ft.get("mtime", 0)))}</span>')
         if self.game is not None and ft.get("avg") is not None:
-            LINKS.add_perf(self.game.key, {k: ft.get(k) for k in ("path", "mtime", "avg", "low1", "p99")})
+            record = {k: ft.get(k) for k in ("path", "mtime", "avg", "low1", "low01",
+                                                   "p99", "stutters", "dur", "kind", "scene")}
+            record['proton'] = (self._info.get('runtime') or {}).get('last_used') or ''
+            record['driver'] = SYSHUB.info.nv_driver if SYSHUB.info else ''
+            prefix = (self._info.get('dlls') or {}).get('prefix') or {}
+            for component, key in (('DXVK', 'dxvk'), ('vkd3d-proton', 'vkd3d')):
+                state, version = prefix.get(component, ('', ''))
+                record[key] = version if state == 'ok' else ''
+            LINKS.add_perf(self.game.key, record)
         self.t_ft.set(f"{fmt(ft.get('avg'))} FPS avg", _rows_html(rows) + src + self._perf_history_html())
 
     def _perf_history_html(self) -> str:
@@ -809,6 +833,65 @@ class GameCardWidget(QWidget):
                                 f"· {len(runs)} run(s) · {_when(runs[-1].get('mtime') or 0)}", ""))
         return f'<br><b>By profile version</b>{_rows_html(rows)}'
 
+
+    def _render_sessions(self, sessions: list):
+        if isinstance(sessions, dict) and sessions.get('error'):
+            self.t_sessions.set('unavailable', _esc(sessions['error']), T['warn'])
+            return
+        if not isinstance(sessions, list) or not sessions:
+            self.t_sessions.set('No recordings',
+                'Use drstool --record PROFILE -- COMMAND (Steam launch options supported). '
+                'A game key is inferred for Steam or supplied with --game-key.', T['muted'])
+            return
+        most = sessions[0]
+        rows = [('Last session', _when(most.get('started_at') or 0), ''),
+                ('Exit', most.get('status', '?') +
+                 (f" (code {most['exit_code']})" if most.get('exit_code') is not None else ''),
+                 T['danger'] if most.get('status') in ('launch_failed', 'nonzero_exit', 'signaled', 'interrupted') else '')]
+        if most.get('scene'):
+            rows.append(('Scene', most['scene'], ''))
+        self.t_sessions.set(f'{len(sessions)} recent', _rows_html(rows))
+
+    def _show_sessions(self):
+        if self.game is None:
+            return
+        ss = self._info.get('sessions') or []
+        if not isinstance(ss, list) or not ss:
+            QMessageBox.information(self, 'Game sessions', 'No recorded session for this game yet.')
+            return
+        lines = []
+        for e in ss[:12]:
+            code = e.get('exit_code')
+            lines.append(f"{_when(e.get('started_at') or 0)}  {e.get('status', '?')}"
+                         + (f' · exit {code}' if code is not None else '')
+                         + (f" · {e.get('scene')}" if e.get('scene') else '')
+                         + f"\n  profile: {e.get('profile')} [{str(e.get('profile_fp') or '')[:8]}]"
+                         + f"\n  id: {e.get('id')}")
+        QMessageBox.information(self, 'Game sessions', '\n\n'.join(lines))
+
+    def _compare_performance(self):
+        if self.game is None:
+            return
+        report = trend_report(self.link().get('perf') or [])
+        lines = [report['message'], '']
+        for group in report['groups'][-12:]:
+            metrics = group['metrics']
+            lines.append(f"{group['profile'] or '?'} · {group['fp'][:8] or '?'} · "
+                         f"{group['runs']} run(s) · {metrics.get('avg', 0):.1f} FPS avg"
+                         f" · {group['scene'] or 'scene not labeled'}")
+        cmp = report['comparison']
+        if cmp:
+            lines.extend(['', 'Most recent profile-version comparison:'])
+            for metric, v in cmp['changes'].items():
+                if v['pct'] is not None:
+                    lines.append(f"{metric}: {v['pct']:+.1f}%")
+            if cmp['warnings']:
+                lines.extend(['', 'Comparison is not controlled:',
+                              *('- ' + w for w in cmp['warnings'])])
+            if cmp['possible_regression']:
+                lines.append('Possible regression: ' + ', '.join(cmp['regressed_metrics']))
+        lines.extend(['', 'This is descriptive; matching labels cannot prove identical test scenes.'])
+        QMessageBox.information(self, 'Game performance trend', '\n'.join(lines))
 
     def _fixes(self) -> list:
         """Libraries the last log asks for that the prefix does not have yet -> [(verb, why)]."""
@@ -1007,6 +1090,11 @@ class GameCardWidget(QWidget):
         p, _ = QFileDialog.getOpenFileName(self, f"Frametime capture of {self.game.name}", start,
                                            "Logs (*.csv *.log *.txt);;All files (*)")
         if p:
+            scene, accepted = QInputDialog.getText(self, 'Benchmark scene',
+                'Scene/test label (leave empty if unknown). Use the same label only for identical tests:')
+            if not accepted:
+                return
+            LINKS.set_field(self.game.key, 'frametime_scene', scene.strip()[:160], name=self.game.name)
             LINKS.set_field(self.game.key, "frametime", p, name=self.game.name)
             self.reload()
 

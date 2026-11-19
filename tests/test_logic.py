@@ -23,6 +23,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def setUpModule():
+    import importlib.util
+    if importlib.util.find_spec('PySide6') is None:
+        raise unittest.SkipTest('PySide6 not installed; GUI-dependent logic unavailable')
     # drstool_gui is imported here, not at discovery time: test_gui needs to import it
     # only after it has set up its fake home.
     global frame_stats, parse_launch_text, lint_config, _log_analyse, detect_real_arch

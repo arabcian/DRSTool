@@ -60,6 +60,10 @@ def _cli_parse(argv):
                                                           "prints the content and the lint result, saves with --save-as")
     g.add_argument("--include-flagged", action="store_true",
                    help="--import-share: also keep variables flagged as sensitive (LD_PRELOAD, layer paths, …)")
+    g.add_argument("--record", metavar="PROFILE", help="run and record a session: --record PROFILE "
+                                                    "[--game-key steam:ID] [--scene LABEL] [--capture FILE] -- COMMAND")
+    g.add_argument("--sessions", action="store_true", help="show recorded sessions (JSON)")
+    g.add_argument("--perf-report", metavar="GAME_KEY", help="show recorded performance groups (JSON)")
     g.add_argument("--run", metavar="PROFILE", help="run a command with a saved profile applied: "
                                                     "drstool --run PROFILE -- COMMAND [ARG…] "
                                                     "(e.g. as Steam launch options: drstool --run NAME -- %%command%%)")
@@ -70,7 +74,9 @@ def _cli_parse(argv):
     return a, rest
 
 
-_RUN_USAGE = "usage: drstool --run PROFILE -- COMMAND [ARG…]"
+_RUN_USAGE = ("usage: drstool --run PROFILE -- COMMAND [ARG…]\n"
+              "       drstool --record PROFILE [--game-key steam:ID] [--scene NAME] "
+              "[--capture CSV] -- COMMAND [ARG…]")
 
 
 def _resolve_profile(profiles, name, err):
@@ -92,17 +98,129 @@ def run_argv(profile, command) -> tuple:
     return env, shlex.split(p["gs_cmd"]) + list(command)
 
 
+def _record_cli(argv) -> int:
+    """Opt-in supervisor. Other launch modes keep execvpe's original semantics."""
+    import argparse
+    from drstool_core.frametime_csv import load_frametimes
+    from drstool_core.game_links import LinkStore
+    from drstool_core.session_recorder import SessionStore, supervise
+    from .links import profile_fp
+
+    parser = argparse.ArgumentParser(prog='drstool --record', allow_abbrev=False)
+    parser.add_argument('profile')
+    parser.add_argument('--game-key', default='')
+    parser.add_argument('--scene', default='')
+    parser.add_argument('--capture', default='')
+    parser.add_argument('--dxvk-version', default='', help='user-supplied DXVK version (not verified)')
+    parser.add_argument('--vkd3d-version', default='', help='user-supplied vkd3d-proton version (not verified)')
+    if '--' not in argv:
+        parser.error(_RUN_USAGE)
+    cut = argv.index('--')
+    opts = parser.parse_args(argv[:cut])
+    command = argv[cut + 1:]
+    if not command:
+        parser.error('missing command after --')
+    def err(msg):
+        print(f'drstool: {msg}', file=sys.stderr)
+    sm = SettingsManager()
+    profiles = sm.get_profiles()
+    name = _resolve_profile(profiles, opts.profile, err)
+    if not name:
+        return 2
+    env, cmd = run_argv(profiles[name], command)
+    if not cmd:
+        err('empty launch command')
+        return 2
+    store = SessionStore()
+    environment = {**os.environ, **env}
+    try:
+        session = store.begin(profile=name, profile_fp=profile_fp(profiles[name]),
+                              command=cmd, env=environment, game_key=opts.game_key,
+                              scene=opts.scene, capture=opts.capture)
+        # Explicit manual labels never masquerade as auto-detected versions.
+        session['runtime'].update({'dxvk': opts.dxvk_version[:80],
+                                   'vkd3d': opts.vkd3d_version[:80]})
+        session['runtime_evidence'] = {'dxvk': 'user' if opts.dxvk_version else 'unknown',
+                                       'vkd3d': 'user' if opts.vkd3d_version else 'unknown'}
+        store.write(session)
+    except (OSError, ValueError) as ex:
+        err(f'unable to record session: {ex}')
+        return 2
+    environment['DRSTOOL_SESSION_ID'] = session['id']
+    err(f'session {session["id"]} recorded in {store.directory}')
+    try:
+        rc, session = supervise(store, session, cmd, environment)
+    except OSError as ex:
+        err(f'session could not be saved: {ex}')
+        return 1
+    if opts.capture:
+        try:
+            capture = Path(opts.capture).expanduser().resolve(strict=True)
+            stat = capture.stat()
+            if not capture.is_file() or stat.st_mtime < session['started_at'] - 2:
+                raise ValueError('capture did not change during the recorded session')
+            if stat.st_size > 512 * 1024 * 1024:
+                raise ValueError('capture exceeds 512 MiB')
+            data = load_frametimes(str(capture))
+            metrics = {label: value for label, value, *_ in data['stats']}
+            perf = {'path': str(capture), 'mtime': stat.st_mtime,
+                    'avg': metrics['Average FPS'], 'low1': metrics['1% low FPS'],
+                    'low01': metrics['0.1% low FPS'], 'p99': metrics['p99 frametime (ms)'],
+                    'stutters': metrics['Stutters (> 2× median)'],
+                    'dur': metrics['Duration (s)'], 'kind': data['kind'],
+                    'scene': opts.scene, 'profile': name, 'fp': session['profile_fp'],
+                    'session_id': session['id'],
+                    'driver': session['runtime'].get('nvidia_driver', ''),
+                    'proton': session['runtime'].get('proton', '') or session['runtime'].get('steam_compat_tool', ''),
+                    'dxvk': session['runtime'].get('dxvk', ''), 'vkd3d': session['runtime'].get('vkd3d', '')}
+            session['performance'] = perf
+            store.write(session)
+            if session['game_key']:
+                LinkStore().add_perf(session['game_key'], perf)
+        except (OSError, ValueError, KeyError, TypeError) as ex:
+            err(f'capture was not associated: {ex}')
+    return rc
+
+
+def _report_cli(argv) -> int:
+    from drstool_core.game_links import LinkStore
+    from drstool_core.performance_history import trend_report
+    from drstool_core.session_recorder import SessionStore
+    if argv[0] == '--sessions':
+        import argparse
+        parser = argparse.ArgumentParser(prog='drstool --sessions')
+        parser.add_argument('--game-key', default='')
+        parser.add_argument('--limit', type=int, default=40)
+        args = parser.parse_args(argv[1:])
+        print(json.dumps(SessionStore().recent(game_key=args.game_key, limit=args.limit),
+                         indent=2, ensure_ascii=False))
+        return 0
+    if argv[0] == '--perf-report':
+        if len(argv) != 2:
+            print('usage: drstool --perf-report GAME_KEY', file=sys.stderr)
+            return 2
+        entry = LinkStore().get(argv[1])
+        print(json.dumps(trend_report(entry.get('perf') or []), indent=2, ensure_ascii=False))
+        return 0
+    return 2
+
+
 def cli_exec(argv) -> None:
-    """`drstool --run PROFILE -- COMMAND…`: replace this process with COMMAND, with the saved
-    profile's environment and gamescope / MangoHud wrapper. The profile is read at every start,
-    so edits saved in DRSTool apply on the next launch without syncing the launcher again.
-    No QApplication is created: nothing of DRSTool's Qt setup reaches the game."""
-    if not argv or argv[0] != "--run":
+    """Non-GUI command paths; --run continues to use execvpe unchanged."""
+    if not argv:
+        return
+    if argv[0] in ('--sessions', '--perf-report'):
+        sys.exit(_report_cli(argv))
+    if argv[0] == '--record':
+        sys.exit(_record_cli(argv[1:]))
+    if argv[0] != '--run':
         return
 
     def err(msg):
         print(f"drstool: {msg}", file=sys.stderr)
-    if len(argv) < 4 or argv[2] != "--":
+    if len(argv) > 2 and argv[2] == '--record':
+        sys.exit(_record_cli([argv[1]] + argv[3:]))
+    if len(argv) < 4 or argv[2] != '--' or not argv[3:]:
         err(_RUN_USAGE)
         sys.exit(2)
     profiles = SettingsManager().get_profiles()
@@ -110,12 +228,14 @@ def cli_exec(argv) -> None:
     if not name:
         sys.exit(2)
     env, cmd = run_argv(profiles[name], argv[3:])
+    if not cmd:
+        err('empty launch command')
+        sys.exit(2)
     try:
         os.execvpe(cmd[0], cmd, {**os.environ, **env})
     except OSError as ex:
         err(f"cannot run {cmd[0]}: {ex.strerror}")
         sys.exit(2)
-
 
 def _cli_wants(a) -> bool:
     return bool(a.list_profiles or a.print_env or a.lint or a.lint_all or a.apply or a.import_nip

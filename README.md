@@ -266,6 +266,16 @@ DRS settings, GPU architectures, environment variables, Gamescope flags, `dxvk.c
 
 `drstool_gui/` has one module per page or feature, and modules only import downwards: `base`, `theme` and `widgets` at the bottom; then what the app knows about (`catalog_data`, `lookup`, `sysinfo`, `state`, `lint`, `launch_import`); then the pages (`settings_manager`, `setting_editor`, `env_widgets`, `profiles`, `launchers`, the Extra Tools pages …); `main_window`, `cli` and `app` on top. Each module starts with a docstring saying what it holds. A few functions (`lookup.env_def`, `state._gs_flag_name`, `launch_import.parse_launch_text` / `op_label`, `steam_utils.steam_compat_tools` / `steam_install_dirs`) import a page class inside the function body, where a top-level import would be circular.
 
+### Game session recording / benchmark history (F01/F03/F05)
+
+Opt-in foreground recording: `drstool --record PROFILE -- COMMAND` or Steam launch options
+`drstool --run PROFILE --record -- %command%`. View recent sessions with `drstool --sessions`,
+and compare tagged capture histories with `drstool --perf-report steam:APPID` or the **Games**
+card’s **Compare runs…** button. The Live process check shows a provenance column for
+active editor/profile variables and the actual process environment. Normal `--run` stays
+unchanged. See [GELISTIRMELER_F01_F03_F05_TR.md](GELISTIRMELER_F01_F03_F05_TR.md) for
+full usage, evidence limitations, safety constraints and test results.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

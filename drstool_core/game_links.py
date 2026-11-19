@@ -157,8 +157,12 @@ class LinkStore:
             if any(r.get("path") == run.get("path") and r.get("mtime") == run.get("mtime") for r in hist):
                 return False
             newer = (run.get("mtime") or 0) >= (e.get("applied_at") or 0)
-            hist.append(dict(run, fp=e.get("fp", "") if newer else "",
-                             profile=e.get("profile") if newer else None))
+            # A supervised session pins the profile at launch time; a GUI
+            # assignment made while the game ran must not relabel the capture.
+            explicit = bool(run.get('session_id'))
+            hist.append(dict(run,
+                             fp=run.get('fp', '') if explicit else (e.get('fp', '') if newer else ''),
+                             profile=run.get('profile') if explicit else (e.get('profile') if newer else None)))
             hist.sort(key=lambda r: r.get("mtime") or 0)
             del hist[:-limit]
             return True

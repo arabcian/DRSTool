@@ -131,6 +131,10 @@ class SettingsManager(QObject):
         return {n: resolve_layers(self._profiles, n) if isinstance(p, dict) else p
                 for n, p in self._profiles.items()}
 
+    def get_raw_profiles(self) -> Dict[str, Dict]:
+        """Original (unmerged) layers for tracing per-key provenance."""
+        return json.loads(json.dumps(self._profiles))
+
     def get_base(self, name: str) -> Optional[str]:
         p = self._profiles.get(name)
         return p.get("base") if isinstance(p, dict) else None

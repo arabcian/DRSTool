@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from drstool_core.provenance import inspect_environment, source_chain
+
 from .catalog_data import ALL_ENV_VARS
 from .lint import _on
 from .theme import T
@@ -178,8 +180,10 @@ class LiveProcessWidget(QWidget):
         self._sum.setWordWrap(True)
         self._sum.setStyleSheet(f"color:{T['text2']}; font-size:12px;")
         lay.addWidget(self._sum)
-        self._env = QTableWidget(0, 4)
-        self._env.setHorizontalHeaderLabels(["Variable", "DRSTool", "Process", ""])
+        self._env = QTableWidget(0, 5)
+        self._env.setHorizontalHeaderLabels(["Variable", "Profile / source", "Expected", "Process", "Status"])
+        for col, width in enumerate((185, 200, 160, 160)):
+            self._env.setColumnWidth(col, width)
         self._mod = QTableWidget(0, 3)
         self._mod.setHorizontalHeaderLabels(["Component", "File", "Origin"])
         for t, stretch in ((self._env, 1), (self._mod, 1)):
@@ -219,40 +223,41 @@ class LiveProcessWidget(QWidget):
         pid = it.data(Qt.UserRole)
         w = self.window()
         exp = w.collect_launch_payload().get("env", {}) if hasattr(w, "collect_launch_payload") else {}
+        read_error = ''
         try:
             env = read_proc_environ(pid)
             mods = read_proc_modules(pid)
         except OSError as ex:
-            self._sum.setText(f"⚠ cannot read process {pid}: {ex}")
-            return
+            env, mods = None, []
+            read_error = str(ex)
         t = self._env
         t.setRowCount(0)
-        ok = bad = 0
-        names = set(exp)
-        known = {e.name for e in ALL_ENV_VARS}
-        extra = sorted(k for k in env if k in known and k not in names)
-        for k in sorted(exp) + extra:
+        sm = getattr(w, 'settings_manager', None)
+        profile = sm.get_current_profile() if sm is not None else None
+        origins = source_chain(sm.get_raw_profiles(), profile) if profile else {}
+        known = tuple(e.name for e in ALL_ENV_VARS)
+        rows = inspect_environment(exp, env, sources=origins, known_keys=known)
+        ok = sum(r['status'] == 'configured' for r in rows)
+        bad = sum(r['status'] in ('absent', 'overridden') for r in rows)
+        colors = {'configured': T['accent'], 'absent': T['danger'],
+                  'overridden': T['warn'], 'inherited': T['muted'],
+                  'unverifiable': T['muted']}
+        for row in rows:
             r = t.rowCount()
             t.insertRow(r)
-            want, got = exp.get(k), env.get(k)
-            if want is None:
-                st, col = "process only", T["muted"]
-            elif got is None:
-                st, col = "✗ missing", T["danger"]
-                bad += 1
-            elif str(got) != str(want):
-                st, col = "≠ differs", T["warn"]
-                bad += 1
-            else:
-                st, col = "✔", T["accent"]
-                ok += 1
-            for c, txt in enumerate((k, "" if want is None else str(want), "" if got is None else str(got), st)):
+            origin = ' → '.join(row['source'])
+            for c, txt in enumerate((row['key'], origin, row['expected'], row['actual'], row['status'])):
                 cell = QTableWidgetItem(txt)
-                if c == 3:
-                    cell.setForeground(QColor(col))
+                cell.setToolTip(origin if c == 1 else txt)
+                if c == 4:
+                    cell.setForeground(QColor(colors[row['status']]))
                 t.setItem(r, c, cell)
         m = self._mod
         m.setRowCount(0)
+        if read_error:
+            self._sum.setText(f"⚠ pid {pid}: /proc unavailable ({read_error}). "
+                              "Configured values are unverifiable, not necessarily missing.")
+            return
         found = {}
         for path in mods:
             for label, rx in _MOD_RULES:
@@ -282,5 +287,7 @@ class LiveProcessWidget(QWidget):
                              + (f" — not mentioned: {', '.join(missing[:6])}" if missing else "") + ".")
         if _on(exp, "MANGOHUD") and "MangoHud" not in found:
             notes.append("⚠ MANGOHUD is set but libMangoHud is not loaded.")
-        self._sum.setText(f"pid {pid}: {ok} variable(s) match, {bad} do not. "
-                          f"{len(found)} component group(s) loaded. " + " ".join(notes))
+        self._sum.setText(f"pid {pid}: {ok} variable(s) match, {bad} absent/overridden. "
+                          f"{len(found)} component group(s) loaded. "
+                          "Profile → launcher → process is inferred from configured values and /proc; "
+                          "the exact stage that changed a variable cannot be proven. " + " ".join(notes))
