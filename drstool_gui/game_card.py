@@ -16,8 +16,8 @@ from typing import Dict, List, Optional
 from PySide6.QtCore import QSettings, Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QInputDialog, QLineEdit, QListWidget, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
+    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
+    QInputDialog, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
     QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
@@ -25,6 +25,10 @@ from PySide6.QtWidgets import (
 from drstool_core import game_info
 from drstool_core.performance_history import trend_report
 from drstool_core.session_recorder import SessionStore
+from drstool_core.launch_preflight import evaluate as evaluate_preflight
+from drstool_core.pacing_advisor import advise as evaluate_pacing
+from drstool_core.compatibility import assess as evaluate_compatibility
+from .state import state_from_profile, state_payload
 
 from .base import _CORE_ERR, APP_ID, game_scan, winetricks
 from .dll_manager import detect_installed, PD_COMPONENTS, read_prefix_manifest
@@ -561,6 +565,12 @@ class GameCardWidget(QWidget):
         self.t_ft.add_button("Compare runs…", self._compare_performance, "ghost",
                              "Compare repeated captures grouped by profile, scene and runtime")
 
+        self.t_advisor = _Tile("Launch advisor")
+        self.t_advisor.set("Read-only checks", "Run the preflight, pacing and component-version checks without changing game settings.")
+        self.t_advisor.add_button("Preflight", self._advice_preflight, "default")
+        self.t_advisor.add_button("Pacing…", self._advice_pacing, "ghost")
+        self.t_advisor.add_button("Versions…", self._advice_versions, "ghost")
+
         self.t_sessions = _Tile("Recorded sessions")
         self.t_sessions.add_button("Recent sessions…", self._show_sessions, "ghost",
                                    "Read-only session history created by drstool --record")
@@ -587,7 +597,7 @@ class GameCardWidget(QWidget):
                                               "Download the ProtonDB summary (network)")
         self.t_pdb.add_button("Game hints", self._open_hints, "ghost")
 
-        self._tiles = [self.t_profile, self.t_runtime, self.t_dlls, self.t_ft,
+        self._tiles = [self.t_profile, self.t_advisor, self.t_runtime, self.t_dlls, self.t_ft,
                        self.t_sessions, self.t_log, self.t_pdb]
         self._grid = QGridLayout()
         self._grid.setHorizontalSpacing(12)
@@ -687,6 +697,143 @@ class GameCardWidget(QWidget):
             self._auto_pdb()
 
     # ── tiles ───────────────────────────────────────────────────────────────
+    def _advice_payload(self):
+        """Use the game's *linked* profile, not whatever happens to be in the editor."""
+        if not self.game:
+            return None
+        name = self.link().get('profile')
+        prof = self.sm.get_profiles().get(name) if name else None
+        if not isinstance(prof, dict):
+            QMessageBox.information(self, 'Launch advisor',
+                                    'Link a saved profile to this game before running the checks.')
+            return None
+        return state_payload(state_from_profile(prof))
+
+    def _advice_show(self, title: str, report: str):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(760, 520)
+        layout = QVBoxLayout(dialog)
+        view = QPlainTextEdit(dialog)
+        view.setReadOnly(True)
+        view.setPlainText(report)
+        layout.addWidget(view)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close, parent=dialog)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
+
+    def _advice_preflight(self):
+        payload = self._advice_payload()
+        if payload is None:
+            return
+        rt = self._info.get('runtime') or {}
+        r = evaluate_preflight(payload, prefix=str(self.game.prefix or ''), runtime=rt)
+        lines = [f'Launch preflight: {r["status"]}',
+                 'No launch command is supplied by the game card; launcher executable is unverified.',
+                 'Checks never alter system or game files.', '']
+        for issue in r['findings']:
+            lines += [f'[{issue["severity"].upper()}] {issue["code"]}: {issue["message"]}',
+                      f'  Evidence: {issue["evidence"]}', f'  Verify: {issue["verify"]}', '']
+        self._advice_show('Game launch preflight', '\n'.join(lines))
+
+    def _advice_pacing(self):
+        payload = self._advice_payload()
+        if payload is None:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle('VRR / MFG / frame pacing advisor')
+        dialog.resize(760, 620)
+        layout = QVBoxLayout(dialog)
+        note = QLabel('Optional measured values: leave fields empty if unknown. '
+                      'No changes are applied. Base FPS means measured real rendered frames, not output FPS.')
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        form = QFormLayout()
+        edits = {}
+        for key, label in (('base_fps', 'Measured base FPS'), ('refresh_hz', 'Panel refresh (Hz)'),
+                           ('vrr_min', 'VRR min (Hz)'), ('vrr_max', 'VRR max (Hz)')):
+            edit = QLineEdit(dialog)
+            edit.setPlaceholderText('Unknown')
+            edits[key] = edit
+            form.addRow(label, edit)
+        mode = QComboBox(dialog)
+        mode.addItems(['Unknown', 'FIFO_KHR', 'FIFO_LATEST_READY_KHR', 'MAILBOX_KHR',
+                       'IMMEDIATE_KHR', 'FIFO_RELAXED_KHR'])
+        form.addRow('Observed swapchain present mode', mode)
+        layout.addLayout(form)
+        view = QPlainTextEdit(dialog)
+        view.setReadOnly(True)
+        layout.addWidget(view, 1)
+
+        def calculate():
+            def number(key):
+                value = edits[key].text().strip()
+                if not value:
+                    return None
+                try:
+                    return float(value)
+                except ValueError:
+                    return float('nan')
+            kwargs = {key: number(key) for key in edits}
+            r = evaluate_pacing(payload, **kwargs, present_mode=mode.currentText()
+                                if mode.currentIndex() else '')
+            lines = ['Read-only pacing report', '', 'Configured limiters: '
+                     + str(next((x['value'] for x in r['observations']
+                                 if x['key'] == 'configured_caps'), {})), '']
+            for item in r['findings']:
+                lines += [f'[{item["severity"].upper()}] {item["code"]}: {item["message"]}', '']
+            estimate = next((x['value'] for x in r['observations']
+                             if x['key'] == 'estimated_display_fps'), None)
+            if estimate is not None:
+                lines += [f'Hypothetical output: {estimate:.1f} FPS (not a measurement)']
+            view.setPlainText('\n'.join(lines))
+        actions = QHBoxLayout()
+        run = QPushButton('Analyze', dialog)
+        run.clicked.connect(calculate)
+        actions.addWidget(run)
+        actions.addStretch(1)
+        close = QPushButton('Close', dialog)
+        close.clicked.connect(dialog.reject)
+        actions.addWidget(close)
+        layout.addLayout(actions)
+        calculate()
+        dialog.exec()
+
+    def _advice_versions(self):
+        payload = self._advice_payload()
+        if payload is None:
+            return
+        dxvk, ok = QInputDialog.getText(self, 'DXVK version',
+                                       'Known DXVK version (e.g. 2.7 or 3.0); leave empty if unknown:')
+        if not ok:
+            return
+        build, ok = QInputDialog.getItem(self, 'DXVK build origin',
+                                         'Identify build only if known (forks are not upstream):',
+                                         ['unknown', 'upstream', 'fork'], 0, False)
+        if not ok:
+            return
+        proton, ok = QInputDialog.getText(self, 'Proton version',
+                                         'Known Proton version (optional):')
+        if not ok:
+            return
+        proton_build = 'unknown'
+        if proton:
+            proton_build, ok = QInputDialog.getItem(self, 'Proton origin', 'Build origin:',
+                                                     ['unknown', 'upstream', 'fork'], 0, False)
+            if not ok:
+                return
+        r = evaluate_compatibility(payload,
+                                   versions={'dxvk': dxvk, 'proton': proton},
+                                   builds={'dxvk': build, 'proton': proton_build})
+        lines = [f'Version compatibility: {r["summary"]}',
+                 'Evidence: built-in catalog, not a live upstream check.',
+                 'Unknown means unverified, NOT supported or unsupported.', '']
+        for item in r['items']:
+            lines += [f'[{item["status"].upper()}] {item["key"]}: {item["reason"]}',
+                      f'  Evidence: {item.get("source") or "no version metadata"}', '']
+        self._advice_show('Version-aware profile settings', '\n'.join(lines))
+
     def _render_profile(self, *_):
         if self.game is None:
             return

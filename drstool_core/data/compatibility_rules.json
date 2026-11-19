@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "description": "Conservative metadata derived from DRSTool's bundled env_vars.json; not online verified.",
+  "env": {
+    "DXVK_FRAME_RATE": {
+      "component": "dxvk",
+      "removed_upstream_at": "3.0",
+      "supported_upstream_through": "2.7",
+      "evidence": "env_vars.json: DXVK_FRAME_RATE description",
+      "note": "Forks may retain support; no claim is made for unknown forks or intervening versions."
+    },
+    "DXVK_STATE_CACHE": {
+      "component": "dxvk",
+      "evidence": "env_vars.json: DXVK_STATE_CACHE description",
+      "note": "Legacy flag; catalog says modern upstream no longer uses state cache, but provides no exact removal version."
+    },
+    "DXVK_STATE_CACHE_PATH": {
+      "component": "dxvk",
+      "evidence": "env_vars.json: DXVK_STATE_CACHE_PATH description",
+      "note": "Legacy state-cache path; no verified removal boundary in bundled metadata."
+    },
+    "DXVK_ASYNC": {
+      "component": "dxvk",
+      "fork_only": true,
+      "evidence": "env_vars.json: DXVK_ASYNC description / linter fork note",
+      "note": "DXVK-async fork-specific, not upstream DXVK."
+    },
+    "PROTON_DXVK_LLASYNC": {
+      "component": "dxvk",
+      "fork_only": true,
+      "evidence": "lint.py: async-gpl rule",
+      "note": "Requires a compatible Proton/DXVK fork; 'fork' alone does not prove it is implemented."
+    },
+    "DXVK_FRAME_PACE": {
+      "component": "dxvk",
+      "fork_only": true,
+      "evidence": "env_vars.json: DXVK_FRAME_PACE description",
+      "note": "Specific to dxvk-low-latency or DXVK-Sarek, with different supported modes."
+    },
+    "PROTON_DXVK_LOWLATENCY": {
+      "component": "proton",
+      "fork_only": true,
+      "evidence": "env_vars.json: PROTON_DXVK_LOWLATENCY description",
+      "note": "Bundled catalog says proton-cachyos exposes this switch; other forks need checking."
+    }
+  }
+}

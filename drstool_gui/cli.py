@@ -62,6 +62,9 @@ def _cli_parse(argv):
                    help="--import-share: also keep variables flagged as sensitive (LD_PRELOAD, layer paths, …)")
     g.add_argument("--record", metavar="PROFILE", help="run and record a session: --record PROFILE "
                                                     "[--game-key steam:ID] [--scene LABEL] [--capture FILE] -- COMMAND")
+    g.add_argument("--preflight", metavar="PROFILE", help="read-only launch preflight: --preflight PROFILE -- COMMAND")
+    g.add_argument("--pacing-report", metavar="PROFILE", help="read-only VRR/MFG pacing report")
+    g.add_argument("--compat-check", metavar="PROFILE", help="read-only version-aware setting report")
     g.add_argument("--sessions", action="store_true", help="show recorded sessions (JSON)")
     g.add_argument("--perf-report", metavar="GAME_KEY", help="show recorded performance groups (JSON)")
     g.add_argument("--run", metavar="PROFILE", help="run a command with a saved profile applied: "
@@ -205,10 +208,68 @@ def _report_cli(argv) -> int:
     return 2
 
 
+def _advisor_cli(argv) -> int:
+    """Read-only F02/F04/F09 reports; no QApplication, no game execution."""
+    import argparse
+    from drstool_core.launch_preflight import evaluate as preflight
+    from drstool_core.pacing_advisor import advise as pacing
+    from drstool_core.compatibility import assess as compatibility
+
+    mode = argv[0]
+    parser = argparse.ArgumentParser(prog=f'drstool {mode}', allow_abbrev=False)
+    parser.add_argument('profile')
+    parser.add_argument('--prefix', default='', help='optional Wine prefix for launch checks')
+    parser.add_argument('--base-fps', type=float, default=None, help='measured real frames/s (not output FPS)')
+    parser.add_argument('--refresh', type=float, default=None, help='display refresh Hz (manual)')
+    parser.add_argument('--vrr-min', type=float, default=None, help='VRR lower bound (manual)')
+    parser.add_argument('--vrr-max', type=float, default=None, help='VRR upper bound (manual)')
+    parser.add_argument('--present-mode', default='', help='actual present mode (manual observation)')
+    parser.add_argument('--dxvk-version', default='', help='DXVK version, if known')
+    parser.add_argument('--dxvk-build', choices=('upstream', 'fork', 'unknown'), default='unknown')
+    parser.add_argument('--proton-version', default='', help='Proton version, if known')
+    parser.add_argument('--proton-build', choices=('upstream', 'fork', 'unknown'), default='unknown')
+    parser.add_argument('--strict', action='store_true', help='return 1 for warnings too (preflight)')
+    if '--' in argv:
+        cut = argv.index('--')
+        opts = parser.parse_args(argv[1:cut])
+        command = argv[cut + 1:]
+    else:
+        opts = parser.parse_args(argv[1:])
+        command = []
+    if mode != '--preflight' and command:
+        parser.error('command after -- is only valid for --preflight')
+    if command and not command[0]:
+        parser.error('empty launch command')
+    profiles = SettingsManager().get_profiles()
+    name = _resolve_profile(profiles, opts.profile,
+                            lambda msg: print(f'drstool: {msg}', file=sys.stderr))
+    if not name:
+        return 2
+    payload = state_payload(state_from_profile(profiles[name]))
+    if mode == '--preflight':
+        # The executable is the game; gamescope wrapper is checked separately.
+        report = preflight(payload, command=command, prefix=opts.prefix)
+        failure = report['counts']['error'] > 0 or (opts.strict and report['counts']['warn'] > 0)
+    elif mode == '--pacing-report':
+        report = pacing(payload, base_fps=opts.base_fps, refresh_hz=opts.refresh,
+                        vrr_min=opts.vrr_min, vrr_max=opts.vrr_max,
+                        present_mode=opts.present_mode)
+        failure = False
+    else:
+        report = compatibility(payload,
+                               versions={'dxvk': opts.dxvk_version, 'proton': opts.proton_version},
+                               builds={'dxvk': opts.dxvk_build, 'proton': opts.proton_build})
+        failure = bool(report['summary']['unsupported'])
+    print(json.dumps({'profile': name, 'mode': mode, **report}, ensure_ascii=False, indent=2))
+    return 1 if failure else 0
+
+
 def cli_exec(argv) -> None:
     """Non-GUI command paths; --run continues to use execvpe unchanged."""
     if not argv:
         return
+    if argv[0] in ('--preflight', '--pacing-report', '--compat-check'):
+        sys.exit(_advisor_cli(argv))
     if argv[0] in ('--sessions', '--perf-report'):
         sys.exit(_report_cli(argv))
     if argv[0] == '--record':

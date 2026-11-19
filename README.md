@@ -8,6 +8,25 @@ Turkish version: [README.tr.md](README.tr.md)
 
 ![DRSTool](assets/drstool.png)
 
+## Launch advisor: preflight, VRR/MFG pacing and version compatibility (F02/F04/F09)
+
+The Games card now includes a **Launch advisor** tile with three read-only tools.
+Checks are deliberately conservative: an unknown runtime is not reported as an
+unsupported configuration, and no settings are written automatically. Reports
+also work from the CLI as JSON:
+
+```bash
+drstool --preflight "Gaming" -- /path/to/game-launcher
+drstool --pacing-report "Gaming" --base-fps 65 --refresh 240 --vrr-min 72 --vrr-max 240
+drstool --compat-check "Gaming" --dxvk-version 3.0 --dxvk-build upstream
+```
+
+`--preflight` exits 1 for confirmed blocking issues, or for warnings with
+`--strict`. `--compat-check` exits 1 when a setting is explicitly incompatible
+with the supplied upstream/fork metadata. `--pacing-report` never changes FLM or
+GPU configuration. For conservative reasoning, MFG and display FPS are not
+assumed to match an FPS cap. See `GELISTIRMELER_F02_F04_F09_TR.md` for details.
+
 ## Components
 
 | Component | Path | Description |

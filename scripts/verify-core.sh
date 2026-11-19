@@ -8,5 +8,6 @@ python -m unittest discover -s tests -p test_core.py -v
 python -m unittest discover -s tests -p test_new_features.py -v
 python -m unittest discover -s tests -p test_integration_plan.py -v
 python -m unittest discover -s tests -p test_perf_regressions.py -v
+python -m unittest discover -s tests -p test_launch_advisors.py -v
 bash lutris-game-tune-main/tests/run-tests.sh
 gcc -Wall -Wextra -Werror -fsyntax-only lutris-game-tune-main/lutris-game-tune-wrapper.c
