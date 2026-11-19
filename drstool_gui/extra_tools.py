@@ -16,6 +16,7 @@ from .lgtune import LgtuneWidget
 from .live_process import LiveProcessWidget
 from .logs import LogViewerWidget
 from .overlay_builders import MangoHudBuilder, VkBasaltBuilder
+from .recovery_center_ui import RecoveryCenterWidget
 from .theme import SCROLLABLE_CONTROL_QSS, T
 from .tool_manager import ToolManagerWidget
 from .upstream_drift import UpstreamDriftWidget
@@ -82,6 +83,7 @@ QTabBar::tab:hover:!selected {{ color:{T['text2']}; border-bottom:2px solid {T['
         tabs.addTab(self.linter, "Linter")
         lazy("System", "sysinfo", SystemInfoWidget)
         lazy("Diagnostics", "diagnostics", DiagnosticsWidget)
+        lazy("Recovery Center", "recovery", RecoveryCenterWidget)
         lazy("Tool Manager", "toolmgr", ToolManagerWidget, scrolled)
         lazy("MangoHud", "mangohud", MangoHudBuilder)
         lazy("vkBasalt", "vkbasalt", VkBasaltBuilder)

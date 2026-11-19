@@ -67,6 +67,9 @@ def _cli_parse(argv):
     g.add_argument("--compat-check", metavar="PROFILE", help="read-only version-aware setting report")
     g.add_argument("--sessions", action="store_true", help="show recorded sessions (JSON)")
     g.add_argument("--perf-report", metavar="GAME_KEY", help="show recorded performance groups (JSON)")
+    g.add_argument("--kernel-events", metavar="GAME_KEY", help="F06: read-only session/kernel correlation JSON")
+    g.add_argument("--recovery-list", action="store_true", help="F08: list known recoverable backups (JSON)")
+    g.add_argument("--game-report", metavar="GAME_KEY", help="F11: export private per-game diagnostic ZIP")
     g.add_argument("--run", metavar="PROFILE", help="run a command with a saved profile applied: "
                                                     "drstool --run PROFILE -- COMMAND [ARG…] "
                                                     "(e.g. as Steam launch options: drstool --run NAME -- %%command%%)")
@@ -264,12 +267,68 @@ def _advisor_cli(argv) -> int:
     return 1 if failure else 0
 
 
+def _incident_cli(argv) -> int:
+    """F06/F08/F11 commands. Never implicitly uploads, restores, or invokes sudo."""
+    import argparse
+    from drstool_core.kernel_events import correlate
+    from drstool_core.recovery_center import inventory
+    from drstool_core.game_report import export_game
+    from drstool_core.session_recorder import SessionStore
+
+    mode = argv[0]
+    parser = argparse.ArgumentParser(prog=f'drstool {mode}', allow_abbrev=False)
+    if mode != '--recovery-list':
+        parser.add_argument('game_key', help='steam:ID, lutris:ID, heroic:ID, bottles:ID or custom:ID')
+    if mode == '--kernel-events':
+        parser.add_argument('--session-id', default='')
+        parser.add_argument('--before', type=int, default=30, help='seconds before session, max 300')
+        parser.add_argument('--after', type=int, default=30, help='seconds after session, max 300')
+    if mode == '--recovery-list':
+        parser.add_argument('--game-key', default='')
+        parser.add_argument('--prefix', type=Path)
+    if mode == '--game-report':
+        parser.add_argument('--out', type=Path, help='destination ZIP; must not exist')
+        parser.add_argument('--include-kernel', action='store_true', help='read system journal as current user')
+        parser.add_argument('--log', type=Path, help='opt-in, redacted last 128 KiB of local log')
+        parser.add_argument('--session-id', default='')
+    opts = parser.parse_args(argv[1:])
+    try:
+        if mode == '--recovery-list':
+            report = inventory(game_key=opts.game_key, prefix=opts.prefix)
+            print(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False))
+            return 0
+        if mode == '--kernel-events':
+            store = SessionStore()
+            if opts.session_id:
+                selected = store.read(opts.session_id)
+                if selected.get('game_key') != opts.game_key:
+                    raise ValueError('session game key does not match')
+            else:
+                recent = store.recent(game_key=opts.game_key, limit=1)
+                if not recent:
+                    print(json.dumps({'status': 'no-session', 'events': [], 'count': 0}, indent=2))
+                    return 1
+                selected = recent[0]
+            report = correlate(selected, before_seconds=opts.before, after_seconds=opts.after)
+            print(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False))
+            return 0 if report['status'] == 'ok' else 1
+        result = export_game(opts.game_key, output=opts.out, include_kernel=opts.include_kernel,
+                             log_file=opts.log, session_id=opts.session_id)
+        print(str(result))
+        return 0
+    except (OSError, ValueError, TypeError, KeyError) as ex:
+        print(f'drstool: {mode}: {ex}', file=sys.stderr)
+        return 2
+
+
 def cli_exec(argv) -> None:
     """Non-GUI command paths; --run continues to use execvpe unchanged."""
     if not argv:
         return
     if argv[0] in ('--preflight', '--pacing-report', '--compat-check'):
         sys.exit(_advisor_cli(argv))
+    if argv[0] in ('--kernel-events', '--recovery-list', '--game-report'):
+        sys.exit(_incident_cli(argv))
     if argv[0] in ('--sessions', '--perf-report'):
         sys.exit(_report_cli(argv))
     if argv[0] == '--record':

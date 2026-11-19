@@ -302,3 +302,12 @@ MIT. See [LICENSE](LICENSE).
 ## Disclaimer
 
 This project was developed with AI assistance. It is provided without warranty. See [DISCLAIMER.md](DISCLAIMER.md) for the full text.
+
+## DRSTool 2026.11.19.3 — Game diagnostics and recovery
+
+- `drstool --kernel-events steam:1091500`: read-only Xid/AER/OOM kernel events correlated with a recorded game session (temporal correlation only).
+- `drstool --recovery-list`: inspect existing DRSTool profile, DLL, prefix and tool recovery records; this does **not** restore or mutate files.
+- `drstool --game-report steam:1091500 --out ~/game-diagnosis.zip`: create a private, local diagnostic ZIP. Journal entries and optional game logs require explicit `--include-kernel` / `--log` flags.
+- GUI: **Games → Recorded sessions** for kernel events and diagnostic export; **Extra Tools → Recovery Center** for inventory.
+
+See [GELISTIRMELER_F06_F08_F11_TR.md](GELISTIRMELER_F06_F08_F11_TR.md) for implementation details, privacy and validation limitations.

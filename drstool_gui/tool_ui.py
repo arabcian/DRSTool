@@ -64,6 +64,8 @@ TOOL_NAV = [
     ("Build & install", "Tool Manager", "\u2193", "Download Proton / Wine / DXVK / vkd3d"),
     ("Diagnose", "Linter", "\u2713", "Contradictions in the current config"),
     ("Diagnose", "System", "\u25a3", "Driver, session, Vulkan extensions"),
+    ("Diagnose", "Diagnostics", "\u2695", "Read-only platform and transaction status"),
+    ("Diagnose", "Recovery Center", "\u21ba", "Inventory and safe recovery workflows"),
     ("Diagnose", "Live process", "\u25c9", "Did the env / DLLs reach the game?"),
     ("Diagnose", "Logs", "\u2261", "Proton / DXVK logs, known failures"),
     ("Diagnose", "Frametime", "\u223f", "MangoHud / FLM CSV, A/B compare"),

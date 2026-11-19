@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
 from drstool_core import game_info
 from drstool_core.performance_history import trend_report
 from drstool_core.session_recorder import SessionStore
+from drstool_core.kernel_events import correlate as correlate_kernel_events
+from drstool_core.game_report import export_game
 from drstool_core.launch_preflight import evaluate as evaluate_preflight
 from drstool_core.pacing_advisor import advise as evaluate_pacing
 from drstool_core.compatibility import assess as evaluate_compatibility
@@ -152,6 +154,38 @@ class _AppidFindWorker(QThread):
             self.done.emit(_gh.steam_appid_search(self._name), "")
         except Exception as ex:           # noqa: BLE001
             self.done.emit([], str(ex))
+
+
+class _KernelEventsWorker(QThread):
+    done = Signal(str, object)
+
+    def __init__(self, game_key: str, session: dict, parent=None):
+        super().__init__(parent)
+        self.key, self.session = game_key, dict(session)
+
+    def run(self):
+        try:
+            result = correlate_kernel_events(self.session)
+        except (OSError, ValueError) as ex:
+            result = {'status': 'unavailable', 'reason': str(ex), 'events': [], 'count': 0}
+        self.done.emit(self.key, result)
+
+
+class _GameReportWorker(QThread):
+    done = Signal(str, str, str)
+
+    def __init__(self, game_key: str, dest: Path, include_kernel: bool, log_file: Optional[Path], parent=None):
+        super().__init__(parent)
+        self.key, self.dest = game_key, dest
+        self.include_kernel, self.log_file = include_kernel, log_file
+
+    def run(self):
+        try:
+            result = export_game(self.key, output=self.dest, include_kernel=self.include_kernel,
+                                 log_file=self.log_file)
+            self.done.emit(self.key, str(result), '')
+        except (OSError, ValueError, TypeError) as ex:
+            self.done.emit(self.key, '', str(ex))
 
 
 class _CardWorker(QThread):
@@ -574,6 +608,11 @@ class GameCardWidget(QWidget):
         self.t_sessions = _Tile("Recorded sessions")
         self.t_sessions.add_button("Recent sessions…", self._show_sessions, "ghost",
                                    "Read-only session history created by drstool --record")
+        self.t_sessions.add_button("Kernel events…", self._show_kernel_events, "ghost",
+                                   "Correlate visible kernel errors with the latest recorded session (read-only)")
+        self.t_sessions.add_button("Export diagnosis…", self._export_diagnosis, "default",
+                                   "Write a private diagnostic ZIP for this game; log and journal are opt-in")
+        self.t_sessions.add_button("Recovery Center", lambda: self._open_tool("Recovery Center"), "ghost")
 
         self.t_log = _Tile("Last log errors")
         self._fix_btn = self.t_log.add_button("", lambda: self._open_tricks(self._fixes()), "primary")
@@ -1015,6 +1054,87 @@ class GameCardWidget(QWidget):
                          + f"\n  profile: {e.get('profile')} [{str(e.get('profile_fp') or '')[:8]}]"
                          + f"\n  id: {e.get('id')}")
         QMessageBox.information(self, 'Game sessions', '\n\n'.join(lines))
+
+    def _show_kernel_events(self):
+        if self.game is None:
+            return
+        ss = self._info.get('sessions') or []
+        if not isinstance(ss, list) or not ss:
+            QMessageBox.information(self, 'Kernel events',
+                                    'No recorded game session. Start with drstool --record to associate events.')
+            return
+        worker = _KernelEventsWorker(self.game.key, ss[0], self)
+        self._threads = [t for t in self._threads if t.isRunning()] + [worker]
+        worker.done.connect(self._on_kernel_events)
+        TASKS.track(worker, f'Kernel events: {self.game.name}')
+        worker.start()
+
+    def _on_kernel_events(self, game_key: str, report: dict):
+        if self.game is None or self.game.key != game_key:
+            return
+        if report['status'] != 'ok':
+            QMessageBox.warning(self, 'Kernel events',
+                                'Kernel events could not be read: ' + str(report.get('reason', 'unknown')))
+            return
+        lines = ['Temporal correlation only — not proof that this game caused an event.', '']
+        for e in report.get('events', [])[:50]:
+            lines.append(f"{datetime.fromtimestamp(e['timestamp']):%H:%M:%S} "
+                         f"[{e['relation']}] {e['category']} "
+                         + (f"Xid {e['xid']} " if e.get('xid') is not None else '')
+                         + str(e['message'])[:250])
+        if not report['events']:
+            lines.append('No matching events in the available journal window.')
+        QMessageBox.information(self, 'Kernel event correlation', '\n'.join(lines))
+
+    def _export_diagnosis(self):
+        if self.game is None:
+            return
+        from drstool_core.game_report import default_report_path
+        suggested = default_report_path(game_key=self.game.key)
+        path, _ = QFileDialog.getSaveFileName(self, 'Export game diagnostic report',
+                                              str(Path.home() / suggested.name),
+                                              'ZIP archives (*.zip)')
+        if not path:
+            return
+        if not path.endswith('.zip'):
+            path += '.zip'
+        if Path(path).exists():
+            QMessageBox.warning(self, 'Diagnostic report', 'Destination already exists. Choose a new name.')
+            return
+        ask = QMessageBox.question(self, 'Include kernel events?',
+                                   'Read kernel errors from the system journal around the last recorded session? '
+                                   'This is optional; entries can contain hardware identifiers.',
+                                   QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                                   QMessageBox.No)
+        if ask == QMessageBox.Cancel:
+            return
+        include_kernel = ask == QMessageBox.Yes
+        log_path = (self._info.get('log') or {}).get('path')
+        include_log = False
+        if log_path:
+            ask_log = QMessageBox.question(self, 'Include game log?',
+                                           'Include a redacted excerpt (up to 128 KiB) of the latest game log? '
+                                           'Review the ZIP before sharing.',
+                                           QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                                           QMessageBox.No)
+            if ask_log == QMessageBox.Cancel:
+                return
+            include_log = ask_log == QMessageBox.Yes
+        worker = _GameReportWorker(self.game.key, Path(path), include_kernel,
+                                   Path(log_path) if include_log else None, self)
+        self._threads = [t for t in self._threads if t.isRunning()] + [worker]
+        worker.done.connect(self._on_diagnosis_exported)
+        TASKS.track(worker, f'Export diagnosis: {self.game.name}')
+        worker.start()
+
+    def _on_diagnosis_exported(self, game_key: str, dest: str, error: str):
+        if self.game is None or self.game.key != game_key:
+            return
+        if error:
+            QMessageBox.warning(self, 'Diagnostic report', f'Export failed: {error}')
+        else:
+            QMessageBox.information(self, 'Diagnostic report',
+                                    f'Report saved to:\n{dest}\n\nReview its contents before sharing.')
 
     def _compare_performance(self):
         if self.game is None:

@@ -275,3 +275,9 @@ MIT. Ayrıntılar için [LICENSE](LICENSE).
 ## Sorumluluk reddi
 
 Bu proje yapay zekâ desteğiyle geliştirilmiştir ve garanti verilmeden sunulmaktadır. Tam metin için [DISCLAIMER.md](DISCLAIMER.md) dosyasına bakın.
+
+## Oyun tanı raporları ve kurtarma envanteri (2026.11.19.3)
+
+Kayıtlı oyun oturumlarına yakın NVIDIA Xid/AER/OOM olaylarını görmek için `drstool --kernel-events steam:1091500`, daha önce kaydedilmiş yedekleri salt okunur listelemek için `drstool --recovery-list`, oyun bazlı yerel tanı ZIP'i oluşturmak için `drstool --game-report steam:1091500 --out ~/game-report.zip` kullanılabilir. Kernel olaylarının yakın zamanda görünmesi tek başına nedensellik kanıtı değildir. `--include-kernel` ve `--log` isteğe bağlıdır; raporu başkalarıyla paylaşmadan önce inceleyin.
+
+Arayüzde **Games → Recorded sessions** ve **Extra Tools → Recovery Center** bölümlerinden erişilir. Uygulama ayrıntıları için [GELISTIRMELER_F06_F08_F11_TR.md](GELISTIRMELER_F06_F08_F11_TR.md) dosyasına bakın.

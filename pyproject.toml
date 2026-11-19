@@ -15,10 +15,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "drstool"
-version = "2026.11.19.2"
+version = "2026.11.19.3"
 description = "dxvk-nvapi / NVIDIA DRS profile editor with Proton, DXVK, VKD3D and gamescope tooling"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
 requires-python = ">=3.12"
 authors = [{ name = "arabcian" }]
 dependencies = [

@@ -69,6 +69,10 @@ jobs:
                                'drstool_core/cache_ops.py',
                                'drstool_core/lutris_config_scan.py',
                                'drstool_core/yaml_merge.py',
-                               'drstool_gui/launchers.py'):
+                               'drstool_gui/launchers.py',
+                               'drstool_core/kernel_events.py',
+                               'drstool_core/recovery_center.py',
+                               'drstool_core/game_report.py',
+                               'drstool_gui/recovery_center_ui.py'):
                   assert required in members, f'missing from wheel: {required}'
           PY
