@@ -442,10 +442,10 @@ class CatalogTests(unittest.TestCase):
 
     def test_counts_and_loading(self):
         self.assertEqual(len(catalog.gpu_archs()), 9)
-        self.assertEqual(len(catalog.drs_settings()), 118)
-        self.assertEqual(len(catalog.gamescope_flags()), 66)
-        self.assertEqual(len(catalog.dxvk_config_keys()), 70)
-        self.assertEqual(sum(len(v) for v in catalog.env_var_groups().values()), 303)
+        self.assertEqual(len(catalog.drs_settings()), 119)
+        self.assertEqual(len(catalog.gamescope_flags()), 81)
+        self.assertEqual(len(catalog.dxvk_config_keys()), 114)
+        self.assertEqual(sum(len(v) for v in catalog.env_var_groups().values()), 315)
 
     def test_drs_settings(self):
         sett = catalog.drs_settings()

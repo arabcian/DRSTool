@@ -5,7 +5,7 @@
    "cat": "DXVK",
    "vtype": "flags",
    "default": "",
-   "desc": "In-game HUD overlay. Comma-separated list of elements to display.",
+   "desc": "In-game HUD overlay. Comma-separated list of elements to display. renderlatency, jitter, latencydetails: dxvk-low-latency / dxvk-gplasync-lowlatency only. samplers: DXVK ≤2.6 only (removed in 2.7).",
    "options": [
     "devinfo",
     "fps",
@@ -24,6 +24,9 @@
     "samplers",
     "swvp",
     "latency",
+    "renderlatency",
+    "jitter",
+    "latencydetails",
     "1",
     "full",
     "scale=N",
@@ -160,7 +163,7 @@
    "cat": "DXVK",
    "vtype": "enum",
    "default": "",
-   "desc": "Async shader compilation (unofficial/patched builds). 1 = enable.",
+   "desc": "[dxvk-gplasync-lowlatency] Async pipeline compilation, on by default in that fork; 0 disables, 1 enables (env form of dxvk.enableAsync). Upstream DXVK ignores it.",
    "options": [
     "0",
     "1"
@@ -184,14 +187,6 @@
     "0",
     "1"
    ]
-  },
-  {
-   "name": "DXVK_NUM_COMPILER_THREADS",
-   "cat": "DXVK",
-   "vtype": "int",
-   "default": "0",
-   "desc": "Number of pipeline compiler threads. 0 = use all available CPU cores; a positive number enforces that exact thread count. Some threads are reserved for high-priority work when the graphics pipeline library feature is enabled. Set to 1 to force fully single-threaded shader compilation (deterministic, but slower cold-start compiles).\nNote: upstream DXVK 3.x does not read this variable — use DXVK_CONFIG=\"dxvk.numCompilerThreads = N\" there.",
-   "placeholder": "0 = all cores, or e.g. 1"
   },
   {
    "name": "DXVK_CONFIG_FILE",
@@ -247,7 +242,7 @@
    "cat": "DXVK",
    "vtype": "enum",
    "default": "",
-   "desc": "Set to 0 to disable the driver-level shader cache DXVK enables by default (only checked when no shader dump path is set). Distinct from DXVK_STATE_CACHE, which is DXVK's own pipeline state cache. Mostly a debugging switch — disabling it means every run pays full compilation cost. Syntax: DXVK_SHADER_CACHE=0 %command%",
+   "desc": "Set to 0 to disable DXVK's internal shader cache (enabled by default) (only checked when no shader dump path is set). Distinct from DXVK_STATE_CACHE, which is DXVK's own pipeline state cache. Mostly a debugging switch — disabling it means every run pays full compilation cost. Syntax: DXVK_SHADER_CACHE=0 %command%",
    "options": [
     "0",
     "1"
@@ -328,7 +323,12 @@
     "fail_unsupported_state_template",
     "adreno_7xx_extra_compat",
     "skip_application_workarounds",
-    "force_host_cached"
+    "force_host_cached",
+    "no_descriptor_heap",
+    "no_default_heap_robustness",
+    "descriptor_heap_robustness",
+    "legacy_structurizer",
+    "clear_table_offsets_on_rebind"
    ],
    "placeholder": "e.g. dxr,retain_descriptor_heaps"
   },
@@ -487,33 +487,6 @@
    ]
   },
   {
-   "name": "VKD3D_WORKER_THREAD_COUNT",
-   "cat": "VKD3D-Proton",
-   "vtype": "int",
-   "default": "",
-   "desc": "Number of background worker threads vkd3d-proton uses for shader/pipeline compilation and pipeline-library disk-cache I/O. Fewer threads reduce CPU contention from compile storms on busy many-core systems; more can speed up cold-cache compile bursts at the cost of using more cores at once.",
-   "placeholder": "e.g. 2"
-  },
-  {
-   "name": "VKD3D_PIPELINE_LIBRARY_SIZE",
-   "cat": "VKD3D-Proton",
-   "vtype": "int",
-   "default": "",
-   "desc": "Caps the size (in bytes) of the automatic vkd3d-proton.cache pipeline library vkd3d-proton maintains on disk. Once the cap is hit, older/least-used entries are evicted rather than letting the cache grow without bound.",
-   "placeholder": "e.g. 2147483648 (2 GiB)"
-  },
-  {
-   "name": "VKD3D_PIPELINE_LIBRARY_APP_CACHE_ONLY",
-   "cat": "VKD3D-Proton",
-   "vtype": "enum",
-   "default": "",
-   "desc": "Restrict pipeline caching to whatever the application itself explicitly manages through ID3D12PipelineLibrary, instead of also letting vkd3d-proton silently cache every PSO it sees in its own automatic vkd3d-proton.cache disk cache.",
-   "options": [
-    "0",
-    "1"
-   ]
-  },
-  {
    "name": "VKD3D_SWAPCHAIN_IMAGES",
    "cat": "VKD3D-Proton",
    "vtype": "int",
@@ -656,6 +629,13 @@
    "default": "24",
    "desc": "Size of the descriptor-QA bloom filter buffer, as a power of two (24 = 16 MiB, the default). Only allocated when descriptor QA with sync validation is active; raise it if the QA layer reports collisions. Syntax: VKD3D_BLOOM_BUFFER_SIZE_LOG2=26 %command%",
    "placeholder": "e.g. 24 (log2 of bytes)"
+  },
+  {
+   "name": "VKD3D_APP_DB_PATH",
+   "cat": "VKD3D-Proton",
+   "vtype": "string",
+   "default": "",
+   "desc": "[vkd3d-proton master] Path to an application database file (first line '{vkd3d-proton-app-db v1}') used for game-engine detection, as in vkd3d-proton-app-db-example.txt. Debugging / development."
   }
  ],
  "NV_ENV_VARS": [
@@ -1460,7 +1440,7 @@
    "cat": "Proton",
    "vtype": "enum",
    "default": "",
-   "desc": "Legacy HDR toggle. Retired in current Proton-CachyOS in favour of DXVK_HDR (see the DXVK category), but Valve's stable Proton and most Proton-GE builds still read this name directly. Combine with ENABLE_HDR_WSI if needed.",
+   "desc": "[Proton-GE] Legacy HDR opt-in: current Proton-GE detects HDR per monitor by itself, and =1 no longer forces HDR on Wayland — use PROTON_FORCE_HDR=1 for that (alias PROTON_USE_HDR takes precedence). Still needed for older X11 HDR WSI paths without output feedback. Proton-CachyOS retired it in favour of DXVK_HDR; Valve's Proton 11 does not read it.",
    "options": [
     "0",
     "1"
@@ -1482,7 +1462,7 @@
    "cat": "Proton",
    "vtype": "enum",
    "default": "",
-   "desc": "Enable Wine's native winewayland.drv instead of XWayland/winex11.drv. Experimental — can improve latency and frame pacing and is required for HDR without Gamescope, but currently breaks the Steam Overlay and Steam Input in several builds. Alias: PROTON_USE_WAYLAND.",
+   "desc": "[Proton-GE | Proton-CachyOS — not read by Valve's Proton 11] Enable Wine's native winewayland.drv instead of XWayland/winex11.drv. Experimental — can improve latency and frame pacing and is required for HDR without Gamescope, but currently breaks the Steam Overlay and Steam Input in several builds. Alias: PROTON_USE_WAYLAND.",
    "options": [
     "0",
     "1"
@@ -1701,7 +1681,7 @@
    "cat": "Proton",
    "vtype": "string",
    "default": "",
-   "desc": "Not a documented Proton/Proton-CachyOS variable under this exact spelling. Most likely intended as PROTON_DXVK_LOWLATENCY (low-latency frame pacing) or the now-removed PROTON_DXVK_GPLASYNC (old async-compile patch). Kept here so the typed value is captured, but treat it as unconfirmed.",
+   "desc": "[Proton-CachyOS — removed] Enabled the alternative DXVK with both its low-latency and gplasync parts. Removed together with PROTON_DXVK_GPLASYNC when gplasync was dropped from that DXVK; PROTON_DXVK_LOWLATENCY is the remaining option.",
    "placeholder": "likely meant PROTON_DXVK_LOWLATENCY"
   },
   {
@@ -1709,7 +1689,7 @@
    "cat": "Proton",
    "vtype": "enum",
    "default": "",
-   "desc": "Retired in current Proton-CachyOS with no replacement. Historically toggled an alternate vkd3d-proton heap allocation strategy. Kept here for older builds.",
+   "desc": "[Proton-CachyOS — retired] Enabled vkd3d-proton's descriptor-heap path in older builds. Use VKD3D_CONFIG=descriptor_heap on vkd3d-proton ≤3.1; vkd3d-proton master uses the heap by default.",
    "options": [
     "0",
     "1"
@@ -1731,7 +1711,7 @@
    "cat": "Proton",
    "vtype": "enum",
    "default": "",
-   "desc": "Use SDL for controller input instead of HIDRAW/Steam Input. Can help controller detection issues under winewayland.drv. Alias: PROTON_USE_SDL.",
+   "desc": "[Proton-GE | Proton-CachyOS — not read by Valve's Proton 11] Use SDL for controller input instead of HIDRAW/Steam Input. Can help controller detection issues under winewayland.drv. Alias: PROTON_USE_SDL.",
    "options": [
     "0",
     "1"
@@ -2266,7 +2246,7 @@
    "cat": "Proton",
    "vtype": "enum",
    "default": "",
-   "desc": "[Proton-CachyOS] Use the native winepipewire.drv audio driver (enabled by default). Set 0 to fall back to winepulse.drv.",
+   "desc": "[Proton-CachyOS | Proton-GE (alias PROTON_ENABLE_PIPEWIRE)] Use the native winepipewire.drv audio driver (enabled by default). Set 0 to fall back to winepulse.drv.",
    "options": [
     "0",
     "1"
@@ -2282,6 +2262,172 @@
     "0",
     "1"
    ]
+  },
+  {
+   "name": "PROTON_FORCE_HDR",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "options": [
+    "1"
+   ],
+   "desc": "[Proton-GE] Force HDR on native Wayland even when automatic per-monitor detection would not enable it."
+  },
+  {
+   "name": "PROTON_STREAMLINE_UPGRADE",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "placeholder": "1",
+   "desc": "[Proton-GE] Download a newer NVIDIA Streamline (sl.*.dll) and load it instead of the game's copy, for games whose Streamline is too old for driver DLSS overrides (e.g. DLSS Multi Frame Generation). 1 or a specific version. Not combined with OptiScaler."
+  },
+  {
+   "name": "PROTON_ENABLE_WINEBTH",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "options": [
+    "1"
+   ],
+   "desc": "[Proton-GE] Enable winebth.sys, Wine's Bluetooth driver (off by default). Needed for Bluetooth LE devices such as smart trainers in Zwift or Rouvy. Requires BlueZ."
+  },
+  {
+   "name": "PROTON_STEAMINPUT_FALLBACK",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "options": [
+    "1"
+   ],
+   "desc": "[Proton-GE] Provide an XInput-backed replacement for the Steam Input interface some games require: controller support outside Steam, and a workaround when Steam Input profile switching is unavailable under Wine-Wayland. Native Steam Input stays authoritative when it is active."
+  },
+  {
+   "name": "PROTON_SONY_AUTO_XINPUT",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "options": [
+    "0",
+    "1"
+   ],
+   "desc": "[Proton-GE] Sony controller XInput fallback with a matching Xbox DirectInput VID/PID while native HID stays available; withdrawn for a controller once the game reads its native HID. On by default."
+  },
+  {
+   "name": "PROTON_SONY_DUALSENSE_AS_DUALSHOCK4",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "options": [
+    "1"
+   ],
+   "desc": "[Proton-GE] Expose a DualSense / DualSense Edge as a DualShock 4 v2, for older games with working DS4 but missing or broken DualSense support. Input, rumble, lightbar and feature reports are translated."
+  },
+  {
+   "name": "PROTON_SONY_DUALSENSE_EDGE_AS_DUALSENSE",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "options": [
+    "0",
+    "1"
+   ],
+   "desc": "[Proton-GE] Expose a DualSense Edge as a regular DualSense to games without Edge support. Automatic for Diablo IV (0 disables). Skipped when a Steam Input virtual controller is present."
+  },
+  {
+   "name": "PROTON_SONY_DUALSHOCK4_V2_AS_V1",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "options": [
+    "1"
+   ],
+   "desc": "[Proton-GE] Expose a DualShock 4 v2 as a DualShock 4 v1. With PROTON_SONY_DUALSENSE_AS_DUALSHOCK4=1 a DualSense is exposed directly as DS4 v1."
+  },
+  {
+   "name": "PROTON_STEAM_INPUT_XBOX_PROMPTS",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "options": [
+    "1"
+   ],
+   "desc": "[Proton-GE] Report a Steam Deck / Steam Controller to the game as an Xbox One controller through Steam Input, for games that otherwise show keyboard prompts. Automatic for Rune Factory 5."
+  },
+  {
+   "name": "PROTON_MIDI_SOUNDFONT",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "placeholder": "/path/to/font.sf2",
+   "desc": "[Proton-GE] Absolute path to an uncompressed .sf2 sound font for the built-in MIDI synth (default: bundled GeneralUser GS). .sf3 is not supported."
+  },
+  {
+   "name": "PROTON_NO_MIDI_SYNTH",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "options": [
+    "1"
+   ],
+   "desc": "[Proton-GE] Disable the built-in MIDI synth used when the host has no MIDI device or synth of its own."
+  },
+  {
+   "name": "PROTON_MEDIACONV_NO_VIDEO",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "options": [
+    "0",
+    "1"
+   ],
+   "desc": "[Proton | Proton-GE] Anything but 0: media-converter replaces unplayable videos with an audio-only placeholder (blank.mka) instead of a blank video (blank.mkv). Defaults to 1 for a few games (Salt and Sanctuary, Tor Eternum, …)."
+  },
+  {
+   "name": "PROTON_REMOTE_DEBUG_CMD",
+   "cat": "Proton",
+   "vtype": "string",
+   "default": "",
+   "placeholder": "command args",
+   "desc": "[Proton | Proton-GE] Command (shell-split) Proton starts alongside the game for remote debugging. Development only."
+  },
+  {
+   "name": "PROTON_USE_ARM64",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "options": [
+    "0",
+    "1"
+   ],
+   "desc": "[Proton | Proton-GE] On aarch64 hosts with an ARM64 Proton build, run the arm64 Wine (default 1). 0 forces the x86_64 path. No effect on x86 hosts."
+  },
+  {
+   "name": "PROTON_GST_VIDEO_ORIENTATION",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "options": [
+    "none",
+    "clockwise",
+    "rotate-180",
+    "counterclockwise",
+    "horizontal-flip",
+    "vertical-flip",
+    "upper-left-diagonal",
+    "upper-right-diagonal",
+    "automatic"
+   ],
+   "desc": "[Proton-CachyOS] Rotate/flip videos rendered through GStreamer; values are those of GStreamer's videoflip method."
+  },
+  {
+   "name": "PROTON_DISCORD_BRIDGE",
+   "cat": "Proton",
+   "vtype": "enum",
+   "default": "",
+   "options": [
+    "1"
+   ],
+   "desc": "[Proton-CachyOS] Enable rpc-bridge so games running in Proton can set Discord Rich Presence."
   }
  ],
  "WINE_ENV_VARS": [
@@ -2823,86 +2969,15 @@
  ],
  "GAMESCOPE_ENV_VARS": [
   {
-   "name": "STEAMID",
-   "cat": "Gamescope",
-   "vtype": "string",
-   "default": "",
-   "desc": "The Steam App ID of the game currently running inside gamescope.  Set automatically by the Steam client when launching through Steam.  gamescope reads this to look up the game's artwork for the overlay, apply per-game DRS presets on Steam Deck, and for FPS limit reporting in the Steam HUD.  You can set it manually in a Lutris command to give gamescope the right game context without going through Steam.  Example: STEAMID=730  (Counter-Strike 2)",
-   "placeholder": "e.g. 730"
-  },
-  {
-   "name": "STEAM_GAMESCOPE_HW_UPSCALE_FILTER",
+   "name": "STEAM_GAMESCOPE_TEARING_SUPPORTED",
    "cat": "Gamescope",
    "vtype": "enum",
    "default": "",
-   "desc": "Steam-specific override to select the upscale filter for gamescope via the Steam Settings UI path.  Maps to the same -F / --filter flag as the CLI 'Upscale Filter' option below but is written by the Steam client itself based on the per-game 'Scaling Filter' setting.  Setting it manually overrides whatever the Steam UI chose.  Example: STEAM_GAMESCOPE_HW_UPSCALE_FILTER=fsr",
-   "options": [
-    "fsr",
-    "nis",
-    "pixel",
-    "linear",
-    "nearest"
-   ]
-  },
-  {
-   "name": "STEAM_GAMESCOPE_HW_UPSCALE_SHARPNESS",
-   "cat": "Gamescope",
-   "vtype": "int",
-   "default": "",
-   "desc": "Steam-specific sharpness override corresponding to the sharpness slider in Steam Settings -> Resolution.  Written by the client; override manually to bypass the UI.  Same 0-20 (FSR) / 0-5 (NIS) scale as the CLI --sharpness flag.  Example: STEAM_GAMESCOPE_HW_UPSCALE_SHARPNESS=5",
-   "placeholder": "0-20 (FSR) or 0-5 (NIS)"
-  },
-  {
-   "name": "STEAM_GAMESCOPE_VRR_ENABLED",
-   "cat": "Gamescope",
-   "vtype": "enum",
-   "default": "",
-   "desc": "Steam client's per-game VRR toggle, written into gamescope's environment when you enable 'Allow Tearing' or 'VRR' in the Steam per-game settings.  Same effect as the CLI --adaptive-sync flag; the STEAM_ prefix just indicates it was set by the client rather than the user.  Override to force VRR on/off regardless of what the Steam UI shows.  Example: STEAM_GAMESCOPE_VRR_ENABLED=1",
+   "desc": "1 when gamescope's backend supports tearing (also exported as STEAM_GAMESCOPE_HAS_TEARING_SUPPORT). Set by gamescope itself in Steam mode (-e) to tell the Steam client what the session supports; gamescope never reads it. Setting it by hand does not change gamescope — at most it misleads Steam.",
    "options": [
     "0",
     "1"
    ]
-  },
-  {
-   "name": "STEAM_GAMESCOPE_TEARING_SUPPORT",
-   "cat": "Gamescope",
-   "vtype": "enum",
-   "default": "",
-   "desc": "Steam client flag advertising that the gamescope session supports tearing presents.  When set, the Steam HUD and the per-game settings panel show the 'Allow Tearing' toggle.  Set automatically in SteamOS; on desktop you may need to set it manually if you want Steam's tearing toggle to have any effect.  Example: STEAM_GAMESCOPE_TEARING_SUPPORT=1",
-   "options": [
-    "0",
-    "1"
-   ]
-  },
-  {
-   "name": "STEAM_GAMESCOPE_DYNAMIC_REFRESH_SUPPORT",
-   "cat": "Gamescope",
-   "vtype": "enum",
-   "default": "",
-   "desc": "Advertises VRR / dynamic refresh rate support to the Steam client so the per-game refresh-rate selector is shown.  Required on desktop gamescope if you want Steam's frame-rate-limit UI to work correctly.  Example: STEAM_GAMESCOPE_DYNAMIC_REFRESH_SUPPORT=1",
-   "options": [
-    "0",
-    "1"
-   ]
-  },
-  {
-   "name": "STEAM_GAMESCOPE_LIMITER_RES",
-   "cat": "Gamescope",
-   "vtype": "enum",
-   "default": "",
-   "desc": "Enables gamescope's own Steam-integrated FPS limiter UI.  When set to 1, the Steam overlay's frame-rate slider adjusts gamescope's -r cap in real time without restarting the game.  Set to 0 to manage the cap entirely via the CLI --framerate-limit flag below.  Example: STEAM_GAMESCOPE_LIMITER_RES=1",
-   "options": [
-    "0",
-    "1"
-   ]
-  },
-  {
-   "name": "STEAM_GAMESCOPE_XWAYLAND_DISPLAY",
-   "cat": "Gamescope",
-   "vtype": "string",
-   "default": "",
-   "desc": "The :DISPLAY number of the XWayland server gamescope started internally.  Set automatically by gamescope; forwarded to the game process so it can connect to gamescope's private XWayland rather than the host X server.  You normally never set this manually - it appears here so you can inspect or pin it when debugging multi-compositor scenarios.  Example: STEAM_GAMESCOPE_XWAYLAND_DISPLAY=:1",
-   "placeholder": "e.g. :1"
   },
   {
    "name": "DISABLE_GAMESCOPE_WSI",
@@ -2942,7 +3017,7 @@
    "cat": "Gamescope",
    "vtype": "enum",
    "default": "",
-   "desc": "Requests a second, dedicated XWayland server from gamescope so overlay windows (Steam overlay, some anti-cheat/launcher UIs) run in their own XWayland instance separate from the game's - pair with the CLI --xwayland-count 2 flag below. Reduces overlay-related stutter/input issues in embedded gamescope sessions. Community-sourced session-script convention, not in gamescope --help. Example: STEAM_MULTIPLE_XWAYLANDS=1 gamescope --xwayland-count 2 -e -- steam -gamepadui",
+   "desc": "1 when gamescope runs more than one XWayland server (--xwayland-count 2 or more). Set by gamescope itself in Steam mode (-e) to tell the Steam client what the session supports; gamescope never reads it. Setting it by hand does not change gamescope — at most it misleads Steam.",
    "options": [
     "0",
     "1"
@@ -2953,7 +3028,7 @@
    "cat": "Gamescope",
    "vtype": "enum",
    "default": "",
-   "desc": "Advertises to the Steam client that the current gamescope session is capable of VRR at all (distinct from STEAM_GAMESCOPE_VRR_ENABLED, which is the per-game on/off toggle). Needed on some desktop setups for Steam's VRR toggle to appear/function in per-game display settings. Community-sourced, not in gamescope --help. Example: STEAM_GAMESCOPE_VRR_SUPPORTED=1",
+   "desc": "Always 1 in Steam mode (VRR may still be unavailable on a given connector). Set by gamescope itself in Steam mode (-e) to tell the Steam client what the session supports; gamescope never reads it. Setting it by hand does not change gamescope — at most it misleads Steam.",
    "options": [
     "0",
     "1"
@@ -3043,6 +3118,19 @@
     "0",
     "1"
    ]
+  },
+  {
+   "name": "GAMESCOPE_NV12_COLORSPACE",
+   "cat": "Gamescope",
+   "vtype": "enum",
+   "default": "",
+   "desc": "Force the colour space gamescope assumes for NV12 (video) surfaces instead of the one it is told. Any other value is ignored.",
+   "options": [
+    "k_EStreamColorspace_BT601",
+    "k_EStreamColorspace_BT601_Full",
+    "k_EStreamColorspace_BT709",
+    "k_EStreamColorspace_BT709_Full"
+   ]
   }
  ],
  "FORK_ENV_VARS": [
@@ -3051,11 +3139,12 @@
    "cat": "DXVK Forks",
    "vtype": "enum",
    "default": "",
-   "desc": "[dxvk-low-latency | DXVK-Sarek] Frame pacing mode — how CPU and GPU are synchronised. Overrides the dxvk.framePace config option.\nmax-frame-latency: stable latency in the GPU limit as long as render times are stable; higher latency but very smooth. Also what both forks fall back to when the value isn't recognised.\nlow-latency: the default in both forks. Lower latency in the GPU limit, fine-tunable via dxvk.lowLatencyOffset and dxvk.lowLatencyAllowCpuFramesOverlap.\nmin-latency: potentially the lowest latency, at the cost of fps — it stalls the GPU between frames. Generally not recommended; useful for tuning low-latency against, or for CPU-limited games.\nlow-latency-vrr-<Hz>: dxvk-low-latency ONLY — VRR-aware pacing at the given refresh rate. The fork's README suggests DXVK_FRAME_RATE=225 together with low-latency-vrr-235 on a 240 Hz VRR panel. Sarek does not implement this mode and will fall back to max-frame-latency.\nProton: proton-cachyos ships dxvk-low-latency behind PROTON_DXVK_LOWLATENCY=1 and DXVK-Sarek behind PROTON_DXVK_SAREK=1. Syntax: DXVK_FRAME_PACE=low-latency-vrr-235 DXVK_FRAME_RATE=225 %command%",
+   "desc": "[dxvk-low-latency | dxvk-gplasync-lowlatency | DXVK-Sarek] Frame pacing mode — how CPU and GPU are synchronised. Overrides the dxvk.framePace config option.\nmax-frame-latency: stable latency in the GPU limit as long as render times are stable; higher latency but very smooth. Default in dxvk-gplasync-lowlatency and DXVK-Sarek.\nlow-latency: lower latency in the GPU limit, fine-tunable via dxvk.lowLatencyOffset and dxvk.lowLatencyAllowCpuFramesOverlap. Default in dxvk-low-latency.\nmin-latency: potentially the lowest latency, at the cost of fps — it stalls the GPU between frames. Generally not recommended; useful for tuning low-latency against, or for CPU-limited games.\nlow-latency-vrr: dxvk-low-latency only (3.1.1-based builds) — VRR-aware pacing using VK_EXT_present_timing; the fps limit defaults to 5% below the maximum refresh rate.\nlow-latency-vrr-<Hz>: dxvk-low-latency and dxvk-gplasync-lowlatency — VRR-aware pacing derived from the given refresh rate (less precise than low-latency-vrr). DXVK-Sarek matches mode names by substring, so this value runs its plain low-latency mode there.\nUnrecognised values keep each fork's default.\nProton: proton-cachyos ships dxvk-low-latency behind PROTON_DXVK_LOWLATENCY=1 and DXVK-Sarek behind PROTON_DXVK_SAREK=1. Syntax: DXVK_FRAME_PACE=low-latency-vrr %command%",
    "options": [
     "max-frame-latency",
     "low-latency",
     "min-latency",
+    "low-latency-vrr",
     "low-latency-vrr-165",
     "low-latency-vrr-235"
    ]
@@ -3075,7 +3164,7 @@
    "cat": "DXVK Forks",
    "vtype": "enum",
    "default": "",
-   "desc": "[DXVK-Sarek] Turns OFF dyasync (Dynamic Asynchronous Pipeline Compilation), which Sarek enables by default (dxvk.enableDyasync = True). With dyasync, a shader is compiled synchronously the first time it is seen; every later VARIANT of it (new blend mode, depth test, cull mode, render pass — same shaders) compiles in the background while DXVK draws with the closest already-compiled pipeline as a placeholder, then swaps it in. Safer than a classic async patch because something is always drawn, but it is still pipeline substitution — disable it for multiplayer titles with strict anti-cheat. Thread count is dxvk.numDyasyncThreads. Syntax: PROTON_DXVK_SAREK=1 DXVK_DISABLE_DYASYNC=1 %command%",
+   "desc": "[DXVK-Sarek <1.13 — removed] Sarek 1.13 and later replaced it with DXVK_SHADER_COMPILATION_METHOD=none. Turns OFF dyasync (Dynamic Asynchronous Pipeline Compilation), which Sarek enables by default (dxvk.enableDyasync = True). With dyasync, a shader is compiled synchronously the first time it is seen; every later VARIANT of it (new blend mode, depth test, cull mode, render pass — same shaders) compiles in the background while DXVK draws with the closest already-compiled pipeline as a placeholder, then swaps it in. Safer than a classic async patch because something is always drawn, but it is still pipeline substitution — disable it for multiplayer titles with strict anti-cheat. Thread count is dxvk.numDyasyncThreads. Syntax: PROTON_DXVK_SAREK=1 DXVK_DISABLE_DYASYNC=1 %command%",
    "options": [
     "1"
    ]
@@ -3120,6 +3209,64 @@
    "default": "100",
    "desc": "[vkd3d-low-latency] Fine-tunes the low-latency frame pacer, in MICROSECONDS. Larger values start a frame later, which can improve responsiveness slightly; the fork defaults to 100us rather than 0 because it does not yet measure the blit cost. Clamped to 0-500 in the fork's code (values are parsed unsigned, so a negative number wraps — don't use one here, unlike DXVK's dxvk.lowLatencyOffset which genuinely accepts -10000..10000).\nOnly active when the game actually drives the pacer: it needs either the Nvidia Reflex API or a waitable DXGI swapchain. Confirm with PROTON_LOG=1 and look for the swapchain lines in the vkd3d log.\nProton-CachyOS: enable the fork with PROTON_VKD3D_LOWLATENCY=1; other Protons need d3d12.dll and d3d12core.dll replaced by hand. Syntax: VKD3D_LOW_LATENCY_OFFSET=100 %command%",
    "placeholder": "e.g. 100 (microseconds, 0-500)"
+  },
+  {
+   "name": "DXVK_SHADER_COMPILATION_METHOD",
+   "cat": "DXVK Forks",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[DXVK-Sarek] Shader compilation method; takes priority over dxvk.shaderCompilationMethod.\ndyasync (default): the first sight of a shader compiles synchronously; later state variants draw the closest compiled pipeline as a placeholder while the right one builds in the background.\nasync: objects whose pipeline is not ready are skipped until it is compiled; removes stalls but needs spare cores.\nnone: unpatched 1.10.x behaviour, everything compiles at draw time — the reference when something looks like a rendering bug.\nSarek warns that dyasync/async can cause brief visual inaccuracies and could theoretically be noticed by client-side anti-cheat.",
+   "options": [
+    "dyasync",
+    "async",
+    "none"
+   ]
+  },
+  {
+   "name": "DXVK_FRAME_RATE_METHOD",
+   "cat": "DXVK Forks",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[DXVK-Sarek] How the frame limiter derives each frame's deadline (env only). deviation (default): carries a correction term so sleep inaccuracy averages out. timeline: fixed cadence, resynchronising only after a frame overran a whole interval. reactive: each interval measured from the frame just presented, never catching up.",
+   "options": [
+    "deviation",
+    "timeline",
+    "reactive"
+   ]
+  },
+  {
+   "name": "DXVK_FRAME_RATE_PACING",
+   "cat": "DXVK Forks",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[DXVK-Sarek] How the frame limiter waits out the rest of a frame (env only). precise (default): sleep, then busy-wait the last stretch — most accurate, keeps a core busy. sliced: bounded sleeps with a short final busy-wait — nearly as accurate, much less CPU (Sarek recommends it under Box64/FEX). sleep: one sleep, timer accuracy only. spin: busy-wait throughout.",
+   "options": [
+    "precise",
+    "sliced",
+    "sleep",
+    "spin"
+   ]
+  },
+  {
+   "name": "DXVK_SAREK_STRICT",
+   "cat": "DXVK Forks",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[DXVK-Sarek] 1 = treat every optional Vulkan extension as required: device creation fails and the log names each missing one. Diagnostic only — tells a driver gap from a Sarek bug.",
+   "options": [
+    "1"
+   ]
+  },
+  {
+   "name": "DXVK_GPLASYNCCACHE",
+   "cat": "DXVK Forks",
+   "vtype": "enum",
+   "default": "",
+   "desc": "[dxvk-gplasync-lowlatency] 0 disables the state-cache fixes that let Async and GPL work together (env form of dxvk.gplAsyncCache; on by default).",
+   "options": [
+    "0",
+    "1"
+   ]
   }
  ],
  "OVERLAY_ENV_VARS": [

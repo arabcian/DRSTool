@@ -7,13 +7,13 @@
    "True",
    "False"
   ],
-  "Latency sleep / Reflex. Auto: Reflex only in D3D11 games that use it, with VK_NV_low_latency2 + dxvk-nvapi. True: DXVK's built-in latency reduction for every game (no effect with in-game/external limiters). False: disable both."
+  "[DXVK ≤3.1.1 | dxvk-low-latency (default False) | dxvk-gplasync-lowlatency (default True)] Latency sleep / Reflex. Auto: Reflex only in D3D11 games that use it, with VK_NV_low_latency2 + dxvk-nvapi. True: DXVK's built-in latency reduction for every game (no effect with in-game/external limiters). False: disable both. Removed on DXVK master (after 3.1.1); use dxvk.enableNvLowLatency2 there."
  ],
  [
   "dxvk.latencyTolerance",
   "num",
   "1000",
-  "Latency-sleep heuristic tolerance in µs. Higher = more latency, maybe smoother pacing. No effect when VK_NV_low_latency2 is used."
+  "[DXVK ≤3.1.1 | dxvk-low-latency | dxvk-gplasync-lowlatency] Latency-sleep heuristic tolerance in µs. Higher = more latency, maybe smoother pacing. No effect when VK_NV_low_latency2 is used. Removed on DXVK master (after 3.1.1)."
  ],
  [
   "dxvk.disableNvLowLatency2",
@@ -23,7 +23,7 @@
    "True",
    "False"
   ],
-  "Don't use VK_NV_low_latency2 (Reflex unavailable; latencySleep=True then uses the custom algorithm). Auto disables it for 32-bit games only."
+  "[DXVK ≤3.1.1 | dxvk-low-latency | dxvk-gplasync-lowlatency] Don't use VK_NV_low_latency2 (Reflex unavailable; latencySleep=True then uses the custom algorithm). Auto disables it for 32-bit games only. Removed on DXVK master (after 3.1.1); replaced by dxvk.enableNvLowLatency2."
  ],
  [
   "dxvk.maxFrameRate",
@@ -66,7 +66,7 @@
    "True",
    "False"
   ],
-  "Present-timing features (non-native refresh emulation, frame limiter). Default True; disable only for debugging."
+  "[DXVK master, after 3.1.1 | dxvk-low-latency | d7vk] Present-timing features (non-native refresh emulation, frame limiter). Default True; disable only for debugging."
  ],
  [
   "dxgi.forceRefreshRate",
@@ -576,5 +576,381 @@
    "False"
   ],
   "Enable VK_EXT_debug_utils object names/labels (RenderDoc / Nsight)."
+ ],
+ [
+  "dxvk.enableNvLowLatency2",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "[DXVK master, after 3.1.1 | d7vk] Use VK_NV_low_latency2 for the Reflex implementation. Auto = on, except in 32-bit games (frame pacing problems). Replaces dxvk.disableNvLowLatency2."
+ ],
+ [
+  "dxvk.allowFse",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Let the Vulkan driver opt in to exclusive fullscreen on Windows (needed there for VRR/HDR; breaks alt+tab and games with extra GDI windows). No effect on Linux."
+ ],
+ [
+  "dxvk.hud",
+  "str",
+  "e.g. fps,frametimes",
+  "HUD elements, same syntax as DXVK_HUD. Ignored when DXVK_HUD is set."
+ ],
+ [
+  "dxgi.deferSurfaceCreation",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Create the Vulkan surface on the first Present instead of at swap chain creation. For games that start rendering with another API and otherwise stay black."
+ ],
+ [
+  "dxgi.enableDummyCompositionSwapchain",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Expose DirectComposition swap chains backed by a dummy window. Not a real implementation: some games need it to exist, others need creation to fail."
+ ],
+ [
+  "d3d11.reproducibleCommandStream",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Emit the same Vulkan commands for the same D3D11 commands on every run. For comparative benchmarking; can cost performance and break games that misuse queries."
+ ],
+ [
+  "d3d9.reproducibleCommandStream",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Same as d3d11.reproducibleCommandStream, for D3D9."
+ ],
+ [
+  "d3d9.adapterGroups",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "[DXVK master, after 3.1.1 | d7vk] Report displays on the same Vulkan device as one D3D9 adapter group and allow D3DCREATE_ADAPTERGROUP_DEVICE multi-head devices. Default True; no effect if d3d9.enumerateByDisplays is off."
+ ],
+ [
+  "d3d9.countLosableResources",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Reject Device::Reset while losable resources (state blocks, extra swap chains, D3DPOOL_DEFAULT) are alive, as D3D9 does. Default True; False for games that leak them and hang."
+ ],
+ [
+  "d3d9.customVendorId",
+  "str",
+  "e.g. 10de",
+  "D3D9: report this PCI vendor ID (4-digit hex)."
+ ],
+ [
+  "d3d9.customDeviceId",
+  "str",
+  "e.g. 2704",
+  "D3D9: report this PCI device ID (4-digit hex)."
+ ],
+ [
+  "d3d9.customDeviceDesc",
+  "str",
+  "e.g. NVIDIA GeForce RTX 4080",
+  "D3D9: report this adapter description."
+ ],
+ [
+  "d3d9.deferSurfaceCreation",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Same as dxgi.deferSurfaceCreation, for D3D9 swap chains."
+ ],
+ [
+  "d3d9.deviceLossOnFocusLoss",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Return D3DERR_DEVICELOST when a fullscreen D3D9 game loses focus, as Windows does. Some games rely on seeing it, others mishandle it."
+ ],
+ [
+  "d3d9.disableA8RT",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Disable A8-format render targets (The Sims 2 workaround)."
+ ],
+ [
+  "d3d9.dpiAware",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Call SetProcessDPIAware on device creation (default True), avoiding upscaling blur on Hi-DPI displays."
+ ],
+ [
+  "d3d9.enumerateByDisplays",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Enumerate D3D9 adapters per display (Windows behaviour, default True) instead of per physical GPU. May help PRIME setups."
+ ],
+ [
+  "d3d9.extraFrontbuffer",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Add and copy a second buffer every frame so GetFrontBufferData works with single-buffer swap chains. Only needed by Silent Hill 2 Enhanced Edition."
+ ],
+ [
+  "d3d9.forceSamplerTypeSpecConstants",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Force sampler-type specialization constants; fixes old games that pair mismatched image/sampler types (Halo: CE, Spellforce)."
+ ],
+ [
+  "d3d9.hideAmdGpu",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "D3D9: report AMD GPUs as NVIDIA (AMDAGS / AMD code-path workaround). Auto = known-affected games."
+ ],
+ [
+  "d3d9.hideIntelGpu",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "D3D9: report Intel GPUs as AMD. Defaults to True for D3D8/9 to avoid early-Intel iGPU restrictions."
+ ],
+ [
+  "d3d9.hideNvidiaGpu",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "D3D9: report NVIDIA GPUs as AMD. Auto = only games known to misbehave with NVAPI / NVIDIA code paths."
+ ],
+ [
+  "d3d9.hideNvkGpu",
+  "enum",
+  [
+   "Auto",
+   "True",
+   "False"
+  ],
+  "D3D9: report NVIDIA GPUs running on NVK (Mesa) as AMD."
+ ],
+ [
+  "d3d9.ignoreDefaultBufferLockRange",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Ignore the lock range of D3DPOOL_DEFAULT buffers and mark the whole buffer dirty, for games that pass wrong ranges. May cost performance."
+ ],
+ [
+  "d3d9.memoryTrackTest",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Memory-tracking test mode for GetAvailableTextureMem (see d3d9.maxAvailableMemory). Debug option."
+ ],
+ [
+  "d3d9.modeCountCompatibility",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "List only the desktop mode plus a few fallback resolutions, for games that fail when too many modes are reported (AquaNox 1/2). Combine with d3d9.forceAspectRatio / forceRefreshRate."
+ ],
+ [
+  "d3d9.shaderModel",
+  "enum",
+  [
+   "0",
+   "1",
+   "2",
+   "3"
+  ],
+  "Shader model reported in the device caps: 0 = fixed-function only, 1-3 = SM1-SM3 (default 3). Capped to 1 for D3D8 games."
+ ],
+ [
+  "d3d9.supportCubeDepthFormats",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Allow depth formats on cube textures like old drivers did. Some games crash without it (SimCity Societies: Destinations), others break with it (Gothic 3)."
+ ],
+ [
+  "d3d9.supportDFFormats",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Expose the AMD/Intel DF floating-point depth formats (default True). Ignored on NVIDIA or when spoofing NVIDIA."
+ ],
+ [
+  "d3d9.supportX4R4G4B4",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Support the X4R4G4B4 format (default True; The Sims 2)."
+ ],
+ [
+  "d3d9.textureMemory",
+  "num",
+  "100",
+  "Virtual memory (MB) for locked D3D9 textures, 0 = no limit. Does not change real memory use or texture quality; upstream advises leaving it alone."
+ ],
+ [
+  "d3d9.useD32forD24",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Use D32F for D24 depth formats, to reproduce AMD issues on other hardware. Debug option."
+ ],
+ [
+  "d3d8.batching",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Draw call batcher for D3D8 games that issue many tiny, similar draws. May hurt performance or cause artifacts elsewhere."
+ ],
+ [
+  "d3d8.forceLegacyBuffers",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Honour D3DLOCK_DISCARD only for DYNAMIC+WRITEONLY buffers and map WRITEONLY buffers directly, as some old games expect. Costs performance."
+ ],
+ [
+  "d3d8.forceVsDecl",
+  "str",
+  "e.g. 0:2,3:2,7:1",
+  "Override the vertex shader declaration with D3DVSDE_REGISTER:D3DVSDT_TYPE pairs, for games that read undeclared inputs."
+ ],
+ [
+  "d3d8.placeP8InScratch",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Put P8 (palettized) textures in D3DPOOL_SCRATCH so creating them always succeeds, for old games that don't handle missing P8 support."
+ ],
+ [
+  "d3d8.scaleDref",
+  "num",
+  "0",
+  "Scale the depth texcoord (Dref) from [0..2^bits-1] back to [0..1] for early D3D8 games; the value is the bit depth (typically 24). 0 = off."
+ ],
+ [
+  "d3d8.shadowPerspectiveDivide",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "Force D3DTTFF_PROJECTED when a depth texture is bound to stage 0, emulating GeForce 3/4 shadow-map behaviour some old games expect."
+ ],
+ [
+  "dxvk.framePace",
+  "str",
+  "e.g. low-latency",
+  "[dxvk-low-latency | dxvk-gplasync-lowlatency | DXVK-Sarek] Config-file form of DXVK_FRAME_PACE (the env var wins). See DXVK_FRAME_PACE for the modes and each fork's default."
+ ],
+ [
+  "dxvk.lowLatencyOffset",
+  "num",
+  "0",
+  "[dxvk-low-latency | dxvk-gplasync-lowlatency | DXVK-Sarek] Fine-tunes low-latency pacing in µs (-10000..10000): positive starts frames later (slightly more responsive), negative earlier (more fps)."
+ ],
+ [
+  "dxvk.lowLatencyAllowCpuFramesOverlap",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "[dxvk-low-latency | dxvk-gplasync-lowlatency] Allow a frame to start before the CPU part of the previous one has finished (default True). False may feel snappier but can cost fps."
+ ],
+ [
+  "dxvk.enableAsync",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "[dxvk-gplasync-lowlatency] Async pipeline compilation (default True): the main thread is not blocked by pipeline compiles, at the cost of brief glitches while shaders compile. DXVK_ASYNC=0/1 overrides it."
+ ],
+ [
+  "dxvk.gplAsyncCache",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "[dxvk-gplasync-lowlatency] State-cache fixes that let Async and GPL work together or separately (default True). DXVK_GPLASYNCCACHE=0/1 overrides it."
+ ],
+ [
+  "dxvk.minSwapchainLatency",
+  "enum",
+  [
+   "True",
+   "False"
+  ],
+  "[dxvk-gplasync-lowlatency] Allocate only minImageCount swap chain images (double buffering) instead of minImageCount + 1: up to about one frame less latency."
  ]
 ]

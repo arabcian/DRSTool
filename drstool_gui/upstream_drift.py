@@ -376,7 +376,8 @@ def _drift_analyse(src: dict, files: Dict[str, str], cat: dict) -> List[dict]:
         txt = files[rel]
         up = {}
         # Current header: enum entries `NAME_ID = 0x1234ABCD,`; older ones: `#define NAME_ID 0x1234ABCD`.
-        for m in re.finditer(r'^\s*(?:#define\s+)?([A-Z0-9_]+)_ID\s*(?:=\s*)?0x([0-9A-Fa-f]{1,8})\b', txt, re.M):
+        # Names are not all upper case (SET_POWER_THROTTLE_FOR_PCIe_COMPLIANCE_ID).
+        for m in re.finditer(r'^\s*(?:#define\s+)?([A-Za-z0-9_]+)_ID\s*(?:=\s*)?0x([0-9A-Fa-f]{1,8})\b', txt, re.M):
             up.setdefault(f"0X{int(m.group(2), 16):08X}", (m.group(1), f"{rel}:{_line_of(txt, m.start())}"))
         if not up:      # never report the whole catalog as "gone" because the parser found nothing
             row("DRS setting", "(header parse)", "gone",

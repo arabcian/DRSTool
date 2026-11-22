@@ -434,6 +434,17 @@ class DriftCatalogTests(unittest.TestCase):
         self.assertEqual(got["rows"], [])
         self.assertTrue(any("network error" in n for n in got["notes"]))
 
+    def test_drs_header_ids_with_lowercase_names(self):
+        # SET_POWER_THROTTLE_FOR_PCIe_COMPLIANCE_ID: the lowercase "e" made every scan report it as "gone".
+        m = self.m
+        src = next(s for s in m.DRIFT_SOURCES if s["key"] == "nvapi-hdr")
+        hdr = ("enum ESetting {\n    OGL_AA_LINE_GAMMA_ID = 0x2089BF6C,\n"
+               "    SET_POWER_THROTTLE_FOR_PCIe_COMPLIANCE_ID     = 0x00AE785C,\n};\n")
+        rows = m._drift_analyse(src, {"NvApiDriverSettings.h": hdr}, m._drift_catalog())
+        gone = [r["name"] for r in rows if r["status"] == "gone"]
+        self.assertTrue(gone)              # two-ID header: the rest of the catalog is "gone", so the check ran
+        self.assertFalse([n for n in gone if n.startswith("0x00AE785C")])
+
     def test_vkd3d_plain_flags_are_internal(self):
         m = self.m
         src = next(s for s in m.DRIFT_SOURCES if s["key"] == "vkd3d")
@@ -1021,6 +1032,36 @@ class GuiTests(unittest.TestCase):
             self.pump()
             self.assertEqual(r.call_count, 1)
         lv.deleteLater()
+
+    def test_arch_list_focus_never_changes_the_spoof(self):
+        # Bug: with no current item, Qt makes the first selectable row (Kepler) current when the
+        # list gets focus -> currentItemChanged -> set_arch(GK100) silently overwrote RTX 50.
+        from PySide6.QtCore import QEvent
+        from PySide6.QtGui import QFocusEvent, QKeyEvent
+        win, sm = self.win, self.win.settings_manager
+        before = sm.get_arch()
+        self.addCleanup(sm.set_arch, before)
+        sm.set_arch(self.m.arch_by_code("GB200"))
+        win._populate_arch_list()
+        lst = win._arch_list
+        self.m.QApplication.sendEvent(lst, QFocusEvent(QEvent.FocusIn, self.m.Qt.TabFocusReason))
+        self.pump()
+        self.assertEqual(sm.get_arch().code, "GB200")
+        self.assertEqual(lst.currentItem().data(self.m.Qt.UserRole).code, "GB200")  # focus starts on the spoof
+        self.m.QApplication.sendEvent(lst, QKeyEvent(QEvent.KeyPress, self.m.Qt.Key_Down, self.m.Qt.NoModifier))
+        self.pump()
+        self.assertEqual(sm.get_arch().code, "GB200", "keyboard navigation must not apply a spoof")
+        # an explicit click still selects
+        item = next(lst.item(i) for i in range(lst.count())
+                    if getattr(lst.item(i).data(self.m.Qt.UserRole), "code", None) == "AD100")
+        lst.itemClicked.emit(item)
+        self.assertEqual(sm.get_arch().code, "AD100")
+        sm.set_arch(None)                         # no spoof: focus must not create one either
+        win._populate_arch_list()
+        lst.clearFocus()
+        self.m.QApplication.sendEvent(lst, QFocusEvent(QEvent.FocusIn, self.m.Qt.TabFocusReason))
+        self.pump()
+        self.assertIsNone(sm.get_arch())
 
     def test_flm_root_step_only_copies_staged_files(self):
         # root must never run the user-writable cmake_install.cmake: stage as the user, copy as root

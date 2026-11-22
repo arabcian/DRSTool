@@ -14,7 +14,7 @@
  "one_time_submit": "Force one-shot command-buffer submission mode. Workaround for GPU hang in Star Wars Outlaws.",
  "pipeline_library_ignore_mismatch_driver": "Ignore driver-version mismatch when loading the pipeline library cache. Useful after driver updates to avoid cold compiles. Auto-applied for Elden Ring.",
  "retain_psos": "Keep PSOs (pipeline state objects) alive instead of freeing them immediately. Prevents use-after-free crashes in FFVII Rebirth, Ark Ascended, and REANIMAL.",
- "descriptor_heap": "Enable the new VK_EXT_descriptor_heap code path (merged May 2026). Requires Mesa ≥ 26.1 or NVIDIA driver with descriptor heap support. Fixes Xid 109 crashes and Crimson Desert hang on Blackwell.",
+ "descriptor_heap": "[vkd3d-proton ≤3.1 | vkd3d-low-latency] Opt in to the VK_EXT_descriptor_heap code path. vkd3d-proton master uses the heap by default; disable it there with no_descriptor_heap.",
  "force_raw_va_cbv": "Force constant-buffer views to use raw GPU virtual addresses instead of descriptor-based binding. Fixes GPU hangs or corruption in Halo Infinite, Eve Online, Guardians of the Galaxy.",
  "preallocate_srv_mip_clamps": "Pre-allocate mip-clamp descriptors for all SRVs at resource creation time. Workaround for a descriptor aliasing bug. Auto-applied for Halo Infinite.",
  "no_invariant_position": "Disable the invariant-position workaround (ON by default). Try if you see Z-fighting or vertex-position artifacts.",
@@ -38,7 +38,7 @@
  "disallow_committed_texture_suballocation": "Give each committed texture its own allocation (better driver memory priorities, higher CPU cost). Default suballocates because Diablo 4 regresses badly otherwise.",
  "allow_image_heap_suballocation": "Suballocate image heaps even when the driver supports dynamic memory priorities. Lower allocation overhead, worse paging under VRAM pressure.",
  "avoid_image_buffer_aliasing": "Avoid aliasing images and buffers in the same memory. Auto-applied for World of Warcraft; fixes corruption in heap-aliasing games.",
- "no_clear_uav_sync": "Skip the extra sync after UAV clears. Small perf gain; may cause flicker in games that depend on it.",
+ "no_clear_uav_sync": "[vkd3d-proton ≤3.1 | vkd3d-low-latency] Skip the extra sync after UAV clears. Small perf gain; may cause flicker in games that depend on it. Removed on vkd3d-proton master.",
  "pipeline_library_app_cache": "Use only the game's own ID3D12PipelineLibrary cache, not vkd3d-proton's internal cache.",
  "global_pipeline_cache": "Use one global VkPipelineCache instead of per-PSO caches. Useful when the game creates PSOs very late.",
  "shader_cache_sync": "Write the vkd3d-proton shader cache synchronously. For debugging cache corruption only; causes hitching.",
@@ -65,5 +65,10 @@
  "damage_not_zeroed_allocations": "Fill D3D12_HEAP_FLAG_CREATE_NOT_ZEROED buffers with 0xFF on creation to expose games that wrongly assume zeroed memory. Debug only.",
  "debug_wave64_simulation": "Report a wave size of 64 to the game (WaveLaneCountMin forced up) to test wave64-dependent shader paths on wave32 GPUs. Debug only.",
  "fail_unsupported_state_template": "Fail loudly instead of silently ignoring when a command-list state template is unsupported. Debug only.",
- "adreno_7xx_extra_compat": "Qualcomm Adreno 7xx only: use slower, more spec-compliant paths to isolate whether a game hits them. Irrelevant on NVIDIA/AMD."
+ "adreno_7xx_extra_compat": "Qualcomm Adreno 7xx only: use slower, more spec-compliant paths to isolate whether a game hits them. Irrelevant on NVIDIA/AMD.",
+ "no_descriptor_heap": "[vkd3d-proton master, after 3.1] Do not use VK_EXT_descriptor_heap (it is used by default where supported).",
+ "no_default_heap_robustness": "[vkd3d-proton master, after 3.1] When the descriptor heap is used, vkd3d-proton applies descriptor-heap robustness to all shaders because much content relies on it; this turns that default off.",
+ "descriptor_heap_robustness": "Force the descriptor-heap robustness shader quirk on.",
+ "legacy_structurizer": "[vkd3d-proton master, after 3.1] Use the legacy control-flow structurizer when translating DXIL to SPIR-V (workaround shader quirk).",
+ "clear_table_offsets_on_rebind": "[vkd3d-proton master, after 3.1] Reset descriptor table offsets when a different descriptor heap is bound. Applied automatically for affected games (Resonance of Fate remaster)."
 }

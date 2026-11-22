@@ -205,14 +205,6 @@
   "desc": "Use realtime scheduling for gamescope's own threads."
  },
  {
-  "name": "Mouse Sensitivity",
-  "flag": "-s",
-  "cat": "Input",
-  "kind": "string",
-  "desc": "Multiply mouse movement by the given decimal factor.",
-  "placeholder": "e.g. 1.2"
- },
- {
   "name": "Force Grab Cursor",
   "flag": "--force-grab-cursor",
   "cat": "Input",
@@ -285,11 +277,12 @@
   "flag": "--backend",
   "cat": "Session",
   "kind": "enum",
-  "desc": "Rendering backend. auto autodetects (default).",
+  "desc": "Rendering backend. auto autodetects (default). openvr outputs as a SteamVR overlay (builds with OpenVR support; see the VR flags).",
   "options": [
    "auto",
    "drm",
    "sdl",
+   "openvr",
    "headless",
    "wayland"
   ]
@@ -543,5 +536,122 @@
   "cat": "Debug",
   "kind": "toggle",
   "desc": "Always rotate the output in the compositor instead of at scanout (autodetected otherwise). Costs a composite pass every frame."
+ },
+ {
+  "name": "VR Overlay Key",
+  "flag": "--vr-overlay-key",
+  "cat": "VR (OpenVR)",
+  "kind": "string",
+  "desc": "[--backend openvr] SteamVR overlay key to use.",
+  "placeholder": "e.g. gamescope"
+ },
+ {
+  "name": "VR App Overlay Key",
+  "flag": "--vr-app-overlay-key",
+  "cat": "VR (OpenVR)",
+  "kind": "string",
+  "desc": "[--backend openvr] SteamVR overlay key used for child apps."
+ },
+ {
+  "name": "VR Overlay Explicit Name",
+  "flag": "--vr-overlay-explicit-name",
+  "cat": "VR (OpenVR)",
+  "kind": "string",
+  "desc": "[--backend openvr] Always use this string as the SteamVR overlay name."
+ },
+ {
+  "name": "VR Overlay Default Name",
+  "flag": "--vr-overlay-default-name",
+  "cat": "VR (OpenVR)",
+  "kind": "string",
+  "desc": "[--backend openvr] Fallback SteamVR overlay name when there is no window title."
+ },
+ {
+  "name": "VR Overlay Icon",
+  "flag": "--vr-overlay-icon",
+  "cat": "VR (OpenVR)",
+  "kind": "string",
+  "desc": "[--backend openvr] SteamVR overlay icon file.",
+  "placeholder": "/path/to/icon.png"
+ },
+ {
+  "name": "VR Show Immediately",
+  "flag": "--vr-overlay-show-immediately",
+  "cat": "VR (OpenVR)",
+  "kind": "toggle",
+  "desc": "[--backend openvr] Make the VR overlay take focus immediately."
+ },
+ {
+  "name": "VR Control Bar",
+  "flag": "--vr-overlay-enable-control-bar",
+  "cat": "VR (OpenVR)",
+  "kind": "toggle",
+  "desc": "[--backend openvr] Enable the SteamVR control bar."
+ },
+ {
+  "name": "VR Control Bar Keyboard",
+  "flag": "--vr-overlay-enable-control-bar-keyboard",
+  "cat": "VR (OpenVR)",
+  "kind": "toggle",
+  "desc": "[--backend openvr] Enable the SteamVR keyboard button on the control bar."
+ },
+ {
+  "name": "VR Control Bar Close",
+  "flag": "--vr-overlay-enable-control-bar-close",
+  "cat": "VR (OpenVR)",
+  "kind": "toggle",
+  "desc": "[--backend openvr] Enable the SteamVR close button on the control bar."
+ },
+ {
+  "name": "VR Click Stabilization",
+  "flag": "--vr-overlay-enable-click-stabilization",
+  "cat": "VR (OpenVR)",
+  "kind": "toggle",
+  "desc": "[--backend openvr] Enable SteamVR click stabilization."
+ },
+ {
+  "name": "VR Modal Overlay",
+  "flag": "--vr-overlay-modal",
+  "cat": "VR (OpenVR)",
+  "kind": "toggle",
+  "desc": "[--backend openvr] Make the VR overlay appear as a modal."
+ },
+ {
+  "name": "VR Overlay Width",
+  "flag": "--vr-overlay-physical-width",
+  "cat": "VR (OpenVR)",
+  "kind": "string",
+  "desc": "[--backend openvr] Physical width of the VR overlay in metres (default 2.0).",
+  "placeholder": "e.g. 2.0"
+ },
+ {
+  "name": "VR Overlay Curvature",
+  "flag": "--vr-overlay-physical-curvature",
+  "cat": "VR (OpenVR)",
+  "kind": "string",
+  "desc": "[--backend openvr] Curvature of the VR overlay.",
+  "placeholder": "e.g. 0.2"
+ },
+ {
+  "name": "VR Overlay Pre-Curve Pitch",
+  "flag": "--vr-overlay-physical-pre-curve-pitch",
+  "cat": "VR (OpenVR)",
+  "kind": "string",
+  "desc": "[--backend openvr] Pre-curve pitch of the VR overlay."
+ },
+ {
+  "name": "VR Scroll Speed",
+  "flag": "--vr-scroll-speed",
+  "cat": "VR (OpenVR)",
+  "kind": "string",
+  "desc": "[--backend openvr] Trackpad scroll speed in VR (default 8.0).",
+  "placeholder": "e.g. 8.0"
+ },
+ {
+  "name": "VR Session Manager",
+  "flag": "--vr-session-manager",
+  "cat": "VR (OpenVR)",
+  "kind": "toggle",
+  "desc": "[--backend openvr] Make this gamescope the VR session manager."
  }
 ]

@@ -148,6 +148,15 @@
   ]
  },
  {
+  "id": "0x20FF7493",
+  "name": "OGL Extension String Version",
+  "cat": "OpenGL",
+  "type": "hex",
+  "default": "0x0",
+  "desc": "Extension String version",
+  "detailed_desc": "OGL_EXTENSION_STRING_VERSION (NvApiDriverSettings.h): DWORD with no predefined values. Driver default (NvApiDriverSettings.c): 0."
+ },
+ {
   "id": "0x201F619F",
   "name": "OGL Force Blit",
   "cat": "OpenGL",
@@ -190,7 +199,7 @@
   "name": "OGL Max Frames",
   "cat": "OpenGL",
   "type": "numeric",
-  "default": "0",
+  "default": "2",
   "desc": "Maximum frames allowed",
   "detailed_desc": "Limits maximum frames rendered ahead.",
   "max": 255
@@ -1820,7 +1829,7 @@
   "type": "numeric",
   "default": "0x0",
   "desc": "GPU Max Power",
-  "detailed_desc": "Sets the maximum GPU power limit in watts at the driver level. Range 0–175 W. 0 = use the GPU's built-in default TDP. Lowering this value can reduce temperatures and fan noise on thermally constrained systems (e.g. laptops). For the RTX 4080 Mobile the factory TGP is typically 60–150 W depending on the OEM configuration; setting a value below the base TGP will throttle GPU clocks. Pair with Ryzenadj for coordinated CPU+GPU power budgeting.",
+  "detailed_desc": "Maximum GPU Power (NvApiDriverSettings.h). Driver default: \"0\". This is a string (WSTRING) setting in NvApiDriverSettings.h; DXVK_NVAPI_DRS_SETTINGS only carries DWORD values, so dxvk-nvapi cannot apply it.",
   "max": 175
  },
  {
@@ -1893,9 +1902,9 @@
   "name": "Idle FPS Limit",
   "cat": "Frame Rate",
   "type": "numeric",
-  "default": "0x14",
+  "default": "0x0",
   "desc": "Idle FPS Limit",
-  "detailed_desc": "Frame rate cap applied when the application loses focus (e.g. alt-tabbed or minimized). Prevents the GPU from running at full speed while the game window is not visible, saving power and thermal headroom. Default is 20 FPS (0x14). Common values: 20=0x14, 30=0x1E, 60=0x3C. Set to a low value like 20–30 FPS for laptops on battery to conserve energy.",
+  "detailed_desc": "Frame rate cap applied when the application loses focus (e.g. alt-tabbed or minimized). Prevents the GPU from running at full speed while the game window is not visible, saving power and thermal headroom. Driver default (NvApiDriverSettings.c): 0. Common values: 20=0x14, 30=0x1E, 60=0x3C. Set to a low value like 20–30 FPS for laptops on battery to conserve energy.",
   "max": 1023
  },
  {
@@ -1903,9 +1912,9 @@
   "name": "Idle Threshold",
   "cat": "Frame Rate",
   "type": "numeric",
-  "default": "3",
+  "default": "0",
   "desc": "Idle Threshold",
-  "detailed_desc": "Number of seconds the application must be in the background (unfocused) before the Idle FPS Limit kicks in. Default is 3 seconds. Increase if you use alt-tab frequently and find the FPS drop too jarring when quickly switching back.",
+  "detailed_desc": "Number of seconds the application must be in the background (unfocused) before the Idle FPS Limit kicks in. Driver default (NvApiDriverSettings.c): 0. Increase if you use alt-tab frequently and find the FPS drop too jarring when quickly switching back.",
   "max": 3600
  },
  {
@@ -2257,7 +2266,7 @@
   "name": "Offline Compiler",
   "cat": "Shader",
   "type": "enum",
-  "default": "0x1",
+  "default": "0x64318112",
   "desc": "Offline Compiler",
   "detailed_desc": "Enables offline shader compilation.",
   "values": [
@@ -2786,7 +2795,7 @@
   "type": "hex",
   "default": "0x0",
   "desc": "CUDA Excluded",
-  "detailed_desc": "Excludes specific GPUs from CUDA."
+  "detailed_desc": "List of Universal GPU ids (NvApiDriverSettings.h). Driver default: \"none\". This is a string (WSTRING) setting in NvApiDriverSettings.h; DXVK_NVAPI_DRS_SETTINGS only carries DWORD values, so dxvk-nvapi cannot apply it."
  },
  {
   "id": "0x10F9DC83",

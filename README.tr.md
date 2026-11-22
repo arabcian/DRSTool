@@ -28,10 +28,10 @@ English version: [README.md](README.md)
 - Uygulamadan önce ortaya çıkacak komut/ortamın önizlemesi
 
 ### Ortam Değişkenleri
-Ortam sekmesi aşağıdaki gruplarda 303 değişkeni kapsar:
+Ortam sekmesi aşağıdaki gruplarda 315 değişkeni kapsar:
 
 - **DXVK** (`DXVK_HUD` bayrak tablosu ve `DXVK_CONFIG` anahtar seçici dahil)
-- **DXVK çatalları**: d7vk, dxvk-low-latency, DXVK-Sarek (hangi Proton çatalına ait olduğu etiketli)
+- **DXVK çatalları**: d7vk, dxvk-low-latency, dxvk-gplasync-lowlatency, DXVK-Sarek (hangi Proton çatalına ait olduğu etiketli)
 - **VKD3D-Proton** (`VKD3D_CONFIG` onay kutusu tablosu ve hata ayıklama/profil değişkenleri)
 - **DXVK-NVAPI** (DRS ayarları, Vulkan Reflex katmanı, günlükleme, NGX hata ayıklama seçenekleri)
 - **Proton** ve **Wine**; Proton-GE, Proton-EM, Proton-CachyOS ve Proton-DW'ye özgü bayraklar dahil

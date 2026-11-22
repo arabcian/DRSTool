@@ -45,10 +45,10 @@ assumed to match an FPS cap. See `GELISTIRMELER_F02_F04_F09_TR.md` for details.
 - Preview of the resulting command/environment before applying
 
 ### Environment Variables
-The Environment tab covers 303 variables in these groups:
+The Environment tab covers 315 variables in these groups:
 
 - **DXVK** (incl. `DXVK_HUD` flag grid and the `DXVK_CONFIG` key picker)
-- **DXVK forks**: d7vk, dxvk-low-latency, DXVK-Sarek (each labelled with the Proton fork it belongs to)
+- **DXVK forks**: d7vk, dxvk-low-latency, dxvk-gplasync-lowlatency, DXVK-Sarek (each labelled with the Proton fork it belongs to)
 - **VKD3D-Proton** (`VKD3D_CONFIG` checkbox grid, plus debug/profile variables)
 - **DXVK-NVAPI** (DRS settings, Vulkan Reflex layer, logging, NGX debug options)
 - **Proton** and **Wine**, including Proton-GE, Proton-EM, Proton-CachyOS and Proton-DW specific flags

@@ -27,8 +27,12 @@ class ArchListWidget(QListWidget):
     def __init__(self):
         super().__init__()
         self.setSelectionMode(QListWidget.SingleSelection)
+        # Selecting an arch APPLIES the spoof, so only explicit actions may do it:
+        # a click, or Enter / double-click. currentItemChanged also fires when the
+        # list merely gets focus (Qt makes the first row - Kepler - current) or on
+        # arrow keys, which silently replaced e.g. an RTX 50 spoof with GK100.
         self.itemClicked.connect(self._on_item_clicked)
-        self.currentItemChanged.connect(self._on_current_item_changed)
+        self.itemActivated.connect(self._on_item_clicked)
         setup_sidebar_list(self)
 
     def populate(self, archs: List[GPUArch], selected_arch: Optional[GPUArch],
@@ -54,17 +58,12 @@ class ArchListWidget(QListWidget):
                 item.setToolTip("This is the generation of the NVIDIA card in this machine — "
                                 "spoofing it changes nothing.")
             self.addItem(item)
+            if is_sel:
+                self.setCurrentItem(item)   # keyboard focus starts here, not on the first row
         self.blockSignals(False)
 
     def _on_item_clicked(self, item):
         arch = item.data(Qt.UserRole)
-        if arch:
-            self.arch_selected.emit(arch)
-
-    def _on_current_item_changed(self, current, previous):
-        if current is None:
-            return
-        arch = current.data(Qt.UserRole)
         if arch:
             self.arch_selected.emit(arch)
 
