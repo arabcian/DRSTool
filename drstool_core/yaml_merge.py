@@ -8,6 +8,31 @@ import io
 from typing import Any
 
 
+_YAML11_WORDS = {'y', 'n', 'yes', 'no', 'on', 'off', 'true', 'false', 'null', '~', ''}
+
+
+def _lutris_env_value(value: Any):
+    """The env value as a string that Lutris reads back as a string.
+
+    ruamel (YAML 1.2) writes OFF / on / no / yes unquoted, but Lutris loads its configs with
+    PyYAML (YAML 1.1), where those become booleans; Lutris then fails to start the
+    pre-launch script ("expected str, bytes or os.PathLike object, not bool"). Such values are
+    written quoted.
+    """
+    from ruamel.yaml.scalarstring import DoubleQuotedScalarString
+    text = str(value)
+    try:
+        import yaml
+        if not isinstance(yaml.safe_load(text), str):
+            return DoubleQuotedScalarString(text)
+    except ImportError:
+        if text.lower() in _YAML11_WORDS:
+            return DoubleQuotedScalarString(text)
+    except yaml.YAMLError:
+        pass
+    return text
+
+
 def merge_lutris_yaml(original_text: str, system_keys: dict[str, Any],
                       env_vars: dict[str, str], owned: dict | None = None):
     """Return (updated text, system added/changed, env added/changed,
@@ -21,6 +46,7 @@ def merge_lutris_yaml(original_text: str, system_keys: dict[str, Any],
     except ImportError as exc:
         raise RuntimeError('Editing Lutris YAML requires ruamel.yaml to preserve '
                            'comments and quote styles') from exc
+    from ruamel.yaml.scalarstring import DoubleQuotedScalarString
     parser = YAML(typ='rt')
     parser.preserve_quotes = True
     parser.width = 1_000_000
@@ -57,9 +83,12 @@ def merge_lutris_yaml(original_text: str, system_keys: dict[str, Any],
             env_removed.add(key)
     env_changed = set()
     for key, value in env_vars.items():
-        if key in env and str(env[key]) == str(value):
+        new = _lutris_env_value(value)
+        # A plain (unquoted) entry PyYAML would misread is rewritten even when the text is equal.
+        if key in env and str(env[key]) == str(value) and not (
+                isinstance(new, DoubleQuotedScalarString) and type(env[key]) is str):
             continue
-        env[key] = str(value)
+        env[key] = new
         env_changed.add(key)
     if not env and isinstance(system.get('env'), dict):
         del system['env']

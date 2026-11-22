@@ -257,6 +257,19 @@ system:
         self.assertEqual((sys_add, env_add, sys_rem, env_rem),
                          ({'gamescope'}, {'DXVK_HUD'}, set(), set()))
 
+    def test_yaml11_words_are_quoted_for_lutris(self):
+        # Lutris reads its configs with PyYAML (YAML 1.1): a plain OFF / on / no becomes a bool
+        # and breaks the pre-launch script. An existing plain entry is repaired too.
+        import yaml
+        out, *_ = merge_lutris_yaml(self.ORIGINAL, {}, {'__GL_EVENT_LOGLEVEL': 'OFF', 'DXVK_HUD': 'fps'})
+        env = yaml.safe_load(out)['system']['env']
+        self.assertEqual(env['__GL_EVENT_LOGLEVEL'], 'OFF')
+        self.assertEqual(env['DXVK_HUD'], 'fps')
+        broken = out.replace('"OFF"', 'OFF')
+        self.assertIsInstance(yaml.safe_load(broken)['system']['env']['__GL_EVENT_LOGLEVEL'], bool)
+        fixed, *_ = merge_lutris_yaml(broken, {}, {'__GL_EVENT_LOGLEVEL': 'OFF'})
+        self.assertEqual(yaml.safe_load(fixed)['system']['env']['__GL_EVENT_LOGLEVEL'], 'OFF')
+
     def test_identical_merge_returns_exact_original_bytes(self):
         out, *changes = merge_lutris_yaml(self.ORIGINAL, {}, {})
         self.assertEqual(out, self.ORIGINAL)
