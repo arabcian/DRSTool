@@ -308,6 +308,12 @@ class GameScanTests(unittest.TestCase):
         self.assertEqual(games[0].prefix, pfx)
         self.assertEqual(games[0].folders, [gdir])
 
+    def test_lutris_db_in_path_with_uri_characters(self):
+        # '#' / '?' / '%' in the home path used to break the sqlite "file:" URI -> DB silently skipped.
+        self.h = self.h / "odd#1?x%41 dir"
+        self.h.mkdir()
+        self.test_lutris_db_and_yaml()
+
     def test_heroic_and_bottles(self):
         hr = self.h / ".config/heroic"
         inst = self.h / "Games/Heroic/Control"

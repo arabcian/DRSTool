@@ -44,8 +44,8 @@ class FlmInstallWidget(QWidget):
     """
     Right-panel build/install widget for vk_flip_meter.
     Source is bundled at _SCRIPT_DIR/vk-flip-meter-main — no picker needed.
-    Unprivileged: cmake configure, cmake --build.
-    Privileged (pkexec, graphical password prompt): cmake --install.
+    Unprivileged: cmake configure, cmake --build, cmake --install into a staging dir.
+    Privileged (pkexec, graphical password prompt): copying the two staged files.
     """
 
     _STEPS = ("configure", "build", "install", "verify")
@@ -72,8 +72,8 @@ class FlmInstallWidget(QWidget):
 
         desc = QLabel(
             "Source is bundled in the repository at <code>vk-flip-meter-main/</code>.  "
-            "The build (cmake configure + build) runs as a normal user.  Only "
-            "<code>cmake --install</code> — the step that writes to <code>/usr/local</code> — "
+            "Build and <code>cmake --install</code> (into a staging folder) run as a normal user.  "
+            "Only copying the layer and its manifest to <code>/usr/local</code> "
             "runs through pkexec with a graphical password prompt."
         )
         desc.setWordWrap(True)
@@ -488,12 +488,27 @@ QPlainTextEdit{
             self._run_process("cmake", ["--build", self._build_dir, "-j", nproc], use_pkexec=False)
 
         elif self._phase == "build":
+            # Stage as the user: cmake_install.cmake lives in the user-writable
+            # build dir, so root must never execute it. The manifest still gets
+            # the FLM_LIB_PATH baked in at configure time (FIX-52/61).
+            self._log("==> Staging install files...")
+            self._phase = "stage"
+            stage = Path(self._build_dir) / "stage"
+            shutil.rmtree(stage, ignore_errors=True)
+            self._run_process("cmake", ["-E", "env", f"DESTDIR={stage}", "cmake", "--install", self._build_dir],
+                              use_pkexec=False)
+
+        elif self._phase == "stage":
             self._log("==> Requesting pkexec authorization for install (root required)...")
             self._set_busy(True, "Waiting for pkexec password...")
             self._phase = "install"
-            # cmake --install writes the manifest with the correct FLM_LIB_PATH
-            # baked in at configure time (FIX-52/61) — no post-install sed needed.
-            self._run_process("cmake", ["--install", self._build_dir], use_pkexec=True)
+            # root only copies the two staged files, through a fixed script.
+            stage = Path(self._build_dir) / "stage"
+            lib = f"{self._prefix_used}/{self._libdir_used}/libvk_flip_meter.so"
+            man = f"{self._prefix_used}/share/vulkan/implicit_layer.d/VkLayer_cpu_flip_meter.json"
+            self._run_process("/bin/sh", [
+                "-c", 'set -e; install -D -m 0755 -- "$1" "$2"; install -D -m 0644 -- "$3" "$4"', "sh",
+                f"{stage}{lib}", lib, f"{stage}{man}", man], use_pkexec=True)
 
         elif self._phase == "install":
             self._log("==> Installation complete.")

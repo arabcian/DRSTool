@@ -28,6 +28,8 @@ def download(url: str, dest: Path, hint: int, cancelled, progress, *, user_agent
     Sidecar metadata survives cancellation so that If-Range protects a resumed
     download from mixing bytes from different server object versions.
     """
+    if not url.startswith('https://'):
+        raise RuntimeError(f'refusing non-HTTPS download: {url}')
     dest = Path(dest)
     sidecar = dest.with_name(dest.name + '.http.json')
     have = dest.stat().st_size if dest.is_file() else 0
@@ -57,6 +59,9 @@ def download(url: str, dest: Path, hint: int, cancelled, progress, *, user_agent
                 continue
             raise RuntimeError(f'download failed: HTTP {exc.code} — {url}') from None
         with response as r:
+            final_url = getattr(r, 'url', None) or url     # after redirects
+            if not final_url.startswith('https://'):
+                raise RuntimeError(f'download redirected to non-HTTPS URL: {final_url}')
             status = getattr(r, 'status', None) or r.getcode()
             size_header = r.headers.get('Content-Length')
             try:

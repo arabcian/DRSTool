@@ -6,6 +6,7 @@ an unverified assertion that the game's rendering process stayed alive.
 """
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import re
@@ -219,8 +220,24 @@ def supervise(store: SessionStore, entry: dict, command: list[str], env: dict,
     This is opt-in because start_new_session and supervision necessarily differ
     from --run's exec replacement. SIGKILL leaves a detectable partial record.
     """
+    # The game gets its own session (so a stop reaches its whole tree via
+    # killpg), which also means SIGKILL of this supervisor would orphan it:
+    # PR_SET_PDEATHSIG sends it SIGTERM when we die. The kernel clears it when
+    # a setuid / file-capability binary is exec'd as the command itself.
+    parent = os.getpid()
     try:
-        child = subprocess.Popen(command, env=env, start_new_session=True)
+        prctl = ctypes.CDLL(None, use_errno=True).prctl
+    except (OSError, AttributeError):
+        prctl = None
+
+    def die_with_parent():
+        if prctl is not None:
+            prctl(1, signal.SIGTERM, 0, 0, 0)        # 1 = PR_SET_PDEATHSIG
+            if os.getppid() != parent:               # we already lost the race
+                os._exit(1)
+
+    try:
+        child = subprocess.Popen(command, env=env, start_new_session=True, preexec_fn=die_with_parent)
     except OSError as ex:
         store.finish(entry, error=f'{type(ex).__name__}: {ex}')
         return 127, entry

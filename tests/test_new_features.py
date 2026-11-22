@@ -7,7 +7,6 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from drstool_core import game_links
 from drstool_core.frametime_csv import load_frametimes
@@ -40,6 +39,36 @@ class SessionsTests(unittest.TestCase):
         self.assertFalse((self.store.directory / (entry['id'] + '.json')).stat().st_mode & 0o077)
         self.assertNotIn('SteamAppId', json.dumps(final))
         self.assertNotIn('PRIVATE_TOKEN', json.dumps(final))
+
+    def test_game_does_not_outlive_a_killed_supervisor(self):
+        # The game runs in its own session, so SIGKILL of the supervisor used to orphan it.
+        import signal
+        import subprocess
+        pidfile = self.root / 'game.pid'
+        code = ("import os,sys; sys.path.insert(0, sys.argv[1]);"
+                "from pathlib import Path; from drstool_core.session_recorder import SessionStore, supervise;"
+                "s = SessionStore(Path(sys.argv[2]));"
+                "e = s.begin(profile='G', profile_fp='0'*12, command=['sleep'], env={});"
+                "supervise(s, e, ['sh', '-c', 'echo $$ > ' + sys.argv[3] + '; exec sleep 60'], dict(os.environ))")
+        sup = subprocess.Popen([sys.executable, '-c', code, str(Path(__file__).resolve().parents[1]),
+                                str(self.root / 's2'), str(pidfile)])
+        self.addCleanup(lambda: sup.poll() is None and sup.kill())
+        for _ in range(100):
+            if pidfile.is_file() and pidfile.read_text().strip():
+                break
+            time.sleep(0.05)
+        game = int(pidfile.read_text())
+        sup.kill()
+        sup.wait()
+        for _ in range(60):
+            try:
+                os.kill(game, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            os.kill(game, signal.SIGKILL)
+            self.fail('game process survived SIGKILL of the supervisor')
 
     def test_missing_executable_is_launch_failed(self):
         entry = self.start()

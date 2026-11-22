@@ -92,7 +92,6 @@ class RecoveryCenterTests(unittest.TestCase):
         self.assertEqual([x['kind'] for x in only_game['entries']], ['game-dll'])
 
     def test_launcher_file_backup_from_known_game_link(self):
-        from drstool_core.game_links import LinkStore
         path = self.home/'config/drstool/game_links.json'
         path.parent.mkdir(parents=True)
         target = self.home/'lutris/games/foo.yml'

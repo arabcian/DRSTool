@@ -191,11 +191,22 @@ def tm_discover() -> List[TMLauncher]:
 
 # ── network ─────────────────────────────────────────────────────────────────
 
+_TM_MAX_REPLY = 32 * 1024 * 1024     # release lists / checksum files are far smaller
+
+
 def _tm_get(url: str, accept: str = "application/json", timeout: int = 25) -> bytes:
     host = urllib.parse.urlsplit(url).hostname or ""
+    if not url.startswith("https://"):
+        raise RuntimeError(f"refusing non-HTTPS request: {url}")
     try:
         with net.open_url(url, timeout=timeout, accept=accept, ua=_TM_UA) as r:
-            return r.read()
+            final_url = getattr(r, "url", None) or url
+            if not final_url.startswith("https://"):
+                raise RuntimeError(f"{host}: redirected to non-HTTPS URL {final_url}")
+            data = r.read(_TM_MAX_REPLY + 1)
+            if len(data) > _TM_MAX_REPLY:
+                raise RuntimeError(f"{host}: reply too large")
+            return data
     except urllib.error.HTTPError as e:
         if net.rate_limit_note(e):
             raise RuntimeError(f"{host}: {net.rate_limit_note(e)}") from None

@@ -243,7 +243,7 @@ def scan_lutris(home: Optional[Path] = None) -> List[GameEntry]:
         db = base / "pga.db"
         if db.is_file():
             try:
-                con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
+                con = sqlite3.connect(db.absolute().as_uri() + "?mode=ro", uri=True, timeout=2)
                 try:
                     cols = {r[1] for r in con.execute("PRAGMA table_info(games)")}
                     want = [c for c in ("slug", "name", "runner", "directory", "configpath", "installed")

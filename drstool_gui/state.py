@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 from .base import _as_dict
 from .gamescope import GamescopeFlagsWidget, normalize_gs_flags
 from .launch_line import gamescope_arg_string
-from .lookup import canonical_drs_key, canonical_drs_value, drs_lookup
+from .lookup import _ENV_NAME_RX, canonical_drs_key, canonical_drs_value, drs_lookup
 from .widgets import _fmt_drs_value
 
 
@@ -72,7 +72,8 @@ def state_from_profile(p) -> dict:
     return {"settings": {canonical_drs_key(k): canonical_drs_value(drs_lookup(k), v)
                          for k, v in _as_dict(p.get("settings")).items() if v is not None and str(v).strip()},
             "arch": str(p["arch"]).strip().upper() if p.get("arch") else None,
-            "env": {str(k): str(v) for k, v in _as_dict(p.get("env_vars")).items()},
+            "env": {str(k): str(v) for k, v in _as_dict(p.get("env_vars")).items()
+                    if _ENV_NAME_RX.fullmatch(str(k))},
             "gs_on": bool(p.get("gamescope_enabled")),
             "gs_flags": normalize_gs_flags(p.get("gamescope_flags"))[0]}
 

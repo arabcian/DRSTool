@@ -1,6 +1,5 @@
 """Conservative F02/F04/F09 rules: no graphics devices or Qt required."""
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path

@@ -1022,6 +1022,48 @@ class GuiTests(unittest.TestCase):
             self.assertEqual(r.call_count, 1)
         lv.deleteLater()
 
+    def test_flm_root_step_only_copies_staged_files(self):
+        # root must never run the user-writable cmake_install.cmake: stage as the user, copy as root
+        w = self.m.FlmInstallWidget()
+        w._build_dir, w._prefix_used, w._libdir_used = "/home/u/.cache/drstool/flm-build", "/usr/local", "lib64"
+        calls = []
+        with mock.patch.object(w, "_run_process", side_effect=lambda *a, **k: calls.append((a, k))):
+            w._phase = "build"
+            w._on_proc_finished(0, self.m.QProcess.NormalExit)
+            w._on_proc_finished(0, self.m.QProcess.NormalExit)
+        (stage_prog, stage_args), stage_kw = calls[0]
+        self.assertEqual(stage_prog, "cmake")
+        self.assertFalse(stage_kw["use_pkexec"])
+        self.assertIn("--install", stage_args)
+        (root_prog, root_args), root_kw = calls[1]
+        self.assertTrue(root_kw["use_pkexec"])
+        self.assertEqual(root_prog, "/bin/sh")
+        self.assertNotIn("cmake", " ".join(root_args))
+        self.assertIn("/usr/local/lib64/libvk_flip_meter.so", root_args)
+        self.assertIn("/usr/local/share/vulkan/implicit_layer.d/VkLayer_cpu_flip_meter.json", root_args)
+        w.deleteLater()
+
+    def test_log_tail_appends_instead_of_rerendering(self):
+        lv = self.m.LogViewerWidget()
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "steam-1.log"
+            p.write_text("err: first\ninfo: quiet\n")
+            lv._path = p
+            lines = p.read_text().splitlines()
+            levels, hits = self.m._log_analyse(lines)
+            lv._on_loaded(lv._gen, p.stat().st_size, lines, levels, hits)
+            with p.open("a") as f:
+                f.write("err: second\nwarn: third\ninfo: hidden\n")
+            with mock.patch.object(lv._view, "setPlainText") as full:
+                lv._tail()
+                full.assert_not_called()
+            self.assertEqual(lv._view.toPlainText().splitlines(), ["err: first", "err: second", "warn: third"])
+            self.assertEqual(len(lv._lines), 5)
+            lv._find.setText("third")                # a filter change still does a full render
+            lv._render()
+            self.assertEqual(lv._view.toPlainText(), "warn: third")
+        lv.deleteLater()
+
     def test_share_code_flags_shell_env(self):
         from drstool_core import share_code
         for k in ("BASH_ENV", "ENV", "SHELLOPTS", "IFS"):

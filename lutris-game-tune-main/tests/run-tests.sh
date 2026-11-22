@@ -243,6 +243,21 @@ rm -f "${GAMES_DIR}/live"
 rm -f "${TMP}/recovered"
 rm -rf "${STATE_DIR}"
 
+# --- session watcher moves ITSELF (not the PRE shell) into theUgly ---------------
+(
+    ensure_state_dir
+    mkdir -p "${TMP}/good" "${TMP}/ugly"
+    : > "${TMP}/ugly/cgroup.procs"
+    CCD_MONITOR_INTERVAL=1
+    start_session_monitor "${TMP}/good" "${TMP}/ugly" >/dev/null 2>&1
+    mon="$(cat "${STATE_DIR}/${MONITOR_PID_FILE_NAME}")"
+    for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -s "${TMP}/ugly/cgroup.procs" ]] && break; sleep 0.1; done
+    got="$(cat "${TMP}/ugly/cgroup.procs")"
+    stop_session_monitor >/dev/null 2>&1
+    [[ "${got}" == "${mon}" && "${got}" != "$$" ]]
+) && PASS=$((PASS + 1)) || { echo 'FAIL: session watcher moves its own pid'; FAIL=$((FAIL + 1)); }
+rm -rf "${STATE_DIR}" "${TMP}/good" "${TMP}/ugly"
+
 echo
 echo "passed: ${PASS}   failed: ${FAIL}"
 (( FAIL == 0 ))

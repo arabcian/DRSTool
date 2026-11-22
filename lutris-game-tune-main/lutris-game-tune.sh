@@ -2386,10 +2386,11 @@ start_session_monitor() {
         exec 0</dev/null
         trap 'exit 0' TERM INT
 
-        renice -n 19 -p "$$" >/dev/null 2>&1 || true
+        # BASHPID, not $$: inside this subshell $$ is still the PRE shell's PID.
+        renice -n 19 -p "${BASHPID}" >/dev/null 2>&1 || true
         # Put the watcher on the system CCD so its own work never lands on
         # the cores the game is using.
-        echo "$$" > "${ugly_dir}/cgroup.procs" 2>/dev/null || true
+        echo "${BASHPID}" > "${ugly_dir}/cgroup.procs" 2>/dev/null || true
 
         local s f t rs rf
         while :; do

@@ -44,6 +44,18 @@ def parse_profile_import(text: str) -> Dict[str, dict]:
     raise ValueError("not a DRSTool profile export or profiles.json")
 
 
+def import_flags(profiles: Dict[str, dict]) -> Dict[str, Dict[str, str]]:
+    """{profile: {env var: reason}} — the same review a share code gets before import."""
+    out = {}
+    for name, prof in profiles.items():
+        env = prof.get("env_vars") if isinstance(prof, dict) else None
+        if isinstance(env, dict):
+            flagged = share_code.flag_env({str(k): str(v) for k, v in env.items()})
+            if flagged:
+                out[name] = flagged
+    return out
+
+
 def unique_profile_name(base: str, taken) -> str:
     if base not in taken:
         return base

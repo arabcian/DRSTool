@@ -24,7 +24,7 @@ from .widgets import _desc_label, _LINEEDIT_QSS, _table_qss, _title_label
 # ----------------------------------------------------------------------------
 
 
-from drstool_core.frametime_csv import load_frametimes, _parse_frametimes, frame_stats
+from drstool_core.frametime_csv import load_frametimes, _parse_frametimes, frame_stats  # noqa: F401 (re-exported)
 
 
 # ----------------------------------------------------------------------------

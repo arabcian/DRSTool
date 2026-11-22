@@ -149,7 +149,8 @@ class LogViewerWidget(QWidget):
         self._lines: List[str] = []
         self._levels: List[str] = []
         self._hits: Dict[str, int] = {}
-        self._gen = 0                         # id of the latest load request
+        self._n_shown = 0                     # lines matching the filter (the view keeps MAX_SHOW)
+        self._gen = 0                        # id of the latest load request
         self._loading = False
         self._loaders: List[QThread] = []
         lay = QVBoxLayout(self)
@@ -211,6 +212,7 @@ class LogViewerWidget(QWidget):
         self._view = QPlainTextEdit()
         self._view.setReadOnly(True)
         self._view.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self._view.setMaximumBlockCount(self.MAX_SHOW)
         self._view.setStyleSheet(_MONO_BOX_QSS)
         self._hl = LogHighlighter(self._view.document())
         lay.addWidget(self._view, 1)
@@ -371,20 +373,41 @@ class LogViewerWidget(QWidget):
         if not data:
             return
         self._pos += len(data)
-        self._ingest(data.decode("utf-8", "replace").splitlines(), False)
-        self._render()
+        new = data.decode("utf-8", "replace").splitlines()
+        self._ingest(new, False)
+        if len(new) > len(self._lines) or self._find_timer.isActive():
+            self._render()                    # buffer was trimmed / a filter edit is pending
+            return
+        # Only the new lines: re-filtering the whole buffer and re-setting (and
+        # re-highlighting) the view every second janked the UI while a game logs.
+        want = {k for k, c in self._chk.items() if c.isChecked()}
+        needle = self._find.text().lower()
+        add = [ln for ln, lv in zip(new, self._levels[len(self._levels) - len(new):])
+               if lv in want and (not needle or needle in ln.lower())]
+        if add:
+            sb = self._view.verticalScrollBar()
+            at_end = sb.value() >= sb.maximum() - 4
+            self._view.appendPlainText("\n".join(add))     # maximumBlockCount drops the oldest
+            self._n_shown += len(add)
+            if at_end or self._follow.isChecked():
+                sb.setValue(sb.maximum())
+        self._render_summary()
 
     def _render(self):
         want = {k for k, c in self._chk.items() if c.isChecked()}
         needle = self._find.text().lower()
         shown = [ln for ln, lv in zip(self._lines, self._levels)
                  if lv in want and (not needle or needle in ln.lower())]
-        trimmed = len(shown) > self.MAX_SHOW
+        self._n_shown = len(shown)
         sb = self._view.verticalScrollBar()
         at_end = sb.value() >= sb.maximum() - 4
         self._view.setPlainText("\n".join(shown[-self.MAX_SHOW:]))
         if at_end or self._follow.isChecked():
             sb.setValue(sb.maximum())
+        self._render_summary()
+
+    def _render_summary(self):
+        trimmed = self._n_shown > self.MAX_SHOW
         # signature scan over the whole buffer
         self._rules.setRowCount(0)
         w = self.window()

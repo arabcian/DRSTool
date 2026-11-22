@@ -71,6 +71,10 @@
  *   - RUN refuses to start a command as root (sudo / pkexec RUN would
  *     otherwise run the whole game as root)
  *
+ * v2.4 changes:
+ *   - the tuning script is opened once (O_NOFOLLOW), verified with fstat and
+ *     run as /dev/fd/N: no check-then-exec window, symlinked scripts refused
+ *
  * Build & install: use install.sh, or:
  *   gcc -O2 -Wall -Wextra -o lutris-game-tune-wrapper lutris-game-tune-wrapper.c
  *   sudo install -o root -g root -m 4755 lutris-game-tune-wrapper /usr/local/bin/
@@ -101,8 +105,11 @@
 #include <sys/prctl.h>
 #include <linux/capability.h>
 
-/* Exact path to the script — update here too if you move it. */
+/* Exact path to the script — update here too if you move it.
+ * (Overridable only at build time, for tests/wrapper-tests.sh.) */
+#ifndef SCRIPT_PATH
 #define SCRIPT_PATH "/usr/local/lib/lutris-game-tune/lutris-game-tune.sh"
+#endif
 
 /* Default nice value used in RUN mode when none is specified. */
 #define DEFAULT_GAME_NICE (-5)
@@ -121,29 +128,41 @@
 #define RT_PRIO_MAX 10
 #define RT_ALLOW_FILE "/etc/lutris-game-tune.allow-rt"
 
-static int verify_script(const char *path)
+/* Opens the script ONCE (no symlink) and verifies that very inode; bash then
+ * reads it through /dev/fd/N, so it cannot be swapped between check and exec.
+ * Returns the fd (inherited by bash), or -1. */
+static int open_verified_script(const char *path)
 {
     struct stat st;
+    int fd = open(path, O_RDONLY | O_NOFOLLOW);
 
-    if (stat(path, &st) != 0) {
+    if (fd < 0) {
+        perror("Script open failed");
+        return -1;
+    }
+    if (fstat(fd, &st) != 0) {
         perror("Script stat failed");
+        close(fd);
         return -1;
     }
     if (!S_ISREG(st.st_mode)) {
         fprintf(stderr, "Error: %s is not a regular file.\n", path);
+        close(fd);
         return -1;
     }
     if (st.st_uid != 0) {
         fprintf(stderr, "Error: %s is not owned by root (uid=%u).\n",
                 path, (unsigned)st.st_uid);
+        close(fd);
         return -1;
     }
     if (st.st_mode & (S_IWGRP | S_IWOTH)) {
         fprintf(stderr, "Error: %s is group/other writable — refusing.\n",
                 path);
+        close(fd);
         return -1;
     }
-    return 0;
+    return fd;
 }
 
 /* Does the token look like it was INTENDED as a nice value? i.e. starts
@@ -520,16 +539,17 @@ int main(int argc, char *argv[])
 
     umask(022);
 
-    /* Script integrity check (there's a TOCTOU window, but the script
-     * directory should already be root-writable-only — this is an
-     * additional line of defense) */
-    if (verify_script(SCRIPT_PATH) != 0)
+    /* Script integrity check on the opened file itself (no TOCTOU window). */
+    int script_fd = open_verified_script(SCRIPT_PATH);
+    if (script_fd < 0)
         return 1;
+    char script_ref[32];
+    snprintf(script_ref, sizeof(script_ref), "/dev/fd/%d", script_fd);
 
     if (argc == 3)
-        execl("/bin/bash", "bash", SCRIPT_PATH, action, argv[2], (char *)NULL);
+        execl("/bin/bash", "bash", script_ref, action, argv[2], (char *)NULL);
     else
-        execl("/bin/bash", "bash", SCRIPT_PATH, action, (char *)NULL);
+        execl("/bin/bash", "bash", script_ref, action, (char *)NULL);
     perror("execl failed");
     return 1;
 }

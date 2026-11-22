@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from .base import _as_dict, _atomic_write, _CORE_ERR, share_code
 from .dialogs import ChangesDialog, ShareImportDialog
 from .links import LINKS
-from .profile_io import parse_profile_import, profile_export_text, profile_share_code
+from .profile_io import import_flags, parse_profile_import, profile_export_text, profile_share_code
 from .settings_manager import SettingsManager
 from .state import state_as_profile
 from .toasts import toast
@@ -377,6 +377,21 @@ class ProfileManagerWidget(QWidget):
         except (OSError, ValueError) as ex:
             QMessageBox.warning(self, "Import profile", f"Could not import {Path(path).name}:\n{ex}")
             return
+        flags = import_flags(profs)
+        if flags:
+            lines = [f"{n}: {k} — {why}" for n, f in flags.items() for k, why in f.items()]
+            ans = QMessageBox.question(
+                self, "Import profile",
+                "Some variables change which libraries / layers / programs a game loads:\n\n"
+                + "\n".join(lines[:12]) + ("\n…" if len(lines) > 12 else "")
+                + "\n\nKeep them? (No = import without them)",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel, QMessageBox.No)
+            if ans == QMessageBox.Cancel:
+                return
+            if ans == QMessageBox.No:
+                for n, f in flags.items():
+                    for k in f:
+                        profs[n]["env_vars"].pop(k, None)
         names = self.settings_manager.import_profiles(profs)
         if names:
             self._select_name(names[0])

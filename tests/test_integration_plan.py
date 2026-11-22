@@ -63,6 +63,19 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(self.dest.read_bytes(), b'abc')
         self.assertTrue(self.dest.with_name(self.dest.name + '.http.json').is_file())
 
+    def test_plain_http_is_refused(self):
+        with self.assertRaises(RuntimeError):
+            download('http://example.invalid/x.tar.gz', self.dest, 0, self.cancel, lambda *_: None,
+                     user_agent='DRSTool/test')
+        self.assertFalse(self.dest.exists())
+
+    def test_redirect_to_plain_http_is_refused(self):
+        reply = _Reply(200, {'Content-Length': '3'}, b'abc')
+        reply.url = 'http://mirror.invalid/x.tar.gz'
+        with self.assertRaises(RuntimeError):
+            self.run_download([reply])
+        self.assertFalse(self.dest.exists())
+
     def test_new_download(self):
         requests = self.run_download([_Reply(200, {'ETag': '"v1"', 'Content-Length': '6'}, b'abcdef')])
         self.assertEqual(self.dest.read_bytes(), b'abcdef')

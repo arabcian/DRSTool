@@ -74,7 +74,9 @@ fi
 c_yellow "[1/5] Building lutris-game-tune-wrapper (PRE/POST/STATUS + RUN)..."
 TMP_BUILD="$(mktemp -d)"
 trap 'rm -rf "${TMP_BUILD}"' EXIT
-gcc -O2 -Wall -Wextra -o "${TMP_BUILD}/lutris-game-tune-wrapper" "${SCRIPT_DIR}/lutris-game-tune-wrapper.c"
+# Hardened: this binary ends up setuid root (or with cap_sys_nice).
+gcc -O2 -Wall -Wextra -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE -pie \
+    -Wl,-z,relro,-z,now -o "${TMP_BUILD}/lutris-game-tune-wrapper" "${SCRIPT_DIR}/lutris-game-tune-wrapper.c"
 c_green "    Build succeeded."
 
 # --- 2. Install the script ---------------------------------------------------

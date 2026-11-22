@@ -66,6 +66,19 @@ class RunCommandTests(unittest.TestCase):
                                 "mangohud", "--dlsym", "game.exe", "--", "-dx12"])
         self.assertEqual(cli.run_argv({"env_vars": {"A": "1"}}, ["x"]), ({"A": "1"}, ["x"]))
 
+    def test_invalid_env_names_from_profile_file_are_dropped(self):
+        # A hand-edited / imported profile must not reach execvpe (ValueError) or a launch line.
+        from drstool_gui import cli
+        env, _argv = cli.run_argv({"env_vars": {"X=1; curl x|sh #": "1", "A=B": "2", "OK": "3"}}, ["x"])
+        self.assertEqual(env, {"OK": "3"})
+
+    def test_file_import_reports_sensitive_env(self):
+        from drstool_gui.profile_io import import_flags
+        profs = {"P": {"env_vars": {"LD_PRELOAD": "/tmp/x.so", "DXVK_HUD": "fps"}},
+                 "Q": {"env_vars": {"DXVK_HUD": "fps"}}}
+        self.assertEqual(set(import_flags(profs)), {"P"})
+        self.assertIn("LD_PRELOAD", import_flags(profs)["P"])
+
     def _exec(self, argv, profiles):
         from unittest import mock
         from drstool_gui import cli
@@ -96,6 +109,34 @@ class RunCommandTests(unittest.TestCase):
         code, ex = self._exec(["--lint", "P"], {})          # not ours: falls through to the normal CLI
         self.assertIsNone(code)
         ex.assert_not_called()
+
+
+@unittest.skipIf(state is None, "PySide6 not installed")
+class ToolManagerGetTests(unittest.TestCase):
+    """Checksums and API metadata come through _tm_get: same HTTPS rule as the archive."""
+
+    def _get(self, url, final_url, body=b"ok"):
+        import io
+        from unittest import mock
+        from drstool_gui import tool_manager as tm
+        reply = io.BytesIO(body)
+        reply.url = final_url
+        with mock.patch.object(tm.net, "open_url", return_value=reply):
+            return tm._tm_get(url)
+
+    def test_https_ok(self):
+        self.assertEqual(self._get("https://a.invalid/x", "https://a.invalid/x"), b"ok")
+
+    def test_plain_http_and_http_redirect_refused(self):
+        with self.assertRaises(RuntimeError):
+            self._get("http://a.invalid/x", "http://a.invalid/x")
+        with self.assertRaises(RuntimeError):
+            self._get("https://a.invalid/x", "http://b.invalid/x")
+
+    def test_oversized_reply_refused(self):
+        from drstool_gui import tool_manager as tm
+        with self.assertRaises(RuntimeError):
+            self._get("https://a.invalid/x", "https://a.invalid/x", b"x" * (tm._TM_MAX_REPLY + 1))
 
 
 class PerfHistoryTests(unittest.TestCase):
