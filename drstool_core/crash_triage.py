@@ -134,6 +134,23 @@ def compare(crashed: dict, clean: dict) -> list:
     return rows
 
 
+# fingerprint key -> the env var that sets it, for turning a crashed/clean difference into a suspect
+_FINGERPRINT_ENV = {"swapchain_images": "VKD3D_SWAPCHAIN_IMAGES",
+                    "max_latency_frames": "VKD3D_SWAPCHAIN_LATENCY_FRAMES"}
+
+
+def suggest_suspects(result: dict, clean: dict | None = None) -> list:
+    """Bisect items to test first: the matched rules' suspects, then VKD3D_CONFIG flags only the
+    crashed run had and env vars behind other fingerprint differences."""
+    out = list(result["suspects"])
+    for key, a, _b in (compare(result, clean) if clean else []):
+        if key.startswith("vkd3d:") and a:
+            out.append(key)
+        elif key in _FINGERPRINT_ENV:
+            out.append("env:" + _FINGERPRINT_ENV[key])
+    return list(dict.fromkeys(out))
+
+
 def kernel_window(result: dict, *, before: int = 30, after: int = 120):
     """(start, end) epoch seconds to read the kernel journal for this run, or None."""
     if not result.get("started"):
@@ -158,8 +175,9 @@ def format_report(result: dict, *, clean: dict | None = None, markdown: bool = F
     if result["fingerprint"]:
         out += ["", h("Run")]
         out += [f"- {k}: {code(v)}" for k, v in sorted(result["fingerprint"].items())]
-    if result["suspects"]:
-        out += ["", h("Test first"), "- " + ", ".join(result["suspects"])]
+    suspects = suggest_suspects(result, clean)
+    if suspects:
+        out += ["", h("Test first"), "- " + ", ".join(suspects)]
     if clean is not None:
         rows = compare(result, clean)
         out += ["", h("Differences from the clean run")]

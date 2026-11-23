@@ -85,6 +85,54 @@ def collect(start: float, end: float, *, runner: Callable = subprocess.run,
             'events': parse_lines(result.stdout.splitlines())}
 
 
+_ISO_LINE = re.compile(r'^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:[.,]\d+)?(?:[+-]\d\d:?\d\d)?)\s+(.*)$')
+
+
+def parse_dmesg_iso(lines: Iterable[str], start: float, end: float, *, limit: int = 500) -> list[dict]:
+    """`dmesg --time-format=iso` lines inside [start, end] -> the same entries as parse_lines."""
+    unix = []
+    for line in lines:
+        m = _ISO_LINE.match(line)
+        if not m:
+            continue
+        try:
+            t = datetime.fromisoformat(m.group(1).replace(',', '.')).timestamp()
+        except ValueError:
+            continue
+        if start <= t <= end:
+            unix.append(f'{t:.6f} host kernel: {m.group(2)}')
+    return parse_lines(unix, limit=limit)
+
+
+def collect_dmesg(start: float, end: float, *, runner: Callable = subprocess.run) -> dict:
+    """Fallback for systems without a readable journal (OpenRC, no systemd-journal group).
+    Needs kernel.dmesg_restrict=0; a refusal is reported, never treated as no events."""
+    if not shutil.which('dmesg') and runner is subprocess.run:
+        return {'status': 'unavailable', 'reason': 'dmesg not installed', 'events': []}
+    try:
+        result = runner(['dmesg', '--time-format=iso', '--nopager'], capture_output=True, text=True,
+                        errors='replace', timeout=8, check=False)
+    except (OSError, subprocess.TimeoutExpired) as ex:
+        return {'status': 'unavailable', 'reason': type(ex).__name__, 'events': []}
+    if result.returncode != 0:
+        return {'status': 'unavailable', 'reason': f'dmesg returned {result.returncode} '
+                '(kernel.dmesg_restrict=1 needs root)', 'events': []}
+    return {'status': 'ok', 'reason': 'Read from dmesg (kernel ring buffer; old entries may have rotated out)',
+            'events': parse_dmesg_iso(result.stdout.splitlines(), start, end)}
+
+
+def collect_any(start: float, end: float, *, runner: Callable = subprocess.run) -> dict:
+    """The journal first, dmesg when the journal cannot be read."""
+    journal = collect(start, end, runner=runner)
+    if journal['status'] == 'ok':
+        return journal
+    ring = collect_dmesg(start, end, runner=runner)
+    if ring['status'] == 'ok':
+        return ring
+    return {'status': 'unavailable', 'reason': f"journal: {journal['reason']}; dmesg: {ring['reason']}",
+            'events': []}
+
+
 def correlate(session: dict, *, before_seconds: int = 30, after_seconds: int = 30,
               collector: Callable = collect, now: float | None = None) -> dict:
     """Correlate a recorded session and journal events. No causal attribution."""

@@ -23,6 +23,7 @@ from .main_history import HistoryMixin
 from .main_session import SessionMixin
 from .app_dialogs import _spawn_restart, AppearanceDialog, ShortcutsDialog
 from .arch_widgets import ArchDetailWidget, ArchListWidget
+from .crash_lab import SEARCH as CRASH_SEARCH, TRIAGE as CRASH_TRIAGE, CrashLabSidebar, CrashLabWidget
 from . import base as _base
 from .base import _CORE_ERR, APP_ID, APP_TITLE, ICON_PATH, share_code
 from .catalog_data import ALL_ENV_VARS, ALL_SETTINGS, GPU_ARCHS
@@ -77,9 +78,10 @@ if TYPE_CHECKING:
 
 class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
     # Tab indices (sidebar stack pages). Nav order on screen matches.
-    TAB_DRS, TAB_ARCH, TAB_ENV, TAB_GAMES, TAB_PROFILES, TAB_TOOLS = range(6)
+    TAB_DRS, TAB_ARCH, TAB_ENV, TAB_GAMES, TAB_PROFILES, TAB_TOOLS, TAB_CRASH = range(7)
     # Right-stack pages
-    PAGE_EMPTY, PAGE_SETTING, PAGE_ARCH, PAGE_ENV, PAGE_GAMESCOPE, PAGE_TOOLS, PAGE_LUTRIS, PAGE_GAMES = range(8)
+    PAGE_EMPTY, PAGE_SETTING, PAGE_ARCH, PAGE_ENV, PAGE_GAMESCOPE, PAGE_TOOLS, PAGE_LUTRIS, PAGE_GAMES, \
+        PAGE_CRASH = range(9)
 
     EMPTY_HINTS = {
         0: "Pick a DRS setting\nGreen dots mark settings already in the launch string; their value shows on the right.",
@@ -159,8 +161,11 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         self._games_tab = NavTab(tr("Games"), "\u25b6")
         self._games_tab.setToolTip("Every installed game with its profile, Proton, DLSS / DXVK, "
                                    "frametime, log errors and ProtonDB tier")
+        self._crash_tab = NavTab(tr("Crash Lab"), "\u26a0")
+        self._crash_tab.setToolTip("Crash triage (log + Xid signatures) and the guided search "
+                                   "for the setting that makes a game crash")
         self._nav_tabs = [self._settings_tab, self._arch_tab, self._env_tab,
-                          self._games_tab, self._profiles_tab, self._flm_tab]
+                          self._games_tab, self._profiles_tab, self._flm_tab, self._crash_tab]
         for idx, btn in enumerate(self._nav_tabs):
             btn.clicked.connect(lambda _c=False, i=idx: self._switch_tab(i))
             # the title is part of the tooltip: a narrow window hides it (NavTab.set_compact)
@@ -233,18 +238,20 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         nav_layout.addWidget(self._profile_chip)
         nav_layout.addSpacing(6)
         self._menu_btn = QToolButton()
-        self._menu_btn.setText("⚙")
-        self._menu_btn.setToolTip("Appearance, keyboard shortcuts, background tasks")
+        self._menu_btn.setText("\u2699  Menu  \u25be")
+        self._menu_btn.setToolTip("Appearance, keyboard shortcuts, background tasks, Crash Lab")
         self._menu_btn.setPopupMode(QToolButton.InstantPopup)
         self._menu_btn.setCursor(Qt.PointingHandCursor)
         self._menu_btn.setFixedHeight(30)
-        self._menu_btn.setStyleSheet(_nav_btn_ss + "QToolButton::menu-indicator{image:none;width:0;}")
+        self._menu_btn.setStyleSheet(btn_ss("default", "sm") + "QToolButton{font-size:13px;}"
+                                     "QToolButton::menu-indicator{image:none;width:0;}")
         _mm = QMenu(self._menu_btn)
         _mm.addAction("Appearance…\tCtrl+,").triggered.connect(self.open_appearance)
         _mm.addAction("Keyboard shortcuts\tF1").triggered.connect(self.open_shortcuts)
         _mm.addAction("Background tasks").triggered.connect(self._tasks_menu)
-        _mm.addAction("Find the breaking setting…").triggered.connect(self._open_bisect)
-        _mm.addAction("Crash triage…").triggered.connect(self._open_crash_triage)
+        _mm.addSeparator()
+        _mm.addAction("Crash triage\tCtrl+7").triggered.connect(self._open_crash_triage)
+        _mm.addAction("Find the breaking setting").triggered.connect(self._open_bisect)
         self._menu_btn.setMenu(_mm)
         nav_layout.addWidget(self._menu_btn)
         main_layout.addWidget(nav)
@@ -357,6 +364,10 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         self._flm_sidebar = ExtraToolsSidebarWidget()
         self._sidebar_stack.addWidget(self._flm_sidebar)
 
+        # Page 6: Crash Lab sidebar (triage / search)
+        self._crash_sidebar = CrashLabSidebar()
+        self._sidebar_stack.addWidget(self._crash_sidebar)
+
         # ===== Right side (editor area) =====
         editor = QWidget()
         editor.setObjectName("editorPane")
@@ -448,6 +459,11 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         self._game_card = GameCardWidget(self.settings_manager, self._right_stack)
         self._right_stack.addWidget(self._game_card)
         self._games_list.game_selected.connect(self._open_game)
+
+        # Page 8: Crash Lab (triage + breaking-setting search)
+        self._crash_lab = CrashLabWidget(self)
+        self._right_stack.addWidget(self._crash_lab)
+        self._crash_sidebar.bind(self._crash_lab)
 
         # Wire the Gamescope CLI-flag builder into the Lutris sync mapping
         self._lutris_sync_widget.set_gamescope_widget(self._gamescope)
@@ -1045,12 +1061,12 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
             toast(f"New driver: {len(hit)} profile(s) have lint findings — " + "; ".join(hit[:5]), "warn", 20000)
 
     def _open_bisect(self):
-        from .bisect_dialog import BisectDialog
-        BisectDialog(self).show()
+        self._switch_tab(self.TAB_CRASH)
+        self._crash_lab.show_tab(CRASH_SEARCH)
 
     def _open_crash_triage(self):
-        from .crash_triage_dialog import CrashTriageDialog
-        CrashTriageDialog(self).show()
+        self._switch_tab(self.TAB_CRASH)
+        self._crash_lab.show_tab(CRASH_TRIAGE)
 
     def _tasks_menu(self):
         m = QMenu(self)
@@ -1167,10 +1183,14 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         if sig == self._nav_sig:                      # our own steps post LayoutRequests too
             return
         self._nav_sig = sig
-        for brand_compact, level in ((False, 0), (True, 0), (True, 1), (True, 2), (True, 3), (True, 4)):
+        for brand_compact, level, short in ((False, 0, False), (True, 0, False), (True, 1, False), (True, 2, False),
+                                            (True, 3, False), (True, 4, False), (True, 4, True)):
             self._brand.set_compact(brand_compact)
             self._nav_seg.set_compact(level)
             self._nav_seg.updateGeometry()            # drop the layout's cached size of the segment
+            # last step: the menu and recipes buttons drop their words (glyph + tooltip stay)
+            self._menu_btn.setText("\u2699" if short else "\u2699  Menu  \u25be")
+            self._recipes_btn.setText("\u2726" if short else "\u2726 Recipes")
             if self._nav_layout.minimumSize().width() <= self.width():
                 break
 
@@ -1326,6 +1346,8 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
                     self._right_stack.setCurrentIndex(self.PAGE_EMPTY)
             elif idx == self.TAB_TOOLS:
                 self._right_stack.setCurrentIndex(self.PAGE_TOOLS)
+            elif idx == self.TAB_CRASH:
+                self._right_stack.setCurrentIndex(self.PAGE_CRASH)
             else:
                 self._right_stack.setCurrentIndex(self.PAGE_EMPTY)
         perf.report()
@@ -1569,6 +1591,8 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
             self._right_stack.setCurrentIndex(self.PAGE_LUTRIS)
         elif active_tab == self.TAB_TOOLS:
             self._right_stack.setCurrentIndex(self.PAGE_TOOLS)
+        elif active_tab == self.TAB_CRASH:
+            self._right_stack.setCurrentIndex(self.PAGE_CRASH)
         elif active_tab == self.TAB_GAMES:
             self._right_stack.setCurrentIndex(self.PAGE_GAMES if self._game_card.game else self.PAGE_EMPTY)
         else:

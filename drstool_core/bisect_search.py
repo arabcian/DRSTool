@@ -1,16 +1,21 @@
 """Interactive delta debugging (ddmin) for "which settings make the game crash".
 
 The user runs every test by hand, so the search is a pure function of the answers given so far:
-`DDMin(items, answers)` replays them, which makes undo and resuming after a restart trivial.
+`CrashSearch(items, answers)` replays them, which makes undo and resuming after a restart trivial.
 
-Each test switches on the `fixed` items plus a subset of `items`; the answer is True when the
-game still fails. The first test is the fixed items alone: if they fail, nothing in `items`
-is needed. Otherwise the full set is taken as failing (that is why the user is here) and
-ddmin shrinks it to a 1-minimal failing set: removing any single item from the result makes
-the failure go away. Unlike halving this also finds causes that need two settings together.
+Each test switches on the always-kept ("fixed") settings plus a subset of `items`; the answer is
+True when the game still fails.
+
+1. The fixed settings alone are tested first: if they fail, nothing in `items` is needed.
+2. ddmin shrinks the full set (failing, that is why the user is here) to a 1-minimal failing
+   set: switching off any one of its settings stops the failure. Unlike halving it also finds
+   settings that only crash together.
+3. Verification: everything except the culprits found so far. If that still fails there is a
+   second, independent cause and the search continues on what is left.
 """
 from __future__ import annotations
 
+import math
 from typing import Iterable, Sequence
 
 
@@ -19,9 +24,9 @@ def order_by_priority(items: Sequence, priority: Iterable) -> list:
 
     ddmin splits the list into consecutive chunks, so suspects that sit together are
     tested together early."""
-    pri = [p for p in priority if p in items]
+    pri = list(dict.fromkeys(p for p in priority if p in items))
     seen = set(pri)
-    return list(dict.fromkeys(pri)) + [i for i in items if i not in seen]
+    return pri + [i for i in items if i not in seen]
 
 
 def _split(c: list, n: int) -> list:
@@ -34,13 +39,10 @@ def _split(c: list, n: int) -> list:
     return [d for d in out if d]
 
 
-def _search(items: list):
-    """Generator: yields subsets to test, receives True (fails) / False (works).
-    Returns ("fixed", []) or ("found", minimal failing subset)."""
-    if (yield []):
-        return "fixed", []
-    c, n = list(items), 2
+def _ddmin(c: list, st: dict):
+    n = 2
     while len(c) >= 2:
+        st["phase"], st["candidates"] = "search", list(c)
         chunks = _split(c, n)
         for d in chunks:
             if (yield d):
@@ -56,24 +58,39 @@ def _search(items: list):
                 if n >= len(c):
                     break
                 n = min(2 * n, len(c))
-    return "found", c
+    return c
 
 
-class DDMin:
+def _search(items: list, st: dict):
+    """Yields subsets to test, receives True (fails) / False (works).
+    Returns ("fixed", []) or ("found", [culprit group, …])."""
+    st["phase"], st["candidates"] = "fixed", list(items)
+    if (yield []):
+        return "fixed", []
+    groups, remaining = st.setdefault("groups", []), list(items)
+    while True:
+        group = yield from _ddmin(remaining, st)
+        groups.append(group)
+        remaining = [i for i in remaining if i not in group]
+        st["phase"], st["candidates"] = "verify", list(remaining)
+        if not remaining or not (yield remaining):
+            return "found", groups
+
+
+class CrashSearch:
     def __init__(self, items: Sequence, answers: Iterable[bool] = ()):
         self.items = list(items)
-        self.answers: list = []
-        self.cache: dict = {}                       # frozenset(subset) -> fails
-        self.outcome = None                         # ("fixed" | "found", items) when done
-        self.pending = None                         # subset the user has to test next
-        self._gen = None
         self._restart()
         for a in answers:
             self.answer(a)
 
     def _restart(self):
-        self.answers, self.cache, self.outcome = [], {}, None
-        self._gen = _search(self.items)
+        self.answers: list = []
+        self.cache: dict = {}                       # frozenset(subset) -> fails
+        self.outcome = None                         # ("fixed" | "found", groups) when done
+        self.pending = None                         # subset the user has to test next
+        self._st: dict = {}
+        self._gen = _search(self.items, self._st)
         self._advance(None, first=True)
 
     def _advance(self, value, first=False):
@@ -94,6 +111,36 @@ class DDMin:
     def tests_done(self) -> int:
         return len(self.answers)
 
+    @property
+    def phase(self) -> str:
+        """"fixed", "search" or "verify" for the pending test; "done" at the end."""
+        return "done" if self.done else self._st["phase"]
+
+    @property
+    def culprits(self) -> list:
+        return [i for g in (self.outcome[1] if self.done else []) for i in g]
+
+    @property
+    def found_so_far(self) -> list:
+        """Culprit groups found before the pending verification / next round."""
+        return [list(g) for g in self._st.get("groups", [])]
+
+    @property
+    def candidates(self) -> list:
+        """What is still suspected while searching (what stays on while verifying)."""
+        return list(self._st.get("candidates", []))
+
+    def estimate_left(self) -> int:
+        """Tests still needed if a single setting is the cause (ddmin: ≤ 2 per halving,
+        plus the verification)."""
+        if self.done:
+            return 0
+        n = len(self._st["candidates"])
+        if self.phase == "verify":
+            return 1
+        steps = 2 * math.ceil(math.log2(n)) if n > 1 else 0
+        return steps + 1 + (1 if self.phase == "fixed" else 0)
+
     def answer(self, fails: bool):
         if self.done:
             raise RuntimeError("search finished")
@@ -106,3 +153,26 @@ class DDMin:
         self._restart()
         for a in answers:
             self.answer(a)
+
+
+def early_works_warning(elapsed: float, crash_times: Iterable[float] = (), upper_bounds: Iterable[float] = (),
+                        *, factor: float = 1.5, floor: float = 60.0) -> str | None:
+    """A reason to doubt a "works" answer given after `elapsed` seconds, or None.
+
+    `crash_times`: measured time until the crash (the crashed run's log); an intermittent crash
+    that took 4 minutes is not ruled out by 5, so a margin (`factor`) applies.
+    `upper_bounds`: time until earlier "still crashes" answers. The crash came at some point
+    before the answer, so these are not stretched: playing as long as that is enough."""
+    exact = [t for t in crash_times if t and t > 0]
+    upper = [t for t in upper_bounds if t and t > 0]
+    need = max([t * factor for t in exact] + upper + [floor])
+    if elapsed >= need:
+        return None
+    why = ("the crash may need more time to show up" if need == floor
+           else f"earlier crashes needed up to {_mmss(max(exact + upper))}")
+    return f"This test ran for {_mmss(elapsed)} only, and {why}. Playing at least {_mmss(need)} is safer."
+
+
+def _mmss(s: float) -> str:
+    s = int(s)
+    return f"{s // 60} min {s % 60:02d} s" if s >= 60 else f"{s} s"

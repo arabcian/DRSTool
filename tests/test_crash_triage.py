@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from drstool_core import crash_triage  # noqa: E402
+from drstool_core import crash_triage, kernel_events  # noqa: E402
 
 # Lines from a Crimson Desert run (2026-11-23) that exited cleanly with VKD3D_CONFIG empty.
 CLEAN_RUN = [
@@ -62,6 +62,14 @@ class CrashTriageTests(unittest.TestCase):
         self.assertIn("## Differences from the clean run", text)
         self.assertIn("- vkd3d:dxr: `on` → clean `—`", text)
 
+    def test_suspects_from_clean_comparison(self):
+        crashed, clean = crash_triage.triage(CRASH_RUN), crash_triage.triage(CLEAN_RUN)
+        self.assertEqual(crash_triage.suggest_suspects(crashed, clean),
+                         ["env:VKD3D_SWAPCHAIN_IMAGES", "vkd3d:dxr", "vkd3d:force_static_cbv"])
+        self.assertEqual(crash_triage.suggest_suspects(crashed), [])
+        self.assertIn("## Test first\n- env:VKD3D_SWAPCHAIN_IMAGES, vkd3d:dxr, vkd3d:force_static_cbv",
+                      crash_triage.format_report(crashed, clean=clean, markdown=True))
+
     def test_rule_suspects_reach_the_result(self):
         rules = [dict(r, suspects=["vkd3d:dxr", "env:VKD3D_SWAPCHAIN_IMAGES"]) if r["id"] == "device-lost" else r
                  for r in crash_triage.RULES]
@@ -99,6 +107,35 @@ class CrashTriageTests(unittest.TestCase):
     def test_device_lost_variants(self):
         for line in ("err: VK_ERROR_DEVICE_LOST", "DXGI_ERROR_DEVICE_HUNG", "vkd3d: device lost"):
             self.assertTrue(crash_triage.triage([line])["crashed"], line)
+
+
+class KernelFallbackTests(unittest.TestCase):
+    class Run:
+        def __init__(self, rc, out=""):
+            self.returncode, self.stdout = rc, out
+
+    def test_dmesg_used_when_journal_fails(self):
+        from datetime import datetime
+        t = datetime(2026, 11, 23, 18, 34, 8).astimezone()
+        dmesg = (f"{t.isoformat().replace('+', ',123456+', 1)} NVRM: Xid (PCI:0000:01:00): 69, pid=1, "
+                 "Class Error: ChId 0017\n"
+                 f"{datetime(2026, 11, 23, 9, 0, 0).astimezone().isoformat()} NVRM: Xid (PCI:0000:01:00): 13\n"
+                 "garbage line\n")
+        calls = []
+
+        def runner(cmd, **_kw):
+            calls.append(cmd[0])
+            return self.Run(1) if cmd[0] == "journalctl" else self.Run(0, dmesg)
+        r = kernel_events.collect_any(t.timestamp() - 60, t.timestamp() + 60, runner=runner)
+        self.assertEqual(calls, ["journalctl", "dmesg"])
+        self.assertEqual(r["status"], "ok")
+        self.assertEqual([e["xid"] for e in r["events"]], [69])         # 09:00 event is outside the window
+
+    def test_both_unavailable_is_reported(self):
+        r = kernel_events.collect_any(1_700_000_000, 1_700_000_100, runner=lambda cmd, **_k: self.Run(1))
+        self.assertEqual(r["status"], "unavailable")
+        self.assertIn("dmesg_restrict", r["reason"])
+        self.assertIn("journal", r["reason"])
 
 
 if __name__ == "__main__":
