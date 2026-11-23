@@ -11,10 +11,10 @@ import json
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, Signal
+from PySide6.QtCore import QSettings, Qt, QThread, Signal
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QMessageBox,
+    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QMessageBox,
     QPlainTextEdit, QPushButton, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -23,7 +23,9 @@ from drstool_core.bisect_search import CrashSearch, early_works_warning, order_b
 from drstool_core.crash_triage import format_report, kernel_window, suggest_suspects, triage
 
 from .base import APP_ID
+from .i18n import tr
 from .state import bisect_items, bisect_state, copy_state
+from .tasks import TASKS
 from .theme import btn_ss, T
 from .tool_ui import ROLE_GLYPH, ROLE_SUB, ToolNavDelegate
 from .widgets import make_list_item, setup_sidebar_list
@@ -82,6 +84,22 @@ def _text(word_wrap=True) -> QLabel:
     return lb
 
 
+class _TriageWorker(QThread):
+    """analyse() off the GUI thread: a multi-MB log plus the journal / dmesg read takes seconds."""
+    done = Signal(int, object, object, str)      # request number, result, clean result, kernel-log note
+    failed = Signal(int, str)
+
+    def __init__(self, seq, paths, clean, use_journal, collect, parent=None):
+        super().__init__(parent)
+        self.seq, self._args = seq, (paths, clean, use_journal, collect)
+
+    def run(self):
+        try:
+            self.done.emit(self.seq, *analyse(*self._args))
+        except OSError as ex:
+            self.failed.emit(self.seq, str(ex))
+
+
 # ─────────────────────────────── triage ───────────────────────────────
 class CrashTriageWidget(QWidget):
     send_to_search = Signal(list, object)        # suspects, seconds until the crash (or None)
@@ -91,6 +109,8 @@ class CrashTriageWidget(QWidget):
         self._paths: list = []
         self._clean: list = []
         self._result = self._clean_result = None
+        self._seq = 0                            # a slow earlier load must not overwrite a newer one
+        self._worker = None
         self.collect = kernel_events.collect_any
         lay = QVBoxLayout(self)
         self._files = _text()
@@ -123,12 +143,12 @@ class CrashTriageWidget(QWidget):
         self._send.setEnabled(False)
 
     def _pick(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Crashed run: game log and kernel log", str(Path.home()))
+        paths, _ = QFileDialog.getOpenFileNames(self, tr("Crashed run: game log and kernel log"), str(Path.home()))
         if paths:
             self.load(paths, self._clean)
 
     def _pick_clean(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Clean run log (same game, no crash)", str(Path.home()))
+        paths, _ = QFileDialog.getOpenFileNames(self, tr("Clean run log (same game, no crash)"), str(Path.home()))
         if paths:
             self._clean = paths
             if self._paths:
@@ -136,17 +156,31 @@ class CrashTriageWidget(QWidget):
 
     def load(self, paths, clean=()):
         self._paths, self._clean = list(paths), list(clean)
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            self._result, self._clean_result, note = analyse(self._paths, self._clean,
-                                                            self._journal.isChecked(), self.collect)
-        finally:
-            QApplication.restoreOverrideCursor()
-        self._files.setText("Crashed: " + ", ".join(Path(p).name for p in self._paths)
-                            + ("\nClean: " + ", ".join(Path(p).name for p in self._clean) if self._clean else ""))
-        self._view.setPlainText(format_report(self._result, clean=self._clean_result) + "\n\n" + note)
+        self._seq += 1
+        self._export.setEnabled(False)
+        self._send.setEnabled(False)
+        self._view.setPlainText(tr("Analysing the logs…"))
+        worker = self._worker = _TriageWorker(self._seq, self._paths, self._clean, self._journal.isChecked(),
+                                              self.collect)       # no parent: TASKS keeps it alive until done
+        worker.done.connect(self._loaded)
+        worker.failed.connect(self._failed)
+        TASKS.track(worker, "Crash triage", fail=worker.failed)
+        worker.start()
+
+    def _loaded(self, seq, result, clean_result, note):
+        if seq != self._seq:
+            return
+        self._result, self._clean_result = result, clean_result
+        self._files.setText(tr("Crashed:") + " " + ", ".join(Path(p).name for p in self._paths)
+                            + ("\n" + tr("Clean:") + " " + ", ".join(Path(p).name for p in self._clean)
+                               if self._clean else ""))
+        self._view.setPlainText(format_report(result, clean=clean_result) + "\n\n" + note)
         self._export.setEnabled(True)
         self._send.setEnabled(True)
+
+    def _failed(self, seq, error):
+        if seq == self._seq:
+            self._view.setPlainText(tr("Could not read the logs: {error}").format(error=error))
 
     def suspects(self) -> list:
         return suggest_suspects(self._result, self._clean_result) if self._result else []
@@ -158,7 +192,7 @@ class CrashTriageWidget(QWidget):
         return int(d) if d else None
 
     def _save(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export crash report", str(Path.home() / "crash-report.md"),
+        path, _ = QFileDialog.getSaveFileName(self, tr("Export crash report"), str(Path.home() / "crash-report.md"),
                                               "Markdown (*.md)")
         if path:
             Path(path).write_text(format_report(self._result, clean=self._clean_result, markdown=True) + "\n",
@@ -297,9 +331,10 @@ class CrashSearchWidget(QWidget):
                                          [e for e, a in zip(self._elapsed, s.answers) if a])]
             xids = self._kernel_xids()
             if xids:
-                doubt.append(f"The kernel logged Xid {', '.join(map(str, xids))} during this test.")
+                doubt.append(tr("The kernel logged Xid {xids} during this test.").format(
+                    xids=", ".join(map(str, xids))))
             doubt = [d for d in doubt if d]
-            if doubt and not self.confirm("Count this test as working?", "\n\n".join(doubt)):
+            if doubt and not self.confirm(tr("Count this test as working?"), "\n\n".join(doubt)):
                 return
         s.answer(fails)
         self._elapsed.append(round(elapsed, 1))
@@ -337,20 +372,20 @@ class CrashSearchWidget(QWidget):
 
     def _show_kernel(self):
         if not self._applied_at:
-            self._evidence.setText("No test is running.")
+            self._evidence.setText(tr("No test is running."))
             return
         k = self.collect(self._applied_at, self.now() + 5)
         ev = k.get("events", [])
         if k.get("status") != "ok":
-            self._evidence.setText(f"Kernel log unavailable: {k.get('reason', '')}")
+            self._evidence.setText(tr("Kernel log unavailable: {reason}").format(reason=k.get("reason", "")))
         elif not ev:
-            self._evidence.setText("No GPU errors in the kernel log since this test started.")
+            self._evidence.setText(tr("No GPU errors in the kernel log since this test started."))
         else:
-            self._evidence.setText("Since this test started:\n" + "\n".join(e["message"][:200] for e in ev[-5:]))
+            self._evidence.setText(tr("Since this test started:") + "\n" + "\n".join(e["message"][:200] for e in ev[-5:]))
 
     @staticmethod
     def _ask(title, text) -> bool:
-        return QMessageBox.question(None, title, text + "\n\nCount it as working anyway?") == QMessageBox.Yes
+        return QMessageBox.question(None, title, text + "\n\n" + tr("Count it as working anyway?")) == QMessageBox.Yes
 
     # ── display ──
     def _show(self, mode: str):
@@ -367,26 +402,26 @@ class CrashSearchWidget(QWidget):
         if mode == "idle":
             pri = ", ".join(_label(p) for p in self._priority)
             self._intro.setText(
-                "Load the profile that crashes into the editor, then start. Each step puts a test "
-                "configuration into the editor: write it to the game, play until the crash would have "
-                "happened, and answer. The search also finds settings that only crash together and "
-                "keeps going if there is more than one cause."
-                + (f"\n\nTested first (from triage): {pri}" if pri else "")
-                + (f"\nThe crashed run lasted {self._crash_hint} s; shorter “works” answers are questioned."
-                   if self._crash_hint else ""))
+                tr("Load the profile that crashes into the editor, then start. Each step puts a test "
+                   "configuration into the editor: write it to the game, play until the crash would have "
+                   "happened, and answer. The search also finds settings that only crash together and "
+                   "keeps going if there is more than one cause.")
+                + (tr("\n\nTested first (from triage): {suspects}").format(suspects=pri) if pri else "")
+                + (tr("\nThe crashed run lasted {seconds} s; shorter “works” answers are questioned.").format(
+                    seconds=self._crash_hint) if self._crash_hint else ""))
             self._text.clear()
-            self.status_changed.emit("Not running")
+            self.status_changed.emit(tr("Not running"))
         elif mode == "paused":
-            self._intro.setText("A saved search was found.")
-            self._text.setText(f"{self._search.tests_done} test(s) answered. “Continue” puts the pending "
-                               "test configuration back into the editor.")
-            self.status_changed.emit(f"Paused at test {self._search.tests_done + 1}")
+            self._intro.setText(tr("A saved search was found."))
+            self._text.setText(tr("{n} test(s) answered. “Continue” puts the pending "
+                                  "test configuration back into the editor.").format(n=self._search.tests_done))
+            self.status_changed.emit(tr("Paused at test {n}").format(n=self._search.tests_done + 1))
 
     def _step(self, keep_clock=False):
         s = self._search
         if not s.items:
             self._intro.setText("")
-            self._text.setText("No settings to test: the editor has nothing besides what is kept on.")
+            self._text.setText(tr("No settings to test: the editor has nothing besides what is kept on."))
             self._show("empty")
             return
         if not keep_clock or not self._applied_at:
@@ -400,25 +435,27 @@ class CrashSearchWidget(QWidget):
         self._win.apply_state(bisect_state(self._full, on), f"Crash search test {s.tests_done + 1}")
         n = s.tests_done + 1
         if s.phase == "fixed":
-            head = f"Test {n} — baseline: only the settings that are always kept on" + (
+            head = tr("Test {n} — baseline: only the settings that are always kept on").format(n=n) + (
                 " (DRS)" if self._fixed else "") + "."
         elif s.phase == "verify":
             found = ", ".join(_label(i) for g in s.found_so_far for i in g)
-            head = (f"Test {n} — check: everything except {found} is on. "
-                    "If it still crashes there is another, independent cause.")
+            head = tr("Test {n} — check: everything except {found} is on. "
+                      "If it still crashes there is another, independent cause.").format(n=n, found=found)
         elif len(s.pending) <= _LIST_MAX:
-            head = f"Test {n}: on — " + ", ".join(_label(i) for i in s.pending)
+            head = tr("Test {n}: on —").format(n=n) + " " + ", ".join(_label(i) for i in s.pending)
         else:
-            head = f"Test {n}: {len(s.pending)} of {len(s.items)} tested settings on."
+            head = tr("Test {n}: {on} of {total} tested settings on.").format(
+                n=n, on=len(s.pending), total=len(s.items))
         cands = [] if s.phase == "verify" else s.candidates
         still = (", ".join(_label(i) for i in cands) if len(cands) <= _LIST_MAX
-                 else f"{len(cands)} settings") or "—"
+                 else tr("{n} settings").format(n=len(cands))) or "—"
         self._intro.setText("")
-        kept = f"\nAlways on: {len(self._fixed)} DRS setting(s) and the GPU arch." if self._fixed else ""
+        kept = tr("\nAlways on: {n} DRS setting(s) and the GPU arch.").format(n=len(self._fixed)) if self._fixed else ""
         self._text.setText(
-            head + f"\n\nStill suspected: {still}\nAbout {s.estimate_left()} more test(s) if one setting "
-            f"is the cause.{kept}\n\nWrite the configuration to the game, play, then answer.")
-        self.status_changed.emit(f"Test {n} · ≈{s.estimate_left()} left")
+            head + tr("\n\nStill suspected: {still}\nAbout {left} more test(s) if one setting "
+                      "is the cause.").format(still=still, left=s.estimate_left())
+            + kept + tr("\n\nWrite the configuration to the game, play, then answer."))
+        self.status_changed.emit(tr("Test {n} · ≈{left} left").format(n=n, left=s.estimate_left()))
 
     def _finish(self):
         s = self._search
@@ -427,10 +464,10 @@ class CrashSearchWidget(QWidget):
         if kind == "fixed":
             self._win.apply_state(self._full, "Crash search: restore")
             self._intro.setText("")
-            self._text.setText("It crashes even with only the kept settings on, so none of the tested settings "
-                               "is needed for the crash. Untick “Keep DRS settings on” and start again to test "
-                               "the DRS settings too — or the cause is outside DRSTool (driver, game, runner).")
-            self.status_changed.emit("Kept settings alone crash")
+            self._text.setText(tr("It crashes even with only the kept settings on, so none of the tested settings "
+                                  "is needed for the crash. Untick “Keep DRS settings on” and start again to test "
+                                  "the DRS settings too — or the cause is outside DRSTool (driver, game, runner)."))
+            self.status_changed.emit(tr("Kept settings alone crash"))
             return
         culprits = s.culprits
         others = [i for i in bisect_items(self._full) if i not in culprits]
@@ -438,15 +475,16 @@ class CrashSearchWidget(QWidget):
         lines = []
         for k, g in enumerate(groups, 1):
             names = " + ".join(_label(i) for i in g)
-            lines.append(f"{k}. {names}" + ("   (only together: switching off one of them is enough)"
+            lines.append(f"{k}. {names}" + (tr("   (only together: switching off one of them is enough)")
                                              if len(g) > 1 else ""))
-        more = ("\n\nThere are independent causes: each one crashes on its own, so all of them must be off."
+        more = (tr("\n\nThere are independent causes: each one crashes on its own, so all of them must be off.")
                 if len(groups) > 1 else "")
         self._intro.setText("")
-        self._text.setText(f"Found after {s.tests_done} test(s):\n" + "\n".join(lines) + more
-                           + "\n\nThe editor now has every other setting on — verified to work in the last "
-                           "test. “Keep result” leaves it so; “Stop and restore” brings the full configuration back.")
-        self.status_changed.emit("Found: " + ", ".join(_label(i) for i in culprits))
+        self._text.setText(tr("Found after {n} test(s):").format(n=s.tests_done) + "\n" + "\n".join(lines) + more
+                           + tr("\n\nThe editor now has every other setting on — verified to work in the last "
+                                "test. “Keep result” leaves it so; “Stop and restore” brings the full "
+                                "configuration back."))
+        self.status_changed.emit(tr("Found: {names}").format(names=", ".join(_label(i) for i in culprits)))
 
 
 # ─────────────────────────────── tab ───────────────────────────────
@@ -484,20 +522,20 @@ class CrashLabSidebar(QListWidget):
         self._lab = None
         self._items = {}
         for title, glyph, sub in self.NAV:
-            it = make_list_item(title, title)
+            it = make_list_item(tr(title), title)
             it.setData(ROLE_GLYPH, glyph)
-            it.setData(ROLE_SUB, sub)
-            it.setToolTip(sub)
+            it.setData(ROLE_SUB, tr(sub))
+            it.setToolTip(tr(sub))
             self.addItem(it)
             self._items[title] = it
-        self.currentItemChanged.connect(lambda cur, _p=None: cur and self._lab and self._lab.show_tab(cur.text()))
+        self.currentItemChanged.connect(lambda cur, _p=None: cur and self._lab and self._lab.show_tab(cur.data(Qt.UserRole)))
 
     def bind(self, lab: CrashLabWidget):
         self._lab = lab
         lab.currentChanged.connect(lambda i: self._select(lab.tabText(i)))
         lab.search.status_changed.connect(lambda t: self._items[SEARCH].setData(ROLE_SUB, t))
-        self._items[SEARCH].setData(ROLE_SUB, "Paused — continue it here" if lab.search.running
-                                    else self.NAV[1][2])
+        self._items[SEARCH].setData(ROLE_SUB, tr("Paused — continue it here") if lab.search.running
+                                    else tr(self.NAV[1][2]))
         self._select(lab.tabText(lab.currentIndex()))
 
     def _select(self, title):

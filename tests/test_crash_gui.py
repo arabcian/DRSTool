@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -13,7 +14,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import _home  # noqa: E402,F401
 
 try:
-    from PySide6.QtCore import QSettings
+    from PySide6.QtCore import QSettings, Qt
     from PySide6.QtWidgets import QApplication, QWidget
     from drstool_gui import crash_lab
     from drstool_gui.base import APP_ID
@@ -45,6 +46,9 @@ class SearchWidgetTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+        env = mock.patch.dict(os.environ, {"DRSTOOL_LANG": "en"})
+        env.start()
+        cls.addClassCleanup(env.stop)
 
     def setUp(self):
         QSettings(APP_ID, APP_ID).remove("crashlab/search")
@@ -169,6 +173,15 @@ class TriageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+        env = mock.patch.dict(os.environ, {"DRSTOOL_LANG": "en"})
+        env.start()
+        cls.addClassCleanup(env.stop)
+
+    @staticmethod
+    def settle(triage):
+        """Wait for the background analysis and deliver its result signal."""
+        triage._worker.wait()
+        QApplication.processEvents()
 
     def test_kernel_events_are_merged(self):
         with tempfile.TemporaryDirectory() as d:
@@ -194,6 +207,41 @@ class TriageTests(unittest.TestCase):
             self.assertIn("not read", crash_lab.analyse([log], use_journal=False, collect=boom)[2])
             self.assertIn("no timestamps", crash_lab.analyse([log], collect=boom)[2])
 
+    def test_load_runs_in_background(self):
+        triage = crash_lab.CrashTriageWidget()
+        triage.collect = lambda s, e: {"status": "ok", "events": []}
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d, "game.log")
+            log.write_text("VK_ERROR_DEVICE_LOST\n")
+            triage.load([log])
+            self.assertFalse(triage._send.isEnabled())                      # nothing to send until it is done
+            self.assertEqual(triage._view.toPlainText(), "Analysing the logs…")
+            self.settle(triage)
+        self.assertTrue(triage._send.isEnabled())
+        self.assertTrue(triage._export.isEnabled())
+        self.assertIn("Kernel log", triage._view.toPlainText())
+
+    def test_unreadable_log_is_reported(self):
+        triage = crash_lab.CrashTriageWidget()
+        triage.load(["/nonexistent/game.log"])
+        self.settle(triage)
+        self.assertIn("Could not read the logs", triage._view.toPlainText())
+        self.assertFalse(triage._send.isEnabled())
+
+    def test_stale_result_is_dropped(self):
+        triage = crash_lab.CrashTriageWidget()
+        triage.collect = lambda s, e: {"status": "ok", "events": []}
+        with tempfile.TemporaryDirectory() as d:
+            old, new = Path(d, "old.log"), Path(d, "new.log")
+            old.write_text("VK_ERROR_DEVICE_LOST\n")
+            new.write_text("all fine\n")
+            triage.load([old])
+            first = triage._worker
+            triage.load([new])
+            first.wait()
+            self.settle(triage)
+        self.assertIn("new.log", triage._files.text())
+
     def test_hand_over_to_search(self):
         QSettings(APP_ID, APP_ID).remove("crashlab/search")
         win = QWidget()
@@ -208,6 +256,7 @@ class TriageTests(unittest.TestCase):
             clean.write_text("info:vkd3d-proton:vkd3d_config_flags_init_once: VKD3D_CONFIG=''.\n")
             lab.triage.collect = lambda s, e: {"status": "ok", "events": []}
             lab.triage.load([crashed], [clean])
+            self.settle(lab.triage)
         lab.triage._send.click()
         self.assertEqual(lab.tabText(lab.currentIndex()), crash_lab.SEARCH)
         self.assertEqual(lab.search._priority, [("vkd3d", "dxr")])
@@ -237,6 +286,35 @@ class MainWindowTabTests(unittest.TestCase):
         finally:
             win.close()
             app.processEvents()
+
+
+@unittest.skipIf(crash_lab is None, "PySide6 not installed")
+class TurkishTests(unittest.TestCase):
+    def test_search_texts_follow_the_language(self):
+        app = QApplication.instance() or QApplication([])
+        QSettings(APP_ID, APP_ID).remove("crashlab/search")
+        win = QWidget()
+        win.capture_state = lambda: dict(FULL)
+        win.apply_state = lambda st, label=None: None
+        with mock.patch.dict(os.environ, {"DRSTOOL_LANG": "tr"}):
+            w = crash_lab.CrashSearchWidget(win)
+            w.set_hints(["env:C"], crash_seconds=240)
+            self.assertIn("Önce denenenler", w._intro.text())
+            w.start()
+            self.assertIn("1. deneme — temel", w._text.text())
+            side = crash_lab.CrashLabSidebar()
+            self.assertEqual(side.item(0).text(), "Çökme triyajı")
+            self.assertEqual(side.item(0).data(Qt.UserRole), crash_lab.TRIAGE)      # routing key stays English
+
+    def test_every_tr_key_is_in_the_catalog(self):
+        import ast
+        from drstool_core.i18n import TR
+        tree = ast.parse(Path(crash_lab.__file__).read_text(encoding="utf-8"))
+        keys = [n.args[0].value for n in ast.walk(tree)
+                if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "tr"
+                and n.args and isinstance(n.args[0], ast.Constant)]
+        self.assertGreater(len(keys), 30)
+        self.assertEqual([k for k in keys if k not in TR], [])
 
 
 if __name__ == "__main__":
