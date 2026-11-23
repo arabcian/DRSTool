@@ -152,6 +152,29 @@ class SearchWidgetTests(unittest.TestCase):
             self.clock.t += 600
             w.answer(has(self.win.state, ("env", "C")))
 
+    def test_adaptive_search_with_xid_hint(self):
+        from drstool_core.xid_analysis import AdaptiveSearch
+        w = self.widget(kernel=[31])
+        w.set_hints([], crash_seconds=300, xid={"xid": 31, "subtypes": ["pde"], "driver": "610.43.02"})
+        w._adaptive.setChecked(True)
+        w.start()
+        self.assertIsInstance(w._search, AdaptiveSearch)
+        self.assertEqual(max(w._search.prior, key=w._search.prior.get), "vkd3d:descriptor_heap")   # Xid 31 on 610
+        self.assertIn("Most likely cause", w._text.text())
+        self.assertIn("Play at least", w._text.text())
+        first = w._search.tests_done
+        self.clock.t += 600
+        w.answer(has(self.win.state, ("vkd3d", "descriptor_heap")))
+        again = self.widget(kernel=[31])                                  # restart: still adaptive
+        self.assertTrue(again._adaptive.isChecked())
+        again.resume()
+        self.assertEqual(again._search.tests_done, first + 1)
+        self.play(again, [[("vkd3d", "descriptor_heap")]])
+        self.assertEqual(again._search.culprits, [("vkd3d", "descriptor_heap")])
+        self.assertIn("Xid ↔ setting links", again._text.text())
+        self.assertIn("Xid 31 (GPU memory page fault): VKD3D_CONFIG descriptor_heap", again._text.text())
+        self.assertFalse(has(self.win.state, ("vkd3d", "descriptor_heap")))
+
     def test_kept_settings_alone_crash(self):
         w = self.widget()
         w.start()

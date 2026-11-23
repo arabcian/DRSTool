@@ -18,9 +18,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QPushButton, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from drstool_core import kernel_events
-from drstool_core.bisect_search import CrashSearch, early_works_warning, order_by_priority
-from drstool_core.crash_triage import format_report, kernel_window, suggest_suspects, triage
+from drstool_core import kernel_events, xid_analysis
+from drstool_core.bisect_search import CrashSearch, _mmss, early_works_warning, order_by_priority
+from drstool_core.crash_triage import format_report, kernel_window, suggest_suspects, triage, xid_hint
 
 from .base import APP_ID
 from .i18n import tr
@@ -102,7 +102,7 @@ class _TriageWorker(QThread):
 
 # ─────────────────────────────── triage ───────────────────────────────
 class CrashTriageWidget(QWidget):
-    send_to_search = Signal(list, object)        # suspects, seconds until the crash (or None)
+    send_to_search = Signal(list, object, object)  # suspects, seconds until the crash, Xid hint (or None)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -199,7 +199,8 @@ class CrashTriageWidget(QWidget):
                                   encoding="utf-8")
 
     def _send_suspects(self):
-        self.send_to_search.emit(self.suspects(), self.crash_seconds())
+        self.send_to_search.emit(self.suspects(), self.crash_seconds(),
+                                 xid_hint(self._result) if self._result else None)
 
 
 # ─────────────────────────────── search ───────────────────────────────
@@ -218,7 +219,9 @@ class CrashSearchWidget(QWidget):
         self._full = None
         self._priority: list = []
         self._crash_hint = None
+        self._xid_hint = None
         self._elapsed: list = []
+        self._xids: list = []                    # kernel Xids logged during each answered test
         self._applied_at = None
         lay = QVBoxLayout(self)
         self._intro = _text()
@@ -226,6 +229,9 @@ class CrashSearchWidget(QWidget):
         self._keep_drs = QCheckBox("Keep DRS settings on (test only env vars, VKD3D_CONFIG flags and gamescope)")
         self._keep_drs.setChecked(True)
         lay.addWidget(self._keep_drs)
+        self._adaptive = QCheckBox("Adaptive search: weighs play time and the Xid, tolerates intermittent "
+                                   "crashes and a wrong answer")
+        lay.addWidget(self._adaptive)
         self._text = _text()
         lay.addWidget(self._text)
         self._evidence = _text()
@@ -278,9 +284,10 @@ class CrashSearchWidget(QWidget):
 
     def _save(self):
         QSettings(APP_ID, APP_ID).setValue(_KEY, json.dumps({
-            "full": self._full, "keep_drs": self._keep_drs.isChecked(),
+            "full": self._full, "keep_drs": self._keep_drs.isChecked(), "adaptive": self._adaptive.isChecked(),
             "priority": [list(p) for p in self._priority], "answers": self._search.answers,
-            "elapsed": self._elapsed, "crash_hint": self._crash_hint, "applied_at": self._applied_at}))
+            "elapsed": self._elapsed, "xids": self._xids, "crash_hint": self._crash_hint,
+            "xid_hint": self._xid_hint, "applied_at": self._applied_at}))
 
     def _clear(self):
         QSettings(APP_ID, APP_ID).remove(_KEY)
@@ -288,9 +295,12 @@ class CrashSearchWidget(QWidget):
     def _from_saved(self, s: dict):
         self._full = copy_state(s["full"])
         self._keep_drs.setChecked(bool(s.get("keep_drs", True)))
+        self._adaptive.setChecked(bool(s.get("adaptive", False)))
         self._priority = [tuple(p) for p in s.get("priority", [])]
         self._crash_hint = s.get("crash_hint")
+        self._xid_hint = s.get("xid_hint") if isinstance(s.get("xid_hint"), dict) else None
         self._elapsed = list(s.get("elapsed", []))
+        self._xids = [list(x) for x in s.get("xids", [])]
         self._applied_at = s.get("applied_at")
         self._build(s.get("answers", []))
 
@@ -298,15 +308,38 @@ class CrashSearchWidget(QWidget):
         items = bisect_items(self._full)
         self._fixed = [i for i in items if i[0] == "settings"] if self._keep_drs.isChecked() else []
         rest = [i for i in items if i not in self._fixed]
-        self._search = CrashSearch(order_by_priority(rest, self._priority), answers)
+        if self._adaptive.isChecked():
+            self._search = xid_analysis.AdaptiveSearch(rest, answers, self._elapsed, prior=self._prior(rest),
+                                                       crash_seconds=self._crash_hint)
+        else:
+            self._search = CrashSearch(order_by_priority(rest, self._priority), answers)
         self._elapsed = self._elapsed[:len(self._search.answers)]
+        self._xids = self._xids[:len(self._search.answers)]
+
+    def _prior(self, items) -> dict:
+        """Log prior weights for the adaptive search: the Xid knowledge base for the crash's root
+        Xid (with the GPU arch and driver), plus a boost for the suspects triage sent."""
+        prior = {}
+        h = self._xid_hint
+        if h and h.get("xid") is not None:
+            prior = {k: w for k, (w, _) in xid_analysis.prior_weights(
+                int(h["xid"]), h.get("subtypes", ()), items, arch=self._full.get("arch"),
+                driver=h.get("driver")).items()}
+        keys = [xid_analysis.item_key(p) for p in self._priority]
+        for rank, k in enumerate(keys):
+            if not prior.get(k):                 # triage also lists knowledge-base links: count them once
+                prior[k] = max(1.0 - 0.15 * rank, 0.3)
+        return prior
 
     # ── public API (also used by the triage hand-over) ──
-    def set_hints(self, suspects, crash_seconds=None):
-        """Suspects to test first and how long the crashed run lasted. Applies to the next start."""
+    def set_hints(self, suspects, crash_seconds=None, xid=None):
+        """Suspects to test first, how long the crashed run lasted and the crash's Xid
+        ({"xid", "subtypes", "driver"}, weighs settings in the adaptive search). Applies to the next start."""
         self._priority = [parse_suspect(s) if isinstance(s, str) else tuple(s) for s in suspects]
         if crash_seconds:
             self._crash_hint = crash_seconds
+        if xid:
+            self._xid_hint = dict(xid)
         if self._search is None:
             self._show("idle")
 
@@ -316,7 +349,7 @@ class CrashSearchWidget(QWidget):
 
     def start(self):
         self._full = copy_state(self._win.capture_state())
-        self._elapsed, self._applied_at = [], None
+        self._elapsed, self._xids, self._applied_at = [], [], None
         self._build([])
         self._step()
 
@@ -326,23 +359,28 @@ class CrashSearchWidget(QWidget):
     def answer(self, fails: bool):
         s = self._search
         elapsed = self.now() - self._applied_at if self._applied_at else 0.0
+        xids = self._kernel_xids()
         if not fails:
             doubt = [early_works_warning(elapsed, [self._crash_hint],
                                          [e for e, a in zip(self._elapsed, s.answers) if a])]
-            xids = self._kernel_xids()
             if xids:
                 doubt.append(tr("The kernel logged Xid {xids} during this test.").format(
                     xids=", ".join(map(str, xids))))
             doubt = [d for d in doubt if d]
             if doubt and not self.confirm(tr("Count this test as working?"), "\n\n".join(doubt)):
                 return
-        s.answer(fails)
+        if isinstance(s, xid_analysis.AdaptiveSearch):
+            s.answer(fails, elapsed or None)
+        else:
+            s.answer(fails)
         self._elapsed.append(round(elapsed, 1))
+        self._xids.append(xids)
         self._step()
 
     def undo(self):
         self._search.undo()
         self._elapsed = self._elapsed[:len(self._search.answers)]
+        self._xids = self._xids[:len(self._search.answers)]
         self._step()
 
     def keep_result(self):
@@ -359,7 +397,7 @@ class CrashSearchWidget(QWidget):
         self._show("idle")
 
     def _start_over(self):
-        self._elapsed, self._applied_at = [], None
+        self._elapsed, self._xids, self._applied_at = [], [], None
         self._build([])
         self._step()
 
@@ -368,7 +406,7 @@ class CrashSearchWidget(QWidget):
         if not self._applied_at:
             return []
         k = self.collect(self._applied_at, self.now() + 5)
-        return sorted({e["xid"] for e in k.get("events", []) if e.get("xid") is not None})
+        return list(dict.fromkeys(e["xid"] for e in k.get("events", []) if e.get("xid") is not None))
 
     def _show_kernel(self):
         if not self._applied_at:
@@ -398,6 +436,7 @@ class CrashSearchWidget(QWidget):
             b.setVisible(b in visible)
         self._undo.setEnabled(bool(self._search and self._search.tests_done))
         self._keep_drs.setVisible(mode == "idle")
+        self._adaptive.setVisible(mode == "idle")
         self._evidence.clear()
         if mode == "idle":
             pri = ", ".join(_label(p) for p in self._priority)
@@ -454,8 +493,55 @@ class CrashSearchWidget(QWidget):
         self._text.setText(
             head + tr("\n\nStill suspected: {still}\nAbout {left} more test(s) if one setting "
                       "is the cause.").format(still=still, left=s.estimate_left())
-            + kept + tr("\n\nWrite the configuration to the game, play, then answer."))
+            + kept + self._adaptive_note() + tr("\n\nWrite the configuration to the game, play, then answer."))
         self.status_changed.emit(tr("Test {n} · ≈{left} left").format(n=n, left=s.estimate_left()))
+
+    def _adaptive_note(self) -> str:
+        """Adaptive search only: leading hypotheses and how long to play the pending test."""
+        s = self._search
+        if not isinstance(s, xid_analysis.AdaptiveSearch):
+            return ""
+        lead = "\n".join(f"  {p:5.0%}  {self._describe(h)}" for h, p in s.post[:3])
+        out = "\n\n" + tr("Most likely cause:") + "\n" + lead
+        if not s.done:
+            out += "\n" + tr("Play at least {time} for this test to count.").format(time=_mmss(s.play_time()))
+        return out
+
+    @staticmethod
+    def _describe(h) -> str:
+        names = [_label(parse_suspect(k)) for k in h[1:]]
+        return {"none": tr("none of the tested settings (the cause is elsewhere)"),
+                "one": "{0}", "and": tr("{0} + {1} (only together)"),
+                "or": tr("{0} or {1} (independent causes)")}[h[0]].format(*names)
+
+    def _xid_links(self) -> str:
+        """Which setting each Xid seen during the tests is tied to (needs a crash with an Xid)."""
+        s = self._search
+        if not any(self._xids) or not s.items:
+            return ""
+        runs = [{"on": [xid_analysis.item_key(i) for i in on], "seconds": t or self._crash_hint or 600,
+                 "crashed": a, "xids": x}
+                for on, t, a, x in zip(self._tested(), self._elapsed, s.answers, self._xids)]
+        links = xid_analysis.associate([xid_analysis.item_key(i) for i in s.items], runs,
+                                       crash_seconds=self._crash_hint)
+        rows = []
+        for sym, ranked in sorted(links.items()):
+            k, p = ranked[0]
+            name = self._describe(("none",)) if k == "none" else _label(parse_suspect(k))
+            title = xid_analysis.info(int(sym))["title"] if sym.isdigit() else tr("no Xid")
+            rows.append(f"  Xid {sym} ({title}): {name} {p:.0%}" if sym.isdigit() else f"  {title}: {name} {p:.0%}")
+        return "\n\n" + tr("Xid ↔ setting links measured in these tests:") + "\n" + "\n".join(rows) if rows else ""
+
+    def _tested(self) -> list:
+        """The tested subset of every answered test, replayed from the answers."""
+        s = self._search
+        if isinstance(s, xid_analysis.AdaptiveSearch):
+            return [sorted(on) for on, _t, _c in s.model.runs[1:]]
+        replay, out = CrashSearch(s.items), []
+        for a in s.answers:
+            out.append([xid_analysis.item_key(i) for i in replay.pending])
+            replay.answer(a)
+        return out
 
     def _finish(self):
         s = self._search
@@ -481,9 +567,10 @@ class CrashSearchWidget(QWidget):
                 if len(groups) > 1 else "")
         self._intro.setText("")
         self._text.setText(tr("Found after {n} test(s):").format(n=s.tests_done) + "\n" + "\n".join(lines) + more
+                           + self._adaptive_note()
                            + tr("\n\nThe editor now has every other setting on — verified to work in the last "
                                 "test. “Keep result” leaves it so; “Stop and restore” brings the full "
-                                "configuration back."))
+                                "configuration back.") + self._xid_links())
         self.status_changed.emit(tr("Found: {names}").format(names=", ".join(_label(i) for i in culprits)))
 
 
@@ -499,8 +586,8 @@ class CrashLabWidget(QTabWidget):
         self.addTab(self.search, SEARCH)
         self.triage.send_to_search.connect(self._hand_over)
 
-    def _hand_over(self, suspects, seconds):
-        self.search.set_hints(suspects, seconds)
+    def _hand_over(self, suspects, seconds, xid=None):
+        self.search.set_hints(suspects, seconds, xid)
         self.show_tab(SEARCH)
 
     def show_tab(self, title: str) -> bool:

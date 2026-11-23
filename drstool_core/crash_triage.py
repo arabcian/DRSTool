@@ -16,6 +16,7 @@ from collections import deque
 from datetime import datetime
 from typing import Iterable
 
+from . import xid_analysis
 from .catalog import DATA_DIR
 
 RULES = [dict(r, rx=re.compile(r["regex"]), suspects=r.get("suspects", []))
@@ -62,19 +63,23 @@ def _ts(text):
 
 
 def triage(lines: Iterable[str]) -> dict:
-    """-> {"crashed", "verdict", "findings", "xid", "fingerprint", "context", "suspects",
-    "started", "ended"}; times are naive local datetimes from the game's own log lines."""
+    """-> {"crashed", "verdict", "findings", "xid", "diagnosis", "fingerprint", "context", "suspects",
+    "started", "ended"}; times are naive local datetimes from the game's own log lines.
+    "diagnosis" is xid_analysis.diagnose() over the NVRM lines (root Xid, cascade, scope, linked settings)."""
     found: dict = {}
     xids: list = []
     fp: dict = {}
     recent: deque = deque(maxlen=CONTEXT_LINES)
     context: list = []
+    nvrm: list = []
     first = last = None
     for n, line in enumerate(lines, 1):
         if line.startswith("("):
             m = _GAME_TS.match(line)
             if m:
                 first, last = first or m.group(1), m.group(1)
+        if "NVRM" in line or "Xid" in line:
+            nvrm.append(line)
         rule = next((r for r in RULES if r["rx"].search(line)), None)
         if not rule or rule["kind"] != "noise":
             for key, rx in _FINGERPRINT.items():
@@ -101,7 +106,8 @@ def triage(lines: Iterable[str]) -> dict:
     crashed = any(f["kind"] == "fatal" for f in findings)
     suspects = list(dict.fromkeys(s for f in findings if f["kind"] == "fatal" for s in f["suspects"]))
     return {"crashed": crashed, "verdict": _verdict(crashed, findings, fp), "findings": findings,
-            "xid": xids, "fingerprint": fp, "context": context, "suspects": suspects,
+            "xid": xids, "diagnosis": xid_analysis.diagnose(nvrm), "fingerprint": fp, "context": context,
+            "suspects": suspects,
             "started": first, "ended": last}
 
 
@@ -139,16 +145,31 @@ _FINGERPRINT_ENV = {"swapchain_images": "VKD3D_SWAPCHAIN_IMAGES",
                     "max_latency_frames": "VKD3D_SWAPCHAIN_LATENCY_FRAMES"}
 
 
-def suggest_suspects(result: dict, clean: dict | None = None) -> list:
+def suggest_suspects(result: dict, clean: dict | None = None, *, kb: bool = True) -> list:
     """Bisect items to test first: the matched rules' suspects, then VKD3D_CONFIG flags only the
-    crashed run had and env vars behind other fingerprint differences."""
+    crashed run had and env vars behind other fingerprint differences, then the settings the Xid
+    knowledge base links to the root Xid (strongest first)."""
     out = list(result["suspects"])
     for key, a, _b in (compare(result, clean) if clean else []):
         if key.startswith("vkd3d:") and a:
             out.append(key)
         elif key in _FINGERPRINT_ENV:
             out.append("env:" + _FINGERPRINT_ENV[key])
+    d = result.get("diagnosis") or {}
+    if kb and d.get("bisect") == "worth":
+        out += [k for k, _w, _why in d["suspects"][:KB_SUSPECTS]]
     return list(dict.fromkeys(out))
+
+
+KB_SUSPECTS = 12
+
+
+def xid_hint(result: dict) -> dict | None:
+    """What the search needs to weigh settings for this crash: root Xid, its subtypes, driver."""
+    p = (result.get("diagnosis") or {}).get("primary")
+    if not p:
+        return None
+    return {"xid": p["root"]["xid"], "subtypes": list(p["subtypes"]), "driver": result["diagnosis"].get("driver")}
 
 
 def kernel_window(result: dict, *, before: int = 30, after: int = 120):
@@ -169,13 +190,16 @@ def format_report(result: dict, *, clean: dict | None = None, markdown: bool = F
                     f"  {code(f['sample'])}", f"  {f['hint']}"]
     for x in result["xid"]:
         out.append("- " + " ".join([f"Xid {x['xid']}"] + [f"{k}={v}" for k, v in x.items() if k != "xid"]))
+    xid_lines = xid_analysis.format_diagnosis(result.get("diagnosis") or {}, markdown=markdown)
+    if xid_lines:
+        out += ["", h("Xid analysis")] + xid_lines
     if result["context"]:
         out += ["", h("Before the first fatal line")]
         out += [f"    {n}: {ln}" for n, ln in result["context"]]
     if result["fingerprint"]:
         out += ["", h("Run")]
         out += [f"- {k}: {code(v)}" for k, v in sorted(result["fingerprint"].items())]
-    suspects = suggest_suspects(result, clean)
+    suspects = suggest_suspects(result, clean, kb=False)        # knowledge-base links are in "Xid analysis"
     if suspects:
         out += ["", h("Test first"), "- " + ", ".join(suspects)]
     if clean is not None:

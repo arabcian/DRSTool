@@ -421,6 +421,14 @@ TR.update({
     'Found after {n} test(s):': '{n} denemeden sonra bulundu:',
     '\n\nThe editor now has every other setting on — verified to work in the last test. “Keep result” leaves it so; “Stop and restore” brings the full configuration back.': '\n\nDüzenleyicide şimdi diğer tüm ayarlar açık — son denemede çalıştığı doğrulandı. “Sonucu koru” böyle bırakır; “Durdur ve geri yükle” tam yapılandırmayı geri getirir.',
     'Found: {names}': 'Bulundu: {names}',
+    'Adaptive search: weighs play time and the Xid, tolerates intermittent crashes and a wrong answer': 'Uyarlamalı arama: oynama süresini ve Xid’i tartar, ara sıra olan çökmelere ve bir yanlış yanıta dayanır',
+    'Most likely cause:': 'En olası neden:',
+    'Play at least {time} for this test to count.': 'Bu denemenin sayılması için en az {time} oynayın.',
+    'none of the tested settings (the cause is elsewhere)': 'denenen ayarların hiçbiri (neden başka yerde)',
+    '{0} + {1} (only together)': '{0} + {1} (yalnızca birlikte)',
+    '{0} or {1} (independent causes)': '{0} ya da {1} (bağımsız nedenler)',
+    'no Xid': 'Xid yok',
+    'Xid ↔ setting links measured in these tests:': 'Bu denemelerde ölçülen Xid ↔ ayar bağları:',
 })
 
 def language_tag(choice: str | None, system_language: str = 'en') -> str:
