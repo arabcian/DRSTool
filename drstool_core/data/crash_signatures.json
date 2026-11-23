@@ -1,0 +1,30 @@
+[
+ {
+  "id": "xid-69",
+  "kind": "fatal",
+  "regex": "\\bXid\\b\\s*(?:\\([^)]*\\))?\\s*:\\s*69\\b",
+  "title": "NVIDIA Xid 69 (graphics engine class error)",
+  "hint": "The GPU rejected a command recorded by the game. Seen with Crimson Desert when DRSTool's environment flags were on and gone with most of them removed: use “Find the breaking setting” to narrow it down."
+ },
+ {
+  "id": "xid",
+  "kind": "fatal",
+  "regex": "\\bXid\\b",
+  "title": "NVIDIA Xid error",
+  "hint": "A GPU fault reported by the NVIDIA kernel driver. Look the number up in NVIDIA's Xid table."
+ },
+ {
+  "id": "device-lost",
+  "kind": "fatal",
+  "regex": "(?i)VK_ERROR_DEVICE_LOST|DXGI_ERROR_DEVICE_(?:REMOVED|HUNG|RESET)|lost the device|\\bdevice lost\\b",
+  "title": "GPU device lost",
+  "hint": "The game lost its GPU device (hang or reset). Check the kernel log for an Xid at the same time."
+ },
+ {
+  "id": "reflex-mfg",
+  "kind": "noise",
+  "regex": "NvAPI_D3D_SetReflexSync\\b.*\\bfailed|setDynamicMFGParams failed|setReflexTiming failed",
+  "title": "Streamline Reflex / frame generation errors",
+  "hint": "Also logged thousands of times in a Crimson Desert run that exited cleanly (2026-11-23), so on their own they do not explain a crash."
+ }
+]

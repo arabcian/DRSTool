@@ -48,6 +48,19 @@ class LayerTests(unittest.TestCase):
         self.assertFalse(half["settings"] or half["gs_on"])
         self.assertEqual(half["arch"], st["arch"])
 
+    def test_bisect_splits_vkd3d_config(self):
+        st = state.state_from_profile(dict(self.base, env_vars={
+            "A": "1", "VKD3D_CONFIG": "dxr; force_static_cbv,descriptor_heap"}))
+        items = state.bisect_items(st)
+        self.assertNotIn(("env", "VKD3D_CONFIG"), items)
+        self.assertEqual([i for i in items if i[0] == "vkd3d"],
+                         [("vkd3d", "dxr"), ("vkd3d", "force_static_cbv"), ("vkd3d", "descriptor_heap")])
+        part = state.bisect_state(st, [("env", "A"), ("vkd3d", "dxr"), ("vkd3d", "descriptor_heap")])
+        self.assertEqual(part["env"], {"A": "1", "VKD3D_CONFIG": "dxr,descriptor_heap"})
+        self.assertNotIn("VKD3D_CONFIG", state.bisect_state(st, [("env", "A")])["env"])
+        self.assertEqual(state.bisect_state(st, items)["env"]["VKD3D_CONFIG"],
+                         "dxr,force_static_cbv,descriptor_heap")
+
 
 @unittest.skipIf(state is None, "PySide6 not installed")
 class RunCommandTests(unittest.TestCase):

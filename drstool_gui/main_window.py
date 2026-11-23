@@ -244,6 +244,7 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         _mm.addAction("Keyboard shortcuts\tF1").triggered.connect(self.open_shortcuts)
         _mm.addAction("Background tasks").triggered.connect(self._tasks_menu)
         _mm.addAction("Find the breaking setting…").triggered.connect(self._open_bisect)
+        _mm.addAction("Crash triage…").triggered.connect(self._open_crash_triage)
         self._menu_btn.setMenu(_mm)
         nav_layout.addWidget(self._menu_btn)
         main_layout.addWidget(nav)
@@ -1046,6 +1047,10 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
     def _open_bisect(self):
         from .bisect_dialog import BisectDialog
         BisectDialog(self).show()
+
+    def _open_crash_triage(self):
+        from .crash_triage_dialog import CrashTriageDialog
+        CrashTriageDialog(self).show()
 
     def _tasks_menu(self):
         m = QMenu(self)

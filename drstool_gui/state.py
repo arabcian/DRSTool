@@ -4,6 +4,7 @@ import time
 from typing import Dict, List, Optional
 
 from .base import _as_dict
+from .catalog_data import vkd3d_config_tokens
 from .gamescope import GamescopeFlagsWidget, normalize_gs_flags
 from .launch_line import gamescope_arg_string
 from .lookup import _ENV_NAME_RX, canonical_drs_key, canonical_drs_value, drs_lookup
@@ -290,7 +291,11 @@ def layer_diff(base_full: dict, full: dict) -> dict:
 
 # ── bisect: one item per setting that can be switched off on its own ──
 def bisect_items(st: dict) -> List[tuple]:
-    return ([("settings", k) for k in st["settings"]] + [("env", k) for k in st["env"]]
+    """VKD3D_CONFIG is split into one ("vkd3d", flag) item per flag."""
+    flags = vkd3d_config_tokens(st["env"].get("VKD3D_CONFIG", ""))
+    return ([("settings", k) for k in st["settings"]]
+            + [("env", k) for k in st["env"] if not (k == "VKD3D_CONFIG" and flags)]
+            + [("vkd3d", f) for f in flags]
             + ([("gs_on", "")] if st["gs_on"] else []))
 
 
@@ -300,5 +305,8 @@ def bisect_state(st: dict, keep) -> dict:
     out = copy_state(st)
     out["settings"] = {k: v for k, v in st["settings"].items() if ("settings", k) in keep}
     out["env"] = {k: v for k, v in st["env"].items() if ("env", k) in keep}
+    flags = [f for f in vkd3d_config_tokens(st["env"].get("VKD3D_CONFIG", "")) if ("vkd3d", f) in keep]
+    if flags:
+        out["env"]["VKD3D_CONFIG"] = ",".join(flags)
     out["gs_on"] = st["gs_on"] and ("gs_on", "") in keep
     return out
