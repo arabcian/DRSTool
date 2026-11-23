@@ -409,6 +409,28 @@ class DllOpsTests(unittest.TestCase):
             self.assertEqual(n, 0)
             self.assertIn("changed since", notes[0])
 
+    def test_restore_finds_moved_game_folder(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            old = fake_dll(td / "old name/bin64/nvngx_dlss.dll", (1, 0, 0, 0))
+            res = dll_ops.replace_files("k", "G", [(old, fake_dll(td / "n.dll", (2, 0, 0, 0)), "x")],
+                                        root=td / "bk")
+            (td / "old name").rename(td / "new name")       # game folder renamed after the swap
+            # without help: a clear note, nothing touched
+            n, notes = dll_ops.restore(res.backup_dir)
+            self.assertEqual(n, 0)
+            self.assertIn("game folder not found", notes[0])
+            self.assertEqual(dll_ops.unlocated(res.backup_dir), [old])
+            # with the launcher's current folder: found by the matching tail (bin64/...)
+            moved = td / "new name/bin64/nvngx_dlss.dll"
+            self.assertEqual(dll_ops.unlocated(res.backup_dir, [td / "new name"]), [])
+            n, notes = dll_ops.restore(res.backup_dir, folders=[td / "new name"])
+            self.assertEqual((n, notes), (1, []))
+            self.assertEqual(pe_version.read_version(moved), (1, 0, 0, 0))
+            # a wrong folder finds nothing and writes nothing
+            n, notes = dll_ops.restore(res.backup_dir, folders=[td])
+            self.assertEqual(n, 0)
+
     def test_refuses_symlink_and_non_pe(self):
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)

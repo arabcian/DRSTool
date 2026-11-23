@@ -27,7 +27,7 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import file_transactions as tx
 from .fsutil import atomic_write
@@ -209,8 +209,39 @@ def list_backups(game_key: str, root: Optional[Path] = None) -> List[Tuple[Path,
     return out
 
 
-def restore(backup_dir: Path, log: Callable[[str], None] = lambda _m: None) -> Tuple[int, List[str]]:
-    """Put the originals from one backup back. Returns (restored count, notes)."""
+def _relocate(target: Path, folders: Sequence[Path]) -> Optional[Path]:
+    """The same file under a current game folder, for a game that moved or was renamed
+    since the backup. Tries the longest matching tail of the old path first (bin64/x.dll
+    before x.dll); the sha256 checks in restore() make a wrong match harmless."""
+    parts = target.parent.parts
+    for folder in folders:
+        for i in range(1, len(parts) + 1):
+            cand = Path(folder, *parts[i:], target.name)
+            if cand.is_file():
+                return cand
+    return None
+
+
+def unlocated(backup_dir: Path, folders: Sequence[Path] = ()) -> List[Path]:
+    """Targets of a backup whose folder is gone and not found under `folders` either."""
+    m = json.loads((backup_dir / "manifest.json").read_text())
+    out = []
+    for e in m.get("entries", []):
+        try:
+            target = Path(e["target"])
+        except (KeyError, TypeError):
+            continue
+        if not target.parent.is_dir() and _relocate(target, folders) is None:
+            out.append(target)
+    return out
+
+
+def restore(backup_dir: Path, log: Callable[[str], None] = lambda _m: None,
+            folders: Sequence[Path] = ()) -> Tuple[int, List[str]]:
+    """Put the originals from one backup back. Returns (restored count, notes).
+
+    `folders`: the game's current folders (from the launcher, or picked by hand), used
+    when a recorded folder no longer exists."""
     m = json.loads((backup_dir / "manifest.json").read_text())
     restored, notes = 0, []
     for e in reversed(m.get("entries", [])):
@@ -223,6 +254,13 @@ def restore(backup_dir: Path, log: Callable[[str], None] = lambda _m: None) -> T
         if not bfile.is_file():
             notes.append(f"{target.name}: backup file missing")
             continue
+        if not target.parent.is_dir():
+            moved = _relocate(target, folders)
+            if moved is None:
+                notes.append(f"{target}: game folder not found (moved or renamed?)")
+                continue
+            log(f"  ⤷ {target.name}: game folder moved, using {moved.parent}")
+            target = moved
         try:
             tx.assert_safe_path(target, allow_missing=True)
         except (OSError, ValueError) as ex:

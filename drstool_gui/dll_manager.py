@@ -881,7 +881,14 @@ class DllRestoreDialog(QDialog):
         kind, where = it.data(0, Qt.UserRole)
         try:
             if kind == "dll":
-                n, notes = dll_ops.restore(where, self._log.appendPlainText)
+                folders = list(self._st.game.folders)        # where the launcher says the game is now
+                if dll_ops.unlocated(where, folders):
+                    d = QFileDialog.getExistingDirectory(
+                        self, "The game folder moved — where is it now?",
+                        str(folders[0] if folders else Path.home()))
+                    if d:
+                        folders.insert(0, Path(d))
+                n, notes = dll_ops.restore(where, self._log.appendPlainText, folders)
                 for note in notes:
                     self._log.appendPlainText("  " + note)
             else:
