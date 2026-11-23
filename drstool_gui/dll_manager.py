@@ -34,7 +34,6 @@ from drstool_core import net
 from drstool_core.catalog import DATA_DIR
 
 from .base import _CORE_ERR, _proc_running, APP_ID, dll_ops, game_scan, pe_version, user_cache_dir
-from .launchers import BottlesBackend, SteamBackend
 from .ngx import (
     _ngx_accent, _NgxWorker, ngx_human, ngx_is_sl, ngx_target_name, ngx_title, ngx_ver_str,
     NgxBuild, NgxCancelled, NgxClient, ngx_cache_valid,
@@ -258,52 +257,6 @@ def detect_installed(prefix: Path, comp: dict, *, manifest_data: Optional[dict] 
     return res
 
 
-def dll_override_gaps(prefix: Path, comp: dict) -> List[str]:
-    try:
-        t = (prefix / "user.reg").read_text(errors="replace")
-    except OSError:
-        return []
-    m = re.search(r"^\[Software\\\\Wine\\\\DllOverrides\][^\n]*\n(.*?)(?:\n\[|\Z)", t, re.S | re.M)
-    block = m.group(1) if m else ""
-    have = {k.lower(): v.lower() for k, v in re.findall(r'^"([^"]+)"="([^"]*)"', block, re.M)}
-    return [d for d in comp["dlls"]
-            if d in ("d3d9", "d3d10core", "d3d11", "dxgi", "d3d12", "d3d12core", "d3d8", "nvapi", "nvapi64", "nvofapi64")
-            and "native" not in have.get(d, "")]
-
-
-def find_prefixes() -> List[tuple]:
-    h = Path.home()
-    cands: List[tuple] = []
-
-    def add(label, p):
-        try:
-            p = Path(p)
-            if (p / "drive_c" / "windows").is_dir() and all(str(p) != str(c[1]) for c in cands):
-                cands.append((label, p))
-        except OSError:
-            pass
-    if os.environ.get("WINEPREFIX"):
-        add("$WINEPREFIX", os.environ["WINEPREFIX"])
-    add("~/.wine", h / ".wine")
-    for root in SteamBackend.roots():
-        for lib in SteamBackend._libraries(root):
-            cd = lib / "compatdata"
-            if cd.is_dir():
-                for d in sorted(cd.iterdir()):
-                    add(f"Steam/Proton {d.name}", d / "pfx")
-    for broot in BottlesBackend.roots():
-        for d in sorted(broot.iterdir()):
-            add(f"Bottles: {d.name}", d)
-    for base in (h / "Games", h / ".local/share/lutris/prefixes"):
-        if base.is_dir():
-            for d in sorted(base.iterdir()):
-                add(f"{base.name}/{d.name}", d)
-                if d.is_dir():
-                    for d2 in sorted(d.iterdir())[:40]:
-                        add(f"{base.name}/{d.name}/{d2.name}", d2)
-    return cands
-
-
 def _gh_release(repo: str) -> dict:
     with net.open_url(f"https://api.github.com/repos/{repo}/releases/latest", timeout=20,
                       accept="application/vnd.github+json", ua=_PD_UA) as r:
@@ -359,6 +312,8 @@ def _cached_release_archive(cache: Path, asset: dict, log) -> Path:
         try:
             req = urllib.request.Request(url, headers={'User-Agent': _PD_UA})
             with urllib.request.urlopen(req, timeout=60) as response, tmp.open('wb') as stream:
+                if not (getattr(response, 'url', None) or url).startswith('https://'):
+                    raise RuntimeError('release asset redirected to a non-HTTPS URL')
                 shutil.copyfileobj(response, stream, 1 << 20)
             if size and tmp.stat().st_size != size:
                 raise RuntimeError('release asset size mismatch')

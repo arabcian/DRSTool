@@ -231,8 +231,14 @@ class FrametimeWidget(QWidget):
         th = _RepeatThread(runs[0], runs[1], self._same_scene.isChecked())
         self._loaders.append(th)
         th.done.connect(self._status.setText)
-        th.finished.connect(lambda t=th: self._loaders.remove(t))
+        th.finished.connect(lambda t=th: self._drop_loader(t))
         th.start()
+
+    def _drop_loader(self, th: QThread):
+        # `finished` is emitted from the worker just before it exits: wait for the
+        # exit before dropping the last reference, or a still-running QThread is destroyed.
+        th.wait()
+        self._loaders.remove(th)
 
     def load_file(self, k: int, p: str):
         """Load a capture as run A (k=0) or B (k=1) — also used by the game card."""
@@ -241,7 +247,7 @@ class FrametimeWidget(QWidget):
         self._loaders.append(th)
         th.done.connect(self._set)
         th.failed.connect(self._status.setText)
-        th.finished.connect(lambda t=th: self._loaders.remove(t))
+        th.finished.connect(lambda t=th: self._drop_loader(t))
         th.start()
 
     def _set(self, k: int, d: Optional[dict], path: str):

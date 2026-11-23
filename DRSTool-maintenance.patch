@@ -1,0 +1,778 @@
+diff --git a/drstool_core/file_transactions.py b/drstool_core/file_transactions.py
+index 6cf1ad2..fde0d5e 100644
+--- a/drstool_core/file_transactions.py
++++ b/drstool_core/file_transactions.py
+@@ -222,6 +222,11 @@ def apply(changes: Iterable[Change], backup: Path, *, log: Callable[[str], None]
+             shutil.copy2(e['target'], bpath)
+             if sha256(bpath) != e['old_sha256']:
+                 raise RuntimeError(f'target changed during backup: {e["target"]}')
++            # The backup must reach the disk before the target is replaced (and
++            # fsynced) below, or a power cut could keep the new file and lose the original.
++            with bpath.open('rb') as stream:
++                os.fsync(stream.fileno())
++            _sync_dir(bpath.parent)
+     journal['entries'] += new_entries
+     journal['state'] = 'prepared'
+     atomic_write_json(path, journal)
+diff --git a/drstool_core/fsutil.py b/drstool_core/fsutil.py
+index 8c25618..67a7d04 100644
+--- a/drstool_core/fsutil.py
++++ b/drstool_core/fsutil.py
+@@ -8,7 +8,17 @@ from typing import Union
+ 
+ 
+ def _umask() -> int:
+-    m = os.umask(0)
++    # The umask is process-wide: setting it to 0 just to read it would let a file
++    # another thread creates meanwhile come out world-writable. Linux >= 4.7 reports
++    # it read-only in /proc/self/status.
++    try:
++        with open("/proc/self/status", encoding="ascii") as f:
++            for line in f:
++                if line.startswith("Umask:"):
++                    return int(line.split()[1], 8)
++    except (OSError, ValueError, IndexError):
++        pass
++    m = os.umask(0o077)
+     os.umask(m)
+     return m
+ 
+diff --git a/drstool_core/game_scan.py b/drstool_core/game_scan.py
+index 8116ba0..c016df8 100644
+--- a/drstool_core/game_scan.py
++++ b/drstool_core/game_scan.py
+@@ -48,7 +48,6 @@ SL_ANCHOR = "sl.interposer.dll"
+ # NGX's Streamline package ships the plugins but no interposer, so the group's version is read
+ # from a plugin every install has — an older interposer would otherwise stay "outdated" for good.
+ SL_VERSION_DLL = "sl.common.dll"
+-KIND_TITLES = {"dlss": "DLSS SR", "dlssd": "DLSS RR", "dlssg": "DLSS FG", SL_FEATURE: "Streamline"}
+ KINDS = ("dlss", "dlssd", "dlssg", SL_FEATURE)
+ 
+ _OPTISCALER_PROXIES = ("optiscaler.dll", "dxgi.dll", "winmm.dll", "version.dll", "dbghelp.dll",
+@@ -107,7 +106,6 @@ def _cached_dll_scan(key: tuple) -> Optional['GameDlls']:
+     return copy.deepcopy(result)
+ 
+ 
+-
+ @dataclass
+ class GameEntry:
+     launcher: str                      # Steam | Lutris | Heroic | Bottles | Custom
+diff --git a/drstool_core/share_code.py b/drstool_core/share_code.py
+index 87f6f83..0eaddaa 100644
+--- a/drstool_core/share_code.py
++++ b/drstool_core/share_code.py
+@@ -120,17 +120,6 @@ def _candidates(text: str) -> List[str]:
+     return out
+ 
+ 
+-def find_code(text: str) -> Optional[str]:
+-    """The share code inside arbitrary text (line breaks inside it removed), or None."""
+-    for cand in _candidates(text):
+-        try:
+-            _unpack(cand)
+-            return cand
+-        except ShareCodeError:
+-            continue
+-    return None
+-
+-
+ def looks_like_code(text: str) -> bool:
+     """Cheap test (no decoding) for "does this text contain a share code"."""
+     return isinstance(text, str) and PREFIX in text
+diff --git a/drstool_core/winetricks.py b/drstool_core/winetricks.py
+index 352da26..96a3b3a 100644
+--- a/drstool_core/winetricks.py
++++ b/drstool_core/winetricks.py
+@@ -56,8 +56,6 @@ def recommended() -> List[dict]:
+     return [v for v in catalog() if v.get("pop")]
+ 
+ 
+-# (winetricks verb, label shown in the UI) of the common ones; kept for older callers.
+-COMPONENTS: Tuple[Tuple[str, str], ...] = tuple((v["verb"], v["pop"]) for v in recommended())
+ _KNOWN = frozenset(v["verb"] for v in _load()[1])
+ 
+ # A game's log line -> the library that fixes it. (regex on a lower-cased line, verb, why)
+diff --git a/drstool_core/xid_analysis.py b/drstool_core/xid_analysis.py
+index 78b2755..b586715 100644
+--- a/drstool_core/xid_analysis.py
++++ b/drstool_core/xid_analysis.py
+@@ -401,8 +401,6 @@ class CrashModel:
+                 m[i] += p
+         return m
+ 
+-    def entropy(self, post=None) -> float:
+-        return -sum(p * math.log2(p) for _, p in (post or self.posterior()) if p > 0)
+ 
+     # ── planning ──
+     def _rate_post(self, h, on_holds: bool):
+@@ -576,9 +574,6 @@ class AdaptiveSearch:
+         for a, t in zip(answers, durations):
+             self.answer(a, t)
+ 
+-    def ranking(self, top: int = 5) -> list:
+-        """[(description, probability)] of the leading hypotheses."""
+-        return [(describe(h), p) for h, p in self.post[:top]]
+ 
+     def play_time(self) -> float:
+         return self.model.play_time([item_key(i) for i in self.pending or []], post=self.post)
+diff --git a/drstool_gui/base.py b/drstool_gui/base.py
+index a21ee98..28366ab 100644
+--- a/drstool_gui/base.py
++++ b/drstool_gui/base.py
+@@ -173,12 +173,6 @@ def _backup_file(path: Path) -> Path:
+ _atomic_write = atomic_write
+ 
+ 
+-def _umask() -> int:
+-    m = os.umask(0)
+-    os.umask(m)
+-    return m
+-
+-
+ def _proc_running(*names: str) -> bool:
+     if shutil.which("pgrep") is None:
+         # no pgrep: scan /proc instead of silently reporting "not running"
+diff --git a/drstool_gui/bisect_dialog.py b/drstool_gui/bisect_dialog.py
+deleted file mode 100644
+index 355523d..0000000
+diff --git a/drstool_gui/crash_triage_dialog.py b/drstool_gui/crash_triage_dialog.py
+deleted file mode 100644
+index ffc3321..0000000
+diff --git a/drstool_gui/diag_panels.py b/drstool_gui/diag_panels.py
+index 0f847f5..b9283d5 100644
+--- a/drstool_gui/diag_panels.py
++++ b/drstool_gui/diag_panels.py
+@@ -28,7 +28,6 @@ class LinterWidget(QWidget):
+ 
+     def __init__(self, parent=None):
+         super().__init__(parent)
+-        self._issues: List[LintIssue] = []
+         lay = QVBoxLayout(self)
+         lay.setContentsMargins(4, 8, 4, 4)
+         lay.setSpacing(8)
+@@ -74,7 +73,6 @@ class LinterWidget(QWidget):
+                             " — no special risk indicators found; not a safety guarantee"))
+ 
+     def set_issues(self, issues: List[LintIssue]):
+-        self._issues = issues
+         t = self._table
+         t.setRowCount(0)
+         n_e = sum(1 for i in issues if i.sev == "error")
+diff --git a/drstool_gui/dll_manager.py b/drstool_gui/dll_manager.py
+index 7695478..00503ff 100644
+--- a/drstool_gui/dll_manager.py
++++ b/drstool_gui/dll_manager.py
+@@ -34,7 +34,6 @@ from drstool_core import net
+ from drstool_core.catalog import DATA_DIR
+ 
+ from .base import _CORE_ERR, _proc_running, APP_ID, dll_ops, game_scan, pe_version, user_cache_dir
+-from .launchers import BottlesBackend, SteamBackend
+ from .ngx import (
+     _ngx_accent, _NgxWorker, ngx_human, ngx_is_sl, ngx_target_name, ngx_title, ngx_ver_str,
+     NgxBuild, NgxCancelled, NgxClient, ngx_cache_valid,
+@@ -258,52 +257,6 @@ def detect_installed(prefix: Path, comp: dict, *, manifest_data: Optional[dict]
+     return res
+ 
+ 
+-def dll_override_gaps(prefix: Path, comp: dict) -> List[str]:
+-    try:
+-        t = (prefix / "user.reg").read_text(errors="replace")
+-    except OSError:
+-        return []
+-    m = re.search(r"^\[Software\\\\Wine\\\\DllOverrides\][^\n]*\n(.*?)(?:\n\[|\Z)", t, re.S | re.M)
+-    block = m.group(1) if m else ""
+-    have = {k.lower(): v.lower() for k, v in re.findall(r'^"([^"]+)"="([^"]*)"', block, re.M)}
+-    return [d for d in comp["dlls"]
+-            if d in ("d3d9", "d3d10core", "d3d11", "dxgi", "d3d12", "d3d12core", "d3d8", "nvapi", "nvapi64", "nvofapi64")
+-            and "native" not in have.get(d, "")]
+-
+-
+-def find_prefixes() -> List[tuple]:
+-    h = Path.home()
+-    cands: List[tuple] = []
+-
+-    def add(label, p):
+-        try:
+-            p = Path(p)
+-            if (p / "drive_c" / "windows").is_dir() and all(str(p) != str(c[1]) for c in cands):
+-                cands.append((label, p))
+-        except OSError:
+-            pass
+-    if os.environ.get("WINEPREFIX"):
+-        add("$WINEPREFIX", os.environ["WINEPREFIX"])
+-    add("~/.wine", h / ".wine")
+-    for root in SteamBackend.roots():
+-        for lib in SteamBackend._libraries(root):
+-            cd = lib / "compatdata"
+-            if cd.is_dir():
+-                for d in sorted(cd.iterdir()):
+-                    add(f"Steam/Proton {d.name}", d / "pfx")
+-    for broot in BottlesBackend.roots():
+-        for d in sorted(broot.iterdir()):
+-            add(f"Bottles: {d.name}", d)
+-    for base in (h / "Games", h / ".local/share/lutris/prefixes"):
+-        if base.is_dir():
+-            for d in sorted(base.iterdir()):
+-                add(f"{base.name}/{d.name}", d)
+-                if d.is_dir():
+-                    for d2 in sorted(d.iterdir())[:40]:
+-                        add(f"{base.name}/{d.name}/{d2.name}", d2)
+-    return cands
+-
+-
+ def _gh_release(repo: str) -> dict:
+     with net.open_url(f"https://api.github.com/repos/{repo}/releases/latest", timeout=20,
+                       accept="application/vnd.github+json", ua=_PD_UA) as r:
+@@ -359,6 +312,8 @@ def _cached_release_archive(cache: Path, asset: dict, log) -> Path:
+         try:
+             req = urllib.request.Request(url, headers={'User-Agent': _PD_UA})
+             with urllib.request.urlopen(req, timeout=60) as response, tmp.open('wb') as stream:
++                if not (getattr(response, 'url', None) or url).startswith('https://'):
++                    raise RuntimeError('release asset redirected to a non-HTTPS URL')
+                 shutil.copyfileobj(response, stream, 1 << 20)
+             if size and tmp.stat().st_size != size:
+                 raise RuntimeError('release asset size mismatch')
+diff --git a/drstool_gui/frametime.py b/drstool_gui/frametime.py
+index b8e4300..50e5d4a 100644
+--- a/drstool_gui/frametime.py
++++ b/drstool_gui/frametime.py
+@@ -231,9 +231,15 @@ class FrametimeWidget(QWidget):
+         th = _RepeatThread(runs[0], runs[1], self._same_scene.isChecked())
+         self._loaders.append(th)
+         th.done.connect(self._status.setText)
+-        th.finished.connect(lambda t=th: self._loaders.remove(t))
++        th.finished.connect(lambda t=th: self._drop_loader(t))
+         th.start()
+ 
++    def _drop_loader(self, th: QThread):
++        # `finished` is emitted from the worker just before it exits: wait for the
++        # exit before dropping the last reference, or a still-running QThread is destroyed.
++        th.wait()
++        self._loaders.remove(th)
++
+     def load_file(self, k: int, p: str):
+         """Load a capture as run A (k=0) or B (k=1) — also used by the game card."""
+         self._status.setText(f"Loading {Path(p).name}…")
+@@ -241,7 +247,7 @@ class FrametimeWidget(QWidget):
+         self._loaders.append(th)
+         th.done.connect(self._set)
+         th.failed.connect(self._status.setText)
+-        th.finished.connect(lambda t=th: self._loaders.remove(t))
++        th.finished.connect(lambda t=th: self._drop_loader(t))
+         th.start()
+ 
+     def _set(self, k: int, d: Optional[dict], path: str):
+diff --git a/drstool_gui/lgtune.py b/drstool_gui/lgtune.py
+index 94a8f89..afc93f0 100644
+--- a/drstool_gui/lgtune.py
++++ b/drstool_gui/lgtune.py
+@@ -1053,8 +1053,13 @@ QPlainTextEdit{
+         if not self._is_installed():
+             self._log("lutris-game-tune is not installed.")
+             return
+-        self._log(f"==> {LGTUNE_WRAPPER} STATUS")
+-        self._run_proc("pkexec", [str(LGTUNE_WRAPPER), "STATUS"], tag="status")
++        self._log(f"==> {lgtune_cmd('STATUS')}")
++        # setuid mode needs no pkexec: there is no polkit action then, so pkexec
++        # would fall back to an admin-password prompt for nothing.
++        if lgtune_mode() == "polkit":
++            self._run_proc("pkexec", [str(LGTUNE_WRAPPER), "STATUS"], tag="status")
++        else:
++            self._run_proc(str(LGTUNE_WRAPPER), ["STATUS"], tag="status")
+ 
+     def _on_view_log(self):
+         if not LGTUNE_LOG.is_file():
+diff --git a/drstool_gui/logs.py b/drstool_gui/logs.py
+index 0459a9c..3fb0dd7 100644
+--- a/drstool_gui/logs.py
++++ b/drstool_gui/logs.py
+@@ -242,7 +242,7 @@ class LogViewerWidget(QWidget):
+         found = {}
+         for d in dirs:
+             try:
+-                for p in list(d.glob("steam-*.log")) + list(d.glob("*.log")):
++                for p in d.glob("*.log"):                 # steam-*.log included
+                     if p.is_file():
+                         found[p] = p.stat().st_mtime
+             except OSError:
+@@ -326,6 +326,12 @@ class LogViewerWidget(QWidget):
+         for code, n in hits.items():
+             self._hits[code] = self._hits.get(code, 0) + n
+ 
++    def _drop_loader(self, th: QThread):
++        # `finished` is emitted from the worker just before it exits: wait for the
++        # exit before dropping the last reference, or a still-running QThread is destroyed.
++        th.wait()
++        self._loaders.remove(th)
++
+     def _load(self, path: Path):
+         """Reads and analyses on a worker thread (a 6 MB log froze the window for ~1.5 s)."""
+         self._path = path
+@@ -336,7 +342,7 @@ class LogViewerWidget(QWidget):
+         self._loaders.append(th)
+         th.done.connect(self._on_loaded)
+         th.failed.connect(self._on_load_failed)
+-        th.finished.connect(lambda t=th: self._loaders.remove(t))
++        th.finished.connect(lambda t=th: self._drop_loader(t))
+         th.start()
+ 
+     def _on_load_failed(self, gen: int, msg: str):
+diff --git a/drstool_gui/lutris_sync.py b/drstool_gui/lutris_sync.py
+index df0aeb4..2a805b3 100644
+--- a/drstool_gui/lutris_sync.py
++++ b/drstool_gui/lutris_sync.py
+@@ -155,24 +155,6 @@ class LutrisSyncWidget(QWidget):
+     # system.* keys wired to the lutris-game-tune checkbox
+     _LGTUNE_KEYS = ("prelaunch_command", "postexit_command", "prefix_command")
+ 
+-    @classmethod
+-    def _managed_system_keys(cls) -> set:
+-        """Every system.* key DRSTool considers itself the owner of.
+-
+-        Sync used to be purely ADDITIVE: a key was written when its control was
+-        set and simply omitted when it wasn't, and _merge_yaml only ever did
+-        `data["system"][k] = v`. That makes every set -> unset transition
+-        invisible on disk — the previous value survives and the YAML silently
+-        disagrees with the GUI. Declaring ownership up front lets the merge
+-        delete what the GUI no longer asks for, so a written file always
+-        matches what is on screen.
+-        """
+-        keys = {"gamescope", "gamescope_flags"}
+-        keys |= set(cls._FLAG_TO_LUTRIS.values())
+-        keys |= set(cls._FLAG_TO_LUTRIS_BOOL.values())
+-        keys |= set(cls._FLAG_PAIR_TO_LUTRIS.keys())
+-        keys |= set(cls._LGTUNE_KEYS)
+-        return keys
+ 
+     # Env vars are derived from the DRS grid + arch selector rather than typed
+     # into the Env Vars tab, so they never appear in ALL_ENV_VARS.
+@@ -182,7 +164,7 @@ class LutrisSyncWidget(QWidget):
+     def _managed_env_keys(cls) -> set:
+         """Every system.env variable DRSTool considers itself the owner of.
+ 
+-        Same ownership rule as _managed_system_keys, applied to the env block:
++        Ownership rule for the env block:
+         without it, dropping a variable in the Env Vars tab left the old value
+         sitting in the YAML forever. That is worse here than in system.*
+         because the env block is where the bulk of the configuration lives —
+diff --git a/drstool_gui/main_window.py b/drstool_gui/main_window.py
+index 119f30c..09f39dd 100644
+--- a/drstool_gui/main_window.py
++++ b/drstool_gui/main_window.py
+@@ -529,7 +529,6 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
+         self._sync_timer.setSingleShot(True)
+         self._sync_timer.setInterval(200)
+         self._sync_timer.timeout.connect(self._refresh_sync_previews)
+-        self._lint_issue_count = (0, 0)
+         for _sig in (self.settings_manager.settings_changed, self._env_widget.env_changed,
+                      self._gamescope.changed):
+             _sig.connect(self._schedule_lint)
+diff --git a/drstool_gui/ngx.py b/drstool_gui/ngx.py
+index 3d7a36d..ccb4b45 100644
+--- a/drstool_gui/ngx.py
++++ b/drstool_gui/ngx.py
+@@ -20,7 +20,6 @@ from pathlib import Path
+ from typing import Dict, List, Optional
+ 
+ from PySide6.QtCore import QThread, Signal
+-from PySide6.QtGui import QColor
+ 
+ from drstool_core import dll_ops, file_transactions as tx
+ from drstool_core import net
+@@ -535,6 +534,3 @@ def _ngx_accent(feat: str) -> str:
+     return _NGX_ACCENTS.get(feat, T["text2"])
+ 
+ 
+-def _ngx_rgba(hex_color: str, alpha: float) -> str:
+-    c = QColor(hex_color)
+-    return f"rgba({c.red()},{c.green()},{c.blue()},{alpha})"
+diff --git a/drstool_gui/output_bar.py b/drstool_gui/output_bar.py
+index 34418ec..27371cc 100644
+--- a/drstool_gui/output_bar.py
++++ b/drstool_gui/output_bar.py
+@@ -2,7 +2,7 @@
+ 
+ from typing import Dict, Optional, TYPE_CHECKING
+ 
+-from PySide6.QtCore import Qt, Signal
++from PySide6.QtCore import Qt
+ from PySide6.QtGui import QAction, QColor
+ from PySide6.QtWidgets import (
+     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton,
+@@ -35,7 +35,6 @@ class OutputBarWidget(QWidget):
+     each value elided to the available width and click-to-copy.
+     Right: Copy (with a Steam %command% variant), Save, Reset.
+     """
+-    feedback = Signal(str)
+ 
+     def __init__(self, settings_manager: SettingsManager, parent=None):
+         super().__init__(parent)
+diff --git a/drstool_gui/overlay_builders.py b/drstool_gui/overlay_builders.py
+index 827952d..d75b43f 100644
+--- a/drstool_gui/overlay_builders.py
++++ b/drstool_gui/overlay_builders.py
+@@ -200,7 +200,6 @@ class MangoHudBuilder(QWidget):
+         self._rows: Dict[str, tuple] = {}
+         self._group_labels: Dict[str, QLabel] = {}
+         self._row_widgets: Dict[str, List[QWidget]] = {}
+-        self._saved_path: Optional[Path] = None
+         root = QHBoxLayout(self)
+         root.setContentsMargins(4, 8, 4, 4)
+         root.setSpacing(10)
+@@ -407,7 +406,6 @@ class MangoHudBuilder(QWidget):
+                               Path.home() / ".config/MangoHud/MangoHud.conf", mangohud_conf_text(v))
+         if p is None:
+             return
+-        self._saved_path = p
+         default = Path.home() / ".config/MangoHud/MangoHud.conf"
+         if p != default:
+             _set_env_on_window(self, "MANGOHUD_CONFIGFILE", str(p))
+diff --git a/drstool_gui/settings_manager.py b/drstool_gui/settings_manager.py
+index 1030beb..3dfc075 100644
+--- a/drstool_gui/settings_manager.py
++++ b/drstool_gui/settings_manager.py
+@@ -17,7 +17,7 @@ from drstool_core.fsutil import atomic_write
+ from drstool_core.models import GPUArch
+ 
+ from .base import _as_dict
+-from .catalog_data import ALL_SETTINGS, GPU_ARCHS
++from .catalog_data import GPU_ARCHS
+ from .gamescope import normalize_gs_flags
+ from .links import LINKS
+ from .lookup import canonical_drs_key, canonical_drs_value, drs_lookup
+@@ -58,7 +58,6 @@ class SettingsManager(QObject):
+         self._loaded_gamescope_enabled = False
+         self._loaded_gamescope_flags: Dict[str, str] = {}
+         self.load_warnings: List[str] = []
+-        self._all_settings = ALL_SETTINGS
+         # profile_save_error fires from the constructor before MainWindow has
+         # connected it, so the message would be lost; MainWindow re-emits this.
+         self.startup_notice: str = ""
+@@ -79,14 +78,11 @@ class SettingsManager(QObject):
+             del self._settings[setting_id]
+             self.settings_changed.emit()
+ 
+-    def clear_all(self):
+-        self._settings.clear()
+-        self.settings_changed.emit()
+ 
+     def reset_everything(self):
+         """Clear DRS settings, GPU arch, and the active-profile marker in one
+         go. Used by the 'Reset All' button. Replaces the previous pattern of
+-        calling clear_all() + set_arch(None) separately (which fired
++        clearing the settings + set_arch(None) separately (which fired
+         settings_changed twice) and reaching into the private
+         self._current_profile field directly from OutputBarWidget."""
+         self._settings.clear()
+diff --git a/drstool_gui/tool_manager.py b/drstool_gui/tool_manager.py
+index b3009ea..123e87d 100644
+--- a/drstool_gui/tool_manager.py
++++ b/drstool_gui/tool_manager.py
+@@ -6,7 +6,6 @@ import logging
+ import os
+ import re
+ import shutil
+-import tarfile
+ import tempfile
+ import threading as _threading
+ import time
+@@ -107,7 +106,6 @@ _TM_DIRS = {
+ _TM_UA = "DRSTool-tool-manager (+https://github.com/arabcian/DRSTool)"
+ _TM_VERSION_FILE = "protondl_version.json"       # same name/schema as protondl
+ _TM_ARM = re.compile(r"(aarch64|arm64|armv\d)", re.I)
+-_TM_FILTER = hasattr(tarfile, "tar_filter")
+ _STL_DIR, _STL_INTERNAL, _STL_PREFIX = "SteamTinkerLaunch", "Proton-stl", "sonic2kk-steamtinkerlaunch-"
+ 
+ 
+@@ -447,11 +445,6 @@ def _tm_verify(path: Path, csum_url: str, cancel, prog, digest=None, filename: s
+     return "SHA-512 verified"
+ 
+ 
+-def _tm_untar_cli(path: Path, dest: Path, cancel):
+-    """Legacy entry point; now safely streams zstd through verified extraction."""
+-    return _tm_untar(path, dest, cancel, lambda *_: None)
+-
+-
+ def _tm_untar(path: Path, dest: Path, cancel, prog, label: str = "Extracting"):
+     try:
+         prog(label, 0, 0)  # unknown expanded size: use indeterminate progress
+diff --git a/drstool_gui/widgets.py b/drstool_gui/widgets.py
+index 4d0e333..8649f5d 100644
+--- a/drstool_gui/widgets.py
++++ b/drstool_gui/widgets.py
+@@ -316,9 +316,6 @@ class ElidedLabel(QLabel):
+     def text(self) -> str:
+         return self._full
+ 
+-    def set_copyable(self, on: bool):
+-        self._copyable = on
+-        self.setCursor(Qt.PointingHandCursor if on else Qt.ArrowCursor)
+ 
+     def _refresh(self):
+         avail = max(20, self.width() - 22)
+@@ -779,10 +776,6 @@ _COMBO_QSS = (f"QComboBox{{background:{T['surface']};border:1px solid {T['border
+               f"QComboBox QAbstractItemView{{background:{T['surface']};color:{T['text']};}}")
+ 
+ 
+-def _main_win(w: QWidget):
+-    return w.window()
+-
+-
+ def _slugify(s: str) -> str:
+     s = re.sub(r"[^A-Za-z0-9._-]+", "-", s.strip()).strip("-.")
+     return s[:60] or "game"
+diff --git a/lutris-game-tune-main/lutris-game-tune-wrapper.c b/lutris-game-tune-main/lutris-game-tune-wrapper.c
+index dc6eab7..8f66e29 100644
+--- a/lutris-game-tune-main/lutris-game-tune-wrapper.c
++++ b/lutris-game-tune-main/lutris-game-tune-wrapper.c
+@@ -75,6 +75,9 @@
+  *   - the tuning script is opened once (O_NOFOLLOW), verified with fstat and
+  *     run as /dev/fd/N: no check-then-exec window, symlinked scripts refused
+  *
++ * v2.5 changes:
++ *   - fd 0/1/2 are re-opened on /dev/null if the caller closed them
++ *
+  * Build & install: use install.sh, or:
+  *   gcc -O2 -Wall -Wextra -o lutris-game-tune-wrapper lutris-game-tune-wrapper.c
+  *   sudo install -o root -g root -m 4755 lutris-game-tune-wrapper /usr/local/bin/
+@@ -483,8 +486,29 @@ static int valid_profile_name(const char *s)
+     return 1;
+ }
+ 
++/* setuid hygiene: a caller can exec us with fd 0/1/2 closed, so the next
++ * file opened as root (the script, or one the script redirects into) would
++ * land on stdin/stdout/stderr. Re-open any closed one on /dev/null. */
++static int sanitize_std_fds(void)
++{
++    for (int fd = 0; fd <= 2; fd++) {
++        if (fcntl(fd, F_GETFD) != -1 || errno != EBADF)
++            continue;
++        int nfd = open("/dev/null", O_RDWR);
++        if (nfd != fd) {
++            if (nfd >= 0)
++                close(nfd);
++            return -1;
++        }
++    }
++    return 0;
++}
++
+ int main(int argc, char *argv[])
+ {
++    if (sanitize_std_fds() != 0)
++        return 1;
++
+     if (argc < 2) {
+         print_usage(argv[0]);
+         return 1;
+diff --git a/lutris-game-tune-main/lutris-game-tune.sh b/lutris-game-tune-main/lutris-game-tune.sh
+index affc485..1d6b3fa 100644
+--- a/lutris-game-tune-main/lutris-game-tune.sh
++++ b/lutris-game-tune-main/lutris-game-tune.sh
+@@ -1656,7 +1656,6 @@ restore_scx_sched() {
+ readonly CGROUP_V2_ROOT="/sys/fs/cgroup"
+ readonly CCD_GOOD_GROUP="theGood"
+ readonly CCD_UGLY_GROUP="theUgly"
+-CCD_AVAILABLE=0   # set by detect_ccx_groups()
+ 
+ # N-CCX-aware topology detection. Returns 1 if only a single CCX/CCD is found
+ # (not an error) — the caller uses this as a "skip silently" signal.
+@@ -1796,14 +1795,12 @@ _pid_cgroup_path_v() {
+     return 1
+ }
+ 
+-# Build a PID -> PPID map for the whole system in ONE pass over /proc.
++# Build a PPID -> children map for the whole system in ONE pass over /proc.
+ # The previous implementation forked `pgrep -P <pid>` once per PID, i.e.
+ # hundreds of forks per monitor pass, and the cost grew with the size of the
+ # game's process tree — the sweep itself became a jitter source over time.
+-declare -gA PPID_MAP=()
+ declare -gA CHILDREN_MAP=()
+ build_process_map() {
+-    PPID_MAP=()
+     CHILDREN_MAP=()
+     local stat_file line pid after ppid
+     for stat_file in /proc/[0-9]*/stat; do
+@@ -1817,47 +1814,10 @@ build_process_map() {
+         after="${after#* }"       # "<ppid> ..."
+         ppid="${after%% *}"
+         [[ "${ppid}" =~ ^[0-9]+$ ]] || continue
+-        PPID_MAP["${pid}"]="${ppid}"
+         CHILDREN_MAP["${ppid}"]+="${pid} "
+     done
+ }
+ 
+-get_process_tree() {
+-    local root_pid="$1"
+-    local -a queue=("${root_pid}") result=()
+-    local -A seen=()
+-    local pid child
+-
+-    (( ${#PPID_MAP[@]} == 0 )) && build_process_map
+-
+-    while (( ${#queue[@]} > 0 )); do
+-        pid="${queue[0]}"
+-        queue=("${queue[@]:1}")
+-        [[ -n "${seen[$pid]:-}" ]] && continue
+-        seen[$pid]=1
+-        result+=("${pid}")
+-        for child in ${CHILDREN_MAP[$pid]:-}; do
+-            [[ -n "${child}" ]] && queue+=("${child}")
+-        done
+-    done
+-    printf '%s\n' "${result[@]}"
+-}
+-
+-collect_targets() {
+-    local pattern="$1"
+-    local -A all_pids=()
+-    local root_pid pid
+-
+-    while read -r root_pid; do
+-        [[ -z "${root_pid}" ]] && continue
+-        while read -r pid; do
+-            [[ -n "${pid}" ]] && all_pids[$pid]=1
+-        done < <(get_process_tree "${root_pid}")
+-    done < <(pgrep -x "${pattern}" 2>/dev/null)
+-
+-    printf '%s\n' "${!all_pids[@]}"
+-}
+-
+ # Recursively collect every PID from ALL cgroup.procs files under a root
+ # directory (the root cgroup's own cgroup.procs, plus every descendant
+ # cgroup's cgroup.procs) — NOT just the top-level file. On systems where
+@@ -1916,7 +1876,7 @@ declare -gA CCD_PROTECTED_SESSION_PIDS=()
+ 
+ refresh_protected_session_pids() {
+     CCD_PROTECTED_SESSION_PIDS=()
+-    local session_dir leader_pid f line
++    local session_dir f line
+     for session_dir in /run/systemd/sessions /run/elogind/sessions; do
+         [[ -d "${session_dir}" ]] || continue
+         for f in "${session_dir}"/*; do
+@@ -2130,11 +2090,11 @@ move_launcher_tree_once() {
+ 
+     # Step 3: Dynamic full-depth process tree scan
+     # Recursively includes all children of currently known PIDs
++    # Index-based FIFO: re-slicing the array on every dequeue made the sweep O(n^2).
+     local -a queue=("${!all_pids[@]}")
+-    local child
+-    while (( ${#queue[@]} > 0 )); do
+-        pid="${queue[0]}"
+-        queue=("${queue[@]:1}")
++    local child qi=0
++    while (( qi < ${#queue[@]} )); do
++        pid="${queue[qi++]}"
+         for child in ${CHILDREN_MAP[$pid]:-}; do
+             if [[ -n "${child}" && -z "${all_pids[$child]:-}" ]]; then
+                 all_pids[$child]=1
+@@ -2254,7 +2214,6 @@ cleanup_stale_ccd_cgroups() {
+ apply_ccd_isolation() {
+     [[ "${CCD_ISOLATION_ENABLED}" == "1" ]] || return 0
+     detect_ccx_groups || return 0   # single CCX/CCD -> silent exit
+-    CCD_AVAILABLE=1
+     if (( DRY_RUN )); then
+         dry "would isolate: ${CCX_LABEL_GOOD} = ${CCX_GROUPS[0]}; ${CCX_LABEL_SYS} = ${CCX_GROUPS[1]}"
+         return 0
+@@ -2464,7 +2423,7 @@ restore_ccd_isolation() {
+     load_origin_cache
+ 
+     local max_attempts=25
+-    local attempt success fail pid remaining
++    local attempt success fail pid
+     local ugly_done=0 good_done=0
+ 
+     # Groups already gone from a previous run count as already-reverted.
+diff --git a/tests/test_audit_regressions.py b/tests/test_audit_regressions.py
+index f6f81e6..a2affba 100644
+--- a/tests/test_audit_regressions.py
++++ b/tests/test_audit_regressions.py
+@@ -411,5 +411,33 @@ class WorkerCancellationRegressions(unittest.TestCase):
+             thread.join(5)
+ 
+ 
++class MaintenanceRegressions(unittest.TestCase):
++    def test_umask_is_read_without_changing_it(self):
++        """os.umask(0) to read the mask made files of other threads world-writable."""
++        from drstool_core import fsutil
++        if not Path('/proc/self/status').is_file():
++            self.skipTest('needs /proc')
++        current = os.umask(0o022)
++        os.umask(current)
++        with mock.patch.object(fsutil.os, 'umask', side_effect=AssertionError('umask changed')):
++            self.assertEqual(fsutil._umask(), current)
++
++    def test_backup_is_durable_before_the_target_is_replaced(self):
++        with tempfile.TemporaryDirectory() as d:
++            root = Path(d)
++            target = pe(root / 'game/a.dll')
++            source = pe(root / 'src/a.dll', content=b'new')
++            events = []
++            real_sync, real_copy = tx._sync_dir, tx.atomic_copy
++            with mock.patch.object(tx, '_sync_dir', side_effect=lambda p: (events.append(('sync', p)),
++                                                                            real_sync(p))), \
++                    mock.patch.object(tx, 'atomic_copy', side_effect=lambda a, b: (events.append(('copy', b)),
++                                                                                    real_copy(a, b))):
++                tx.apply([tx.Change(target, source, 'a.dll', 'test')], root / 'bk')
++            self.assertEqual(events[0], ('sync', root / 'bk' / 'files'))
++            self.assertEqual(events[1], ('copy', target))
++            self.assertEqual(target.read_bytes(), source.read_bytes())
++
++
+ if __name__ == '__main__':
+     unittest.main()
+diff --git a/tests/test_crash_gui.py b/tests/test_crash_gui.py
+index 882a7e8..a5ab09c 100644
+--- a/tests/test_crash_gui.py
++++ b/tests/test_crash_gui.py
+@@ -314,7 +314,7 @@ class MainWindowTabTests(unittest.TestCase):
+ @unittest.skipIf(crash_lab is None, "PySide6 not installed")
+ class TurkishTests(unittest.TestCase):
+     def test_search_texts_follow_the_language(self):
+-        app = QApplication.instance() or QApplication([])
++        _app = QApplication.instance() or QApplication([])
+         QSettings(APP_ID, APP_ID).remove("crashlab/search")
+         win = QWidget()
+         win.capture_state = lambda: dict(FULL)
+diff --git a/tests/test_gui.py b/tests/test_gui.py
+index 70a37a5..067c6b3 100644
+--- a/tests/test_gui.py
++++ b/tests/test_gui.py
+@@ -694,6 +694,20 @@ class GuiTests(unittest.TestCase):
+         self.win.set_env_var("PROTON_ENABLE_NVAPI", "")
+ 
+     # ── lutris-game-tune without setuid ─────────────────────────────────────
++    def test_lgtune_status_uses_pkexec_only_in_polkit_mode(self):
++        m = self.m
++        lw = m.LgtuneWidget()
++        try:
++            for mode, prog in (("setuid", str(m.LGTUNE_WRAPPER)), ("polkit", "pkexec")):
++                with patch_name(m, "lgtune_mode", return_value=mode), \
++                        mock.patch.object(lw, "_is_installed", return_value=True), \
++                        mock.patch.object(lw, "_run_proc") as run:
++                    lw._on_run_status()
++                self.assertEqual(run.call_args.args[0], prog, mode)
++                self.assertEqual(run.call_args.args[1][-1], "STATUS")
++        finally:
++            lw.deleteLater()
++
+     def test_lgtune_polkit_commands(self):
+         m = self.m
+         ls = self.win._lutris_sync_widget
+diff --git a/vk-flip-meter-main/CMakeLists.txt b/vk-flip-meter-main/CMakeLists.txt
+index 305ef56..fce4db1 100644
+--- a/vk-flip-meter-main/CMakeLists.txt
++++ b/vk-flip-meter-main/CMakeLists.txt
+@@ -32,7 +32,8 @@ find_package(Vulkan REQUIRED)
+ # ============================================================================
+ # Target
+ # ============================================================================
+-# Repository builds compile the canonical source at ../src/.  Wheels contain
++# Repository builds compile the canonical source at ../src/ (the only copy in the
++# repository).  Wheels contain
+ # its packaged copy under share/drstool/vk-flip-meter-main/src/.
+ set(_FLM_SOURCE "${CMAKE_CURRENT_LIST_DIR}/../src/flip_meter.cpp")
+ if(NOT EXISTS "${_FLM_SOURCE}")
+diff --git a/vk-flip-meter-main/src/flip_meter.cpp b/vk-flip-meter-main/src/flip_meter.cpp
+deleted file mode 100644
+index 385b12d..0000000

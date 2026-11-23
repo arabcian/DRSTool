@@ -48,7 +48,6 @@ SL_ANCHOR = "sl.interposer.dll"
 # NGX's Streamline package ships the plugins but no interposer, so the group's version is read
 # from a plugin every install has — an older interposer would otherwise stay "outdated" for good.
 SL_VERSION_DLL = "sl.common.dll"
-KIND_TITLES = {"dlss": "DLSS SR", "dlssd": "DLSS RR", "dlssg": "DLSS FG", SL_FEATURE: "Streamline"}
 KINDS = ("dlss", "dlssd", "dlssg", SL_FEATURE)
 
 _OPTISCALER_PROXIES = ("optiscaler.dll", "dxgi.dll", "winmm.dll", "version.dll", "dbghelp.dll",
@@ -105,7 +104,6 @@ def _cached_dll_scan(key: tuple) -> Optional['GameDlls']:
         if key in _DLL_CACHE:
             _DLL_CACHE.move_to_end(key)
     return copy.deepcopy(result)
-
 
 
 @dataclass

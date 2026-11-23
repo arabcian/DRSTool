@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QThread, Signal
-from PySide6.QtGui import QColor
 
 from drstool_core import dll_ops, file_transactions as tx
 from drstool_core import net
@@ -535,6 +534,3 @@ def _ngx_accent(feat: str) -> str:
     return _NGX_ACCENTS.get(feat, T["text2"])
 
 
-def _ngx_rgba(hex_color: str, alpha: float) -> str:
-    c = QColor(hex_color)
-    return f"rgba({c.red()},{c.green()},{c.blue()},{alpha})"

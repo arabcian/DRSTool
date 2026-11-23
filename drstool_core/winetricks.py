@@ -56,8 +56,6 @@ def recommended() -> List[dict]:
     return [v for v in catalog() if v.get("pop")]
 
 
-# (winetricks verb, label shown in the UI) of the common ones; kept for older callers.
-COMPONENTS: Tuple[Tuple[str, str], ...] = tuple((v["verb"], v["pop"]) for v in recommended())
 _KNOWN = frozenset(v["verb"] for v in _load()[1])
 
 # A game's log line -> the library that fixes it. (regex on a lower-cased line, verb, why)

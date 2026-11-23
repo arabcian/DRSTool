@@ -401,8 +401,6 @@ class CrashModel:
                 m[i] += p
         return m
 
-    def entropy(self, post=None) -> float:
-        return -sum(p * math.log2(p) for _, p in (post or self.posterior()) if p > 0)
 
     # ── planning ──
     def _rate_post(self, h, on_holds: bool):
@@ -576,9 +574,6 @@ class AdaptiveSearch:
         for a, t in zip(answers, durations):
             self.answer(a, t)
 
-    def ranking(self, top: int = 5) -> list:
-        """[(description, probability)] of the leading hypotheses."""
-        return [(describe(h), p) for h, p in self.post[:top]]
 
     def play_time(self) -> float:
         return self.model.play_time([item_key(i) for i in self.pending or []], post=self.post)

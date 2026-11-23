@@ -694,6 +694,20 @@ class GuiTests(unittest.TestCase):
         self.win.set_env_var("PROTON_ENABLE_NVAPI", "")
 
     # ── lutris-game-tune without setuid ─────────────────────────────────────
+    def test_lgtune_status_uses_pkexec_only_in_polkit_mode(self):
+        m = self.m
+        lw = m.LgtuneWidget()
+        try:
+            for mode, prog in (("setuid", str(m.LGTUNE_WRAPPER)), ("polkit", "pkexec")):
+                with patch_name(m, "lgtune_mode", return_value=mode), \
+                        mock.patch.object(lw, "_is_installed", return_value=True), \
+                        mock.patch.object(lw, "_run_proc") as run:
+                    lw._on_run_status()
+                self.assertEqual(run.call_args.args[0], prog, mode)
+                self.assertEqual(run.call_args.args[1][-1], "STATUS")
+        finally:
+            lw.deleteLater()
+
     def test_lgtune_polkit_commands(self):
         m = self.m
         ls = self.win._lutris_sync_widget

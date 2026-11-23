@@ -28,7 +28,6 @@ class LinterWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._issues: List[LintIssue] = []
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 8, 4, 4)
         lay.setSpacing(8)
@@ -74,7 +73,6 @@ class LinterWidget(QWidget):
                             " — no special risk indicators found; not a safety guarantee"))
 
     def set_issues(self, issues: List[LintIssue]):
-        self._issues = issues
         t = self._table
         t.setRowCount(0)
         n_e = sum(1 for i in issues if i.sev == "error")

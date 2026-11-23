@@ -17,7 +17,7 @@ from drstool_core.fsutil import atomic_write
 from drstool_core.models import GPUArch
 
 from .base import _as_dict
-from .catalog_data import ALL_SETTINGS, GPU_ARCHS
+from .catalog_data import GPU_ARCHS
 from .gamescope import normalize_gs_flags
 from .links import LINKS
 from .lookup import canonical_drs_key, canonical_drs_value, drs_lookup
@@ -58,7 +58,6 @@ class SettingsManager(QObject):
         self._loaded_gamescope_enabled = False
         self._loaded_gamescope_flags: Dict[str, str] = {}
         self.load_warnings: List[str] = []
-        self._all_settings = ALL_SETTINGS
         # profile_save_error fires from the constructor before MainWindow has
         # connected it, so the message would be lost; MainWindow re-emits this.
         self.startup_notice: str = ""
@@ -79,14 +78,11 @@ class SettingsManager(QObject):
             del self._settings[setting_id]
             self.settings_changed.emit()
 
-    def clear_all(self):
-        self._settings.clear()
-        self.settings_changed.emit()
 
     def reset_everything(self):
         """Clear DRS settings, GPU arch, and the active-profile marker in one
         go. Used by the 'Reset All' button. Replaces the previous pattern of
-        calling clear_all() + set_arch(None) separately (which fired
+        clearing the settings + set_arch(None) separately (which fired
         settings_changed twice) and reaching into the private
         self._current_profile field directly from OutputBarWidget."""
         self._settings.clear()

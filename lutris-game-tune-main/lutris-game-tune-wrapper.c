@@ -75,6 +75,9 @@
  *   - the tuning script is opened once (O_NOFOLLOW), verified with fstat and
  *     run as /dev/fd/N: no check-then-exec window, symlinked scripts refused
  *
+ * v2.5 changes:
+ *   - fd 0/1/2 are re-opened on /dev/null if the caller closed them
+ *
  * Build & install: use install.sh, or:
  *   gcc -O2 -Wall -Wextra -o lutris-game-tune-wrapper lutris-game-tune-wrapper.c
  *   sudo install -o root -g root -m 4755 lutris-game-tune-wrapper /usr/local/bin/
@@ -483,8 +486,29 @@ static int valid_profile_name(const char *s)
     return 1;
 }
 
+/* setuid hygiene: a caller can exec us with fd 0/1/2 closed, so the next
+ * file opened as root (the script, or one the script redirects into) would
+ * land on stdin/stdout/stderr. Re-open any closed one on /dev/null. */
+static int sanitize_std_fds(void)
+{
+    for (int fd = 0; fd <= 2; fd++) {
+        if (fcntl(fd, F_GETFD) != -1 || errno != EBADF)
+            continue;
+        int nfd = open("/dev/null", O_RDWR);
+        if (nfd != fd) {
+            if (nfd >= 0)
+                close(nfd);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
+    if (sanitize_std_fds() != 0)
+        return 1;
+
     if (argc < 2) {
         print_usage(argv[0]);
         return 1;

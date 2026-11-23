@@ -8,7 +8,17 @@ from typing import Union
 
 
 def _umask() -> int:
-    m = os.umask(0)
+    # The umask is process-wide: setting it to 0 just to read it would let a file
+    # another thread creates meanwhile come out world-writable. Linux >= 4.7 reports
+    # it read-only in /proc/self/status.
+    try:
+        with open("/proc/self/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("Umask:"):
+                    return int(line.split()[1], 8)
+    except (OSError, ValueError, IndexError):
+        pass
+    m = os.umask(0o077)
     os.umask(m)
     return m
 

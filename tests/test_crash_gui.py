@@ -314,7 +314,7 @@ class MainWindowTabTests(unittest.TestCase):
 @unittest.skipIf(crash_lab is None, "PySide6 not installed")
 class TurkishTests(unittest.TestCase):
     def test_search_texts_follow_the_language(self):
-        app = QApplication.instance() or QApplication([])
+        _app = QApplication.instance() or QApplication([])
         QSettings(APP_ID, APP_ID).remove("crashlab/search")
         win = QWidget()
         win.capture_state = lambda: dict(FULL)

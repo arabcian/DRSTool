@@ -242,7 +242,7 @@ class LogViewerWidget(QWidget):
         found = {}
         for d in dirs:
             try:
-                for p in list(d.glob("steam-*.log")) + list(d.glob("*.log")):
+                for p in d.glob("*.log"):                 # steam-*.log included
                     if p.is_file():
                         found[p] = p.stat().st_mtime
             except OSError:
@@ -326,6 +326,12 @@ class LogViewerWidget(QWidget):
         for code, n in hits.items():
             self._hits[code] = self._hits.get(code, 0) + n
 
+    def _drop_loader(self, th: QThread):
+        # `finished` is emitted from the worker just before it exits: wait for the
+        # exit before dropping the last reference, or a still-running QThread is destroyed.
+        th.wait()
+        self._loaders.remove(th)
+
     def _load(self, path: Path):
         """Reads and analyses on a worker thread (a 6 MB log froze the window for ~1.5 s)."""
         self._path = path
@@ -336,7 +342,7 @@ class LogViewerWidget(QWidget):
         self._loaders.append(th)
         th.done.connect(self._on_loaded)
         th.failed.connect(self._on_load_failed)
-        th.finished.connect(lambda t=th: self._loaders.remove(t))
+        th.finished.connect(lambda t=th: self._drop_loader(t))
         th.start()
 
     def _on_load_failed(self, gen: int, msg: str):

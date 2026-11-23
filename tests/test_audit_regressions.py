@@ -411,5 +411,33 @@ class WorkerCancellationRegressions(unittest.TestCase):
             thread.join(5)
 
 
+class MaintenanceRegressions(unittest.TestCase):
+    def test_umask_is_read_without_changing_it(self):
+        """os.umask(0) to read the mask made files of other threads world-writable."""
+        from drstool_core import fsutil
+        if not Path('/proc/self/status').is_file():
+            self.skipTest('needs /proc')
+        current = os.umask(0o022)
+        os.umask(current)
+        with mock.patch.object(fsutil.os, 'umask', side_effect=AssertionError('umask changed')):
+            self.assertEqual(fsutil._umask(), current)
+
+    def test_backup_is_durable_before_the_target_is_replaced(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = pe(root / 'game/a.dll')
+            source = pe(root / 'src/a.dll', content=b'new')
+            events = []
+            real_sync, real_copy = tx._sync_dir, tx.atomic_copy
+            with mock.patch.object(tx, '_sync_dir', side_effect=lambda p: (events.append(('sync', p)),
+                                                                            real_sync(p))), \
+                    mock.patch.object(tx, 'atomic_copy', side_effect=lambda a, b: (events.append(('copy', b)),
+                                                                                    real_copy(a, b))):
+                tx.apply([tx.Change(target, source, 'a.dll', 'test')], root / 'bk')
+            self.assertEqual(events[0], ('sync', root / 'bk' / 'files'))
+            self.assertEqual(events[1], ('copy', target))
+            self.assertEqual(target.read_bytes(), source.read_bytes())
+
+
 if __name__ == '__main__':
     unittest.main()

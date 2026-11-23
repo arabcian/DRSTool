@@ -1053,8 +1053,13 @@ QPlainTextEdit{
         if not self._is_installed():
             self._log("lutris-game-tune is not installed.")
             return
-        self._log(f"==> {LGTUNE_WRAPPER} STATUS")
-        self._run_proc("pkexec", [str(LGTUNE_WRAPPER), "STATUS"], tag="status")
+        self._log(f"==> {lgtune_cmd('STATUS')}")
+        # setuid mode needs no pkexec: there is no polkit action then, so pkexec
+        # would fall back to an admin-password prompt for nothing.
+        if lgtune_mode() == "polkit":
+            self._run_proc("pkexec", [str(LGTUNE_WRAPPER), "STATUS"], tag="status")
+        else:
+            self._run_proc(str(LGTUNE_WRAPPER), ["STATUS"], tag="status")
 
     def _on_view_log(self):
         if not LGTUNE_LOG.is_file():

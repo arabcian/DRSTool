@@ -1656,7 +1656,6 @@ restore_scx_sched() {
 readonly CGROUP_V2_ROOT="/sys/fs/cgroup"
 readonly CCD_GOOD_GROUP="theGood"
 readonly CCD_UGLY_GROUP="theUgly"
-CCD_AVAILABLE=0   # set by detect_ccx_groups()
 
 # N-CCX-aware topology detection. Returns 1 if only a single CCX/CCD is found
 # (not an error) — the caller uses this as a "skip silently" signal.
@@ -1796,14 +1795,12 @@ _pid_cgroup_path_v() {
     return 1
 }
 
-# Build a PID -> PPID map for the whole system in ONE pass over /proc.
+# Build a PPID -> children map for the whole system in ONE pass over /proc.
 # The previous implementation forked `pgrep -P <pid>` once per PID, i.e.
 # hundreds of forks per monitor pass, and the cost grew with the size of the
 # game's process tree — the sweep itself became a jitter source over time.
-declare -gA PPID_MAP=()
 declare -gA CHILDREN_MAP=()
 build_process_map() {
-    PPID_MAP=()
     CHILDREN_MAP=()
     local stat_file line pid after ppid
     for stat_file in /proc/[0-9]*/stat; do
@@ -1817,45 +1814,8 @@ build_process_map() {
         after="${after#* }"       # "<ppid> ..."
         ppid="${after%% *}"
         [[ "${ppid}" =~ ^[0-9]+$ ]] || continue
-        PPID_MAP["${pid}"]="${ppid}"
         CHILDREN_MAP["${ppid}"]+="${pid} "
     done
-}
-
-get_process_tree() {
-    local root_pid="$1"
-    local -a queue=("${root_pid}") result=()
-    local -A seen=()
-    local pid child
-
-    (( ${#PPID_MAP[@]} == 0 )) && build_process_map
-
-    while (( ${#queue[@]} > 0 )); do
-        pid="${queue[0]}"
-        queue=("${queue[@]:1}")
-        [[ -n "${seen[$pid]:-}" ]] && continue
-        seen[$pid]=1
-        result+=("${pid}")
-        for child in ${CHILDREN_MAP[$pid]:-}; do
-            [[ -n "${child}" ]] && queue+=("${child}")
-        done
-    done
-    printf '%s\n' "${result[@]}"
-}
-
-collect_targets() {
-    local pattern="$1"
-    local -A all_pids=()
-    local root_pid pid
-
-    while read -r root_pid; do
-        [[ -z "${root_pid}" ]] && continue
-        while read -r pid; do
-            [[ -n "${pid}" ]] && all_pids[$pid]=1
-        done < <(get_process_tree "${root_pid}")
-    done < <(pgrep -x "${pattern}" 2>/dev/null)
-
-    printf '%s\n' "${!all_pids[@]}"
 }
 
 # Recursively collect every PID from ALL cgroup.procs files under a root
@@ -1916,7 +1876,7 @@ declare -gA CCD_PROTECTED_SESSION_PIDS=()
 
 refresh_protected_session_pids() {
     CCD_PROTECTED_SESSION_PIDS=()
-    local session_dir leader_pid f line
+    local session_dir f line
     for session_dir in /run/systemd/sessions /run/elogind/sessions; do
         [[ -d "${session_dir}" ]] || continue
         for f in "${session_dir}"/*; do
@@ -2130,11 +2090,11 @@ move_launcher_tree_once() {
 
     # Step 3: Dynamic full-depth process tree scan
     # Recursively includes all children of currently known PIDs
+    # Index-based FIFO: re-slicing the array on every dequeue made the sweep O(n^2).
     local -a queue=("${!all_pids[@]}")
-    local child
-    while (( ${#queue[@]} > 0 )); do
-        pid="${queue[0]}"
-        queue=("${queue[@]:1}")
+    local child qi=0
+    while (( qi < ${#queue[@]} )); do
+        pid="${queue[qi++]}"
         for child in ${CHILDREN_MAP[$pid]:-}; do
             if [[ -n "${child}" && -z "${all_pids[$child]:-}" ]]; then
                 all_pids[$child]=1
@@ -2254,7 +2214,6 @@ cleanup_stale_ccd_cgroups() {
 apply_ccd_isolation() {
     [[ "${CCD_ISOLATION_ENABLED}" == "1" ]] || return 0
     detect_ccx_groups || return 0   # single CCX/CCD -> silent exit
-    CCD_AVAILABLE=1
     if (( DRY_RUN )); then
         dry "would isolate: ${CCX_LABEL_GOOD} = ${CCX_GROUPS[0]}; ${CCX_LABEL_SYS} = ${CCX_GROUPS[1]}"
         return 0
@@ -2464,7 +2423,7 @@ restore_ccd_isolation() {
     load_origin_cache
 
     local max_attempts=25
-    local attempt success fail pid remaining
+    local attempt success fail pid
     local ugly_done=0 good_done=0
 
     # Groups already gone from a previous run count as already-reverted.

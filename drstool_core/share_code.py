@@ -120,17 +120,6 @@ def _candidates(text: str) -> List[str]:
     return out
 
 
-def find_code(text: str) -> Optional[str]:
-    """The share code inside arbitrary text (line breaks inside it removed), or None."""
-    for cand in _candidates(text):
-        try:
-            _unpack(cand)
-            return cand
-        except ShareCodeError:
-            continue
-    return None
-
-
 def looks_like_code(text: str) -> bool:
     """Cheap test (no decoding) for "does this text contain a share code"."""
     return isinstance(text, str) and PREFIX in text

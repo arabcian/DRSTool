@@ -155,24 +155,6 @@ class LutrisSyncWidget(QWidget):
     # system.* keys wired to the lutris-game-tune checkbox
     _LGTUNE_KEYS = ("prelaunch_command", "postexit_command", "prefix_command")
 
-    @classmethod
-    def _managed_system_keys(cls) -> set:
-        """Every system.* key DRSTool considers itself the owner of.
-
-        Sync used to be purely ADDITIVE: a key was written when its control was
-        set and simply omitted when it wasn't, and _merge_yaml only ever did
-        `data["system"][k] = v`. That makes every set -> unset transition
-        invisible on disk — the previous value survives and the YAML silently
-        disagrees with the GUI. Declaring ownership up front lets the merge
-        delete what the GUI no longer asks for, so a written file always
-        matches what is on screen.
-        """
-        keys = {"gamescope", "gamescope_flags"}
-        keys |= set(cls._FLAG_TO_LUTRIS.values())
-        keys |= set(cls._FLAG_TO_LUTRIS_BOOL.values())
-        keys |= set(cls._FLAG_PAIR_TO_LUTRIS.keys())
-        keys |= set(cls._LGTUNE_KEYS)
-        return keys
 
     # Env vars are derived from the DRS grid + arch selector rather than typed
     # into the Env Vars tab, so they never appear in ALL_ENV_VARS.
@@ -182,7 +164,7 @@ class LutrisSyncWidget(QWidget):
     def _managed_env_keys(cls) -> set:
         """Every system.env variable DRSTool considers itself the owner of.
 
-        Same ownership rule as _managed_system_keys, applied to the env block:
+        Ownership rule for the env block:
         without it, dropping a variable in the Env Vars tab left the old value
         sitting in the YAML forever. That is worse here than in system.*
         because the env block is where the bulk of the configuration lives —

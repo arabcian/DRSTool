@@ -222,6 +222,11 @@ def apply(changes: Iterable[Change], backup: Path, *, log: Callable[[str], None]
             shutil.copy2(e['target'], bpath)
             if sha256(bpath) != e['old_sha256']:
                 raise RuntimeError(f'target changed during backup: {e["target"]}')
+            # The backup must reach the disk before the target is replaced (and
+            # fsynced) below, or a power cut could keep the new file and lose the original.
+            with bpath.open('rb') as stream:
+                os.fsync(stream.fileno())
+            _sync_dir(bpath.parent)
     journal['entries'] += new_entries
     journal['state'] = 'prepared'
     atomic_write_json(path, journal)

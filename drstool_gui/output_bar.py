@@ -2,7 +2,7 @@
 
 from typing import Dict, Optional, TYPE_CHECKING
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton,
@@ -35,7 +35,6 @@ class OutputBarWidget(QWidget):
     each value elided to the available width and click-to-copy.
     Right: Copy (with a Steam %command% variant), Save, Reset.
     """
-    feedback = Signal(str)
 
     def __init__(self, settings_manager: SettingsManager, parent=None):
         super().__init__(parent)

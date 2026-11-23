@@ -173,12 +173,6 @@ def _backup_file(path: Path) -> Path:
 _atomic_write = atomic_write
 
 
-def _umask() -> int:
-    m = os.umask(0)
-    os.umask(m)
-    return m
-
-
 def _proc_running(*names: str) -> bool:
     if shutil.which("pgrep") is None:
         # no pgrep: scan /proc instead of silently reporting "not running"

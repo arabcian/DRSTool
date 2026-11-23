@@ -200,7 +200,6 @@ class MangoHudBuilder(QWidget):
         self._rows: Dict[str, tuple] = {}
         self._group_labels: Dict[str, QLabel] = {}
         self._row_widgets: Dict[str, List[QWidget]] = {}
-        self._saved_path: Optional[Path] = None
         root = QHBoxLayout(self)
         root.setContentsMargins(4, 8, 4, 4)
         root.setSpacing(10)
@@ -407,7 +406,6 @@ class MangoHudBuilder(QWidget):
                               Path.home() / ".config/MangoHud/MangoHud.conf", mangohud_conf_text(v))
         if p is None:
             return
-        self._saved_path = p
         default = Path.home() / ".config/MangoHud/MangoHud.conf"
         if p != default:
             _set_env_on_window(self, "MANGOHUD_CONFIGFILE", str(p))

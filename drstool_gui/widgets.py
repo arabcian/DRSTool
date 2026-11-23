@@ -316,9 +316,6 @@ class ElidedLabel(QLabel):
     def text(self) -> str:
         return self._full
 
-    def set_copyable(self, on: bool):
-        self._copyable = on
-        self.setCursor(Qt.PointingHandCursor if on else Qt.ArrowCursor)
 
     def _refresh(self):
         avail = max(20, self.width() - 22)
@@ -777,10 +774,6 @@ _LINEEDIT_QSS = (f"QLineEdit{{background:{T['surface']};border:1px solid {T['bor
 _COMBO_QSS = (f"QComboBox{{background:{T['surface']};border:1px solid {T['border']};"
               f"color:{T['text']};padding:3px 8px;border-radius:4px;min-height:26px;}}"
               f"QComboBox QAbstractItemView{{background:{T['surface']};color:{T['text']};}}")
-
-
-def _main_win(w: QWidget):
-    return w.window()
 
 
 def _slugify(s: str) -> str:

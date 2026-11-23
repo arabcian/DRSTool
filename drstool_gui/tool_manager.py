@@ -6,7 +6,6 @@ import logging
 import os
 import re
 import shutil
-import tarfile
 import tempfile
 import threading as _threading
 import time
@@ -107,7 +106,6 @@ _TM_DIRS = {
 _TM_UA = "DRSTool-tool-manager (+https://github.com/arabcian/DRSTool)"
 _TM_VERSION_FILE = "protondl_version.json"       # same name/schema as protondl
 _TM_ARM = re.compile(r"(aarch64|arm64|armv\d)", re.I)
-_TM_FILTER = hasattr(tarfile, "tar_filter")
 _STL_DIR, _STL_INTERNAL, _STL_PREFIX = "SteamTinkerLaunch", "Proton-stl", "sonic2kk-steamtinkerlaunch-"
 
 
@@ -445,11 +443,6 @@ def _tm_verify(path: Path, csum_url: str, cancel, prog, digest=None, filename: s
     if h.hexdigest() != checksum:
         raise RuntimeError("SHA-512 mismatch — the download is corrupted; nothing was installed")
     return "SHA-512 verified"
-
-
-def _tm_untar_cli(path: Path, dest: Path, cancel):
-    """Legacy entry point; now safely streams zstd through verified extraction."""
-    return _tm_untar(path, dest, cancel, lambda *_: None)
 
 
 def _tm_untar(path: Path, dest: Path, cancel, prog, label: str = "Extracting"):

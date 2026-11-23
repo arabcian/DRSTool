@@ -529,7 +529,6 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
         self._sync_timer.setSingleShot(True)
         self._sync_timer.setInterval(200)
         self._sync_timer.timeout.connect(self._refresh_sync_previews)
-        self._lint_issue_count = (0, 0)
         for _sig in (self.settings_manager.settings_changed, self._env_widget.env_changed,
                      self._gamescope.changed):
             _sig.connect(self._schedule_lint)
