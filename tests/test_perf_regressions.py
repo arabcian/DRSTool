@@ -1,7 +1,9 @@
 """Regressions for metadata-cached game inventories (requires no Qt)."""
 
+import os
 import tempfile
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -104,6 +106,58 @@ class OptiscalerScanCacheTests(unittest.TestCase):
                 game_scan.find_dlls(game)
                 self.assertEqual(version.call_count, 2)
             game_scan.clear_dll_scan_cache(game.key)
+
+
+class _CoarseStat:
+    """os.stat result as a filesystem without multigrain timestamps reports it:
+    mtime/ctime cut to a 4 ms tick and a constant directory size (ext4, xfs)."""
+    TICK = 4_000_000
+
+    def __init__(self, st):
+        self._st = st
+
+    def __getattr__(self, name):
+        value = getattr(self._st, name)
+        if name in ("st_mtime_ns", "st_ctime_ns"):
+            return value // self.TICK * self.TICK
+        if name == "st_size" and os.path.stat.S_ISDIR(self._st.st_mode):
+            return 4096
+        return value
+
+
+class CoarseTimestampCacheTests(unittest.TestCase):
+    """A change in the same timestamp tick as the scan leaves the directory stat identical;
+    the caches must still notice it (failed on a real Gentoo machine)."""
+
+    def setUp(self):
+        real_stat, real_clock = os.stat, time.clock_gettime_ns
+        tick = _CoarseStat.TICK
+        for target, fake in ((game_scan.os, "stat"), (game_info.os, "stat")):
+            p = mock.patch.object(target, fake, lambda *a, **k: _CoarseStat(real_stat(*a, **k)))
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(game_scan.time, "clock_gettime_ns", lambda c: real_clock(c) // tick * tick)
+        p.start()
+        self.addCleanup(p.stop)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "Game"
+        (self.root / "Binaries").mkdir(parents=True)
+        (self.root / "Binaries" / "Game.exe").write_bytes(b"MZ")
+        self.game = game_scan.GameEntry("Custom", "perf:coarse", "Test", [self.root])
+        for clear in (game_info.clear_game_files_cache, game_scan.clear_dll_scan_cache):
+            clear(self.game.key)
+            self.addCleanup(clear, self.game.key)
+
+    def test_game_files_sees_a_file_added_in_the_same_tick(self):
+        self.assertEqual(game_info.game_files(self.game)["exes"], ["Game"])
+        (self.root / "Binaries" / "New.exe").write_bytes(b"MZ")
+        self.assertEqual(game_info.game_files(self.game)["exes"], ["Game", "New"])
+
+    def test_find_dlls_sees_a_dll_added_in_the_same_tick(self):
+        self.assertEqual(len(game_scan.find_dlls(self.game).dlls), 0)
+        (self.root / "Binaries" / "nvngx_dlss.dll").write_bytes(b"dummy DLL")
+        self.assertEqual(len(game_scan.find_dlls(self.game).dlls), 1)
 
 
 if __name__ == "__main__":

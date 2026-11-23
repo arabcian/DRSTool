@@ -21,6 +21,7 @@ import re
 import sqlite3
 import copy
 import threading
+import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -72,6 +73,30 @@ def _stat_key(path: Path | str) -> tuple:
     return (st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino, st.st_dev, st.st_mode)
 
 
+def _scan_clock_ns() -> int:
+    """Read just before a walk. Filesystems without multigrain timestamps stamp
+    mtime/ctime with the coarse clock (one tick, a few ms), so a directory changed in
+    the same tick as the scan keeps an identical stat afterwards."""
+    if hasattr(time, "CLOCK_REALTIME_COARSE"):
+        return time.clock_gettime_ns(time.CLOCK_REALTIME_COARSE)
+    return time.time_ns() - 50_000_000       # no coarse clock: assume a generous tick
+
+
+def _dir_stamp(path: str, names: Iterable[str], since_ns: int) -> tuple:
+    """(stat key, listing or None). A "racy" directory (changed at/after since_ns,
+    as in racy-git) keeps the listing the scan used; validation then compares names
+    too, because its stat alone cannot reveal a change made within the same tick."""
+    key = _stat_key(path)
+    return key, (tuple(sorted(names)) if max(key[0], key[1]) >= since_ns else None)
+
+
+def _dir_unchanged(path: str, stamp: tuple) -> bool:
+    key, names = stamp
+    if _stat_key(path) != key:
+        return False
+    return names is None or tuple(sorted(os.listdir(path))) == names
+
+
 def clear_dll_scan_cache(game_key: Optional[str] = None):
     """Force full rescan on next lookup (all games or one key)."""
     with _DLL_CACHE_LOCK:
@@ -91,7 +116,7 @@ def _cached_dll_scan(key: tuple) -> Optional['GameDlls']:
     dirs, files, result = snapshot
     try:
         for path, stamp in dirs:
-            if _stat_key(path) != stamp:
+            if not _dir_unchanged(path, stamp):
                 return None
         for path, stamp in files:
             # lstat's st_mode is already in the snapshot: an extra is_symlink()
@@ -488,6 +513,7 @@ def find_dlls(game: GameEntry, max_entries: int = MAX_ENTRIES,
     seen_files = set()
     watched_files = set()  # OptiScaler proxies are not FoundDll objects.
     count = 0
+    since = _scan_clock_ns()
     for top in game.folders:
         if not top.is_dir():
             continue
@@ -495,7 +521,7 @@ def find_dlls(game: GameEntry, max_entries: int = MAX_ENTRIES,
         for dp, dns, fns in os.walk(top, followlinks=False):
             try:
                 if len(dir_stamps) <= _DLL_DIR_LIMIT:
-                    dir_stamps.append((dp, _stat_key(dp)))
+                    dir_stamps.append((dp, _dir_stamp(dp, dns + fns, since)))
             except OSError:
                 pass
             count += len(dns) + len(fns)

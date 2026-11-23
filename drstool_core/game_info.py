@@ -52,7 +52,7 @@ def _cached_game_files(key: tuple) -> Optional[Dict[str, list]]:
         return None
     stamps, result = snapshot
     try:
-        if any(game_scan._stat_key(path) != stamp for path, stamp in stamps):
+        if not all(game_scan._dir_unchanged(path, stamp) for path, stamp in stamps):
             return None
     except OSError:
         return None
@@ -199,6 +199,7 @@ def game_files(game, max_entries: int = 30_000, max_depth: int = 4) -> Dict[str,
     stamps = []
     cacheable = True
     count = 0
+    since = game_scan._scan_clock_ns()
     for top in game.folders:
         if not top.is_dir():
             cacheable = False  # a missing root may appear without changing any visited dir
@@ -207,7 +208,7 @@ def game_files(game, max_entries: int = 30_000, max_depth: int = 4) -> Dict[str,
         for dp, dns, fns in os.walk(top, followlinks=False):
             if len(stamps) < _FILES_DIR_LIMIT:
                 try:
-                    stamps.append((dp, game_scan._stat_key(dp)))
+                    stamps.append((dp, game_scan._dir_stamp(dp, dns + fns, since)))
                 except OSError:
                     cacheable = False
             else:
