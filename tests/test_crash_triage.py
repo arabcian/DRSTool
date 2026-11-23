@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from drstool_core import crash_triage, kernel_events  # noqa: E402
 
-# Lines from a Crimson Desert run (2026-11-23) that exited cleanly with VKD3D_CONFIG empty.
+# Lines from a game run (2026-11-23) that exited cleanly with VKD3D_CONFIG empty.
 CLEAN_RUN = [
     "13364.120:0020:0024:info:vkd3d-proton:vkd3d_config_flags_init_once: VKD3D_CONFIG=''.",
     "(2026-11-23 18:34:08) (0x440 ) [DATA_ERROR] [Success](0) [Error: [18-34-08][streamline][error][tid:420]"
@@ -23,7 +23,7 @@ CLEAN_RUN = [
 ]
 
 CRASH_RUN = [
-    "Started initial process 1 from /usr/lib/wine-cachyos-11.0.20261107/bin/wine X:/CrimsonDesert.exe",
+    "Started initial process 1 from /usr/lib/wine-cachyos-11.0.20261107/bin/wine X:/ExampleGame.exe",
     "(2026-11-23 18:00:00) (0x36  ) [I] [Success](0) [GameVersion: 1.14.00]]",
     "13364.120:0020:0024:info:vkd3d-proton:vkd3d_config_flags_init_once: VKD3D_CONFIG='dxr,force_static_cbv'.",
     "13364.120:0020:0024:info:vkd3d-proton:dxgi_vk_swap_chain_recreate_swapchain_in_present_task: Got 1 swapchain images.",
@@ -32,7 +32,7 @@ CRASH_RUN = [
     "Exit with return code 1",
 ]
 
-XID_69 = ("NVRM: Xid (PCI:0000:01:00): 69, pid=633300, name=CrimsonDesert.e, Class Error: ChId 0017, "
+XID_69 = ("NVRM: Xid (PCI:0000:01:00): 69, pid=633300, name=ExampleGame.e, Class Error: ChId 0017, "
           "Class 0000ce97, Offset 000017c8, Data 00000000, ErrorCode 0000000c")
 
 

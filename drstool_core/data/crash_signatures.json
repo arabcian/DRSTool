@@ -4,7 +4,7 @@
   "kind": "fatal",
   "regex": "\\bXid\\b\\s*(?:\\([^)]*\\))?\\s*:\\s*69\\b",
   "title": "NVIDIA Xid 69 (graphics engine class error)",
-  "hint": "The GPU rejected a command recorded by the game. Seen with Crimson Desert when DRSTool's environment flags were on and gone with most of them removed: use “Find the breaking setting” to narrow it down."
+  "hint": "The GPU rejected a command recorded by the game. Often caused by one of the environment / VKD3D flags in use: if the crash goes away with them removed, use “Find the breaking setting” to narrow it down."
  },
  {
   "id": "xid",
@@ -25,6 +25,6 @@
   "kind": "noise",
   "regex": "NvAPI_D3D_SetReflexSync\\b.*\\bfailed|setDynamicMFGParams failed|setReflexTiming failed",
   "title": "Streamline Reflex / frame generation errors",
-  "hint": "Also logged thousands of times in a Crimson Desert run that exited cleanly (2026-11-23), so on their own they do not explain a crash."
+  "hint": "Also logged thousands of times in runs that exited cleanly, so on their own they do not explain a crash."
  }
 ]
