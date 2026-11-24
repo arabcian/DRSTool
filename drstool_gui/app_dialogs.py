@@ -195,7 +195,6 @@ class AppearanceDialog(QDialog):
             qs.sync()
         except Exception:
             _log.debug("ignored error", exc_info=True)
-            pass
         ap["animations"] = self._animations.isChecked()          # read live, no restart needed
         self.restart_requested = restart and self.needs_restart
         self.accept()
@@ -308,7 +307,6 @@ class UXFilter(QObject):
                         _a11y_label(obj)
         except Exception:
             _log.debug("ignored error", exc_info=True)
-            pass
         return False
 
 

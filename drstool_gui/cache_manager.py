@@ -23,7 +23,7 @@ from .sysinfo import SYSHUB
 from .tasks import _NAV, TASKS
 from .theme import T
 from .tool_ui import _tool_btn
-from .widgets import _pack2_table_ss, _pack2_title
+from .widgets import _pack2_table_ss, _pack2_title, FlowLayout
 
 _log = logging.getLogger(__name__)
 
@@ -320,7 +320,7 @@ class CacheManagerWidget(QWidget):
         hdr.setSectionResizeMode(4, QHeaderView.Interactive)
         self._tree.setColumnWidth(4, 260)
         lay.addWidget(self._tree, 1)
-        row = QHBoxLayout()
+        row = FlowLayout()
         b_scan = _tool_btn("Rescan", bold=True)
         b_scan.clicked.connect(self.rescan)
         self._btn_cancel_scan = _tool_btn("Cancel scan")
@@ -337,7 +337,7 @@ class CacheManagerWidget(QWidget):
         self._btn_cancel_delete.setEnabled(False)
         for b in (b_scan, self._btn_cancel_scan, b_add, b_open, b_clear, self._btn_cancel_delete):
             row.addWidget(b)
-        row.addStretch(1)
+        row.add_stretch()
         self._total = QLabel("")
         self._total.setStyleSheet(f"color:{T['text2']};font-size:12px;")
         row.addWidget(self._total)
@@ -376,7 +376,6 @@ class CacheManagerWidget(QWidget):
             QSettings(APP_ID, APP_ID).setValue("cache/extra_folders", list(lst))
         except Exception:
             _log.debug("ignored error", exc_info=True)
-            pass
 
     def rescan(self):
         if self._delete_thread is not None and self._delete_thread.isRunning():

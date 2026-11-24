@@ -1020,9 +1020,13 @@ class GameHintsWidget(QWidget):
         if not (code or title):
             self._status.setText(tr("Pick a game or type its name first."))
             return
+        prev = getattr(self, "_umu_w", None)
+        if prev is not None and prev.isRunning():
+            return
         self._status.setText(tr("Searching umu-database…"))
         self._umu_w = _UmuWorker(code, title, self)
         self._umu_w.done.connect(self._umu_db_done)
+        TASKS.track(self._umu_w, "Game hints: umu-database", _NAV("Game hints"))
         self._umu_w.start()
 
     def _umu_db_done(self, ids: list, err: str):

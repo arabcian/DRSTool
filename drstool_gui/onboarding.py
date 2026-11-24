@@ -42,9 +42,9 @@ class OnboardingDialog(QDialog):
         lay.addWidget(txt)
         row = QHBoxLayout()
         row.addStretch(1)
-        rec = QPushButton("Open recipes")
+        rec = QPushButton(tr("Open recipes"))       # translated before the dialog sizes itself
         rec.clicked.connect(lambda: (self.close(), win.open_recipes()))
-        close = QPushButton("Close")
+        close = QPushButton(tr("Close"))
         close.clicked.connect(self.close)
         row.addWidget(rec)
         row.addWidget(close)

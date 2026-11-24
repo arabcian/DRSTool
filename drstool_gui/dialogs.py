@@ -67,7 +67,6 @@ class PlanDialog(QDialog):
         self._ops: List[dict] = list(ops or [])
         self._parsed: Optional[ParsedLaunch] = None
         self.result_state: Optional[dict] = None
-        self.result_label = title
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 12, 14, 12)

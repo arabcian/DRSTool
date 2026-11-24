@@ -63,7 +63,6 @@ def main():
             )
         except Exception:
             _log.debug("ignored error", exc_info=True)
-            pass
         finally:
             _err["showing"] = False
             _err["last"] = time.monotonic()

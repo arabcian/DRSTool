@@ -20,6 +20,7 @@ from .base import (
 )
 from .tool_ui import _tool_btn, FLM_FIELD_SS
 from .i18n import tr
+from .widgets import ElidedLabel
 
 
 # FLM v2.x variables removed in v3.0 (mirrors k_legacy_keys in
@@ -88,7 +89,8 @@ class FlmInstallWidget(QWidget):
         src_icon = QLabel("📁")
         src_lbl = QLabel("Source:")
         src_lbl.setStyleSheet("color:#8f9bb0; font-size:12px; font-weight:600;")
-        self._src_path_lbl = QLabel(str(self._BUNDLED_SRC))
+        # A pipx / distro path is long: elide it instead of widening the page.
+        self._src_path_lbl = ElidedLabel(str(self._BUNDLED_SRC), elide=Qt.ElideMiddle)
         self._src_path_lbl.setStyleSheet(
             "color:#76b900; font-size:12px; font-family:monospace;"
         )
@@ -126,8 +128,9 @@ QCheckBox::indicator:checked{ background:#76b900; border:1px solid #76b900; }
         layout.addWidget(self._native_chk)
 
         native_warn = QLabel(
-            "If enabled: the .so built for the 7845HX may not run on a different CPU (a different machine)."
+            "If enabled: the .so is tuned for this computer's CPU and may not run on a different CPU (another machine)."
         )
+        native_warn.setWordWrap(True)
         native_warn.setStyleSheet("color:#7b8496; font-size:13px; font-style:italic;")
         layout.addWidget(native_warn)
 

@@ -54,4 +54,3 @@ class SessionMixin:
                         break
         except Exception:
             _log.debug("ignored error", exc_info=True)
-            pass

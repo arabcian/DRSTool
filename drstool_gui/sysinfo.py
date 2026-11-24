@@ -235,7 +235,6 @@ class SysHub(QObject):
             self.enabled = QSettings(APP_ID, APP_ID).value("sys/grey_unsupported", True, type=bool)
         except Exception:
             _log.debug("ignored error", exc_info=True)
-            pass
 
     def set_enabled(self, on: bool):
         self.enabled = on
@@ -243,7 +242,6 @@ class SysHub(QObject):
             QSettings(APP_ID, APP_ID).setValue("sys/grey_unsupported", on)
         except Exception:
             _log.debug("ignored error", exc_info=True)
-            pass
         self.info_changed.emit(self.info)
 
     def refresh(self, force: bool = False):

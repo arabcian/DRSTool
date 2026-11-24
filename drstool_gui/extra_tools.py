@@ -91,7 +91,7 @@ QTabBar::tab:hover:!selected {{ color:{T['text2']}; border-bottom:2px solid {T['
         tabs.addTab(self.cache, "Cache")
         self.cache.stale_changed.connect(
             lambda stale: tabs.setTabText(tabs.indexOf(self.cache), "Cache ⚠" if stale else "Cache"))
-        lazy("Upstream drift", "drift", UpstreamDriftWidget)
+        lazy("Upstream drift", "drift", UpstreamDriftWidget, scrolled)
         lazy("Game hints", "hints", GameHintsWidget)
         lazy("Community tips", "community", CommunityTipsWidget)
         lazy("Frametime", "frametime", FrametimeWidget)

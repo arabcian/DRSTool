@@ -1,6 +1,5 @@
 """Regression coverage for the deep audit. No Qt, GPU or root required."""
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path

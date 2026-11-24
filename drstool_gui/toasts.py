@@ -35,7 +35,6 @@ def toast(text: str, kind: str = "info", timeout: int = 3500, action=None):
             TOASTS.show_toast(text, kind, timeout, action)
         except Exception:
             _log.debug("ignored error", exc_info=True)
-            pass
 
 
 def _guess_kind(text: str) -> str:
@@ -251,7 +250,6 @@ def offer_undo(label: str):
                     getattr(w, fn)()
                 except Exception:
                     _log.debug("ignored error", exc_info=True)
-                    pass
         toast(f"Restored {done} file(s) from backup" + ((" — " + "; ".join(bad)) if bad else ""),
               "warn" if bad else "ok", 7000)
 
@@ -278,4 +276,3 @@ def desktop_notify(title: str, body: str = ""):
                 "DRSTool", "0", "", title, body, "[]", "{}", "6000"])
     except Exception:
         _log.debug("ignored error", exc_info=True)
-        pass

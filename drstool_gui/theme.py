@@ -120,7 +120,6 @@ def _load_appearance() -> dict:
             ap["animations"] = str(v).lower() not in ("false", "0", "no")
     except Exception:
         _log.debug("ignored error", exc_info=True)
-        pass
     if ap["theme"] not in ("dark", "light"):
         ap["theme"] = "dark"
     if ap["accent"] not in ACCENT_PRESETS:

@@ -68,7 +68,7 @@ from .tasks import TASKS
 from .theme import btn_ss, pill_ss, SCROLLABLE_CONTROL_QSS, T
 from .toasts import _install_toasts, toast, ToastStatusBar
 from .tool_ui import ExtraToolsSidebarWidget
-from .widgets import _fmt_drs_value, BrandMark, EmptyState, NavSegment, NavTab
+from .widgets import _fmt_drs_value, BrandMark, EmptyState, FlowLayout, NavSegment, NavTab
 
 _log = logging.getLogger(__name__)
 
@@ -302,9 +302,7 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
 
         # Filter chips: "only set" and "★ favorites" for the DRS / Arch / Env lists
         self._chips = QWidget()
-        _cl = QHBoxLayout(self._chips)
-        _cl.setContentsMargins(0, 0, 0, 0)
-        _cl.setSpacing(6)
+        _cl = FlowLayout(self._chips)      # two lines when the translated chips do not fit the sidebar
         _chip_ss = (f"QToolButton{{background:transparent;border:1px solid {T['border_hi']};"
                     f"border-radius:11px;color:{T['muted']};padding:3px 11px;font-size:11px;font-weight:600;}}"
                     f"QToolButton:hover{{border-color:{T['accent_dim']};}}"
@@ -322,7 +320,6 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
             _c.setStyleSheet(_chip_ss)
             _c.toggled.connect(lambda _x: self._on_chips())
             _cl.addWidget(_c)
-        _cl.addStretch(1)
         sidebar_layout.addWidget(self._chips)
 
         self._sidebar_stack = FadeStack()
@@ -1225,7 +1222,6 @@ class MainWindow(HistoryMixin, SessionMixin, GameLinksMixin, QMainWindow):
             self._save_session()
         except Exception:
             _log.debug("ignored error", exc_info=True)
-            pass
         try:
             SYSHUB.shutdown()
             self._game_card.shutdown()

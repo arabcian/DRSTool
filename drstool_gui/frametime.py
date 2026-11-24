@@ -14,6 +14,7 @@ from drstool_core.benchmark import compare as compare_captures, compare_repeats
 
 from .base import APP_ID
 from .i18n import tr
+from .tasks import TASKS
 from .theme import T
 from .tool_ui import _tool_btn
 from .widgets import _desc_label, _LINEEDIT_QSS, _table_qss, _title_label
@@ -230,7 +231,7 @@ class FrametimeWidget(QWidget):
         self._qs.setValue("frametime/last_dir", start)
         self._status.setText(tr("Comparing repeated runs…"))
         th = _RepeatThread(runs[0], runs[1], self._same_scene.isChecked())
-        self._loaders.append(th)
+        self._loaders.append(TASKS.retain(th))
         th.done.connect(self._status.setText)
         th.finished.connect(lambda t=th: self._drop_loader(t))
         th.start()
@@ -245,7 +246,7 @@ class FrametimeWidget(QWidget):
         """Load a capture as run A (k=0) or B (k=1) — also used by the game card."""
         self._status.setText(f"Loading {Path(p).name}…")
         th = _FrametimeLoadThread(k, p)
-        self._loaders.append(th)
+        self._loaders.append(TASKS.retain(th))
         th.done.connect(self._set)
         th.failed.connect(self._status.setText)
         th.finished.connect(lambda t=th: self._drop_loader(t))

@@ -712,7 +712,6 @@ class GuiTests(unittest.TestCase):
         m = self.m
         ls = self.win._lutris_sync_widget
         ls._chk_lgtune.setChecked(True)
-        w = m.ShortcutWidget.LGTUNE
         try:
             with patch_name(m, "lgtune_mode", return_value="polkit"):
                 keys, _env, _warn = ls._split_gamescope({})

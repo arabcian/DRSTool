@@ -50,20 +50,40 @@ class LinkStore:
     def __init__(self, path: Optional[Path] = None):
         self.path = Path(path) if path else links_path()
         self._games: Dict[str, dict] = {}
+        self._sig = None             # identity of the file version self._games was parsed from
+        self.load_error = None
         self.reload()
 
     # ── file ────────────────────────────────────────────────────────────────
-    def reload(self) -> None:
-        self.load_error = None
+    def reload(self, *, force: bool = False) -> None:
+        """Re-read the store if the file changed since the last read.
+
+        Queries run on the GUI thread, often once per game in a list, and the file grows with
+        every capture remembered; parsing it per call froze the UI for seconds. Every write
+        (ours and other windows') goes through an atomic replace, so the file's inode/mtime/size
+        signature changes with each version and an unchanged signature means unchanged content.
+        """
         try:
-            d = json.loads(self.path.read_text(encoding="utf-8"))
+            with open(self.path, encoding="utf-8") as fh:
+                st = os.fstat(fh.fileno())
+                sig = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+                if not force and sig == self._sig:
+                    return
+                text = fh.read()
+        except FileNotFoundError:
+            self._games, self._sig, self.load_error = {}, "missing", None
+            return
+        except (OSError, ValueError) as exc:     # ValueError: not UTF-8
+            self._sig, self.load_error = None, str(exc)
+            return
+        self._sig, self.load_error = sig, None
+        try:
+            d = json.loads(text)
             g = d.get("games") if isinstance(d, dict) else None
             if not isinstance(g, dict) or any(not isinstance(v, dict) for v in g.values()):
                 raise ValueError('invalid game links store')
             self._games = g
-        except FileNotFoundError:
-            self._games = {}
-        except (OSError, ValueError) as exc:
+        except ValueError as exc:
             self.load_error = str(exc)  # retain last valid snapshot, never overwrite corrupt data
 
     def _write(self) -> None:
@@ -72,22 +92,27 @@ class LinkStore:
     def _change(self, fn) -> bool:
         """Lock before reload+mutate+write so concurrent windows preserve edits."""
         with file_lock(self.path):
-            self.reload()
+            self.reload(force=True)
             if self.load_error:
                 raise ValueError(f"Game links store cannot be read; original preserved: {self.path}: {self.load_error}")
             previous = deepcopy(self._games)
-            changed = bool(fn(self._games))
-            if changed:
-                if self.path.exists():
-                    atomic_write_json(self.path.with_suffix(self.path.suffix + '.bak'),
-                                      {'version': STORE_VERSION, 'games': previous})
-                self._write()
+            try:
+                changed = bool(fn(self._games))
+                if changed:
+                    if self.path.exists():
+                        atomic_write_json(self.path.with_suffix(self.path.suffix + '.bak'),
+                                          {'version': STORE_VERSION, 'games': previous})
+                    self._write()
+            finally:
+                # Next query re-reads whatever is on disk now (also drops an in-memory mutation
+                # whose write failed).
+                self._sig = None
             return changed
 
     def recover_backup(self, *, only_if_corrupt: bool = False) -> Path:
         """Explicit recovery only; preserve the corrupt original for investigation."""
         with file_lock(self.path):
-            self.reload()
+            self.reload(force=True)
             if only_if_corrupt and not self.load_error:
                 raise ValueError('Game links store is no longer corrupt; recovery cancelled')
             candidate = self.path.with_suffix(self.path.suffix + '.bak')
@@ -100,7 +125,7 @@ class LinkStore:
                 from .file_transactions import atomic_copy
                 atomic_copy(self.path, quarantine)
             atomic_write_json(self.path, doc)
-            self.reload()
+            self.reload(force=True)
             return quarantine
 
     # ── queries ─────────────────────────────────────────────────────────────

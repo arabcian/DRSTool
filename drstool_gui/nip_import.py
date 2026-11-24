@@ -29,7 +29,10 @@ def parse_nip(text: str) -> List[dict]:
     """Parse a Profile Inspector export. Returns [{name, exes, settings:[{id,value,vtype,label}]}]."""
     if re.search(r"<!\s*(DOCTYPE|ENTITY)", text, re.I):
         raise ValueError("DTD / entity declarations are not allowed in a .nip file")
-    root = ET.fromstring(text)
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as ex:
+        raise ValueError(f"not a valid .nip (XML) file: {ex}") from ex
     out = []
     for prof in root.iter("Profile"):
         settings = []

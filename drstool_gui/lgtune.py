@@ -7,7 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QProcess, Qt
+from PySide6.QtCore import QProcess, QSize, Qt
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPlainTextEdit, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
@@ -17,7 +18,7 @@ from .base import find_bundled_dir, pkexec_auth_failed
 from .i18n import tr
 from .theme import SCROLLABLE_CONTROL_QSS
 from .tool_ui import _tool_btn, _TOOL_GROUP_SS, FLM_FIELD_SS
-from .widgets import _NO_SCROLL_FILTER
+from .widgets import _NO_SCROLL_FILTER, ElidedLabel
 
 
 # ============================================================================
@@ -427,6 +428,24 @@ LGTUNE_KEYS: List[tuple] = [
 ]
 
 
+class _KeyLabel(QLabel):
+    """Bold config key that prefers one line but may wrap after an "_" when the window is narrow.
+
+    A word-wrapping QLabel guesses a narrower preferred width and would wrap even on a wide
+    window; the preferred width here is the whole key, the minimum its longest "_" segment."""
+
+    def __init__(self, key: str):
+        super().__init__("<b>" + key.replace("_", "_\u200b") + "</b>")    # zero-width break points
+        self._key = key
+        self.setWordWrap(True)
+
+    def sizeHint(self):                      # noqa: N802
+        f = QFont(self.font())
+        f.setBold(True)
+        sh = super().sizeHint()
+        return QSize(max(sh.width(), QFontMetrics(f).horizontalAdvance(self._key) + 6), sh.height())
+
+
 class LgtuneWidget(QWidget):
     """
     Right-panel widget for the lutris-game-tune sub-tab inside Extra Tools.
@@ -548,7 +567,8 @@ class LgtuneWidget(QWidget):
         src_row.setSpacing(6)
         src_lbl = QLabel("📁 Source:")
         src_lbl.setStyleSheet("color:#8f9bb0; font-size:12px; font-weight:600;")
-        self._lgt_src_lbl = QLabel(str(self._BUNDLED_SRC))
+        # A pipx / distro path is long: elide it instead of widening the page.
+        self._lgt_src_lbl = ElidedLabel(str(self._BUNDLED_SRC), elide=Qt.ElideMiddle)
         self._lgt_src_lbl.setStyleSheet(
             "color:#76b900; font-size:12px; font-family:monospace;"
         )
@@ -617,6 +637,7 @@ class LgtuneWidget(QWidget):
 
         # Build per-key widgets
         self._key_widgets: Dict[str, QWidget] = {}  # key → control widget
+        desc_labels: Dict[str, QLabel] = {}
         grid = QGridLayout()
         grid.setSpacing(6)
         grid.setColumnStretch(1, 1)
@@ -627,7 +648,9 @@ class LgtuneWidget(QWidget):
             opts_or_range = rest[0] if rest else None
 
             # Label (key name, bold)
-            key_lbl = QLabel(f"<b>{key}</b>")
+            # Breakable after each "_" (zero-width space), so on a narrow window a long key wraps
+            # instead of widening the whole settings grid; on a wide one it stays on one line.
+            key_lbl = _KeyLabel(key)
             key_lbl.setStyleSheet("color:#c8cdd8; font-size:13px;")
             key_lbl.setToolTip(desc)
             grid.addWidget(key_lbl, row_idx * 2, 0, Qt.AlignTop)
@@ -690,6 +713,15 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
                 "color:#b4bcc9; font-size:13px; line-height:150%; padding:1px 0 6px 0;"
             )
             grid.addWidget(desc_lbl, row_idx * 2 + 1, 0, 1, 2)
+            desc_labels[key] = desc_lbl
+
+        # Kernel-support notes go at the start of the (wrapping) description, not into the
+        # checkbox text: a checkbox cannot wrap, and the longer text widened the whole page
+        # past narrow windows.
+        def kernel_note(key: str, text: str):
+            lbl = desc_labels.get(key)
+            if lbl is not None:
+                lbl.setText(f"Kernel: {text}.  {lbl.text()}")
 
         # ── Runtime availability hint for SET_EPP_BOOST ───────────────────────
         # epp_boost is not upstream yet, so annotate the checkbox with whether
@@ -700,9 +732,9 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
         if isinstance(_epp_ctrl, QCheckBox):
             _epp_present = Path("/sys/module/amd_pstate/parameters/epp_boost").exists()
             if _epp_present:
-                _epp_ctrl.setText(_epp_ctrl.text() + "   [kernel: supported]")
+                kernel_note("SET_EPP_BOOST", "supported")
             else:
-                _epp_ctrl.setText(_epp_ctrl.text() + "   [kernel: not present]")
+                kernel_note("SET_EPP_BOOST", "not present")
                 _epp_ctrl.setToolTip(
                     _epp_ctrl.toolTip()
                     + "\n\nThis kernel does not expose "
@@ -721,9 +753,9 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
             _x3d_matches = list(Path("/sys/bus/platform/drivers/amd_x3d_vcache").glob("*/amd_x3d_mode")) \
                 if Path("/sys/bus/platform/drivers/amd_x3d_vcache").is_dir() else []
             if _x3d_matches:
-                _x3d_ctrl.setText(_x3d_ctrl.text() + "   [kernel: supported]")
+                kernel_note("SET_X3D_VCACHE_MODE", "supported")
             else:
-                _x3d_ctrl.setText(_x3d_ctrl.text() + "   [kernel: not present]")
+                kernel_note("SET_X3D_VCACHE_MODE", "not present")
                 _x3d_ctrl.setToolTip(
                     _x3d_ctrl.toolTip()
                     + "\n\nNo amd_x3d_vcache driver instance was found under "

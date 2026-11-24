@@ -45,7 +45,6 @@ class FavoritesStore(QObject):
                 qs.setValue(f"favorites/{kind}", list(lst))
         except Exception:
             _log.debug("ignored error", exc_info=True)
-            pass
 
     def is_fav(self, kind: str, key: str) -> bool:
         return key in self._load().get(kind, [])

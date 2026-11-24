@@ -41,7 +41,7 @@ from .user_catalog import (
     _UC_LABEL, _UC_LISTS, _uc_add, _uc_as_json, _uc_form, _uc_merge, _uc_record, _uc_validate,
     load_user_catalog, save_user_catalog, user_catalog_path,
 )
-from .widgets import _COMBO_QSS, _LINEEDIT_QSS, _pack2_table_ss, _pack2_title, _slugify
+from .widgets import _COMBO_QSS, _LINEEDIT_QSS, _pack2_table_ss, _pack2_title, _slugify, FlowLayout
 
 _log = logging.getLogger(__name__)
 
@@ -547,14 +547,14 @@ class UpstreamDriftWidget(QWidget):
             "catalog does not. “Gone” = the catalog has it, upstream no longer mentions it. Forks "
             "(unchecked by default) add “Fork-only” = a fork has it, its upstream and the catalog do not. "
             "Select rows and add them to the catalog, or mark them reviewed to hide them next time."))
-        srow, frow2 = QHBoxLayout(), QHBoxLayout()
+        srow, frow2 = FlowLayout(), FlowLayout()
         self._src_rows = {False: srow, True: frow2}
         self._src_pos = {False: 1, True: 1}
         self._src_checks: Dict[str, QCheckBox] = {}
         srow.addWidget(QLabel("Upstream"))
         frow2.addWidget(QLabel("Forks"))
-        srow.addStretch(1)
-        frow2.addStretch(1)
+        srow.add_stretch()
+        frow2.add_stretch()
         for s in DRIFT_SOURCES:
             self._add_src_check(s)
         self._btn_check = _tool_btn("Check now", bold=True)
@@ -596,7 +596,7 @@ class UpstreamDriftWidget(QWidget):
         self._table.itemSelectionChanged.connect(self._sel_changed)
         self._table.cellDoubleClicked.connect(lambda *_: self._add_selected())
         lay.addWidget(self._table, 1)
-        brow = QHBoxLayout()
+        brow = FlowLayout()
         b1 = _tool_btn("Mark selected reviewed")
         b1.clicked.connect(lambda: self._ack(selected_only=True))
         b2 = _tool_btn("Mark all shown reviewed")
@@ -612,7 +612,6 @@ class UpstreamDriftWidget(QWidget):
         b5.clicked.connect(lambda: UserCatalogDialog(self).exec())
         for b in (self._btn_add, b1, b2, b3, b4, b5):
             brow.addWidget(b)
-        brow.addStretch(1)
         lay.addLayout(brow)
 
     def _add_src_check(self, s: dict):
@@ -621,7 +620,7 @@ class UpstreamDriftWidget(QWidget):
         c.setStyleSheet(f"color:{T['text2']};")
         self._src_checks[s["key"]] = c
         fork = s.get("kind") == "fork"
-        self._src_rows[fork].insertWidget(self._src_pos[fork], c)    # after the label, before the stretch
+        self._src_rows[fork].insertWidget(self._src_pos[fork], c)    # after the label, before the button
         self._src_pos[fork] += 1
 
     # reviewed set (QSettings) ------------------------------------------------

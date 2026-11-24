@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 from .base import _atomic_write, _backup_file
 from .theme import SCROLLABLE_CONTROL_QSS, T
 from .tool_ui import _tool_btn
-from .widgets import _LAUNCHER_QSS, _MONO_BOX_QSS, _NO_SCROLL_FILTER
+from .widgets import _LAUNCHER_QSS, _MONO_BOX_QSS, _NO_SCROLL_FILTER, FlowLayout
 
 
 # ============================================================================
@@ -208,14 +208,14 @@ class MangoHudBuilder(QWidget):
         # Top-down: a widget moved into the tree later is re-styled together with all its children.
         left = QVBoxLayout()
         root.addLayout(left, 3)
-        top = QHBoxLayout()
-        left.addLayout(top)
         self._filter = QLineEdit()
         self._filter.setPlaceholderText("Filter options…")
         self._filter.setClearButtonEnabled(True)
         self._filter.setMinimumWidth(170)
         self._filter.textChanged.connect(self._apply_filter)
-        top.addWidget(self._filter, 1)
+        left.addWidget(self._filter)
+        top = FlowLayout()                  # presets wrap instead of squeezing on narrow windows
+        left.addLayout(top)
         for name in MANGOHUD_PRESETS:
             b = _tool_btn(name)
             b.clicked.connect(lambda _c=False, n=name: self._preset(n))
@@ -264,6 +264,8 @@ class MangoHudBuilder(QWidget):
                 ed.textEdited.connect(lambda _t, k=key: self._on_edit(k))
             cb.toggled.connect(lambda _c, k=key: self._refresh())
             d = QLabel(desc)
+            d.setWordWrap(True)                 # long descriptions wrap rather than widen the grid
+            cb.setToolTip(desc)                 # still readable when the column is hidden (narrow window)
             d.setStyleSheet(f"color:{T['muted']}; font-size:11px;")
             grid.addWidget(cb, r, 0)
             if ed is not None:
@@ -291,11 +293,13 @@ class MangoHudBuilder(QWidget):
         self._also_on.setStyleSheet(f"color:{T['text2']};")
         right.addWidget(self._also_on)
         for label, fn, primary in (("Set as MANGOHUD_CONFIG env var", self._to_env, True),
-                                   ("Save config file…  (+ MANGOHUD_CONFIGFILE)", self._save, False),
+                                   ("Save config file…", self._save, False),
                                    ("Load .conf…", self._load_file, False),
                                    ("Copy conf text", lambda: QApplication.clipboard().setText(self._prev.toPlainText()), False)):
             b = (_tool_btn(label, bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True) if primary
                  else _tool_btn(label))
+            if fn == self._save:
+                b.setToolTip("Writes a MangoHud.conf and sets MANGOHUD_CONFIGFILE to it in the Environment tab")
             b.clicked.connect(fn)
             right.addWidget(b)
         self._status = QLabel("")
@@ -305,7 +309,7 @@ class MangoHudBuilder(QWidget):
         right.addStretch(1)
         holder = QWidget()
         holder.setLayout(right)
-        holder.setMinimumWidth(300)
+        holder.setMinimumWidth(260)
         holder.setMaximumWidth(420)
         root.addWidget(holder, 2)
         self._refresh()
@@ -313,6 +317,7 @@ class MangoHudBuilder(QWidget):
     @staticmethod
     def _cap(t):
         l = QLabel(t)
+        l.setWordWrap(True)
         l.setStyleSheet(f"color:{T['muted']}; font-size:11px; font-weight:700;")
         return l
 
@@ -360,14 +365,26 @@ class MangoHudBuilder(QWidget):
     def _preset(self, name):
         self._load(dict(MANGOHUD_PRESETS[name]))
 
+    # Below this builder width the description column cannot be wider than a word or two and
+    # every row turns into a tall stack of fragments; the text moves to the checkbox tooltip.
+    NARROW_WIDTH = 880
+
+    def resizeEvent(self, ev):                      # noqa: N802
+        super().resizeEvent(ev)
+        narrow = self.width() < self.NARROW_WIDTH
+        if narrow != getattr(self, "_narrow", False):
+            self._narrow = narrow
+            self._apply_filter(self._filter.text())
+
     def _apply_filter(self, text):
         t = text.lower().strip()
         shown_groups = set()
+        narrow = getattr(self, "_narrow", False)
         for key, ws in self._row_widgets.items():
             desc = ws[-1].text().lower()
             vis = (not t) or t in key or t in desc
             for w in ws:
-                w.setVisible(vis)
+                w.setVisible(vis and not (narrow and w is ws[-1]))
             if vis:
                 shown_groups.add(next(o[3] for o in MANGOHUD_OPTS if o[0] == key))
         for g, lbl in self._group_labels.items():
@@ -558,11 +575,13 @@ class VkBasaltBuilder(QWidget):
         self._also_on.setChecked(True)
         self._also_on.setStyleSheet(f"color:{T['text2']};")
         right.addWidget(self._also_on)
-        for label, fn, primary in (("Save config file…  (+ VKBASALT_CONFIG_FILE)", self._save, True),
+        for label, fn, primary in (("Save config file…", self._save, True),
                                    ("Load .conf…", self._load_file, False),
                                    ("Copy conf text", lambda: QApplication.clipboard().setText(self._prev.toPlainText()), False)):
             b = (_tool_btn(label, bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True) if primary
                  else _tool_btn(label))
+            if fn == self._save:
+                b.setToolTip("Writes a vkBasalt.conf and sets VKBASALT_CONFIG_FILE to it in the Environment tab")
             b.clicked.connect(fn)
             right.addWidget(b)
         self._status = QLabel("")
@@ -571,7 +590,7 @@ class VkBasaltBuilder(QWidget):
         right.addWidget(self._status)
         holder = QWidget()
         holder.setLayout(right)
-        holder.setMinimumWidth(300)
+        holder.setMinimumWidth(260)
         holder.setMaximumWidth(420)
         root.addWidget(holder, 2)
         self._refresh()

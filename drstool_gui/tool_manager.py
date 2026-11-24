@@ -38,7 +38,7 @@ from .theme import T
 from .toasts import toast
 from .user_catalog import user_tm_tools
 from .tool_ui import _tool_btn, _TOOL_GROUP_SS
-from .widgets import _COMBO_QSS, _desc_label, _MONO_BOX_QSS
+from .widgets import _COMBO_QSS, _desc_label, _MONO_BOX_QSS, FlowLayout
 
 _log = logging.getLogger(__name__)
 
@@ -832,7 +832,7 @@ class ToolManagerWidget(QWidget):
         r.addWidget(QLabel("Install for"))
         self._lc = QComboBox()
         self._lc.setStyleSheet(_COMBO_QSS)
-        self._lc.setMinimumWidth(340)
+        self._lc.setMinimumWidth(220)
         self._lc.activated.connect(self._on_launcher)
         r.addWidget(self._lc, 1)
         b = _tool_btn("Rescan")
@@ -846,7 +846,7 @@ class ToolManagerWidget(QWidget):
         r.addWidget(QLabel("Tool"))
         self._tc = QComboBox()
         self._tc.setStyleSheet(_COMBO_QSS)
-        self._tc.setMinimumWidth(300)
+        self._tc.setMinimumWidth(200)
         self._tc.currentIndexChanged.connect(self._on_tool)
         r.addWidget(self._tc, 1)
         self._adv = QCheckBox("Show advanced / unstable")
@@ -862,12 +862,15 @@ class ToolManagerWidget(QWidget):
         r.addWidget(QLabel("Version"))
         self._vc = QComboBox()
         self._vc.setStyleSheet(_COMBO_QSS)
-        self._vc.setMinimumWidth(300)
+        self._vc.setMinimumWidth(200)
         self._vc.currentIndexChanged.connect(lambda _i: self._sel_changed())
         r.addWidget(self._vc, 1)
         self._bfetch = _tool_btn("Fetch versions")
         self._bfetch.clicked.connect(self._fetch)
         r.addWidget(self._bfetch)
+        g.addLayout(r)
+        r = FlowLayout()                    # the install actions wrap below on narrow windows
+        r.add_stretch()
         self._force = QCheckBox("Reinstall if present")
         r.addWidget(self._force)
         self._binst = _tool_btn("Install", bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True)
@@ -913,7 +916,7 @@ class ToolManagerWidget(QWidget):
         self._table.setMinimumHeight(190)
         self._table.itemSelectionChanged.connect(self._sel_changed)
         g.addWidget(self._table)
-        r = QHBoxLayout()
+        r = FlowLayout()
         b = _tool_btn("Refresh")
         b.clicked.connect(self._refresh)
         r.addWidget(b)
@@ -925,7 +928,7 @@ class ToolManagerWidget(QWidget):
         r.addWidget(self._bupd)
         self._rmold = QCheckBox("Remove the old version after updating")
         r.addWidget(self._rmold)
-        r.addStretch(1)
+        r.add_stretch()
         self._bdef = _tool_btn("Set as Steam default")
         self._bdef.setToolTip("Writes Steam's global Play-compatibility tool (config.vdf, with backup). "
                               "Steam must be closed.")

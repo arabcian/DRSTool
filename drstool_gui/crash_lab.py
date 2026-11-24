@@ -29,7 +29,7 @@ from .state import bisect_items, bisect_state, copy_state
 from .tasks import TASKS
 from .theme import btn_ss, T
 from .tool_ui import ROLE_GLYPH, ROLE_SUB, ToolNavDelegate
-from .widgets import make_list_item, setup_sidebar_list
+from .widgets import FlowLayout, make_list_item, setup_sidebar_list
 
 _KEY = "crashlab/search"
 _LIST_MAX = 12
@@ -125,7 +125,7 @@ class CrashTriageWidget(QWidget):
         self._view = _mono(QPlainTextEdit())
         self._view.setReadOnly(True)
         lay.addWidget(self._view, 1)
-        row = QHBoxLayout()
+        row = FlowLayout()                  # wraps on narrow windows / longer translations
         add = QPushButton("Crashed run log(s)…")
         add.setStyleSheet(btn_ss("primary"))
         clean = QPushButton("Clean run log…")
@@ -137,7 +137,7 @@ class CrashTriageWidget(QWidget):
         self._send.clicked.connect(self._send_suspects)
         for b in (add, clean, self._export):
             row.addWidget(b)
-        row.addStretch(1)
+        row.add_stretch()
         row.addWidget(self._send)
         lay.addLayout(row)
         self._export.setEnabled(False)

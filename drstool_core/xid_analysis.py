@@ -20,8 +20,8 @@ Four layers, all Qt-free and deterministic:
    otherwise; both rates have Gamma priors, so every marginal likelihood is closed form. Because
    evidence is weighted by play time, a crash that needs 20 minutes is not ruled out by a 3-minute
    "works", and one wrong answer lowers confidence instead of derailing the search (ddmin assumes
-   a perfect oracle). `best_test` picks the next configuration by expected information gain and
-   `best_plan` balances information against time cost; planned durations are recommendations, not guarantees. `AdaptiveSearch` wraps it in the
+   a perfect oracle). `best_plan` picks the next configuration and duration by expected information
+   gain per unit of time cost; planned durations are recommendations, not guarantees. `AdaptiveSearch` wraps it in the
    CrashSearch interface used by the Crash Lab.
 
 `associate` applies the model per symptom (root Xid of each crashed test), which gives the
@@ -29,6 +29,7 @@ Xid ↔ setting links measured on the user's own runs.
 """
 from __future__ import annotations
 
+import functools
 import json
 import math
 import re
@@ -357,6 +358,29 @@ def _positive(value, name):
     return value
 
 
+@functools.lru_cache(maxsize=65536)
+def _clauses(h) -> tuple:
+    """A hypothesis as OR-of-AND clauses: it holds for a configuration if any clause is a subset.
+
+    Planning evaluates every hypothesis against every candidate configuration; set inclusion on
+    precompiled clauses replaces a per-call kind dispatch there.
+    """
+    kind = h[0]
+    if kind == "none":
+        return (frozenset(),)
+    if kind == "one":
+        return (frozenset(h[1:2]),)
+    if kind == "and":
+        return (frozenset(h[1:]),)
+    if kind == "or":
+        return tuple(frozenset((i,)) for i in h[1:])
+    if kind == "mixed":
+        return (frozenset(h[1:3]), frozenset(h[3:4]))
+    if kind == "mixed2":
+        return (frozenset(h[1:3]), frozenset(h[3:5]))
+    raise ValueError(f"unknown hypothesis kind: {kind}")
+
+
 def _bounded_groups(ranked, degree, focus, budget):
     """Keep focused combinations and a reproducible sample across *all* candidates.
 
@@ -473,20 +497,7 @@ class CrashModel:
 
     @staticmethod
     def _holds(h, on: frozenset) -> bool:
-        kind = h[0]
-        if kind == "none":
-            return True
-        if kind == "one":
-            return h[1] in on
-        if kind == "and":
-            return all(i in on for i in h[1:])
-        if kind == "or":
-            return any(i in on for i in h[1:])
-        if kind == "mixed":
-            return (h[1] in on and h[2] in on) or h[3] in on
-        if kind == "mixed2":
-            return (h[1] in on and h[2] in on) or (h[3] in on and h[4] in on)
-        raise ValueError(f"unknown hypothesis kind: {kind}")
+        return any(c <= on for c in _clauses(h))
 
     def _stats(self, h):
         if h in self._cache:
@@ -575,13 +586,6 @@ class CrashModel:
             c = frozenset(rng.sample(ranked, len(ranked)//2)); cands.update((c, full-c))
         return sorted(cands, key=lambda c: (len(c), sorted(c)))
 
-    def best_test(self, seconds: float, post=None) -> tuple[frozenset, float]:
-        post = post or self.posterior()
-        preds = self._predictions(seconds, post)
-        gain, _, _, best = max((self._score(c, preds)[0], -len(c), tuple(sorted(c)), c)
-                               for c in self.candidates(post))
-        return best, gain
-
     def best_plan(self, seconds, post=None, *, overhead=None):
         """Select configuration AND duration by expected bits per wall-clock budget.
 
@@ -592,7 +596,8 @@ class CrashModel:
         overhead = _positive(max(90., 4 * seconds) if overhead is None else overhead, "overhead")
         candidates = self.candidates(post)
         options = sorted({max(30., min(14400., seconds * f)) for f in (1., 2., 4., 8.)})
-        active = [(c, tuple(sorted(c)), [i for i, (h, _) in enumerate(post) if self._holds(h, c)])
+        clauses = [_clauses(h) for h, _ in post]
+        active = [(c, tuple(sorted(c)), [i for i, cl in enumerate(clauses) if any(x <= c for x in cl)])
                   for c in candidates]
         best = None
         for duration in options:
@@ -602,8 +607,8 @@ class CrashModel:
             dq = [p*(q1-q0) for _, p, q0, q1 in preds]
             dh = [p*(_h2(q1)-_h2(q0)) for _, p, q0, q1 in preds]
             for c, keys, indices in active:
-                risk = min(1., max(0., base_q + math.fsum(dq[i] for i in indices)))
-                gain = max(0., _h2(risk) - base_h - math.fsum(dh[i] for i in indices))
+                risk = min(1., max(0., base_q + math.fsum(map(dq.__getitem__, indices))))
+                gain = max(0., _h2(risk) - base_h - math.fsum(map(dh.__getitem__, indices)))
                 score = gain / (duration + overhead)
                 row = (score, gain, -duration, -len(c), keys, c, risk)
                 if best is None or row[:5] > best[:5]:

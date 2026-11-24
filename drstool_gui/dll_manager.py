@@ -24,7 +24,7 @@ from typing import Dict, List, Optional
 from PySide6.QtCore import QSettings, QStandardPaths, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
@@ -44,7 +44,7 @@ from .toasts import toast
 from .tool_ui import _tool_btn
 from .widgets import (
     _COMBO_QSS, _desc_label, _LINEEDIT_QSS, _MONO_BOX_QSS, _pack2_table_ss, _pack2_title,
-    _title_label, ElidedLabel,
+    _title_label, ElidedLabel, FlowLayout,
 )
 
 _log = logging.getLogger(__name__)
@@ -904,7 +904,7 @@ class DllManagerWidget(QWidget):
             return
         self._ok = True
 
-        top = QHBoxLayout()
+        top = FlowLayout()                  # wraps on narrow windows instead of widening the page
         self._scan_btn = _tool_btn("⟳  Scan games", bold=True)
         self._scan_btn.clicked.connect(lambda: self.scan())    # not clicked(bool) -> only=False
         top.addWidget(self._scan_btn)
@@ -932,11 +932,11 @@ class DllManagerWidget(QWidget):
         self._rm_custom.setToolTip("Remove the selected custom folder from the list")
         self._rm_custom.clicked.connect(self._forget_folder)
         top.addWidget(self._rm_custom)
-        top.addStretch(1)
+        top.add_stretch()
         self._filter = QLineEdit()
         self._filter.setPlaceholderText("filter games…")
         self._filter.setStyleSheet(_LINEEDIT_QSS)
-        self._filter.setMaximumWidth(220)
+        self._filter.setFixedWidth(200)
         self._filter.textChanged.connect(lambda _t: self._apply_filter())
         top.addWidget(self._filter)
         self._show = QComboBox()
@@ -953,16 +953,19 @@ class DllManagerWidget(QWidget):
         tgt.setAttribute(Qt.WA_StyledBackground, True)
         tgt.setStyleSheet(f"QFrame#dllmTargets {{ background:{T['raised']}; border:1px solid {T['border_hi']};"
                           f" border-radius:8px; }}")
-        tg = QGridLayout(tgt)
+        tg = QVBoxLayout(tgt)
         tg.setContentsMargins(10, 8, 10, 8)
-        tg.setHorizontalSpacing(10)
-        tg.setVerticalSpacing(4)
-        tg.addWidget(caption("Update to"), 0, 0, 1, 4)
+        tg.setSpacing(4)
+        tg.addWidget(caption("Update to"))
+        cells = FlowLayout(spacing=10)      # 4 per line when there is room, fewer otherwise
+        tg.addLayout(cells)
         self._t_on: Dict[str, QCheckBox] = {}
         self._t_ver: Dict[str, QComboBox] = {}
-        for i, (cid, title) in enumerate(DLLM_COLS):
-            r, c = 1 + i // 4, (i % 4)
-            cell = QHBoxLayout()
+        for cid, title in DLLM_COLS:
+            holder = QWidget()
+            holder.setMinimumWidth(230)
+            cell = QHBoxLayout(holder)
+            cell.setContentsMargins(0, 0, 0, 0)
             cb = QCheckBox(title)
             cb.setChecked(True)
             cb.setStyleSheet(f"color:{_ngx_accent(cid) if cid in _DLLM_NGX else T['text2']}; font-weight:700;")
@@ -975,12 +978,12 @@ class DllManagerWidget(QWidget):
             combo.setEnabled(False)
             combo.currentIndexChanged.connect(lambda _i: self._targets_changed())
             cell.addWidget(combo, 1)
-            tg.addLayout(cell, r, c)
+            cells.addWidget(holder)
             self._t_on[cid], self._t_ver[cid] = cb, combo
         self._install_missing = QCheckBox("Also install DXVK / vkd3d / nvapi into prefixes that don't have it")
         self._install_missing.setStyleSheet(f"color:{T['text2']};")
         self._install_missing.toggled.connect(lambda _c: self._targets_changed())
-        tg.addWidget(self._install_missing, 3, 0, 1, 4)
+        tg.addWidget(self._install_missing)
         lay.addWidget(tgt)
 
         self._tree = QTreeWidget()
@@ -1024,10 +1027,11 @@ class DllManagerWidget(QWidget):
         self._bar.setFixedHeight(5)
         lay.addWidget(self._bar)
 
-        btns = QHBoxLayout()
         self._bar_lbl = ElidedLabel()
         self._bar_lbl.setStyleSheet(f"color:{T['text2']}; font-size:11px;")
-        btns.addWidget(self._bar_lbl, 1)
+        lay.addWidget(self._bar_lbl)
+        btns = FlowLayout()
+        btns.add_stretch()                  # right-aligned, wrapping when the window is narrow
         self._restore_btn = _tool_btn("Restore…")
         self._restore_btn.setToolTip("Put back the DLLs a previous update replaced in the selected game")
         self._restore_btn.clicked.connect(self._restore)

@@ -17,7 +17,7 @@ from .tasks import _NAV, TASKS
 from .theme import T
 from .i18n import tr
 from .tool_ui import _tool_btn
-from .widgets import _COMBO_QSS, _table_qss, _title_label
+from .widgets import _COMBO_QSS, _table_qss, _title_label, FlowLayout
 
 
 class CommunityTipsWidget(QWidget):
@@ -42,7 +42,7 @@ class CommunityTipsWidget(QWidget):
         warn.setStyleSheet(f"color:{T['text']}; background:#2a1414; border:1px solid {T['danger']};"
                            "border-radius:4px; padding:8px 10px; font-size:12px;")
         lay.addWidget(warn)
-        frow = QHBoxLayout()
+        frow = FlowLayout()
         self._nv = QCheckBox("NVIDIA reports only")
         self._nv.setChecked(bool(SYSHUB.info.has_nvidia))
         self._period = QComboBox()
@@ -57,7 +57,6 @@ class CommunityTipsWidget(QWidget):
         frow.addWidget(self._nv)
         frow.addWidget(self._period)
         frow.addWidget(self._cat)
-        frow.addStretch(1)
         lay.addLayout(frow)
         drow = QHBoxLayout()
         self._dl = _tool_btn("Download / update ProtonDB report data")

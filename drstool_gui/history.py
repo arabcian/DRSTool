@@ -28,7 +28,7 @@ from .settings_manager import SettingsManager
 from .state import diff_profiles
 from .theme import T
 from .tool_ui import _tool_btn
-from .widgets import _fmt_drs_value, _LAUNCHER_QSS, _pack2_table_ss, _pack2_title
+from .widgets import _fmt_drs_value, _LAUNCHER_QSS, _pack2_table_ss, _pack2_title, FlowLayout
 
 _log = logging.getLogger(__name__)
 
@@ -57,7 +57,6 @@ class ProfileDiffTable(QTableWidget):
                     return shown_key, f"{_fmt_drs_value(s, val)}  [{val}]" if _fmt_drs_value(s, val) != val else val
                 except Exception:
                     _log.debug("ignored error", exc_info=True)
-                    pass
             return shown_key, val
         return key, val
 
@@ -155,7 +154,7 @@ class HistoryWidget(QWidget):
         rv.addWidget(self._snap_summary)
         self._snap_diff = ProfileDiffTable()
         rv.addWidget(self._snap_diff, 1)
-        row = QHBoxLayout()
+        row = FlowLayout()
         self._btn_restore_one = _tool_btn("Restore this profile", bold=True)
         self._btn_restore_one.clicked.connect(self._restore_one)
         self._btn_restore_all = _tool_btn("Restore whole snapshot")
@@ -165,7 +164,6 @@ class HistoryWidget(QWidget):
             QUrl.fromLocalFile(str(SettingsManager._history_dir()))))
         for b in (self._btn_restore_one, self._btn_restore_all, b_open):
             row.addWidget(b)
-        row.addStretch(1)
         rv.addLayout(row)
         split.addWidget(right)
         split.setChildrenCollapsible(False)
@@ -245,7 +243,6 @@ class HistoryWidget(QWidget):
                     self._snap_data = data
             except Exception:
                 _log.debug("ignored error", exc_info=True)
-                pass
         live = self.sm.get_profiles()
         for name in sorted(self._snap_data, key=str.lower):
             if name not in live:
@@ -470,7 +467,6 @@ class HistoryWidget(QWidget):
                 lw._on_game_selected(lw._game_combo.currentIndex())
             except Exception:
                 _log.debug("ignored error", exc_info=True)
-                pass
 
     # ── Compare profiles ──────────────────────────────────────────────────
     def _build_compare(self) -> QWidget:

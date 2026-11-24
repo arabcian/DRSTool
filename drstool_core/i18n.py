@@ -289,7 +289,7 @@ TR.update({
     'Game hints (ProtonDB · PCGamingWiki)': 'Oyun ipuçları (ProtonDB · PCGamingWiki)',
     'Hex: 0x': 'Onaltılık: 0x',
     'I understand these are unverified user reports and I use them at my own risk': 'Bunların doğrulanmamış kullanıcı raporları olduğunu ve riski üstlendiğimi anlıyorum',
-    'If enabled: the .so built for the 7845HX may not run on a different CPU (a different machine).': 'Etkinse 7845HX için derlenen .so başka bir işlemci veya makinede çalışmayabilir.',
+    "If enabled: the .so is tuned for this computer's CPU and may not run on a different CPU (another machine).": 'Etkinse .so bu bilgisayarın işlemcisine göre derlenir; başka bir işlemcide (başka bir makinede) çalışmayabilir.',
     'Ignore the one-week cache and ask ProtonDB / PCGamingWiki again': 'Bir haftalık önbelleği atla ve ProtonDB / PCGamingWiki verilerini yeniden getir',
     'Keyboard shortcuts\tF1': 'Klavye kısayolları\tF1',
     'Link a profile to this game. Writing it to the game is a separate step.': 'Bu oyuna profil bağlayın; profile ait ayarları oyuna yazmak ayrı bir işlemdir.',
@@ -304,7 +304,7 @@ TR.update({
     'Profiles in snapshot   (= same · ≠ differs · ＋ deleted since)': 'Anlık görüntüdeki profiller (= aynı · ≠ farklı · ＋ sonradan silinmiş)',
     'Proton': 'Proton',
     'Put back the DLLs a previous update replaced in the selected game': 'Seçili oyunda önceki güncellemenin değiştirdiği DLL dosyalarını geri yükle',
-    'Put the current DRSTool configuration into the launch options': 'Geçerli DRSTool yapılandırmasını başlatma seçeneklerine ekle',
+    'Put the current DRSTool configuration into the launch options': 'DRSTool yapılandırmasını başlatma seçeneklerine ekle',
     'Re-install in the other mode (setuid ⇄ polkit); settings are kept': 'Diğer modda yeniden kur (setuid ⇄ polkit); ayarlar korunur',
     'Read the game\'s files, logs and captures again': 'Oyunun dosyalarını, günlüklerini ve kayıtlarını yeniden oku',
     'Reinstall even if winetricks says it is already installed (--force)': 'Winetricks kurulu dese bile yeniden kur (--force)',
@@ -358,6 +358,14 @@ TR.update({
     '⚠ Pick a game above, or enter a Steam appid / a game name.': '⚠ Yukarıdan bir oyun seçin veya Steam uygulama kimliği / oyun adı girin.',
     '✔ Requirements met (or not detectable here)': '✔ Gereksinimler karşılandı (veya bu sistemde belirlenemiyor)',
     '📁 Source:': '📁 Kaynak:',
+    # MangoHud / vkBasalt builders
+    'Save config file…': 'Yapılandırma dosyasını kaydet…',
+    'Load .conf…': '.conf yükle…',
+    'Copy conf text': 'Yapılandırma metnini kopyala',
+    'Writes a MangoHud.conf and sets MANGOHUD_CONFIGFILE to it in the Environment tab':
+        'Bir MangoHud.conf yazar ve Ortam Değişkenleri sekmesinde MANGOHUD_CONFIGFILE değişkenini ona ayarlar',
+    'Writes a vkBasalt.conf and sets VKBASALT_CONFIG_FILE to it in the Environment tab':
+        'Bir vkBasalt.conf yazar ve Ortam Değişkenleri sekmesinde VKBASALT_CONFIG_FILE değişkenini ona ayarlar',
 })
 
 TR.update({

@@ -21,7 +21,7 @@ class TaskCenter(QObject):
         super().__init__()
         self._tasks: List[dict] = []
         self._seq = 0
-        self._threads: list = []       # every tracked thread, so wait_all() can stop them on exit
+        self._threads: list = []       # tracked + retained threads; closing waits until none runs
 
     def tasks(self) -> List[dict]:
         return list(self._tasks)
@@ -52,6 +52,14 @@ class TaskCenter(QObject):
             if not th.wait(max(0, timeout_ms)):
                 return False
         return not self.running()
+
+    def retain(self, thread):
+        """Make the window's close wait for a short, unlisted worker (card refresh, file load).
+
+        Closing only waits for threads in running(); one missing here is destroyed while it
+        still runs when its owner goes away, which aborts the process."""
+        self._threads = [th for th in self._threads if th.isRunning()] + [thread]
+        return thread
 
     def track(self, thread, title: str, nav: Optional[dict] = None, progress=None, fail=None) -> dict:
         self._seq += 1

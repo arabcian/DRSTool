@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from drstool_core.catalog import DATA_DIR
 
 from .catalog_data import LOG_ENV_ON
+from .tasks import TASKS
 from .theme import T
 from .tool_ui import _tool_btn
 from .widgets import (
@@ -339,7 +340,7 @@ class LogViewerWidget(QWidget):
         self._loading = True
         self._status.setText(f"Loading {path.name}…")
         th = _LogLoadThread(self._gen, path, self.MAX_READ)
-        self._loaders.append(th)
+        self._loaders.append(TASKS.retain(th))
         th.done.connect(self._on_loaded)
         th.failed.connect(self._on_load_failed)
         th.finished.connect(lambda t=th: self._drop_loader(t))

@@ -935,7 +935,6 @@ class LutrisSyncWidget(QWidget):
                     lines.append(f"    {k}: {env_sec[k]!r}")
         except Exception:
             _log.debug("ignored error", exc_info=True)
-            pass
         self._preview.setPlainText("\n".join(lines))
         self._apply_btn.setEnabled(True)
 

@@ -205,10 +205,15 @@ class SessionStore:
             return []
         entries = []
         # At most the most recent 300 records. Avoid unbounded IO on very old installs.
+        def mtime(p: Path) -> float:
+            try:
+                return p.stat().st_mtime
+            except OSError:          # removed meanwhile; read() below skips it
+                return 0.0
         try:
             paths = sorted((p for p in self.directory.iterdir() if _ID_RE.fullmatch(p.stem)
                             and p.suffix == '.json' and not p.is_symlink()),
-                           key=lambda p: p.stat().st_mtime, reverse=True)[:300]
+                           key=mtime, reverse=True)[:300]
         except OSError:
             return []
         for p in paths:

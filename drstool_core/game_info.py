@@ -77,7 +77,6 @@ def _load_yaml(path: Path):
             return yaml.load(text, Loader=_YAML_LOADER), text
         except Exception:
             _log.debug("ignored error", exc_info=True)
-            pass
     return None, text
 
 

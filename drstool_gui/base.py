@@ -142,7 +142,6 @@ def apply_wayland_app_id(app_id: str) -> None:
         setproctitle.setproctitle(app_id)
     except Exception:
         _log.debug("ignored error", exc_info=True)
-        pass
 
 
 def _run(cmd: List[str], timeout: float = 15.0) -> str:

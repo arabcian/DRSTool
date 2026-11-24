@@ -343,11 +343,11 @@ class SteamShortcutsWidget(QWidget):
         b_ic = _tool_btn("Browse…")
         b_ic.clicked.connect(lambda: self._browse(self._icon, False))
         add_row("Name:", self._name)
-        self._exe_lbl = add_row("Program:", self._exe, b_exe)
+        add_row("Program:", self._exe, b_exe)
         self._b_exe = b_exe
         add_row("Start in:", self._dir, b_dir)
         add_row("Icon:", self._icon, b_ic)
-        self._args_lbl = add_row("Arguments:", self._args)
+        add_row("Arguments:", self._args)
 
         self._compat = QComboBox()
         self._compat.setStyleSheet(_COMBO_QSS)
@@ -378,7 +378,7 @@ class SteamShortcutsWidget(QWidget):
         btns.addWidget(QLabel("Added by DRSTool:"))
         self._existing = QComboBox()
         self._existing.setStyleSheet(_COMBO_QSS)
-        self._existing.setMinimumWidth(200)
+        self._existing.setMinimumWidth(160)
         btns.addWidget(self._existing, 1)
         ed = _tool_btn("Edit")
         ed.setToolTip("Load the selected shortcut into the form (Add then updates it)")

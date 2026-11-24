@@ -232,10 +232,10 @@ def _yaml_game_section(text: str) -> Dict[str, str]:
         try:
             d = yaml.load(text, Loader=_YAML_LOADER) or {}
             g = d.get("game") if isinstance(d, dict) else None
-            return {str(k): str(v) for k, v in g.items()} if isinstance(g, dict) else {}
+            # `exe: null` / `prefix: ~` must not turn into a relative path named "None"
+            return {str(k): str(v) for k, v in g.items() if v is not None} if isinstance(g, dict) else {}
         except Exception:
             _log.debug("ignored error", exc_info=True)
-            pass
     out, inside = {}, False
     for line in text.splitlines():
         if re.match(r"^game:\s*$", line):
@@ -250,11 +250,19 @@ def _yaml_game_section(text: str) -> Dict[str, str]:
 
 
 def _game_root_from_exe(exe: Path) -> Path:
-    """Unreal-style <Game>/<Project>/Binaries/Win64/x.exe -> <Game>; otherwise the exe's folder."""
+    """Unreal folder of a game exe; otherwise the exe's folder.
+
+    UE4/5 ship <Game>/<Project>/Binaries/Win64/x.exe next to <Game>/Engine, so the root is <Game>.
+    UE3 ships <Game>/Binaries/Win32/x.exe (no Engine sibling one level up): going up two levels
+    there would name the whole library folder as the game, so the root is the Binaries' parent.
+    """
     parts = exe.parent.parts
     for i in range(len(parts) - 1, 0, -1):
         if parts[i].lower() == "binaries" and i >= 2:
-            return Path(*parts[:i - 1])
+            ue4_root = Path(*parts[:i - 1])
+            if (ue4_root / "Engine").is_dir():
+                return ue4_root
+            return Path(*parts[:i])
     return exe.parent
 
 

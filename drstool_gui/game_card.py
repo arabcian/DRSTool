@@ -47,7 +47,7 @@ from .theme import btn_ss, caption, SCROLLABLE_CONTROL_QSS, T
 from .toasts import toast
 from .widgets import (
     _COMBO_QSS, _LINEEDIT_QSS, _pack2_table_ss, ElidedLabel, make_header_item, make_list_item,
-    setup_sidebar_list,
+    setup_sidebar_list, FlowLayout,
 )
 
 _KIND_TITLES = {"dlss": "DLSS SR", "dlssd": "DLSS RR", "dlssg": "DLSS FG", "sl_sdk_0": "Streamline"}
@@ -326,10 +326,11 @@ class GameListWidget(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
-        row = QHBoxLayout()
+        row = FlowLayout()                  # the sidebar is narrow: wrap rather than squeeze "Rescan"
         self._count = QLabel("")
         self._count.setStyleSheet(f"color:{T['muted']}; font-size:11px;")
-        row.addWidget(self._count, 1)
+        row.addWidget(self._count)
+        row.add_stretch()
         self._preset = QComboBox()
         for label, code in _PRESETS:
             self._preset.addItem(label, code)
@@ -483,11 +484,9 @@ class _Tile(QFrame):
         self.body.setSpacing(6)
         lay.addLayout(self.body)
         lay.addStretch(1)              # keeps the buttons at the bottom of equal-height tiles
-        self.buttons = QHBoxLayout()
-        self.buttons.setSpacing(6)
+        self.buttons = FlowLayout()         # the tiles are narrow: buttons wrap instead of squeezing
         lay.addSpacing(2)
         lay.addLayout(self.buttons)
-        self.buttons.addStretch(1)
 
     def add_button(self, text: str, fn, kind: str = "default", tip: str = "") -> QPushButton:
         b = QPushButton(text)
@@ -496,7 +495,7 @@ class _Tile(QFrame):
         if tip:
             b.setToolTip(tip)
         b.clicked.connect(fn)
-        self.buttons.insertWidget(self.buttons.count() - 1, b)
+        self.buttons.addWidget(b)
         return b
 
     def set(self, value: str, detail: str = "", color: str = ""):
@@ -586,8 +585,8 @@ class GameCardWidget(QWidget):
         self._tricks_btn = self.t_runtime.add_button(
             "Windows libraries…", lambda: self._open_tricks(), "default",
             "Install Visual C++, DirectX / D3DX, .NET and every other winetricks library into this game's prefix")
-        self._pfx_btn = self.t_runtime.add_button("Prefix tools", self._prefix_menu, "ghost",
-                                                  "winecfg, regedit, stop wineserver, back up or reset the prefix")
+        self.t_runtime.add_button("Prefix tools", self._prefix_menu, "ghost",
+                                  "winecfg, regedit, stop wineserver, back up or reset the prefix")
 
         self.t_dlls = _Tile("DLSS / DXVK")
         self.t_dlls.add_button("DLL Manager", lambda: self._open_tool("DLL Manager"), "ghost")
@@ -715,9 +714,12 @@ class GameCardWidget(QWidget):
         wk = _CardWorker(self.game, env, self.link(), self)
         self._worker = wk
         self._threads = [t for t in self._threads if t.isRunning()] + [wk]
-        wk.done.connect(self._on_info)
+        TASKS.retain(wk)
+        # Same game reloaded while an earlier refresh still runs: only the latest result counts,
+        # or a slower, older scan finishing last would overwrite the fresh card.
+        wk.done.connect(lambda key, info, w=wk: self._on_info(key, info) if w is self._worker else None)
         self._reload_btn.setEnabled(False)
-        wk.finished.connect(lambda: self._reload_btn.setEnabled(True))
+        wk.finished.connect(lambda w=wk: self._reload_btn.setEnabled(True) if w is self._worker else None)
         wk.start()
 
     def _on_info(self, key: str, info: dict):

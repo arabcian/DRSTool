@@ -34,7 +34,7 @@ from .theme import T
 from .tasks import TASKS, _NAV
 from .toasts import offer_undo
 from .tool_ui import _tool_btn
-from .widgets import _COMBO_QSS, _LAUNCHER_QSS, _LINEEDIT_QSS, _MONO_BOX_QSS
+from .widgets import _COMBO_QSS, _LAUNCHER_QSS, _LINEEDIT_QSS, _MONO_BOX_QSS, FlowLayout
 
 _log = logging.getLogger(__name__)
 
@@ -251,7 +251,6 @@ class HeroicBackend(LauncherBackend):
                 walk(json.loads(f.read_text(errors="replace")))
             except Exception:
                 _log.debug("ignored error", exc_info=True)
-                pass
         return titles
 
     def scan(self, account=None):
@@ -363,7 +362,6 @@ class BottlesBackend(LauncherBackend):
                         name = (yaml.load(f.read_text(), Loader=_YAML_LOADER) or {}).get("Name", d.name)
                     except Exception:
                         _log.debug("ignored error", exc_info=True)
-                        pass
                     out.append(LEntry(d.name, f"{name}  [{d.name}]", f))
         return out
 
@@ -793,7 +791,7 @@ class LaunchLineWidget(QWidget):
         self._out.setMinimumHeight(140)
         lay.addWidget(self._out, 1)
 
-        row = QHBoxLayout()
+        row = FlowLayout()                  # wraps on narrow windows / longer translations
         b1 = _tool_btn("Copy line", bg="#26330f", border="#4a7300", fg="#cfe9a0", bold=True)
         b1.clicked.connect(self._copy)
         row.addWidget(b1)
@@ -810,7 +808,6 @@ class LaunchLineWidget(QWidget):
                       "Needs a saved profile, and `drstool` on the PATH the launcher uses.")
         b4.clicked.connect(self._copy_live)
         row.addWidget(b4)
-        row.addStretch(1)
         lay.addLayout(row)
         self._status = QLabel("")
         self._status.setStyleSheet(f"color:{T['muted']}; font-size:12px;")

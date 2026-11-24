@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QSizePolicy,
-    QStyle, QStyledItemDelegate, QVBoxLayout, QWidget,
+    QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QLayout, QListWidget, QListWidgetItem, QPushButton,
+    QSizePolicy, QStyle, QStyledItemDelegate, QVBoxLayout, QWidgetItem, QWidget,
 )
 
 from .base import APP_TITLE
@@ -300,9 +300,10 @@ class ElidedLabel(QLabel):
     """
     copied = Signal(str)
 
-    def __init__(self, text: str = "", parent=None):
+    def __init__(self, text: str = "", parent=None, elide=Qt.ElideRight):
         super().__init__(parent)
         self._full = ""
+        self._elide = elide                # Qt.ElideMiddle for paths: keeps both ends readable
         self._copyable = True
         self.setCursor(Qt.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -319,7 +320,7 @@ class ElidedLabel(QLabel):
 
     def _refresh(self):
         avail = max(20, self.width() - 22)
-        shown = self.fontMetrics().elidedText(self._full, Qt.ElideRight, avail)
+        shown = self.fontMetrics().elidedText(self._full, self._elide, avail)
         QLabel.setText(self, shown)
 
     def resizeEvent(self, e):             # noqa: N802
@@ -791,6 +792,114 @@ def _file_sha(path: Path) -> str:
     except OSError:
         return ""
 
+
+
+class FlowLayout(QLayout):
+    """A row of buttons / checkboxes that wraps onto the next line instead of overflowing.
+
+    The window's minimum width (980 px) is smaller than several tool pages' button rows; in a
+    QHBoxLayout those buttons were squeezed below their text ("ancel scar") or pushed past the
+    right edge of the page. Items keep their size hint; `add_stretch()` pushes every item added
+    after it to the right end of its line (the QHBoxLayout addStretch idiom).
+    """
+
+    def __init__(self, parent=None, spacing: int = 6):
+        super().__init__(parent)
+        self._items: list = []
+        self._right_from: int | None = None
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(spacing)
+
+    # QLayout API
+    def addItem(self, item):                       # noqa: N802
+        self._items.append(item)
+
+    def insertWidget(self, index: int, w: QWidget):  # noqa: N802
+        self.addChildWidget(w)
+        self._items.insert(max(0, min(index, len(self._items))), QWidgetItem(w))
+        if self._right_from is not None and index <= self._right_from:
+            self._right_from += 1
+        self.invalidate()
+
+    def add_stretch(self):
+        self._right_from = len(self._items)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):                           # noqa: N802
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):                           # noqa: N802
+        if not 0 <= i < len(self._items):
+            return None
+        if self._right_from is not None and i < self._right_from:
+            self._right_from -= 1
+        return self._items.pop(i)
+
+    def expandingDirections(self):                 # noqa: N802
+        return Qt.Orientations(0)
+
+    def hasHeightForWidth(self):                   # noqa: N802
+        return True
+
+    def heightForWidth(self, width):               # noqa: N802
+        return self._place(QRect(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect):                   # noqa: N802
+        super().setGeometry(rect)
+        self._place(rect, apply=True)
+
+    def sizeHint(self):                            # noqa: N802
+        vis = [it.sizeHint() for it in self._items if not it.isEmpty()]
+        m = self.contentsMargins()
+        w = sum(s.width() for s in vis) + self.spacing() * max(0, len(vis) - 1)
+        h = max((s.height() for s in vis), default=0)
+        return QSize(w + m.left() + m.right(), h + m.top() + m.bottom())
+
+    def minimumSize(self):                         # noqa: N802
+        size = QSize()
+        for it in self._items:
+            if not it.isEmpty():
+                size = size.expandedTo(it.minimumSize().expandedTo(it.sizeHint()))
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _place(self, rect, apply: bool) -> int:
+        m = self.contentsMargins()
+        r = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        sp = self.spacing()
+        lines, line, line_w = [], [], 0
+        for idx, it in enumerate(self._items):
+            if it.isEmpty():
+                continue
+            w = it.sizeHint().width()
+            if line and line_w + sp + w > r.width():
+                lines.append(line)
+                line, line_w = [], 0
+            line_w += (sp if line else 0) + w
+            line.append((idx, it))
+        if line:
+            lines.append(line)
+        y = r.y()
+        for ln in lines:
+            h = max(it.sizeHint().height() for _, it in ln)
+            if apply:
+                left = [it for i, it in ln if self._right_from is None or i < self._right_from]
+                right = [it for i, it in ln if self._right_from is not None and i >= self._right_from]
+                x = r.x()
+                for it in left:
+                    sh = it.sizeHint()
+                    it.setGeometry(QRect(x, y + (h - sh.height()) // 2, sh.width(), sh.height()))
+                    x += sh.width() + sp
+                x = r.right() + 1
+                for it in reversed(right):
+                    sh = it.sizeHint()
+                    x -= sh.width()
+                    it.setGeometry(QRect(x, y + (h - sh.height()) // 2, sh.width(), sh.height()))
+                    x -= sp
+            y += h + sp
+        return y - sp - r.y() + m.top() + m.bottom() if lines else m.top() + m.bottom()
 
 # Row density (Appearance dialog). The classes above are already defined here.
 SidebarDelegate.ITEM_H, SidebarDelegate.HEADER_H = DENSITY_ROWS[APPEARANCE["density"]][:2]
