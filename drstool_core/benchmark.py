@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from statistics import median, pstdev
 from random import Random
 from typing import Sequence
+from .frame_statistics import metrics
 
 
 @dataclass(frozen=True)
@@ -23,18 +24,10 @@ class CaptureSummary:
 
 
 def summarize(frames: Sequence[float]) -> CaptureSummary:
-    if len(frames) < 10 or any(not math.isfinite(x) or x <= 0 or x >= 10000 for x in frames):
-        raise ValueError('Capture requires >=10 finite, positive frametimes below 10000 ms')
-    ordered = sorted(frames)
-    total = math.fsum(frames)
-    worst = ordered[-max(1, math.ceil(len(frames) * .01)):]
-    med = median(ordered)
-    return CaptureSummary(
-        len(frames), total / 1000, len(frames) * 1000 / total,
-        1000 * len(worst) / math.fsum(worst),
-        ordered[min(len(frames) - 1, math.ceil(.99 * len(frames)) - 1)], med,
-        sum(x > 2 * med for x in frames),
-    )
+    if len(frames) < 10 or any(not math.isfinite(x) or x <= 0 for x in frames):
+        raise ValueError('Capture requires >=10 finite, positive frametimes')
+    m = metrics(frames)
+    return CaptureSummary(**{k: m[k] for k in CaptureSummary.__dataclass_fields__})
 
 
 def compare(a: Sequence[float], b: Sequence[float], *, kind_a: str = '', kind_b: str = '',
@@ -46,6 +39,8 @@ def compare(a: Sequence[float], b: Sequence[float], *, kind_a: str = '', kind_b:
         warnings.append('Capture durations differ by more than 20%')
     if kind_a and kind_b and kind_a != kind_b:
         warnings.append('Capture formats may represent different frame streams')
+    if 'mangohud' in (kind_a, kind_b):
+        warnings.append('MangoHud sampling cadence must be verified before treating samples as frames')
     if not scene_confirmed:
         warnings.append('Same game scene and matching test conditions are not confirmed')
     if min(sa.duration_s, sb.duration_s) < 30:
@@ -61,7 +56,7 @@ def compare(a: Sequence[float], b: Sequence[float], *, kind_a: str = '', kind_b:
 
 
 def compare_repeats(a_runs: Sequence[Sequence[float]], b_runs: Sequence[Sequence[float]],
-                    *, same_scene_confirmed: bool = False) -> dict:
+                    *, same_scene_confirmed: bool = False, kinds_a: Sequence[str] = (), kinds_b: Sequence[str] = ()) -> dict:
     """Compare 3+ independent repeated runs, using median FPS per group."""
     if len(a_runs) < 3 or len(b_runs) < 3:
         raise ValueError('At least three captures per configuration are required')
@@ -69,6 +64,11 @@ def compare_repeats(a_runs: Sequence[Sequence[float]], b_runs: Sequence[Sequence
     b = [summarize(x) for x in b_runs]
     am, bm = median(s.average_fps for s in a), median(s.average_fps for s in b)
     warnings = []
+    if kinds_a or kinds_b:
+        if len(kinds_a) != len(a_runs) or len(kinds_b) != len(b_runs) or len(set([*kinds_a, *kinds_b])) != 1:
+            warnings.append('Capture formats may represent different frame streams')
+        elif 'mangohud' in kinds_a:
+            warnings.append('MangoHud sampling cadence must be verified before treating samples as frames')
     if not same_scene_confirmed:
         warnings.append('Identical scene and test conditions have not been confirmed')
     if min(s.duration_s for s in a + b) < 30:

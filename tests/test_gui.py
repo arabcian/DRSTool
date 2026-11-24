@@ -716,18 +716,18 @@ class GuiTests(unittest.TestCase):
         try:
             with patch_name(m, "lgtune_mode", return_value="polkit"):
                 keys, _env, _warn = ls._split_gamescope({})
-                self.assertEqual(keys["prelaunch_command"], f"pkexec {w} PRE")
-                self.assertEqual(keys["postexit_command"], f"pkexec {w} POST")
-                self.assertTrue(keys["prefix_command"].startswith(f"{w} RUN "))   # RUN never via pkexec
+                self.assertNotIn("prelaunch_command", keys)
+                self.assertNotIn("postexit_command", keys)
+                self.assertTrue(keys["prefix_command"].startswith(f"{ls._LGTUNE_SESSION_PATH} --polkit --nice "))
                 sc = self.win._shortcut
                 sc._lg.setEnabled(True)
                 sc._lg.setChecked(True)
                 script = sc.build_script()
-                self.assertIn('pkexec "$W" PRE', script)
-                self.assertIn("trap 'pkexec \"$W\" POST' EXIT", script)
+                self.assertIn(f"exec {sc.LGTUNE_SESSION} --polkit --nice", script)
             with patch_name(m, "lgtune_mode", return_value="setuid"):
                 keys, _env, _warn = ls._split_gamescope({})
-                self.assertEqual(keys["prelaunch_command"], f"{w} PRE")
+                self.assertTrue(keys["prefix_command"].startswith(f"{ls._LGTUNE_SESSION_PATH} --nice "))
+                self.assertNotIn("--polkit", keys["prefix_command"])
         finally:
             ls._chk_lgtune.setChecked(False)
             self.win._shortcut._lg.setChecked(False)

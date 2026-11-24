@@ -68,6 +68,7 @@ drstool_core = ["data/*.json"]
     "lutris-game-tune-main/uninstall.sh",
     "lutris-game-tune-main/lutris-game-tune.sh",
     "lutris-game-tune-main/lgtune-recovery-service.sh",
+    "lutris-game-tune-main/lgtune-session.py",
     "lutris-game-tune-main/lutris-game-tune-wrapper.c",
     "lutris-game-tune-main/lutris-game-tune.conf",
     "lutris-game-tune-main/lutris-game-tune.conf.example",

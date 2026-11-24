@@ -11,6 +11,8 @@ import os
 import platform
 import re
 import socket
+import stat
+import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -24,6 +26,8 @@ _log = logging.getLogger(__name__)
 _SENSITIVE_KEY = re.compile(r'(?:token|secret|password|passwd|api[_-]?key|auth(?:orization)?|'
                             r'private[_-]?key|access[_-]?key|client[_-]?secret|cookie)', re.I)
 _SECRET_REGEXES = [
+    # Quoted shell/JSON-style secrets may contain spaces; redact the whole value.
+    (re.compile(r"(?im)((?<![A-Za-z0-9_-])(?:[A-Za-z0-9_-]{0,128}(?:token|password|passwd|secret|api[_-]?key|cookie|authorization)[A-Za-z0-9_-]{0,128})[\"']?\s*[:=]\s*)([\"'])(?:\\.|(?!\2)[^\\\r\n])*(?:\2|(?=\r?$))"), r'\1[REDACTED]'),
     (re.compile(r'(?i)\b(Bearer|Basic)\s+[A-Za-z0-9_+.~\-/=]+'), r'\1 [REDACTED]'),
     (re.compile(r'(?i)([?&](?:token|access_token|api_key|key|secret|password)=)[^&#\s]+'),
      r'\1[REDACTED]'),
@@ -88,13 +92,36 @@ def system_lines(si: Optional[Any] = None) -> List[str]:
 def build(dest: Path, profiles: Dict[str, Dict], lines: Iterable[str] = (),
           *, include_logs: bool = True, include_profiles: bool = True) -> Path:
     """Write the anonymised bundle to `dest` (a .zip path) and return it."""
-    log_files = sorted(applog.log_path().parent.glob("debug.log*")) if include_logs else []
+    dest = Path(dest)
+    log_files = sorted(applog.log_path().parent.glob("debug.log*"))[:32] if include_logs else []
     summary = list(lines) + ["", "[debug log]",
                              f"files: {', '.join(p.name for p in log_files) or 'none (no errors recorded yet)'}"]
-    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("system.txt", redact("\n".join(summary)) + "\n")
-        if include_profiles:
-            zf.writestr("profiles.json", json.dumps(_redact_obj(profiles), indent=2, ensure_ascii=False) + "\n")
-        for p in log_files:
-            zf.writestr(f"log/{p.name}", redact(p.read_text(encoding="utf-8", errors="replace")))
+    fd, temporary = tempfile.mkstemp(prefix='.support-', suffix='.zip', dir=dest.parent)
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("system.txt", redact("\n".join(summary)) + "\n")
+            if include_profiles:
+                zf.writestr("profiles.json", json.dumps(_redact_obj(profiles), indent=2, ensure_ascii=False) + "\n")
+            for p in log_files:
+                try:
+                    log_fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    with os.fdopen(log_fd, 'rb') as stream:
+                        info = os.fstat(stream.fileno())
+                        if not stat.S_ISREG(info.st_mode):
+                            continue
+                        cap = 2 * 1024 * 1024
+                        # Keep the latest complete lines, never load an unlimited log.
+                        truncated = info.st_size > cap
+                        if truncated:
+                            stream.seek(info.st_size - cap)
+                            stream.readline(cap)
+                        raw = stream.read(cap)
+                    body = ('[Log truncated to final 2 MiB]\n' if truncated else '') + raw.decode('utf-8', 'replace')
+                    zf.writestr(f"log/{p.name}", redact(body))
+                except OSError:
+                    _log.debug('log unavailable for support bundle: %s', p.name)
+        os.replace(temporary, dest)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
     return dest

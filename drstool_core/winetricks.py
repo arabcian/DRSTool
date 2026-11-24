@@ -97,7 +97,10 @@ class Plan:
 def steam_appid(prefix: Path) -> Optional[str]:
     """steamapps/compatdata/<appid>/pfx -> '<appid>', anything else -> None."""
     prefix = Path(prefix)
-    if prefix.name == "pfx" and prefix.parent.name.isdigit():
+    if (prefix.name == "pfx" and re.fullmatch(r"[0-9]{1,10}", prefix.parent.name)
+            and prefix.parent.parent.name == "compatdata"
+            and prefix.parent.parent.parent.name == "steamapps"
+            and 0 < int(prefix.parent.name) <= 0xFFFFFFFF):
         return prefix.parent.name
     return None
 
@@ -117,7 +120,7 @@ def plan(prefix: Path, components: Sequence[str], force: bool = False) -> Plan:
     Raises ValueError for an unknown component or a folder that is not a Wine prefix,
     and RuntimeError when the needed tool is not installed.
     """
-    prefix = Path(prefix)
+    prefix = Path(prefix).absolute()
     if not (prefix / "drive_c" / "windows").is_dir():
         raise ValueError(f"not a Wine prefix (drive_c/windows missing): {prefix}")
     if not components:
@@ -142,7 +145,9 @@ PREFIX_ACTIONS = ("winecfg", "regedit", "kill")
 def prefix_command(prefix: Path, action: str) -> Plan:
     """winecfg / regedit / wineserver -k for a prefix, through protontricks for Steam games
     (so the game's own Proton build is used) and winetricks / the system wine otherwise."""
-    prefix = Path(prefix)
+    prefix = Path(prefix).absolute()
+    if not (prefix / "drive_c" / "windows").is_dir():
+        raise ValueError(f"not a Wine prefix (drive_c/windows missing): {prefix}")
     if action not in PREFIX_ACTIONS:
         raise ValueError(f"unknown prefix action: {action}")
     appid = steam_appid(prefix)

@@ -734,11 +734,14 @@ struct SwapchainState {
     //
     // Line P — written by the present thread.
     alignas(64) std::atomic<uint64_t> next_present_id{1};
+                std::atomic<uint64_t> submitted_present_id{0}; // successful driver submission only
+                std::atomic<uint64_t> measurement_epoch{0};
                 std::atomic<int64_t>  last_gate_wait_ns{0};   // MFG detection freeze
                 std::atomic<uint32_t> present_seq{0};
                 std::atomic<int>      frame_count{0};
                 std::atomic<int>      eff_ratio{0};           // [V3-13] observability
                 int64_t limiter_next_ns = 0;
+                int limiter_fps = 0;
                 int64_t last_present_ns = 0;
                 std::atomic<uint32_t> submit_seq{0};          // [V31-5] futex: id handed to the driver / stop
                 std::atomic<bool>     reanchor_req{false};    // [V31-1] restart T/slot windows
@@ -1335,7 +1338,8 @@ static void measurement_thread_fn(std::stop_token stoken, SwapchainState* st) {
     if (g_config.stats)
         st->stat_ring = std::make_unique<int64_t[]>(FlmConst::STAT_RING);
 
-    uint64_t wait_id         = std::max<uint64_t>(1, st->next_present_id.load(std::memory_order_relaxed));
+    uint64_t wait_id = 1;
+    uint64_t epoch = 0;
     int64_t  last_display_ns = 0;
     bool     last_valid      = false;
     int      immediate_run   = 0;
@@ -1351,17 +1355,21 @@ static void measurement_thread_fn(std::stop_token stoken, SwapchainState* st) {
 #ifdef FLM_PGO_INSTRUMENTED
         flm_gcov_periodic_dump();
 #endif
-        const uint64_t latest = st->next_present_id.load(std::memory_order_acquire);
-        // [V31-5] Only ids already handed to QueuePresent go to the driver.
-        // Waiting there for an id that was never submitted kept every
-        // swapchain destroy blocked on the 50 ms timeout.
-        if (wait_id >= latest) {
+        const uint64_t current_epoch = st->measurement_epoch.load(std::memory_order_acquire);
+        const uint64_t latest = st->submitted_present_id.load(std::memory_order_acquire);
+        if (current_epoch != epoch) {
+            epoch = current_epoch;
+            last_valid = false;
+            immediate_run = 0;
+        }
+        if (wait_id > latest || latest == 0) {
             st->submit_seq.wait(seq, std::memory_order_acquire);
             continue;
         }
-        // [V3-4] Safety net only: a backlog is normally caught by [V3-3].
-        if (latest > FlmConst::FF_GAP && wait_id + FlmConst::FF_GAP < latest) {
-            wait_id    = latest - 1;
+        // App-owned IDs need not be consecutive. Never wait for an ID that
+        // was not actually submitted successfully; skip backlog conservatively.
+        if (wait_id != latest) {
+            wait_id = latest;
             last_valid = false;
         }
 
@@ -1389,6 +1397,11 @@ static void measurement_thread_fn(std::stop_token stoken, SwapchainState* st) {
             break;
         }
 
+        if (st->measurement_epoch.load(std::memory_order_acquire) != epoch) {
+            last_valid = false;
+            ++wait_id;
+            continue;
+        }
         const int64_t tnow = now_ns();
         // [V3-3] Non-blocking return = this id flipped before we waited, its
         // real flip time is unknown. One of them: MAILBOX replaced the image
@@ -1683,7 +1696,13 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkCreateSwapchainKHR(
     st->height       = pCreateInfo->imageExtent.height;
     st->next_present_id.store(1, std::memory_order_relaxed);
     st->is_fifo      = (pCreateInfo->presentMode == VK_PRESENT_MODE_FIFO_KHR ||
-                        pCreateInfo->presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR);
+                        pCreateInfo->presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR
+#ifdef VK_KHR_present_mode_fifo_latest_ready
+                        || pCreateInfo->presentMode == VK_PRESENT_MODE_FIFO_LATEST_READY_KHR
+#elif defined(VK_EXT_present_mode_fifo_latest_ready)
+                        || pCreateInfo->presentMode == VK_PRESENT_MODE_FIFO_LATEST_READY_EXT
+#endif
+                        );
 
     // Small auxiliary swapchains (launcher/overlay) are never paced. FIFO is
     // decided later from the measured cadence [V3-2].
@@ -1742,14 +1761,16 @@ static void gate_limiter(SwapchainState* st, int fps, int64_t t) {
     const int64_t iv = 1'000'000'000LL / fps;
     // [V31-3] First present: it IS the anchor (v3.0 stored t+iv here and the
     // next call added another iv → the second frame waited two intervals).
-    if (st->limiter_next_ns == 0) { st->limiter_next_ns = t; return; }
+    if (st->limiter_next_ns == 0 || st->limiter_fps != fps) {
+        st->limiter_fps = fps; st->limiter_next_ns = t; return;
+    }
     st->limiter_next_ns += iv;
     const int64_t drift = st->limiter_next_ns - t;
     const int64_t tol   = std::clamp<int64_t>(iv / 4, 1'000'000LL, 4'000'000LL);
     // [V31-3] Stall / rate change: re-anchor to NOW. v3.0 re-anchored to
     // now+iv, adding a full interval of wait to a frame that was already late.
     if (drift < -2 * iv || drift > 4 * iv) { st->limiter_next_ns = t; return; }
-    if (drift < -tol) st->limiter_next_ns -= drift / 8;
+    if (drift < -tol) st->limiter_next_ns = t; // avoid catch-up bursts after a late frame
 
     const int64_t left     = st->limiter_next_ns - t;
     const int64_t max_wait = std::max<int64_t>(FlmConst::MAX_PACE_WAIT_NS, iv + iv / 2);
@@ -1900,7 +1921,7 @@ static void apply_gate(SwapchainState* st, bool has_wait) {
     if (!st->pace_allowed) return;
     st->eff_ratio.store(0, std::memory_order_relaxed);   // [V31-9] gate_floor overwrites
     const PaceMode mode = (PaceMode)g_config.mode.load(std::memory_order_relaxed);
-    if (mode == PaceMode::OFF) return;
+    if (mode == PaceMode::OFF) { st->limiter_next_ns = 0; st->limiter_fps = 0; return; }
 
     const int64_t t   = now_ns();
     const int     fps = g_config.target_fps.load(std::memory_order_relaxed);
@@ -1936,8 +1957,11 @@ static bool find_queue(VkQueue queue, QueueData& out) {
         {
             std::shared_lock lk(g_dev_lock);
             void* key = dispatch_key((void*)queue);
-            for (auto& [d, dd] : g_dev_map)
-                if (dispatch_key((void*)d) == key) { qd.disp = &dd; qd.device = d; break; }
+            for (auto& [d, dd] : g_dev_map) {
+                if (dispatch_key((void*)d) != key) continue;
+                if (qd.disp) { qd = {}; break; } // ambiguous dispatch key
+                qd.disp = &dd; qd.device = d;
+            }
         }
         if (qd.disp) {
             std::unique_lock qlk(g_queue_lock);
@@ -1959,7 +1983,23 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkQueuePresentKHR(
 #endif
 
     QueueData qdata{};
-    if (!find_queue(queue, qdata)) return VK_ERROR_DEVICE_LOST;
+    if (!find_queue(queue, qdata)) {
+        // A present carries a swapchain owned by the queue's logical device.
+        // Recover dispatch from that verified ownership rather than guessing.
+        for (uint32_t i = 0; i < pPresentInfo->swapchainCount; ++i) {
+            auto st = find_sc_state(pPresentInfo->pSwapchains[i]);
+            if (!st) continue;
+            if (dispatch_key((void*)st->device) != dispatch_key((void*)queue) ||
+                (qdata.disp && qdata.device != st->device)) {
+                qdata = {}; break;
+            }
+            qdata.device = st->device; qdata.disp = st->disp;
+        }
+        if (!qdata.disp || !qdata.disp->QueuePresentKHR) {
+            FLM_LOG(LogLevel::ERR, "Unable to resolve queue dispatch safely");
+            return VK_ERROR_DEVICE_LOST; // no safe downstream dispatch exists
+        }
+    }
 
     const uint32_t sc_count = pPresentInfo->swapchainCount;
     const bool has_wait = qdata.disp->has_present_wait;
@@ -1977,9 +2017,18 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkQueuePresentKHR(
     else std::fill(ids_stack, ids_stack + sc_count, 0ULL);
 
     bool any_id = false;
+    uint32_t primary = sc_count;
+    uint64_t area = 0;
+    for (uint32_t i = 0; i < sc_count; ++i) {
+        auto st = find_sc_state(pPresentInfo->pSwapchains[i]);
+        if (st && st->pace_allowed && st->device == qdata.device) {
+            const uint64_t size = uint64_t(st->width) * st->height;
+            if (size > area) { area = size; primary = i; }
+        }
+    }
     for (uint32_t i = 0; i < sc_count; i++) {
         auto st = find_sc_state(pPresentInfo->pSwapchains[i]);
-        if (!st) continue;
+        if (!st || st->device != qdata.device) continue;
 
         if (app_pid) {
             // Monotonic: an app that resets/reuses ids must never move the
@@ -1996,27 +2045,17 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkQueuePresentKHR(
             }
         }
 
-        // Single gate, primary swapchain only.
-        if (i == 0) {
-            st->present_seq.fetch_add(1, std::memory_order_relaxed);
+        // Single gate, largest eligible swapchain only.
+        if (i == primary) {
             const int fc = st->frame_count.load(std::memory_order_relaxed);
-            if (fc < FlmConst::WARMUP_FRAMES)
-                st->frame_count.store(fc + 1, std::memory_order_relaxed);
-            else
-                apply_gate(st.get(), has_wait);
+            if (fc >= FlmConst::WARMUP_FRAMES) apply_gate(st.get(), has_wait);
         }
 
         if (has_wait && !app_pid) {
             present_ids[i] = st->next_present_id.fetch_add(1, std::memory_order_relaxed);
             any_id = true;
         }
-        // [V31-5] Wake the measurement thread if it sleeps waiting for this
-        // id (a plain load when nobody waits). After the gate, so a held
-        // frame's id never reaches the driver wait early.
-        if (has_wait && st->measure_thread.joinable()) {
-            st->submit_seq.fetch_add(1, std::memory_order_release);
-            st->submit_seq.notify_one();
-        }
+
     }
 
     VkPresentIdKHR   present_id_info{};
@@ -2028,7 +2067,38 @@ VK_LAYER_EXPORT VkResult VKAPI_CALL FLM_vkQueuePresentKHR(
         present_id_info.pNext          = pPresentInfo->pNext;
         modified.pNext                 = &present_id_info;
     }
-    return qdata.disp->QueuePresentKHR(queue, &modified);
+    VkResult result = qdata.disp->QueuePresentKHR(queue, &modified);
+    for (uint32_t i = 0; i < sc_count; ++i) {
+        auto st = find_sc_state(pPresentInfo->pSwapchains[i]);
+        if (!st || st->device != qdata.device) continue;
+        const bool per_results_valid = result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR ||
+            result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_ERROR_SURFACE_LOST_KHR;
+        const VkResult per = (pPresentInfo->pResults && per_results_valid)
+            ? pPresentInfo->pResults[i] : result;
+        if (per == VK_SUCCESS || per == VK_SUBOPTIMAL_KHR) {
+            if (i == primary) {
+                st->present_seq.fetch_add(1, std::memory_order_relaxed);
+                const int fc = st->frame_count.load(std::memory_order_relaxed);
+                if (fc < FlmConst::WARMUP_FRAMES) st->frame_count.store(fc + 1, std::memory_order_relaxed);
+            }
+            const uint64_t id = app_pid && app_pid->pPresentIds && i < app_pid->swapchainCount
+                ? app_pid->pPresentIds[i] : present_ids[i];
+            uint64_t cur = st->submitted_present_id.load(std::memory_order_relaxed);
+            while (id > cur && !st->submitted_present_id.compare_exchange_weak(
+                       cur, id, std::memory_order_release, std::memory_order_relaxed)) {}
+        } else {
+            st->measurement_epoch.fetch_add(1, std::memory_order_release);
+            st->reanchor_req.store(true, std::memory_order_relaxed);
+            st->last_flip_ns.store(0, std::memory_order_relaxed);
+            st->limiter_next_ns = 0;
+            st->last_present_ns = 0;
+        }
+        if (has_wait && st->measure_thread.joinable()) {
+            st->submit_seq.fetch_add(1, std::memory_order_release);
+            st->submit_seq.notify_one();
+        }
+    }
+    return result;
 }
 
 // ============================================================================

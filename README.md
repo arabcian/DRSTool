@@ -311,3 +311,7 @@ This project was developed with AI assistance. It is provided without warranty. 
 - GUI: **Games → Recorded sessions** for kernel events and diagnostic export; **Extra Tools → Recovery Center** for inventory.
 
 See [GELISTIRMELER_F06_F08_F11_TR.md](GELISTIRMELER_F06_F08_F11_TR.md) for implementation details, privacy and validation limitations.
+
+### Bayesian Crash Lab model upgrade
+
+See [BAYESIAN_UPGRADE_TR.md](BAYESIAN_UPGRADE_TR.md) for the expanded hypotheses, time-aware planner, verification rules and session migration.

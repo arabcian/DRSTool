@@ -316,9 +316,16 @@ sudo lutris-game-tune-wrapper DRYRUN heavy-game
 `PRE <profile>` loads `/etc/lutris-game-tune.d/<profile>.conf` on top of the
 global config (same whitelist parser; the file and the directory must be
 root-owned and not group/other-writable; names match
-`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`). The profile of the **first** game that
-starts stays in effect until all games exit; POST reloads it so the restore sees
-the same gating. See `profiles/heavy-game.conf.example`.
+`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`). The profile of the **first** game that starts stays in effect until all games
+exit; conflicting profiles are refused. Restore uses a snapshot of the effective
+configuration from PRE, not the current profile file. See
+`profiles/heavy-game.conf.example`.
+
+For paired hooks, pass a matching session token to `PRE <profile> <token>`
+(or `PRE --global <token>`) and `POST <token>`. Use a unique token per launch
+when the launcher supports it. Legacy tokenless POST only removes an unambiguous
+launcher match. If an entry remains after all games have exited, inspect STATUS
+and use RESTORE. Never force RESTORE while another game is still using the tuning.
 
 ### Verification and summary
 Every `tune_param` write is read back (hex/decimal and `[bracketed]` choice

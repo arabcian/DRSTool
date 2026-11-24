@@ -101,23 +101,16 @@ def wrap(code: str, width: int = 76) -> str:
 # ── decoding ────────────────────────────────────────────────────────────────
 
 def _candidates(text: str) -> List[str]:
-    """Possible codes after the first prefix, longest first.
-
-    A wrapped code spans several lines, but so does "CODE<newline>Have fun!" —
-    the base64 alphabet cannot tell them apart. Every prefix of the whitespace-
-    separated chunks is a candidate; zlib's checksum picks the right one."""
+    """Bounded scan; zlib identifies the stream end even with trailing forum prose."""
     if not isinstance(text, str):
         return []
-    m = _CODE_RE.search(text[: MAX_CODE_CHARS * 2])
+    m = _CODE_RE.search(text[:MAX_CODE_CHARS * 2])
     if not m:
         return []
-    chunks = [c for c in m.group(1).split() if c]
-    out = []
-    for n in range(len(chunks), 0, -1):
-        body = "".join(chunks[:n]).rstrip("=")
-        if body:
-            out.append(PREFIX + body)
-    return out
+    body = ''.join(m.group(1).split()).split('=', 1)[0][:MAX_CODE_CHARS]
+    if len(body) % 4 == 1:
+        body = body[:-1]  # impossible for a complete unpadded base64 stream
+    return [PREFIX + body] if body else []
 
 
 def looks_like_code(text: str) -> bool:
@@ -130,7 +123,7 @@ def _unpack(code: str) -> dict:
     if len(body) > MAX_CODE_CHARS:
         raise ShareCodeError("the code is too long to be a profile")
     try:
-        packed = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
+        packed = base64.b64decode(body + "=" * (-len(body) % 4), altchars=b"-_", validate=True)
     except (ValueError, TypeError):
         raise ShareCodeError("the code is damaged (not valid base64) — was it copied completely?")
     try:
@@ -186,8 +179,31 @@ def sanitize_profile(p) -> tuple:
     if arch is not None and (not isinstance(arch, str) or len(arch) > 32):
         dropped.append("arch: invalid value")
         arch = None
+    from .catalog import gamescope_flags
+    known = {key: spec for spec in gamescope_flags() for key in (spec.flag, spec.short) if key}
+    for key, value in list(flags.items()):
+        spec = known.get(key)
+        if key == 'mangohud':
+            valid = value in ('', '1', 'true', 'on', 'mangohud --dlsym')
+        elif spec is None:
+            valid = False
+        elif spec.kind == 'int':
+            valid = bool(re.fullmatch(r'[+-]?\d+', value))
+        elif spec.kind == 'enum':
+            valid = value in spec.options
+        elif spec.kind == 'toggle':
+            valid = value in ('', '1', 'true', 'on')
+        else:
+            valid = bool(value) and not value.startswith('-')
+        if not valid:
+            dropped.append(f'gamescope: invalid or unknown flag {key}')
+            del flags[key]
+    enabled = p.get('gamescope_enabled', False)
+    if not isinstance(enabled, bool):
+        dropped.append('gamescope_enabled: expected boolean')
+        enabled = False
     clean = {"settings": settings, "arch": arch or None, "env_vars": env,
-             "gamescope_enabled": bool(p.get("gamescope_enabled", False)),
+             "gamescope_enabled": enabled,
              "gamescope_flags": flags}
     notes = p.get("notes")
     if isinstance(notes, str) and notes.strip():
@@ -206,7 +222,8 @@ def flag_env(env: Dict[str, str]) -> Dict[str, str]:
     """{name: reason} for variables the receiver should review before using."""
     out = {}
     for k, v in env.items():
-        if k.upper() in SENSITIVE_ENV:
+        if (k.upper() in SENSITIVE_ENV or k.upper().startswith(('LD_', 'DYLD_', 'PYTHON', 'VK_LAYER_', 'VK_LOADER_', 'GCONV_', 'QT_PLUGIN_', 'BASH_FUNC_'))
+                or re.search(r'(?:^|_)(?:TOKEN|SECRET|PASSWORD|API_KEY|PRELOAD|LIBRARY_PATH|PLUGIN_PATH)(?:_|$)', k.upper())):
             out[k] = "changes which libraries / layers / programs are loaded"
         elif _SHELL_META_RE.search(v):
             out[k] = "value contains shell syntax"

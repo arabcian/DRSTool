@@ -29,7 +29,7 @@ from .catalog_data import ALL_ENV_VARS, GAMESCOPE_FLAGS
 from .flm import FLM_LEGACY_ENV_KEYS
 from .gamescope import GamescopeFlagsWidget
 from .launch_import import _parse_drs_string, ParsedLaunch
-from .lgtune import lgtune_cmd
+from .lgtune import lgtune_mode
 from .lookup import arch_by_code
 from .settings_manager import SettingsManager
 from .toasts import offer_undo
@@ -153,6 +153,7 @@ class LutrisSyncWidget(QWidget):
 
     _LGTUNE_WRAPPER_PATH = "/usr/local/bin/lutris-game-tune-wrapper"
     # system.* keys wired to the lutris-game-tune checkbox
+    _LGTUNE_SESSION_PATH = "/usr/local/lib/lutris-game-tune/lgtune-session.py"
     _LGTUNE_KEYS = ("prelaunch_command", "postexit_command", "prefix_command")
 
 
@@ -305,8 +306,7 @@ class LutrisSyncWidget(QWidget):
         lgtune_layout.setSpacing(10)
 
         self._chk_lgtune = QCheckBox(
-            "Wire lutris-game-tune (prelaunch_command / postexit_command / "
-            "prefix_command)"
+            "Wire Lutris Game Tune (per-launch supervisor)"
         )
         self._chk_lgtune.setStyleSheet(_chk_ss)
         lgtune_layout.addWidget(self._chk_lgtune)
@@ -316,7 +316,7 @@ class LutrisSyncWidget(QWidget):
         nice_lbl = QLabel("RUN nice value:")
         nice_lbl.setStyleSheet("color:#c8cdd8; font-size:13px;")
         self._lgtune_nice = QSpinBox()
-        self._lgtune_nice.setRange(-20, 19)
+        self._lgtune_nice.setRange(-20, -1)
         self._lgtune_nice.setValue(-10)
         self._lgtune_nice.setStyleSheet("""
             QSpinBox {
@@ -333,9 +333,8 @@ class LutrisSyncWidget(QWidget):
 
         lgtune_note = QLabel(
             f"When enabled, writes:\n"
-            f"  prelaunch_command: {lgtune_cmd('PRE', self._LGTUNE_WRAPPER_PATH)}\n"
-            f"  postexit_command:  {lgtune_cmd('POST', self._LGTUNE_WRAPPER_PATH)}\n"
-            f"  prefix_command:    {self._LGTUNE_WRAPPER_PATH} RUN <nice>\n"
+            f"  prefix_command: {self._LGTUNE_SESSION_PATH} --nice <nice> --\n"
+            "A unique PRE/POST session is managed for each launch.\n"
             "directly into system.* — no separate prompt, same "
             "'Write to Lutris config' confirmation as everything else."
         )
@@ -696,12 +695,12 @@ class LutrisSyncWidget(QWidget):
 
         # ── lutris-game-tune ───────────────────────────────────────
         prefix_cmd = str(sysdict.get("prefix_command", "") or "")
-        lgtune_on = self._LGTUNE_WRAPPER_PATH in prefix_cmd
+        lgtune_on = (self._LGTUNE_WRAPPER_PATH in prefix_cmd or self._LGTUNE_SESSION_PATH in prefix_cmd)
         self._chk_lgtune.setChecked(lgtune_on)
         if lgtune_on:
             parts = prefix_cmd.split()
-            if "RUN" in parts:
-                idx = parts.index("RUN")
+            if "RUN" in parts or "--nice" in parts:
+                idx = parts.index("--nice" if "--nice" in parts else "RUN")
                 if idx + 1 < len(parts):
                     try:
                         self._lgtune_nice.setValue(int(parts[idx + 1]))
@@ -825,13 +824,10 @@ class LutrisSyncWidget(QWidget):
         # everything else here; no separate confirmation prompt.
         if self._chk_lgtune.isChecked():
             nice = self._lgtune_nice.value()
-            system_keys["prelaunch_command"] = lgtune_cmd("PRE", self._LGTUNE_WRAPPER_PATH)
-            system_keys["postexit_command"] = lgtune_cmd("POST", self._LGTUNE_WRAPPER_PATH)
-            # Both want prefix_command. They compose rather than conflict: the
-            # tune wrapper execs whatever follows it, so mangohud goes second
-            # and ends up wrapping the game while still running under the
-            # wrapper's scheduling settings.
-            prefix = f"{self._LGTUNE_WRAPPER_PATH} RUN {nice}"
+            polkit = " --polkit" if lgtune_mode() == "polkit" else ""
+            prefix = f"{self._LGTUNE_SESSION_PATH}{polkit} --nice {nice} --"
+            if not Path(self._LGTUNE_SESSION_PATH).is_file():
+                warnings.append("Update Lutris Game Tune before launching: session supervisor not installed")
             if mangohud_on:
                 prefix += f" {GamescopeFlagsWidget.MANGOHUD_PREFIX}"
             system_keys["prefix_command"] = prefix

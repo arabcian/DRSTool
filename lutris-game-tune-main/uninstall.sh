@@ -69,6 +69,7 @@ fi
 remove /etc/init.d/lutris-game-tune-recovery
 remove /etc/systemd/system/lutris-game-tune-recovery.service
 remove "${LIB_DIR}/lgtune-recovery-service.sh"
+remove "${LIB_DIR}/lgtune-session.py"
 
 remove "${WRAPPER_DST}"
 remove "${SCRIPT_DST}"

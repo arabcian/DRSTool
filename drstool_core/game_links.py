@@ -20,9 +20,11 @@ undo each other's links. Qt-free.
 from __future__ import annotations
 
 import hashlib
+from copy import deepcopy
 import json
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -52,13 +54,17 @@ class LinkStore:
 
     # ── file ────────────────────────────────────────────────────────────────
     def reload(self) -> None:
+        self.load_error = None
         try:
             d = json.loads(self.path.read_text(encoding="utf-8"))
             g = d.get("games") if isinstance(d, dict) else None
-            self._games = {str(k): v for k, v in g.items() if isinstance(v, dict)} \
-                if isinstance(g, dict) else {}
-        except (OSError, ValueError):
+            if not isinstance(g, dict) or any(not isinstance(v, dict) for v in g.values()):
+                raise ValueError('invalid game links store')
+            self._games = g
+        except FileNotFoundError:
             self._games = {}
+        except (OSError, ValueError) as exc:
+            self.load_error = str(exc)  # retain last valid snapshot, never overwrite corrupt data
 
     def _write(self) -> None:
         atomic_write_json(self.path, {"version": STORE_VERSION, "games": self._games})
@@ -67,23 +73,52 @@ class LinkStore:
         """Lock before reload+mutate+write so concurrent windows preserve edits."""
         with file_lock(self.path):
             self.reload()
+            if self.load_error:
+                raise ValueError(f"Game links store cannot be read; original preserved: {self.path}: {self.load_error}")
+            previous = deepcopy(self._games)
             changed = bool(fn(self._games))
             if changed:
+                if self.path.exists():
+                    atomic_write_json(self.path.with_suffix(self.path.suffix + '.bak'),
+                                      {'version': STORE_VERSION, 'games': previous})
                 self._write()
             return changed
 
+    def recover_backup(self, *, only_if_corrupt: bool = False) -> Path:
+        """Explicit recovery only; preserve the corrupt original for investigation."""
+        with file_lock(self.path):
+            self.reload()
+            if only_if_corrupt and not self.load_error:
+                raise ValueError('Game links store is no longer corrupt; recovery cancelled')
+            candidate = self.path.with_suffix(self.path.suffix + '.bak')
+            doc = json.loads(candidate.read_text(encoding='utf-8'))
+            if not isinstance(doc, dict) or not isinstance(doc.get('games'), dict) or any(
+                    not isinstance(v, dict) for v in doc['games'].values()):
+                raise ValueError('invalid game links backup')
+            quarantine = self.path.with_name(self.path.name + '.corrupt-' + uuid.uuid4().hex)
+            if self.path.exists():
+                from .file_transactions import atomic_copy
+                atomic_copy(self.path, quarantine)
+            atomic_write_json(self.path, doc)
+            self.reload()
+            return quarantine
+
     # ── queries ─────────────────────────────────────────────────────────────
     def get(self, key: str) -> dict:
-        return dict(self._games.get(key) or {})
+        self.reload()
+        return deepcopy(self._games.get(key) or {})
 
     def all(self) -> Dict[str, dict]:
-        return {k: dict(v) for k, v in self._games.items()}
+        self.reload()
+        return deepcopy(self._games)
 
     def games_for(self, profile: str) -> List[str]:
+        self.reload()
         return sorted((k for k, v in self._games.items() if v.get("profile") == profile),
                       key=lambda k: str(self._games[k].get("name") or k).casefold())
 
     def counts(self) -> Dict[str, int]:
+        self.reload()
         out: Dict[str, int] = {}
         for v in self._games.values():
             p = v.get("profile")
@@ -99,10 +134,10 @@ class LinkStore:
     def record(self, key: str, *, name: str, launcher: str, target: dict,
                profile: Optional[str], fp: str) -> None:
         """A configuration was written to the game (profile None = editor without a profile).
-        A name the game already has (from the launcher's library) is kept."""
+        A nonempty current launcher name replaces the previously recorded name."""
         def fn(g):
             e = g.setdefault(key, {})
-            if name and not e.get("name"):
+            if name:
                 e["name"] = name
             e.update(launcher=launcher, target=dict(target), profile=profile or None,
                      fp=fp, applied_at=time.time())
@@ -118,7 +153,7 @@ class LinkStore:
                     return False
                 for f in _LINK_FIELDS:
                     e.pop(f, None)
-                if not e.get("appid") and not e.get("frametime"):
+                if not e.get("appid") and not e.get("frametime") and not e.get("perf"):
                     g.pop(key, None)
                 return True
             e = g.setdefault(key, {})
@@ -164,7 +199,7 @@ class LinkStore:
                              fp=run.get('fp', '') if explicit else (e.get('fp', '') if newer else ''),
                              profile=run.get('profile') if explicit else (e.get('profile') if newer else None)))
             hist.sort(key=lambda r: r.get("mtime") or 0)
-            del hist[:-limit]
+            del hist[:-max(1, int(limit))]
             return True
         return self._change(fn)
 

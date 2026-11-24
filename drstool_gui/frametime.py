@@ -136,9 +136,10 @@ class _RepeatThread(QThread):
 
     def run(self):
         try:
-            r = compare_repeats([load_frametimes(x)["ft"] for x in self._a],
-                                [load_frametimes(x)["ft"] for x in self._b],
-                                same_scene_confirmed=self._same)
+            a, b = [load_frametimes(x) for x in self._a], [load_frametimes(x) for x in self._b]
+            r = compare_repeats([x['ft'] for x in a], [x['ft'] for x in b],
+                                same_scene_confirmed=self._same,
+                                kinds_a=[x['kind'] for x in a], kinds_b=[x['kind'] for x in b])
         except (ValueError, OSError) as ex:
             self.done.emit(f"⚠ Repeated comparison: {ex}")
             return
@@ -267,7 +268,12 @@ class FrametimeWidget(QWidget):
             return
         for r, (label, _v, hib, fmt) in enumerate(ref):
             t.insertRow(r)
-            t.setItem(r, 0, QTableWidgetItem(tr(label)))
+            sampled = any(d and d['kind'] == 'mangohud' for d in ds)
+            display_label = label
+            if sampled:
+                display_label = {"Frames": "Samples / frames", "Duration (s)": "Summed intervals (s; not wall time)",
+                                 "Average FPS": "Estimated average FPS"}.get(label, label)
+            t.setItem(r, 0, QTableWidgetItem(tr(display_label)))
             vals = [s[r][1] if s else None for s in stats]
             for c in (0, 1):
                 t.setItem(r, c + 1, QTableWidgetItem("" if vals[c] is None else fmt.format(vals[c])))

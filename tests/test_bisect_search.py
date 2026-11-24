@@ -62,8 +62,10 @@ class CrashSearchTests(unittest.TestCase):
     def test_phases_and_estimate(self):
         s = CrashSearch(self.items)
         self.assertEqual((s.phase, s.pending), ("fixed", []))
-        self.assertEqual(s.estimate_left(), 2 * 5 + 2)
+        self.assertEqual(s.estimate_left(), 2 * 5 + 3)
         s.answer(False)
+        self.assertEqual(s.phase, "baseline")
+        s.answer(True)
         self.assertEqual(s.phase, "search")
         while s.phase != "verify":
             s.answer("f04" in s.pending)

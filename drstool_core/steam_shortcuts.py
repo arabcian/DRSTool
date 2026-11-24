@@ -313,6 +313,8 @@ def upsert_shortcut(root: KV, name: str, exe: str, start_dir: str = "", launch_o
 
     Returns (appid_u32, created). An existing entry keeps every field this
     function does not manage (play time, hidden flag, Steam's own extras)."""
+    if any("\x00" in field for field in (name, exe, start_dir, launch_options, icon)):
+        raise VdfError("shortcut fields must not contain NUL characters")
     name = name.strip()
     exe = unquote_path(exe)
     if not name:
@@ -324,6 +326,14 @@ def upsert_shortcut(root: KV, name: str, exe: str, start_dir: str = "", launch_o
     start_q = quote_path(start)
     appid = shortcut_appid(exe_q, name)
     sc = _entries(root)
+    existing = list_shortcuts(root)
+    same_entries = [x for x in existing if x.name == name and x.exe == exe]
+    if len(same_entries) > 1:
+        raise VdfError('ambiguous duplicate shortcuts; resolve in Steam first')
+    if same_entries:
+        appid = same_entries[0].appid  # preserve Steam's existing ID and compat mapping
+    if any(x.appid == appid and not (x.name == name and x.exe == exe) for x in existing):
+        raise VdfError('shortcut AppID collision; choose a different name')
     for _idx, entry in sc.items:
         if not isinstance(entry, KV):
             continue
@@ -342,7 +352,11 @@ def upsert_shortcut(root: KV, name: str, exe: str, start_dir: str = "", launch_o
                 tags = KV()
                 entry.set("tags", T_MAP, tags)
             if DRSTOOL_TAG not in _tags(entry):
-                tags.items.append((str(len(tags.items)), (T_STR, DRSTOOL_TAG)))
+                used_tags = set(tags.keys())
+                tag_index = 0
+                while str(tag_index) in used_tags:
+                    tag_index += 1
+                tags.items.append((str(tag_index), (T_STR, DRSTOOL_TAG)))
         return appid, False
     used = {k for k, _ in sc.items}
     idx = 0
@@ -356,6 +370,8 @@ def upsert_shortcut(root: KV, name: str, exe: str, start_dir: str = "", launch_o
 def remove_shortcut(root: KV, appid_u32: int) -> bool:
     """Remove a shortcut and renumber the rest ("0".."n-1"), as Steam does."""
     sc = _entries(root)
+    if sum(x.appid == appid_u32 for x in list_shortcuts(root)) > 1:
+        raise VdfError("ambiguous AppID; resolve duplicate shortcuts in Steam first")
     keep, removed = [], False
     for k, entry in sc.items:
         if isinstance(entry, KV) and not removed:

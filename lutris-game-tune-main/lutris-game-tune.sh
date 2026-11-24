@@ -477,7 +477,7 @@ load_config_file() {
     fi
 
     local line key val
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "${line}" ]]; do
         # skip comments and blank lines
         [[ "${line}" =~ ^[[:space:]]*(#|$) ]] && continue
         # CCD_EXTRA_GOOD_PROCS may contain spaces (multiple process names);
@@ -930,20 +930,21 @@ restore_param() {
         return 0
     fi
     if [[ ! -e "${path}" ]]; then
-        warn "Target no longer exists, skipped: ${desc}"
-        rm -f "${save_file}"
+        warn "Target no longer exists; saved value retained: ${desc}"
         return 0
     fi
 
-    local saved_val
-    saved_val="$(cat "${save_file}")"
-
+    local saved_val before_mismatch="${STAT_MISMATCH}"
+    saved_val="$(cat "${save_file}")" || return 0
     if ! printf '%s' "${saved_val}" > "${path}" 2>/dev/null; then
-        warn "Restore failed: ${desc} = '${saved_val}'"
-    else
-        log "Restored    [${desc}]: '${saved_val}'"
+        warn "Restore failed; saved value retained: ${desc} = '${saved_val}'"
+        return 0
     fi
-    rm -f "${save_file}"
+    _verify_applied "${path}" "${saved_val}" "restore ${desc}"
+    if (( STAT_MISMATCH == before_mismatch )); then
+        log "Restored    [${desc}]: '${saved_val}'"
+        rm -f "${save_file}"
+    fi
 }
 
 # --- PCI latency timer (deterministic, via sysfs enumeration) ------------------
@@ -991,7 +992,6 @@ tune_pci_latency() {
 }
 
 restore_pci_latency() {
-    [[ "${SET_PCI_LATENCY}" == "1" ]] || return 0
     PCI_SAVE_FILE="${STATE_DIR}/pci_latency"
     [[ -f "${PCI_SAVE_FILE}" ]] || return 0
     if ! command -v setpci &>/dev/null; then
@@ -2355,7 +2355,7 @@ start_session_monitor() {
         while :; do
             sleep "${CCD_MONITOR_INTERVAL}"
             # Stop as soon as game mode is over or the groups are gone.
-            [[ -f "${REFCOUNT_FILE}" ]] || break
+            [[ -f "${REFCOUNT_FILE}" || -f "${STATE_DIR}/.applying" ]] || break
             [[ -d "${good_dir}" && -d "${ugly_dir}" ]] || break
 
             refresh_protected_session_pids
@@ -2627,6 +2627,10 @@ sweep_stale_games() {
 # Unknown/legacy anchors deliberately block automatic restoration.
 recover_stale_session() {
     [[ -d "${STATE_DIR}" && ! -L "${STATE_DIR}" ]] || return 0
+    if [[ -f "${STATE_DIR}/.applying" && ! -L "${STATE_DIR}/.applying" ]]; then
+        force_restore
+        return $?
+    fi
     [[ -d "${GAMES_DIR}" && ! -L "${GAMES_DIR}" ]] || return 0
     local f anchor start active=0 unknown=0
     for f in "${GAMES_DIR}"/*; do
@@ -2667,44 +2671,44 @@ recover_stale_session() {
 # Called by PRE (in a command substitution — must stay silent): add an entry,
 # print the new number of running games.
 refcount_inc() {
-    local profile="${1:-}" anchor start id
+    local profile="${1:-}" token="${2:-}" anchor start id
     _games_init
     read -r anchor start <<< "$(_find_anchor "${PPID}")"
-    id="$(date +%s%N)-$$"
-    printf '%s %s %s\n' "${anchor}" "${start}" "${profile:-none}" > "${GAMES_DIR}/${id}"
+    if [[ -n "${token}" ]]; then
+        valid_profile_name "${token}" || return 1
+        id="session-${token}"
+        # Supervised launches may outlive their launcher (or be orphaned by SIGKILL).
+        # Never auto-restore from a launcher PID for these sessions.
+        if [[ "${token}" == run-* ]]; then anchor=0; start=0; fi
+    else
+        id="$(date +%s%N)-$$"
+    fi
+    if [[ ! -f "${GAMES_DIR}/${id}" ]]; then
+        printf '%s %s %s\n' "${anchor}" "${start}" "${profile:-none}" > "${GAMES_DIR}/${id}"
+    fi
     _refcount_sync
     _games_count
 }
 
-# Called by POST (also silent): remove ONE entry — preferably the one from the
-# same launcher, else one whose launcher is gone, else the oldest — and print
-# the number of games still running.
 refcount_dec() {
-    local f anchor start my_anchor my_start target="" first="" cur
+    local token="${1:-}" f anchor start my_anchor my_start target="" matches=0
     if [[ -d "${GAMES_DIR}" || -f "${REFCOUNT_FILE}" ]]; then _games_init; fi
-    read -r my_anchor my_start <<< "$(_find_anchor "${PPID}")"
-    for f in "${GAMES_DIR}"/*; do
-        [[ -f "${f}" ]] || continue
-        [[ -n "${first}" ]] || first="${f}"
-        anchor=""; start=""
-        read -r anchor start _ < "${f}" || true
-        if (( my_anchor > 0 )) && [[ "${anchor}" == "${my_anchor}" && "${start}" == "${my_start}" ]]; then
-            target="${f}"
-            break
-        fi
-    done
-    if [[ -z "${target}" ]]; then
+    if [[ -n "${token}" ]]; then
+        valid_profile_name "${token}" || return 1
+        target="${GAMES_DIR}/session-${token}"
+        [[ -f "${target}" && ! -L "${target}" ]] || target=""
+    else
+        read -r my_anchor my_start <<< "$(_find_anchor "${PPID}")"
         for f in "${GAMES_DIR}"/*; do
-            [[ -f "${f}" ]] || continue
-            anchor=""; start=""
+            [[ -f "${f}" && ! -L "${f}" && "${f##*/}" != session-* ]] || continue
             read -r anchor start _ < "${f}" || true
-            [[ "${anchor}" =~ ^[0-9]+$ ]] && (( anchor > 0 )) || continue
-            cur="$(_pid_start "${anchor}" 2>/dev/null || true)"
-            if [[ "${cur}" != "${start}" ]]; then target="${f}"; break; fi
+            if (( my_anchor > 0 )) && [[ "${anchor}" == "${my_anchor}" && "${start}" == "${my_start}" ]]; then
+                matches=$((matches + 1)); target="${f}"
+            fi
         done
+        (( matches == 1 )) || target=""
     fi
-    [[ -n "${target}" ]] || target="${first}"
-    if [[ -n "${target}" ]]; then rm -f "${target}"; fi
+    if [[ -n "${target}" ]]; then rm -f -- "${target}"; fi
     if [[ -d "${GAMES_DIR}" ]]; then _refcount_sync; fi
     _refcount_read
 }
@@ -2713,35 +2717,45 @@ refcount_dec() {
 # PRE — apply settings before the game starts
 # =============================================================================
 apply_game_settings() {
-    local profile="${1:-}"
+    local profile="${1:-}" token="${2:-}"
+    [[ "${profile}" != "--global" ]] || profile=""
     log "========== ENTERING GAME MODE =========="
     ensure_state_dir
     if [[ -n "${profile}" ]] && ! valid_profile_name "${profile}"; then
-        warn "Invalid profile name '${profile}' — ignored, using the global config."
-        profile=""
+        err "Invalid profile name; refusing PRE."
+        return 1
     fi
+    [[ -z "${token}" ]] || valid_profile_name "${token}" || return 1
     sweep_stale_games
     local count
-    count="$(refcount_inc "${profile}")"
-    if (( count > 1 )); then
+    count="$(_refcount_read)"
+    if [[ -f "${STATE_DIR}/.applying" ]] || { (( count == 0 )) && [[ -f "${STATE_DIR}/.summary" ]]; }; then
+        warn "Incomplete previous session; restoring before applying new tuning"
+        force_restore || return 1
+        count=0
+    fi
+    if (( count > 0 )); then
         local active_profile=""
         if [[ -f "${STATE_DIR}/.profile" ]]; then
             active_profile="$(cat "${STATE_DIR}/.profile" 2>/dev/null || true)"
         fi
         if [[ "${profile}" != "${active_profile}" ]]; then
-            warn "Game mode already active with profile '${active_profile:-<global>}'; requested '${profile:-<global>}' is ignored until all games exit."
+            err "Conflicting active profile; requested tuning not applied. Close the other game first."
+            return 1
         fi
+        count="$(refcount_inc "${profile}" "${token}")" || return 1
         log "Reference count: ${count} (parameters already set, not rewriting)"
         log "========== GAME MODE ALREADY ACTIVE (${count} games running) =========="
         return 0
     fi
-    log "Reference count: ${count} (first game — applying parameters)"
+    log "First game — applying parameters"
 
     if [[ -n "${profile}" ]]; then
         if load_profile "${profile}"; then
-            _state_write "${STATE_DIR}/.profile" "${profile}" || true
+            _state_write "${STATE_DIR}/.profile" "${profile}" || return 1
         else
-            warn "Profile '${profile}' could not be loaded — continuing with the global config."
+            err "Profile could not be loaded; refusing to apply a different profile."
+            return 1
         fi
     fi
 
@@ -2750,7 +2764,17 @@ apply_game_settings() {
     stop_session_monitor
     rm -f "${STATE_DIR}/.tracked_game_pids" "${STATE_DIR}/.ccd_pid_origin" "${STATE_DIR}/.ccd_cpuset_saved" "${STATE_DIR}/.summary"
 
+    local key
+    _state_write "${STATE_DIR}/.effective.conf" "$(
+        for key in CPU_GOVERNOR SET_CPU_GOVERNOR SET_EPP_BOOST SET_X3D_VCACHE_MODE X3D_VCACHE_MODE SET_VM_DIRTY SET_NUMA_BALANCING SET_IRQ_AFFINITY SET_NVIDIA_PERSISTENCE SET_AMDGPU_PERF_LEVEL SET_WIFI_POWERSAVE SET_NVME_SCHED SET_SCX_SCHED SCX_SCHEDULER VM_MAX_MAP_COUNT VM_DIRTY_BACKGROUND_BYTES VM_DIRTY_BYTES AMDGPU_PERF_LEVEL NVME_IO_SCHEDULER IRQ_AFFINITY_CPUS IRQ_AFFINITY_CLASSES SET_INTEL_TURBO SET_INTEL_HWP_BOOST SET_INTEL_EPB SET_INTEL_ITMT HYBRID_CORE_ISOLATION INTEL_MAX_PERF_PCT INTEL_MIN_PERF_PCT HYBRID_MIN_P_THREADS ASPM_POLICY SET_ASPM DISABLE_DEEP_CSTATES CSTATE_KEEP_MAX VM_SWAPPINESS VM_COMPACTION_PROACTIVENESS VM_WATERMARK_BOOST_FACTOR VM_STAT_INTERVAL LRU_GEN_ENABLED SCHED_MIN_BASE_SLICE_NS SCHED_MIGRATION_COST_NS SCHED_NR_MIGRATE CCD_MONITOR_MODE CCD_MONITOR_INTERVAL CCD_ISOLATION_ENABLED CCD_LAUNCHER CCD_EXTRA_GOOD_PROCS CCD_MONITOR_SECONDS CCD_PROTECTED_PROCS CCD_GOOD_PARTITION_TYPE CCD_UGLY_PARTITION_TYPE THP_ENABLED THP_SHMEM_ENABLED THP_DEFRAG SET_PCI_LATENCY LOG_LEVEL; do
+            if [[ -v "${key}" ]]; then printf '%s=%s\n' "${key}" "${!key}"; fi
+        done
+    )" || return 1
+    _state_write "${STATE_DIR}/.applying" 1 || return 1
+    # Keep marker if killed before completing; the next PRE/RECOVER restores.
     _apply_all
+    count="$(refcount_inc "${profile}" "${token}")" || return 1
+    rm -f "${STATE_DIR}/.applying"
 }
 
 # DRYRUN [profile]: show what PRE would do. Writes, saves and moves nothing.
@@ -2885,10 +2909,14 @@ restore_game_settings() {
     fi
 
     local count
-    count="$(refcount_dec)"
+    count="$(refcount_dec "${1:-}")" || return 1
     if (( count > 0 )); then
         log "Reference count: ${count} (${count} game(s) still running — restore deferred)"
         log "========== RESTORE DEFERRED =========="
+        return 0
+    fi
+    if [[ ! -f "${STATE_DIR}/.summary" && ! -f "${STATE_DIR}/.applying" ]]; then
+        log "No tracked session to restore."
         return 0
     fi
     log "Reference count: 0 (last game exited — starting restore)"
@@ -2908,13 +2936,9 @@ force_restore() {
 
 _restore_all() {
     log "--- RESTORE ---"
-    # Re-load the profile PRE used: restore must see the same config gating.
-    local saved_profile=""
-    if [[ -f "${STATE_DIR}/.profile" && ! -L "${STATE_DIR}/.profile" ]]; then
-        saved_profile="$(cat "${STATE_DIR}/.profile" 2>/dev/null || true)"
-        if [[ -n "${saved_profile}" ]] && ! load_profile "${saved_profile}"; then
-            warn "Could not re-load profile '${saved_profile}' for the restore — using the global config."
-        fi
+    # Restore from the immutable effective PRE configuration, not an edited profile.
+    if [[ -f "${STATE_DIR}/.effective.conf" ]]; then
+        load_config_file "${STATE_DIR}/.effective.conf" || return 1
     fi
 
     # Unconditional: restore_ccd_isolation() returns early when no cgroups
@@ -2994,22 +3018,28 @@ _restore_all() {
     restore_nvme_sched
     restore_irq_affinity
 
-    # Clean up the state directory
+    # Keep the effective config and recovery marker until every saved value
+    # is gone. This makes a subsequent RESTORE/RECOVER retry safe.
+    local pending_file
+    for pending_file in "${STATE_DIR}"/_* "${STATE_DIR}/pci_latency" \
+        "${STATE_DIR}/${NVIDIA_PM_FILE_NAME}" "${STATE_DIR}/${WIFI_PS_FILE_NAME}"; do
+        if [[ -f "${pending_file}" ]]; then
+            err "Restore incomplete; saved state retained: ${pending_file}"
+            return 1
+        fi
+    done
+    if (( ccd_restore_failed )); then
+        err "CCD/CCX isolation did not fully revert; saved state retained."
+        return 1
+    fi
     rmdir "${GAMES_DIR}" 2>/dev/null || true
-    rm -f "${STATE_DIR}/.profile" "${STATE_DIR}/.summary"
+    rm -f "${STATE_DIR}/.profile" "${STATE_DIR}/.summary" "${STATE_DIR}/.effective.conf" "${STATE_DIR}/.applying"
     if rmdir "${STATE_DIR}" 2>/dev/null; then
         log "State directory cleaned up."
     else
         warn "Could not clean up STATE_DIR — unexpected files remain: ${STATE_DIR}"
-        ls -la "${STATE_DIR}" 2>/dev/null | while IFS= read -r l; do warn "  ${l}"; done
     fi
-
     log "========== RESTORE COMPLETE =========="
-
-    if (( ccd_restore_failed )); then
-        err "CCD/CCX isolation failed to fully revert — see errors above. All other settings were restored successfully."
-        return 1
-    fi
 }
 
 # =============================================================================
@@ -3135,8 +3165,8 @@ case "${ACTION}" in
             exit 1
         fi
         case "${ACTION}" in
-            PRE|pre)         apply_game_settings "${2:-}" ;;
-            POST|post)       restore_game_settings ;;
+            PRE|pre)         apply_game_settings "${2:-}" "${3:-}" ;;
+            POST|post)       restore_game_settings "${2:-}" ;;
             RESTORE|restore) force_restore ;;
             RECOVER|recover) recover_stale_session ;;
         esac

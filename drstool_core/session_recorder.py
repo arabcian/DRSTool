@@ -64,6 +64,13 @@ def _write_private(path: Path, obj: dict) -> None:
             os.unlink(tmp)
 
 
+def _boot_id():
+    try:
+        return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    except OSError:
+        return None
+
+
 def _proc_start(pid: int) -> Optional[int]:
     """Linux /proc starttime, used with PID to detect PID reuse."""
     try:
@@ -145,7 +152,7 @@ class SessionStore:
         now = time.time()
         entry = {'version': _VERSION, 'id': uuid.uuid4().hex, 'status': 'starting',
                  'started_at': now, 'ended_at': None, 'supervisor_pid': os.getpid(),
-                 'supervisor_start_ticks': _proc_start(os.getpid()),
+                 'supervisor_start_ticks': _proc_start(os.getpid()), 'boot_id': _boot_id(),
                  'profile': profile, 'profile_fp': profile_fp,
                  'game_key': game_key, 'scene': scene[:160],
                  'executable': Path(command[0]).name[:128],
@@ -155,6 +162,8 @@ class SessionStore:
         return entry
 
     def write(self, entry: dict) -> None:
+        if not isinstance(entry.get('id'), str) or not _ID_RE.fullmatch(entry['id']):
+            raise ValueError('invalid session id')
         _write_private(self.directory / f'{entry["id"]}.json', entry)
 
     def finish(self, entry: dict, *, returncode: Optional[int] = None,
@@ -184,14 +193,15 @@ class SessionStore:
             raise ValueError('corrupt session record')
         if entry.get('status') in ('starting', 'running'):
             pid, start = entry.get('supervisor_pid'), entry.get('supervisor_start_ticks')
-            if not isinstance(pid, int) or start is None or _proc_start(pid) != start:
+            if (not isinstance(pid, int) or start is None or _proc_start(pid) != start
+                    or (entry.get('boot_id') and entry['boot_id'] != _boot_id())):
                 entry['status'] = 'interrupted'     # don't mutate the original for forensic integrity
         return entry
 
     def recent(self, *, game_key: str = '', limit: int = 40) -> list[dict]:
         if game_key:
             _safe_game_key(game_key)
-        if not self.directory.is_dir():
+        if limit <= 0 or not self.directory.is_dir():
             return []
         entries = []
         # At most the most recent 300 records. Avoid unbounded IO on very old installs.
@@ -273,6 +283,10 @@ def supervise(store: SessionStore, entry: dict, command: list[str], env: dict,
                     if key not in seen and len(seen) < 48:
                         seen.add(key)
                         entry['processes'].append(proc)
+                try:
+                    store.write(entry)
+                except OSError:
+                    pass  # telemetry failure must not abandon the running child
         entry['termination_requested'] = bool(signals_received)
         store.finish(entry, returncode=rc)
     finally:

@@ -281,3 +281,7 @@ Bu proje yapay zekâ desteğiyle geliştirilmiştir ve garanti verilmeden sunulm
 Kayıtlı oyun oturumlarına yakın NVIDIA Xid/AER/OOM olaylarını görmek için `drstool --kernel-events steam:1091500`, daha önce kaydedilmiş yedekleri salt okunur listelemek için `drstool --recovery-list`, oyun bazlı yerel tanı ZIP'i oluşturmak için `drstool --game-report steam:1091500 --out ~/game-report.zip` kullanılabilir. Kernel olaylarının yakın zamanda görünmesi tek başına nedensellik kanıtı değildir. `--include-kernel` ve `--log` isteğe bağlıdır; raporu başkalarıyla paylaşmadan önce inceleyin.
 
 Arayüzde **Games → Recorded sessions** ve **Extra Tools → Recovery Center** bölümlerinden erişilir. Uygulama ayrıntıları için [GELISTIRMELER_F06_F08_F11_TR.md](GELISTIRMELER_F06_F08_F11_TR.md) dosyasına bakın.
+
+### Bayesian Crash Lab modeli
+
+Genişletilmiş hipotezler, süreye duyarlı planlayıcı, doğrulama kuralları ve oturum geçişi için [Bayesian model geliştirme notları](BAYESIAN_UPGRADE_TR.md).

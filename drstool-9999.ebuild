@@ -247,6 +247,7 @@ src_install() {
 		exeinto "${LGT_LIB_DIR}"
 		doexe lutris-game-tune-main/lutris-game-tune.sh
 		doexe lutris-game-tune-main/lgtune-recovery-service.sh
+		doexe lutris-game-tune-main/lgtune-session.py
 
 		# Crash recovery monitor is installed but never enabled automatically.
 		exeinto /etc/init.d

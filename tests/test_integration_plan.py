@@ -3,6 +3,7 @@
 All core tests work without PySide6, GPU access, or internet.
 """
 import io
+import os
 import json
 import tempfile
 import threading
@@ -225,12 +226,12 @@ class CacheCleanupTests(unittest.TestCase):
     def test_permission_error_is_reported(self):
         victim = self.cache/'locked.bin'
         victim.write_bytes(b'x')
-        original = Path.unlink
-        def fail(self, *args, **kwargs):
-            if self == victim:
+        original = os.unlink
+        def fail(name, *args, **kwargs):
+            if name == victim.name:
                 raise PermissionError('permission denied')
-            return original(self, *args, **kwargs)
-        with mock.patch.object(Path, 'unlink', fail):
+            return original(name, *args, **kwargs)
+        with mock.patch.object(os, 'unlink', fail):
             result = self.clear([{'path': str(self.cache)}])
         self.assertEqual(len(result['errors']), 1)
         self.assertTrue(victim.exists())

@@ -19,7 +19,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertAlmostEqual(s.duration_s, 30)
 
     def test_finite_validation(self):
-        for val in (math.nan, math.inf, -1, 0, 10000):
+        for val in (math.nan, math.inf, -1, 0):
             with self.subTest(val=val), self.assertRaises(ValueError):
                 summarize([10.0] * 100 + [val])
 

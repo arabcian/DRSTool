@@ -42,6 +42,10 @@ class RecoveryCenterWidget(QWidget):
             row.addWidget(btn)
         row.addStretch(1)
         lay.addLayout(row)
+        self.links_restore = QPushButton('Recover Game Links backup')
+        self.links_restore.setStyleSheet(btn_ss('ghost', 'sm'))
+        self.links_restore.clicked.connect(self.recover_game_links)
+        row.insertWidget(row.count() - 1, self.links_restore)
         self.notice = QLabel('')
         self.notice.setWordWrap(True)
         lay.addWidget(self.notice)
@@ -59,11 +63,37 @@ class RecoveryCenterWidget(QWidget):
                     cell = QTableWidgetItem(str(item))
                     cell.setToolTip(entry['path'])
                     self.table.setItem(row, col, cell)
-            self.notice.setText(f"{len(self._entries)} item(s). Selecting a backup does not restore it.")
+            from .links import LINKS
+            store = LINKS.store
+            store.reload()
+            self.links_restore.setEnabled(bool(store.load_error) and store.path.with_suffix(store.path.suffix + '.bak').is_file())
+            self.notice.setText(f"{len(self._entries)} item(s). Selecting a backup does not restore it."
+                                + (' Game Links data is unreadable; the original is preserved.' if store.load_error else ''))
         except (OSError, ValueError) as ex:
             self._entries = []
             self.table.setRowCount(0)
             self.notice.setText(f'Could not read backup inventory: {ex}')
+
+    def recover_game_links(self):
+        from .links import LINKS
+        store = LINKS.store
+        store.reload()
+        if not store.load_error:
+            self.refresh()
+            return
+        if QMessageBox.question(self, 'Recover Game Links',
+                'Restore the last valid backup? Recent changes may be lost. The damaged original will be preserved.',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        try:
+            path = store.recover_backup(only_if_corrupt=True)
+        except (OSError, ValueError) as ex:
+            QMessageBox.warning(self, 'Recovery failed', str(ex))
+            self.refresh()
+            return
+        LINKS.changed.emit()
+        self.refresh()
+        QMessageBox.information(self, 'Recovery complete', f'Original preserved at:\n{path}')
 
     def _selected(self):
         row = self.table.currentRow()

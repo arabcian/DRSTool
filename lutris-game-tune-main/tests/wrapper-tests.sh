@@ -22,6 +22,11 @@ chmod 755 "${TMP}/real.sh"
 cp "${TMP}/real.sh" "${S}"
 ok  "root-owned script runs with its args" "${TMP}/w" PRE myprofile
 ok  "args reach the script"                grep -qx 'ran:PRE myprofile' "${TMP}/out"
+ok "token PRE is accepted" "${TMP}/w" PRE --global session-abc
+ok "PRE token reaches script" grep -qx 'ran:PRE --global session-abc' "${TMP}/out"
+ok "token POST is accepted" "${TMP}/w" POST session-abc
+ok "POST token reaches script" grep -qx 'ran:POST session-abc' "${TMP}/out"
+bad "path traversal token refused" "${TMP}/w" POST ../bad
 rm -f "${TMP}/out"
 
 chmod 775 "${S}"

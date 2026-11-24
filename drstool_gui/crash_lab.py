@@ -8,13 +8,14 @@ than earlier crashes took).
 """
 
 import json
+import math
 import time
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QThread, Signal
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
-    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QMessageBox,
+    QCheckBox, QDoubleSpinBox, QFileDialog, QHBoxLayout, QLabel, QListWidget, QMessageBox, QSpinBox,
     QPlainTextEdit, QPushButton, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -229,9 +230,36 @@ class CrashSearchWidget(QWidget):
         self._keep_drs = QCheckBox("Keep DRS settings on (test only env vars, VKD3D_CONFIG flags and gamescope)")
         self._keep_drs.setChecked(True)
         lay.addWidget(self._keep_drs)
+        self._repeat = QCheckBox("Repeat each deterministic test twice (intermittent crashes)")
+        lay.addWidget(self._repeat)
         self._adaptive = QCheckBox("Adaptive search: weighs play time and the Xid, tolerates intermittent "
                                    "crashes and a wrong answer")
         lay.addWidget(self._adaptive)
+        self._bayes_options = QWidget()
+        opts = QHBoxLayout(self._bayes_options)
+        opts.setContentsMargins(0, 0, 0, 0)
+        opts.addWidget(QLabel(tr("Posterior threshold")))
+        self._confidence = QSpinBox()
+        self._confidence.setRange(70, 99)
+        self._confidence.setValue(95)
+        self._confidence.setSuffix(" %")
+        opts.addWidget(self._confidence)
+        opts.addWidget(QLabel(tr("Maximum tests")))
+        self._max_tests = QSpinBox()
+        self._max_tests.setRange(5, 200)
+        self._max_tests.setValue(40)
+        opts.addWidget(self._max_tests)
+        opts.addStretch(1)
+        lay.addWidget(self._bayes_options)
+        self._adaptive.toggled.connect(self._bayes_options.setVisible)
+        self._actual_duration = QDoubleSpinBox()
+        self._actual_duration.setRange(0, 864000)
+        self._actual_duration.setDecimals(1)
+        self._actual_duration.setSuffix(" s")
+        self._actual_duration.setSpecialValueText(tr("Actual play time (enter seconds; 0 = estimate)"))
+        self._actual_duration.setToolTip(tr("Enter active gameplay seconds, not time spent in the editor or away. For a crash, enter time until the crash."))
+        lay.addWidget(self._actual_duration)
+        self._legacy_reset = False
         self._text = _text()
         lay.addWidget(self._text)
         self._evidence = _text()
@@ -246,6 +274,8 @@ class CrashSearchWidget(QWidget):
         self._ok = QPushButton("✓ Works")
         self._bad = QPushButton("✗ Still crashes")
         self._bad.setStyleSheet(btn_ss("danger"))
+        self._retest = QPushButton("Inconclusive / Retest")
+        self._retest.clicked.connect(lambda: self._step())
         self._undo = QPushButton("Undo")
         self._kernel = QPushButton("Check kernel log")
         self._restart = QPushButton("Start over")
@@ -260,7 +290,7 @@ class CrashSearchWidget(QWidget):
         self._restart.clicked.connect(self._start_over)
         self._finish_btn.clicked.connect(self.keep_result)
         self._stop.clicked.connect(self.restore)
-        self._buttons = (self._start, self._resume, self._ok, self._bad, self._undo, self._kernel,
+        self._buttons = (self._start, self._resume, self._ok, self._bad, self._retest, self._undo, self._kernel,
                          self._restart, self._finish_btn, self._stop)
         for b in self._buttons:
             row.addWidget(b)
@@ -284,7 +314,10 @@ class CrashSearchWidget(QWidget):
 
     def _save(self):
         QSettings(APP_ID, APP_ID).setValue(_KEY, json.dumps({
-            "full": self._full, "keep_drs": self._keep_drs.isChecked(), "adaptive": self._adaptive.isChecked(),
+            "search_version": 4, "confidence": self._confidence.value(), "max_tests": self._max_tests.value(),
+            "tested": self._tested() if isinstance(self._search, xid_analysis.AdaptiveSearch) else None,
+            "pending": [xid_analysis.item_key(i) for i in self._search.pending] if isinstance(self._search, xid_analysis.AdaptiveSearch) and self._search.pending is not None else None,
+            "planned_seconds": self._search.play_time() if isinstance(self._search, xid_analysis.AdaptiveSearch) else None, "repeats": 2 if self._repeat.isChecked() else 1, "full": self._full, "keep_drs": self._keep_drs.isChecked(), "adaptive": self._adaptive.isChecked(),
             "priority": [list(p) for p in self._priority], "answers": self._search.answers,
             "elapsed": self._elapsed, "xids": self._xids, "crash_hint": self._crash_hint,
             "xid_hint": self._xid_hint, "applied_at": self._applied_at}))
@@ -296,23 +329,52 @@ class CrashSearchWidget(QWidget):
         self._full = copy_state(s["full"])
         self._keep_drs.setChecked(bool(s.get("keep_drs", True)))
         self._adaptive.setChecked(bool(s.get("adaptive", False)))
+        self._repeat.setChecked(s.get("repeats", 1) == 2)
         self._priority = [tuple(p) for p in s.get("priority", [])]
-        self._crash_hint = s.get("crash_hint")
+        try:
+            hint = float(s["crash_hint"]) if s.get("crash_hint") is not None else None
+            self._crash_hint = hint if hint is not None and math.isfinite(hint) and hint > 0 else None
+        except (TypeError, ValueError):
+            self._crash_hint = None
         self._xid_hint = s.get("xid_hint") if isinstance(s.get("xid_hint"), dict) else None
         self._elapsed = list(s.get("elapsed", []))
         self._xids = [list(x) for x in s.get("xids", [])]
         self._applied_at = s.get("applied_at")
-        self._build(s.get("answers", []))
+        try:
+            self._confidence.setValue(int(s.get("confidence", 95)))
+            self._max_tests.setValue(int(s.get("max_tests", 40)))
+        except (TypeError, ValueError, OverflowError):
+            self._confidence.setValue(95)
+            self._max_tests.setValue(40)
+        version = s.get("search_version")
+        adaptive = self._adaptive.isChecked()
+        try:
+            if adaptive and version == 4 and isinstance(s.get("tested"), list):
+                self._build(s.get("answers", []), tested=s["tested"], pending=s.get("pending"),
+                            planned_seconds=s.get("planned_seconds"))
+            elif not adaptive and version in (2, 3, 4):
+                self._build(s.get("answers", []))
+            else:
+                self._legacy_reset = True
+                self._elapsed, self._xids, self._applied_at = [], [], None
+                self._build([])
+        except (ValueError, TypeError, RuntimeError, KeyError):
+            self._legacy_reset = True
+            self._elapsed, self._xids, self._applied_at = [], [], None
+            self._build([])
 
-    def _build(self, answers):
+    def _build(self, answers, *, tested=None, pending=None, planned_seconds=None):
         items = bisect_items(self._full)
         self._fixed = [i for i in items if i[0] == "settings"] if self._keep_drs.isChecked() else []
         rest = [i for i in items if i not in self._fixed]
         if self._adaptive.isChecked():
             self._search = xid_analysis.AdaptiveSearch(rest, answers, self._elapsed, prior=self._prior(rest),
-                                                       crash_seconds=self._crash_hint)
+                                                       crash_seconds=self._crash_hint, tested=tested, pending=pending,
+                                                       planned_seconds=planned_seconds,
+                                                       threshold=self._confidence.value()/100, max_tests=self._max_tests.value(),
+                                                       known_baseline=False)
         else:
-            self._search = CrashSearch(order_by_priority(rest, self._priority), answers)
+            self._search = CrashSearch(order_by_priority(rest, self._priority), answers, repeats=2 if self._repeat.isChecked() else 1)
         self._elapsed = self._elapsed[:len(self._search.answers)]
         self._xids = self._xids[:len(self._search.answers)]
 
@@ -335,11 +397,12 @@ class CrashSearchWidget(QWidget):
     def set_hints(self, suspects, crash_seconds=None, xid=None):
         """Suspects to test first, how long the crashed run lasted and the crash's Xid
         ({"xid", "subtypes", "driver"}, weighs settings in the adaptive search). Applies to the next start."""
+        if self._search is not None:
+            # Do not mutate priors of an in-progress search (which would change its replay).
+            return
         self._priority = [parse_suspect(s) if isinstance(s, str) else tuple(s) for s in suspects]
-        if crash_seconds:
-            self._crash_hint = crash_seconds
-        if xid:
-            self._xid_hint = dict(xid)
+        self._crash_hint = crash_seconds if crash_seconds and math.isfinite(crash_seconds) and crash_seconds > 0 else None
+        self._xid_hint = dict(xid) if xid else None
         if self._search is None:
             self._show("idle")
 
@@ -359,6 +422,15 @@ class CrashSearchWidget(QWidget):
     def answer(self, fails: bool):
         s = self._search
         elapsed = self.now() - self._applied_at if self._applied_at else 0.0
+        if isinstance(s, xid_analysis.AdaptiveSearch):
+            measured = self._actual_duration.value()
+            if measured > 0:
+                elapsed = measured
+            elif elapsed <= 0 or not math.isfinite(elapsed):
+                self._evidence.setText(tr("Enter actual play time in seconds before recording the test."))
+                return
+            elif not self.confirm(tr("Confirm active gameplay time"), tr("The elapsed wall time is {time}. Count it only if you were actually playing for that duration, or enter the real duration.").format(time=_mmss(elapsed))):
+                return
         xids = self._kernel_xids()
         if not fails:
             doubt = [early_works_warning(elapsed, [self._crash_hint],
@@ -370,10 +442,10 @@ class CrashSearchWidget(QWidget):
             if doubt and not self.confirm(tr("Count this test as working?"), "\n\n".join(doubt)):
                 return
         if isinstance(s, xid_analysis.AdaptiveSearch):
-            s.answer(fails, elapsed or None)
+            s.answer(fails, elapsed)
         else:
             s.answer(fails)
-        self._elapsed.append(round(elapsed, 1))
+        self._elapsed.append(elapsed if isinstance(s, xid_analysis.AdaptiveSearch) else round(elapsed, 1))
         self._xids.append(xids)
         self._step()
 
@@ -423,13 +495,13 @@ class CrashSearchWidget(QWidget):
 
     @staticmethod
     def _ask(title, text) -> bool:
-        return QMessageBox.question(None, title, text + "\n\n" + tr("Count it as working anyway?")) == QMessageBox.Yes
+        return QMessageBox.question(None, title, text) == QMessageBox.Yes
 
     # ── display ──
     def _show(self, mode: str):
         visible = {"idle": {self._start},
                    "paused": {self._resume, self._restart, self._stop},
-                   "running": {self._ok, self._bad, self._undo, self._kernel, self._restart, self._stop},
+                   "running": {self._ok, self._bad, self._retest, self._undo, self._kernel, self._restart, self._stop},
                    "done": {self._undo, self._finish_btn, self._stop},
                    "empty": {self._stop}}[mode]
         for b in self._buttons:
@@ -437,6 +509,9 @@ class CrashSearchWidget(QWidget):
         self._undo.setEnabled(bool(self._search and self._search.tests_done))
         self._keep_drs.setVisible(mode == "idle")
         self._adaptive.setVisible(mode == "idle")
+        self._repeat.setVisible(mode == "idle")
+        self._bayes_options.setVisible(mode == "idle" and self._adaptive.isChecked())
+        self._actual_duration.setVisible(mode == "running" and isinstance(self._search, xid_analysis.AdaptiveSearch))
         self._evidence.clear()
         if mode == "idle":
             pri = ", ".join(_label(p) for p in self._priority)
@@ -454,10 +529,13 @@ class CrashSearchWidget(QWidget):
             self._intro.setText(tr("A saved search was found."))
             self._text.setText(tr("{n} test(s) answered. “Continue” puts the pending "
                                   "test configuration back into the editor.").format(n=self._search.tests_done))
+            if self._legacy_reset:
+                self._text.setText(self._text.text() + "\n" + tr("The saved search uses an older or invalid evidence format. Its original profile is preserved; the search will restart without reassigning old answers to new configurations."))
             self.status_changed.emit(tr("Paused at test {n}").format(n=self._search.tests_done + 1))
 
     def _step(self, keep_clock=False):
         s = self._search
+        self._actual_duration.setValue(0)
         if not s.items:
             self._intro.setText("")
             self._text.setText(tr("No settings to test: the editor has nothing besides what is kept on."))
@@ -476,10 +554,15 @@ class CrashSearchWidget(QWidget):
         if s.phase == "fixed":
             head = tr("Test {n} — baseline: only the settings that are always kept on").format(n=n) + (
                 " (DRS)" if self._fixed else "") + "."
+        elif s.phase == "baseline":
+            head = tr("Test {n} — confirm that the full configuration still crashes.").format(n=n)
         elif s.phase == "verify":
             found = ", ".join(_label(i) for g in s.found_so_far for i in g)
-            head = tr("Test {n} — check: everything except {found} is on. "
-                      "If it still crashes there is another, independent cause.").format(n=n, found=found)
+            if isinstance(s, xid_analysis.AdaptiveSearch):
+                head = tr("Test {n} — verification: everything except {found} is on. A crash updates the model; a short successful run is weak evidence.").format(n=n, found=found)
+            else:
+                head = tr("Test {n} — check: everything except {found} is on. "
+                          "If it still crashes there is another, independent cause.").format(n=n, found=found)
         elif len(s.pending) <= _LIST_MAX:
             head = tr("Test {n}: on —").format(n=n) + " " + ", ".join(_label(i) for i in s.pending)
         else:
@@ -494,6 +577,9 @@ class CrashSearchWidget(QWidget):
             head + tr("\n\nStill suspected: {still}\nAbout {left} more test(s) if one setting "
                       "is the cause.").format(still=still, left=s.estimate_left())
             + kept + self._adaptive_note() + tr("\n\nWrite the configuration to the game, play, then answer."))
+        if isinstance(s, CrashSearch):
+            lo, hi = s.estimate_range()
+            self._text.setText(self._text.text() + tr("\nRemaining tests: {lo}–{hi} (conservative theoretical bound; typical searches are much shorter).").format(lo=lo, hi=hi))
         self.status_changed.emit(tr("Test {n} · ≈{left} left").format(n=n, left=s.estimate_left()))
 
     def _adaptive_note(self) -> str:
@@ -503,32 +589,43 @@ class CrashSearchWidget(QWidget):
             return ""
         lead = "\n".join(f"  {p:5.0%}  {self._describe(h)}" for h, p in s.post[:3])
         out = "\n\n" + tr("Most likely cause:") + "\n" + lead
+        out += "\n" + tr("Probabilities are conditional on the bounded hypothesis model; untested combinations may be missing.")
+        out += "\n" + tr("Hypotheses: {n} · Confidence target: {target}% · Budget: {left} tests").format(n=len(s.model.hyps), target=round(s.threshold*100), left=max(0, s.max_tests-s.tests_done))
         if not s.done:
-            out += "\n" + tr("Play at least {time} for this test to count.").format(time=_mmss(s.play_time()))
+            out += "\n" + tr("Play at least {time} for the planned observation (shorter runs still count as weaker evidence).").format(time=_mmss(s.play_time()))
+            out += "\n" + tr("Predicted crash probability: {risk:.0%} · Expected information: {bits:.3f} bits").format(risk=s.predicted_risk(), bits=s.expected_gain)
+            if s.phase == "verify":
+                out += "\n" + tr("Verification exposure: {p:.0%} conditional detection probability (target 80%).").format(p=s.verification_probability)
         return out
 
     @staticmethod
     def _describe(h) -> str:
         names = [_label(parse_suspect(k)) for k in h[1:]]
-        return {"none": tr("none of the tested settings (the cause is elsewhere)"),
-                "one": "{0}", "and": tr("{0} + {1} (only together)"),
-                "or": tr("{0} or {1} (independent causes)")}[h[0]].format(*names)
+        if h[0] == "and":
+            return " + ".join(names) + tr(" (only together)")
+        if h[0] == "mixed":
+            return "(" + " + ".join(names[:2]) + ") " + tr("or") + " " + names[2]
+        if h[0] == "mixed2":
+            return "(" + " + ".join(names[:2]) + ") " + tr("or") + " (" + " + ".join(names[2:]) + ")"
+        if h[0] == "or":
+            return (" " + tr("or") + " ").join(names) + tr(" (independent causes)")
+        return names[0] if h[0] == "one" else tr("none of the tested settings (the cause is elsewhere)")
 
     def _xid_links(self) -> str:
         """Which setting each Xid seen during the tests is tied to (needs a crash with an Xid)."""
         s = self._search
         if not any(self._xids) or not s.items:
             return ""
-        runs = [{"on": [xid_analysis.item_key(i) for i in on], "seconds": t or self._crash_hint or 600,
+        runs = [{"on": [xid_analysis.item_key(i) for i in on], "seconds": t,
                  "crashed": a, "xids": x}
-                for on, t, a, x in zip(self._tested(), self._elapsed, s.answers, self._xids)]
+                for on, t, a, x in zip(self._tested(), self._elapsed, s.answers, self._xids) if t > 0]
         links = xid_analysis.associate([xid_analysis.item_key(i) for i in s.items], runs,
                                        crash_seconds=self._crash_hint)
         rows = []
         for sym, ranked in sorted(links.items()):
             k, p = ranked[0]
             name = self._describe(("none",)) if k == "none" else _label(parse_suspect(k))
-            title = xid_analysis.info(int(sym))["title"] if sym.isdigit() else tr("no Xid")
+            title = xid_analysis.info(int(sym))["title"] if sym.isdigit() else tr("secondary Xids only (root unknown)") if sym == "secondary-only" else tr("no Xid")
             rows.append(f"  Xid {sym} ({title}): {name} {p:.0%}" if sym.isdigit() else f"  {title}: {name} {p:.0%}")
         return "\n\n" + tr("Xid ↔ setting links measured in these tests:") + "\n" + "\n".join(rows) if rows else ""
 
@@ -536,8 +633,8 @@ class CrashSearchWidget(QWidget):
         """The tested subset of every answered test, replayed from the answers."""
         s = self._search
         if isinstance(s, xid_analysis.AdaptiveSearch):
-            return [sorted(on) for on, _t, _c in s.model.runs[1:]]
-        replay, out = CrashSearch(s.items), []
+            return [sorted(on) for on, _t, _c in s.observations]
+        replay, out = CrashSearch(s.items, repeats=s.repeats), []
         for a in s.answers:
             out.append([xid_analysis.item_key(i) for i in replay.pending])
             replay.answer(a)
@@ -547,6 +644,12 @@ class CrashSearchWidget(QWidget):
         s = self._search
         self._show("done")
         kind, groups = s.outcome
+        if kind in ("no-candidates", "not-reproduced", "inconclusive"):
+            self._win.apply_state(self._full, "Crash search: restore")
+            self._intro.setText("")
+            self._text.setText(tr("No verified culprit. The original configuration was restored. Retest or use deterministic bisect for larger interactions."))
+            self.status_changed.emit(tr("Inconclusive"))
+            return
         if kind == "fixed":
             self._win.apply_state(self._full, "Crash search: restore")
             self._intro.setText("")
@@ -563,7 +666,7 @@ class CrashSearchWidget(QWidget):
             names = " + ".join(_label(i) for i in g)
             lines.append(f"{k}. {names}" + (tr("   (only together: switching off one of them is enough)")
                                              if len(g) > 1 else ""))
-        more = (tr("\n\nThere are independent causes: each one crashes on its own, so all of them must be off.")
+        more = (tr("\n\nThere are independent cause groups: each group can cause a crash. Disable at least one setting from each group.")
                 if len(groups) > 1 else "")
         self._intro.setText("")
         self._text.setText(tr("Found after {n} test(s):").format(n=s.tests_done) + "\n" + "\n".join(lines) + more

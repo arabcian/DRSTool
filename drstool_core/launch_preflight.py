@@ -6,7 +6,7 @@ never treated as a confirmed incompatibility. Caller owns launch policy.
 from __future__ import annotations
 
 import os
-import shlex
+import re
 import shutil
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -60,6 +60,8 @@ def evaluate(payload: Mapping, *, command: Sequence[str] = (), prefix: str = "",
                 'Profile gamescope_enabled=true.', 'Install gamescope or disable the gamescope wrapper.')
 
     actual_prefix = prefix or str(env.get('WINEPREFIX') or '')
+    if not actual_prefix and env.get('STEAM_COMPAT_DATA_PATH'):
+        actual_prefix = os.path.join(str(env['STEAM_COMPAT_DATA_PATH']), 'pfx')
     if actual_prefix:
         p = os.path.expanduser(actual_prefix)
         if not path_exists(p):
@@ -83,13 +85,9 @@ def evaluate(payload: Mapping, *, command: Sequence[str] = (), prefix: str = "",
                 f'{name}: {len(absent)} nonexistent path(s)', 'Inspect configured Vulkan layer search paths.')
     preload = str(env.get('LD_PRELOAD') or '').strip()
     if preload:
-        try:
-            paths = shlex.split(preload)
-        except ValueError:
-            paths = []
-            add('warn', 'preload-malformed', 'LD_PRELOAD cannot be parsed as a shell-style list.',
-                'LD_PRELOAD syntax.', 'Check quotes and whitespace.')
-        missing = [x for x in paths if x.startswith('/') and not path_exists(x)]
+        # glibc accepts spaces and colons as separators, not shell quoting.
+        paths = re.split(r'[:\s]+', preload)
+        missing = [x for x in paths if x.startswith('/') and '$' not in x and not path_exists(x)]
         if missing:
             add('warn', 'preload-missing', f'LD_PRELOAD references {len(missing)} missing absolute file(s).',
                 'One or more absolute paths do not exist.', 'Inspect LD_PRELOAD paths; relative library names need runtime lookup.')

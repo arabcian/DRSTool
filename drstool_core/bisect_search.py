@@ -7,7 +7,7 @@ Each test switches on the always-kept ("fixed") settings plus a subset of `items
 True when the game still fails.
 
 1. The fixed settings alone are tested first: if they fail, nothing in `items` is needed.
-2. ddmin shrinks the full set (failing, that is why the user is here) to a 1-minimal failing
+2. Verify that the full set fails, then ddmin shrinks it to a 1-minimal failing
    set: switching off any one of its settings stops the failure. Unlike halving it also finds
    settings that only crash together.
 3. Verification: everything except the culprits found so far. If that still fails there is a
@@ -67,6 +67,11 @@ def _search(items: list, st: dict):
     st["phase"], st["candidates"] = "fixed", list(items)
     if (yield []):
         return "fixed", []
+    if not items:
+        return "no-candidates", []
+    st["phase"] = "baseline"
+    if not (yield list(items)):
+        return "not-reproduced", []
     groups, remaining = st.setdefault("groups", []), list(items)
     while True:
         group = yield from _ddmin(remaining, st)
@@ -78,14 +83,16 @@ def _search(items: list, st: dict):
 
 
 class CrashSearch:
-    def __init__(self, items: Sequence, answers: Iterable[bool] = ()):
-        self.items = list(items)
+    def __init__(self, items: Sequence, answers: Iterable[bool] = (), *, repeats: int = 1):
+        self.items = list(dict.fromkeys(items))
+        self.repeats = max(1, int(repeats))
         self._restart()
         for a in answers:
             self.answer(a)
 
     def _restart(self):
         self.answers: list = []
+        self._votes = []
         self.cache: dict = {}                       # frozenset(subset) -> fails
         self.outcome = None                         # ("fixed" | "found", groups) when done
         self.pending = None                         # subset the user has to test next
@@ -139,14 +146,34 @@ class CrashSearch:
         if self.phase == "verify":
             return 1
         steps = 2 * math.ceil(math.log2(n)) if n > 1 else 0
-        return steps + 1 + (1 if self.phase == "fixed" else 0)
+        return (steps + 1 + (2 if self.phase == "fixed" else int(self.phase == "baseline"))) * self.repeats
 
-    def answer(self, fails: bool):
+    def estimate_range(self) -> tuple[int, int]:
+        if self.done:
+            return 0, 0
+        n = len(self.items)
+        # Unique subset cache bounds all search/verification tests; repeats are counted separately.
+        upper = max(1, min(1 << n, 4 * n**3 + 2*n + 2) - len(self.cache)) * self.repeats - len(self._votes)
+        return 1, upper
+
+    def answer(self, fails: bool | None):
         if self.done:
             raise RuntimeError("search finished")
-        self.answers.append(bool(fails))
-        self.cache[frozenset(self.pending)] = bool(fails)
-        self._advance(bool(fails))
+        if fails is not None and not isinstance(fails, bool):
+            raise ValueError('answer must be True, False or None (retest)')
+        if fails is None:
+            return  # Inconclusive: keep the same subset; no evidence recorded.
+        self.answers.append(fails)
+        self._votes.append(fails)
+        if len(self._votes) < self.repeats:
+            return
+        if any(v != self._votes[0] for v in self._votes):
+            self.outcome, self.pending = ('inconclusive', []), None
+            return
+        result = self._votes[0]
+        self._votes.clear()
+        self.cache[frozenset(self.pending)] = result
+        self._advance(result)
 
     def undo(self):
         answers = self.answers[:-1]

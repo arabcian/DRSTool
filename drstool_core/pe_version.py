@@ -60,15 +60,26 @@ def read_version(path: Path) -> Optional[Tuple[int, int, int, int]]:
         if size > _MAX_READ or size < 64:
             return None
         with open(path, "rb") as f:
+            header = f.read(64)
+            if len(header) != 64 or header[:2] != b'MZ':
+                return None
+            pe = struct.unpack_from('<I', header, 0x3c)[0]
+            if pe < 64 or pe + 24 > size:
+                return None
+            f.seek(pe)
+            if f.read(4) != b'PE\0\0':
+                return None
+            f.seek(0)
             span = _rsrc_span(f)
             if span and span[0] + span[1] <= size:
                 # the version resource lives in .rsrc: read only that instead of ~50 MB
                 f.seek(span[0])
                 ver = fixed_file_version(b"MZ" + f.read(span[1]))
-                if ver:
-                    return ver
+                return ver
             f.seek(0)
-            data = f.read()
+            data = f.read(_MAX_READ + 1)
+            if len(data) > _MAX_READ:
+                return None
     except OSError:
         return None
     return fixed_file_version(data)

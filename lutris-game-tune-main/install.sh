@@ -83,6 +83,7 @@ c_green "    Build succeeded."
 c_yellow "[2/5] Copying script -> ${SCRIPT_DEST}"
 mkdir -p "${LIB_DIR}"
 install -o root -g root -m 755 "${SCRIPT_DIR}/lutris-game-tune.sh" "${SCRIPT_DEST}"
+install -o root -g root -m 755 "${SCRIPT_DIR}/lgtune-session.py" "${LIB_DIR}/lgtune-session.py"
 # DRSTool's "Uninstall" button runs the copy in the lib dir
 install -o root -g root -m 755 "${SCRIPT_DIR}/uninstall.sh" "${LIB_DIR}/uninstall.sh"
 # Installing a recovery helper does not automatically enable privileged background work.

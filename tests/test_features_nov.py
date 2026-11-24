@@ -172,7 +172,7 @@ class SensorAndLogTests(unittest.TestCase):
         rows = [f"60,{16.6 if i % 10 else 50},90,70,{7.9 if i % 10 == 0 else 6.0}" for i in range(40)]
         d = _parse_frametimes("t.csv", head, iter(rows))
         self.assertEqual(len(d["sensors"]["VRAM"]), 40)
-        self.assertEqual(d["extra"]["stutters at ≥95% peak VRAM"], "4/4")
+        self.assertEqual(d["extra"]["stutters at ≥95% observed VRAM peak (not capacity)"], "4/4")
 
     def test_drs_ids_in_logs(self):
         with tempfile.TemporaryDirectory() as d:

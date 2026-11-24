@@ -152,11 +152,14 @@ chmod 755 "${TMP}/profiles"
 CCD_LAUNCHER=bash   # make _find_anchor() find this very test shell's ancestry
 start_me="$(_pid_start "$$")"
 t  "pid start is numeric" test -n "${start_me}"
-eq "inc: first game"  1 "$(refcount_inc one)"
-eq "inc: second game" 2 "$(refcount_inc two)"
+eq "inc: first game"  1 "$(refcount_inc one first)"
+eq "inc: second game" 2 "$(refcount_inc two second)"
 eq "mirror file"      2 "$(cat "${REFCOUNT_FILE}")"
-eq "dec: one left"    1 "$(refcount_dec)"
-eq "dec: none left"   0 "$(refcount_dec)"
+eq "duplicate PRE is idempotent" 2 "$(refcount_inc one first)"
+eq "unknown POST cannot remove either session" 2 "$(refcount_dec unknown)"
+eq "dec: one left"    1 "$(refcount_dec first)"
+eq "duplicate POST cannot remove second session" 1 "$(refcount_dec first)"
+eq "dec: none left"   0 "$(refcount_dec second)"
 no "mirror removed at 0" test -e "${REFCOUNT_FILE}"
 eq "dec below zero is safe" 0 "$(refcount_dec)"
 
@@ -180,7 +183,7 @@ t  "entry younger than STALE_MIN_AGE kept" test -e "${GAMES_DIR}/4-young"
 rm -f "${GAMES_DIR}/4-young"; touch -d '2 minutes ago' "${GAMES_DIR}"/*
 printf '%s %s dead2\n' "${dead}" 12345 > "${GAMES_DIR}/0-dead2"; touch -d '2 minutes ago' "${GAMES_DIR}/0-dead2"
 refcount_dec >/dev/null 2>&1 || true
-no "dec prefers an entry whose launcher is gone" test -e "${GAMES_DIR}/0-dead2"
+t "unmatched POST does not remove a stale entry" test -e "${GAMES_DIR}/0-dead2"
 t  "dec keeps the live entry"                    test -e "${GAMES_DIR}/2-alive"
 # same-launcher match: an entry anchored to POST's own launcher goes first
 rm -rf "${GAMES_DIR}"; mkdir -p "${GAMES_DIR}"
@@ -257,6 +260,28 @@ rm -rf "${STATE_DIR}"
     [[ "${got}" == "${mon}" && "${got}" != "$$" ]]
 ) && PASS=$((PASS + 1)) || { echo 'FAIL: session watcher moves its own pid'; FAIL=$((FAIL + 1)); }
 rm -rf "${STATE_DIR}" "${TMP}/good" "${TMP}/ugly"
+
+# --- restore failures retain the only saved original value ---
+ensure_state_dir
+printf '42' > "${TMP}/restore-original"
+tune_param "${TMP}/restore-original" 17 test-restore >/dev/null 2>&1
+rm -f "${TMP}/restore-original"
+restore_param "${TMP}/restore-original" test-restore >/dev/null 2>&1
+t "missing restore target retains original" test -f "$(_save_name "${TMP}/restore-original")"
+printf '17' > "${TMP}/restore-original"
+restore_param "${TMP}/restore-original" test-restore >/dev/null 2>&1
+eq "restored original after target returns" 42 "$(cat "${TMP}/restore-original")"
+no "successful retry clears snapshot" test -f "$(_save_name "${TMP}/restore-original")"
+rm -rf "${STATE_DIR}"
+# Supervised sessions are intentionally not inferred from launcher PID.
+ensure_state_dir
+refcount_inc "" run-aaaaaaaa >/dev/null
+refcount_inc "" run-bbbbbbbb >/dev/null
+eq "supervised sessions distinct" 2 "$(_refcount_read)"
+eq "supervised session stays unanchored" '0 0 none' "$(cat "${GAMES_DIR}/session-run-aaaaaaaa")"
+eq "supervised POST matches own token" 1 "$(refcount_dec run-aaaaaaaa)"
+eq "late duplicate POST leaves other game" 1 "$(refcount_dec run-aaaaaaaa)"
+rm -rf "${STATE_DIR}"
 
 echo
 echo "passed: ${PASS}   failed: ${FAIL}"

@@ -82,8 +82,8 @@ def _tokenize(text: str, out: ParsedLaunch) -> List[str]:
         try:
             lt = shlex.split(line, comments=True)
         except ValueError as ex:
-            out.notes.append(("warn", f"Shell quoting error ({ex}) — fell back to splitting on spaces"))
-            lt = line.split()
+            out.notes.append(("warn", f"Shell quoting error ({ex}) — import aborted to avoid changing values"))
+            return []
         if lt and lt[0] == "export":
             lt = lt[1:]
         toks += lt
@@ -159,7 +159,7 @@ def parse_launch_text(text: str) -> ParsedLaunch:
                 if gf.kind == "toggle":
                     out.gs_flags[gf.flag] = ""
                     i += 1
-                elif i + 1 < n and toks[i + 1] != "--":
+                elif i + 1 < n and toks[i + 1] != "--" and toks[i + 1] not in gs_table:
                     out.gs_flags[gf.flag] = toks[i + 1]
                     i += 2
                 else:

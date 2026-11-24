@@ -149,7 +149,7 @@ class PerformanceHistoryTests(unittest.TestCase):
     def _run(self, fp, fps, when):
         return {'profile': 'p', 'fp': fp, 'avg': fps, 'low1': fps * .8,
                 'p99': 1000 / fps * 1.4, 'stutters': 4, 'dur': 60.0, 'mtime': when,
-                'kind': 'mangohud', 'scene': 'fixed-benchmark', 'driver': '615', 'proton': '11.0',
+                'kind': 'flm', 'scene': 'fixed-benchmark', 'driver': '615', 'proton': '11.0',
                 'dxvk': '2.6', 'vkd3d': '2.14'}
 
     def test_detects_repeat_regression_but_no_causality_claim(self):

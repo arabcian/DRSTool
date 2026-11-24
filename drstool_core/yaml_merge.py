@@ -5,6 +5,7 @@ Qt-free so the exact write plan can be regression-tested without a GUI.
 from __future__ import annotations
 
 import io
+import re
 from typing import Any
 
 
@@ -53,12 +54,28 @@ def merge_lutris_yaml(original_text: str, system_keys: dict[str, Any],
     doc = parser.load(original_text) or {}
     if not isinstance(doc, dict):
         raise ValueError("the game's YAML top level is not a mapping")
-    if not isinstance(doc.get('system'), dict):
+    if doc.get('system') is not None and not isinstance(doc['system'], dict):
+        raise ValueError('system is not a mapping; refusing to replace existing data')
+    if doc.get('system') is None:
         doc['system'] = {}
     system = doc['system']
     owned = owned or {}
 
     sys_removed = set()
+    # Migrate only exact, previously generated hook commands. Unknown hooks
+    # must never be discarded or silently run a second tuning session.
+    if '/lutris-game-tune/lgtune-session.py' in str(system_keys.get('prefix_command', '')):
+        wrapper = r'(?:pkexec )?/usr/local/bin/lutris-game-tune-wrapper '
+        pre = system.get('prelaunch_command')
+        post = system.get('postexit_command')
+        for key, value, action in (('prelaunch_command', pre, r'PRE(?: --global lutris-[0-9a-f]{32})?'),
+                                   ('postexit_command', post, r'POST(?: lutris-[0-9a-f]{32})?')):
+            if isinstance(value, str) and re.fullmatch(wrapper + action, value):
+                del system[key]
+                sys_removed.add(key)
+            elif 'lutris-game-tune-wrapper' in str(value or ''):
+                raise ValueError(f'{key} contains a custom Game Tune hook; remove it manually before migration')
+
     for key, previous in owned.get('system', {}).items():
         if key not in system_keys and key in system and system[key] == previous:
             del system[key]
@@ -71,6 +88,8 @@ def merge_lutris_yaml(original_text: str, system_keys: dict[str, Any],
         sys_changed.add(key)
 
     env = system.get('env')
+    if env is not None and not isinstance(env, dict) and (env_vars or owned.get('env')):
+        raise ValueError('system.env is not a mapping; refusing to replace existing data')
     if not isinstance(env, dict):
         # Do not fabricate an env object if there is nothing to set.
         env = {}

@@ -532,7 +532,16 @@ int main(int argc, char *argv[])
                 action);
         return 1;
     }
-    if (takes_profile) {
+    int is_pre = strcmp(action, "PRE") == 0;
+    int is_post = strcmp(action, "POST") == 0;
+    if (is_pre && argc == 4) {
+        if ((strcmp(argv[2], "--global") != 0 && !valid_profile_name(argv[2])) || !valid_profile_name(argv[3])) {
+            fprintf(stderr, "Invalid profile or session token.\n");
+            return 1;
+        }
+    } else if (is_post && argc == 3) {
+        if (!valid_profile_name(argv[2])) return 1;
+    } else if (takes_profile) {
         if (argc > 3) {
             fprintf(stderr, "Error: %s accepts at most one argument (a profile name).\n", action);
             return 1;
@@ -570,7 +579,9 @@ int main(int argc, char *argv[])
     char script_ref[32];
     snprintf(script_ref, sizeof(script_ref), "/dev/fd/%d", script_fd);
 
-    if (argc == 3)
+    if (argc == 4)
+        execl("/bin/bash", "bash", script_ref, action, argv[2], argv[3], (char *)NULL);
+    else if (argc == 3)
         execl("/bin/bash", "bash", script_ref, action, argv[2], (char *)NULL);
     else
         execl("/bin/bash", "bash", script_ref, action, (char *)NULL);

@@ -167,7 +167,7 @@ KB_SUSPECTS = 12
 def xid_hint(result: dict) -> dict | None:
     """What the search needs to weigh settings for this crash: root Xid, its subtypes, driver."""
     p = (result.get("diagnosis") or {}).get("primary")
-    if not p:
+    if not p or not p.get("root_known", True):
         return None
     return {"xid": p["root"]["xid"], "subtypes": list(p["subtypes"]), "driver": result["diagnosis"].get("driver")}
 

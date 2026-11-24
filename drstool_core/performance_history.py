@@ -17,6 +17,11 @@ def _finite(v) -> bool:
     return isinstance(v, (float, int)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0
 
 
+def _when(record):
+    v = record.get('mtime')
+    return v if _finite(v) else 0
+
+
 def group_captures(history: list[dict]) -> list[dict]:
     """Use full profile+fingerprint, capture type, scene, driver and runner keys."""
     groups: dict[tuple, list] = defaultdict(list)
@@ -29,7 +34,7 @@ def group_captures(history: list[dict]) -> list[dict]:
         groups[key].append(r)
     out = []
     for (profile, fp, kind, scene, driver, proton, dxvk, vkd3d), records in groups.items():
-        records = sorted(records, key=lambda x: x.get('mtime') or 0)
+        records = sorted(records, key=_when)
         metrics = {k: median(r[k] for r in records if _finite(r.get(k)))
                    for k in _METRICS if any(_finite(r.get(k)) for r in records)}
         avgs = [r['avg'] for r in records]
@@ -38,7 +43,7 @@ def group_captures(history: list[dict]) -> list[dict]:
         out.append({'profile': profile, 'fp': fp, 'kind': kind, 'scene': scene,
                     'driver': driver, 'proton': proton, 'dxvk': dxvk, 'vkd3d': vkd3d,
                     'runs': len(records),
-                    'last': records[-1].get('mtime') or 0, 'metrics': metrics,
+                    'last': _when(records[-1]), 'metrics': metrics,
                     'fps_cv_pct': cv, 'duration_s': median(durations) if durations else None,
                     'captures': [r.get('path', '') for r in records]})
     return sorted(out, key=lambda g: g['last'])
@@ -53,6 +58,10 @@ def _context(a: dict, b: dict) -> list[str]:
             warnings.append(f'{k} not recorded for both groups')
         elif a[k] != b[k]:
             warnings.append(f'{k} differs')
+    if 'mangohud' in (a.get('kind'), b.get('kind')):
+        warnings.append('MangoHud sample cadence is unverified; frame statistics are estimates')
+    if not a['fp'] or not b['fp']:
+        warnings.append('Profile fingerprint missing')
     if a['fp'] == b['fp']:
         warnings.append('Same profile fingerprint; no configuration change to compare')
     da, db = a.get('duration_s'), b.get('duration_s')
@@ -104,11 +113,13 @@ def trend_report(history: list[dict], *, profile: str = '') -> dict:
     if profile:
         groups = [g for g in groups if g['profile'] == profile]
     pairs = [(a, b) for i, a in enumerate(groups) for b in groups[i + 1:]
-             if a['fp'] != b['fp'] and a['profile'] == b['profile']]
+             if a['fp'] and b['fp'] and a['fp'] != b['fp'] and a['profile'] == b['profile']]
     if not pairs:
         return {'groups': groups, 'comparison': None,
                 'message': 'At least two profile fingerprints with captured runs are required.'}
-    a, b = max(pairs, key=lambda pair: pair[1]['last'])
+    # Latest target first; among its possible baselines prefer comparable
+    # captures, then the most recent earlier baseline.
+    a, b = max(pairs, key=lambda pair: (pair[1]['last'], not _context(*pair), pair[0]['last']))
     comparison = compare_groups(a, b)
     return {'groups': groups, 'comparison': comparison,
             'message': 'Possible performance regression' if comparison['possible_regression']

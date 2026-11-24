@@ -12,6 +12,7 @@ import os
 import shutil
 import stat
 import uuid
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -93,7 +94,7 @@ def atomic_copy(src: Path, dst: Path):
     name = None
     try:
         dfd = _safe_parent(dst)
-        source = os.open(src.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=sfd)
+        source = os.open(src.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=sfd)
         try:
             if not stat.S_ISREG(os.fstat(source).st_mode):
                 raise ValueError(f'unsafe source: {src}')
@@ -109,7 +110,20 @@ def atomic_copy(src: Path, dst: Path):
             try:
                 with os.fdopen(os.dup(source), 'rb') as inp, os.fdopen(temp, 'wb') as out:
                     shutil.copyfileobj(inp, out, 1 << 20)
-                    os.fchmod(out.fileno(), stat.S_IMODE((old_stat or os.fstat(source)).st_mode))
+                    metadata = old_stat or os.fstat(source)
+                    if old_stat is not None:
+                        old_fd = os.open(dst.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+                        try:
+                            actual = os.fstat(old_fd)
+                            if (actual.st_dev, actual.st_ino) != (old_stat.st_dev, old_stat.st_ino):
+                                raise RuntimeError(f'target changed during metadata copy: {dst}')
+                            if (actual.st_uid, actual.st_gid) != (os.fstat(out.fileno()).st_uid, os.fstat(out.fileno()).st_gid):
+                                os.fchown(out.fileno(), actual.st_uid, actual.st_gid)
+                            for attr in os.listxattr(old_fd):
+                                os.setxattr(out.fileno(), attr, os.getxattr(old_fd, attr))
+                        finally:
+                            os.close(old_fd)
+                    os.fchmod(out.fileno(), stat.S_IMODE(metadata.st_mode))
                     out.flush()
                     os.fsync(out.fileno())
             except BaseException:
@@ -237,7 +251,17 @@ def apply(changes: Iterable[Change], backup: Path, *, log: Callable[[str], None]
             current = sha256(c.target) if c.target.is_file() else ''
             if c.target.is_symlink() or current != e['old_sha256']:
                 raise RuntimeError(f'target modified concurrently: {c.target}')
-            atomic_copy(c.source, c.target)
+            with tempfile.TemporaryDirectory(prefix='drstool-stage-') as stage:
+                staged = Path(stage) / c.source.name
+                assert_safe_path(c.source)
+                shutil.copy2(c.source, staged)
+                if sha256(staged) != e['new_sha256']:
+                    raise RuntimeError(f'source changed before replacement: {c.source}')
+                # Recheck target after potentially slow staging.
+                assert_safe_path(c.target, allow_missing=True)
+                if (sha256(c.target) if c.target.is_file() else '') != e['old_sha256']:
+                    raise RuntimeError(f'target modified concurrently: {c.target}')
+                atomic_copy(staged, c.target)
             if sha256(c.target) != e['new_sha256']:
                 raise RuntimeError(f'written file failed checksum: {c.target}')
             changed.append(c.target)
@@ -251,14 +275,28 @@ def apply(changes: Iterable[Change], backup: Path, *, log: Callable[[str], None]
                 assert_safe_path(t, allow_missing=True)
                 if t.is_file() and sha256(t) == e['new_sha256']:
                     if e['old_sha256']:
-                        atomic_copy(backup / 'files' / e['backup'], t)
+                        original = backup / 'files' / e['backup']
+                        assert_safe_path(original)
+                        if sha256(original) != e['old_sha256']:
+                            raise RuntimeError('backup checksum mismatch')
+                        atomic_copy(original, t)
                     else:
                         safe_unlink(t)
-            except (OSError, ValueError):
+            except (OSError, ValueError, RuntimeError):
                 log(f'  ⚠ automatic rollback failed: {t}; backup preserved')
-        journal['state'] = 'recovery-needed' if any(
-            ((t := Path(e['target'])).is_file() and sha256(t) == e['new_sha256']) for e in new_entries
-        ) else ('committed' if original_entries else 'rolled-back')
+        complete = True
+        for e in new_entries:
+            t = Path(e['target'])
+            try:
+                assert_safe_path(t, allow_missing=True)
+                current = sha256(t) if t.is_file() else ''
+                if current != e['old_sha256']:
+                    complete = False
+                else:
+                    e['state'] = 'rolled-back'
+            except (OSError, ValueError, RuntimeError):
+                complete = False
+        journal['state'] = ('committed' if original_entries else 'rolled-back') if complete else 'recovery-needed'
         atomic_write_json(path, journal)
         raise
     journal['state'] = 'committed'
@@ -296,9 +334,12 @@ def restore(backup: Path, *, journal_name: str = 'transaction.json',
             elif target.is_file():
                 # Destination is validated immediately before unlink.
                 safe_unlink(target)
+            if (sha256(target) if target.is_file() else '') != e['old_sha256']:
+                notes.append(f'{target}: restore checksum mismatch')
+                continue
             restored += 1
             log(f'  ↺ {target}')
-        except (OSError, ValueError) as ex:
+        except (OSError, ValueError, RuntimeError) as ex:
             notes.append(f'{target}: {ex}')
     if not notes:
         journal['state'] = 'restored'

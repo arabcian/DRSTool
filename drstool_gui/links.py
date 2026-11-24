@@ -5,6 +5,7 @@ import re
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QObject, Signal
+from PySide6.QtWidgets import QMessageBox
 
 from drstool_core import game_links
 
@@ -70,8 +71,9 @@ class _LinkHub(QObject):
     def _do(self, fn, *a, **kw):
         try:
             res = fn(*a, **kw)
-        except OSError:
-            return None                   # links are a convenience: never break a write over them
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(None, "Game Links", str(exc))
+            return None
         self.changed.emit()
         return res
 
@@ -87,7 +89,8 @@ class _LinkHub(QObject):
     def add_perf(self, key: str, run: dict) -> bool:
         try:
             added = self.store.add_perf(key, run)
-        except OSError:
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(None, "Game Links", str(exc))
             return False
         if added:
             self.changed.emit()
