@@ -228,7 +228,7 @@ class FrametimeWidget(QWidget):
             start = str(Path(ps[0]).parent)
             runs.append(ps)
         self._qs.setValue("frametime/last_dir", start)
-        self._status.setText("Comparing repeated runs…")
+        self._status.setText(tr("Comparing repeated runs…"))
         th = _RepeatThread(runs[0], runs[1], self._same_scene.isChecked())
         self._loaders.append(th)
         th.done.connect(self._status.setText)

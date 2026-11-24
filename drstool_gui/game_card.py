@@ -781,7 +781,7 @@ class GameCardWidget(QWidget):
         if payload is None:
             return
         dialog = QDialog(self)
-        dialog.setWindowTitle('VRR / MFG / frame pacing advisor')
+        dialog.setWindowTitle(tr('VRR / MFG / frame pacing advisor'))
         dialog.resize(760, 620)
         layout = QVBoxLayout(dialog)
         note = QLabel('Optional measured values: leave fields empty if unknown. '
@@ -1285,10 +1285,10 @@ class GameCardWidget(QWidget):
         m = QMenu(self)
         for label, act in (("winecfg", "winecfg"), ("Registry editor (regedit)", "regedit"),
                            ("Stop wineserver (wineserver -k)", "kill")):
-            m.addAction(label).triggered.connect(lambda _c=False, a=act: self._prefix_run(a))
+            m.addAction(tr(label)).triggered.connect(lambda _c=False, a=act: self._prefix_run(a))
         m.addSeparator()
-        m.addAction("Back up prefix (.tar.gz)…").triggered.connect(self._prefix_backup)
-        m.addAction("Reset prefix…").triggered.connect(self._prefix_reset)
+        m.addAction(tr("Back up prefix (.tar.gz)…")).triggered.connect(self._prefix_backup)
+        m.addAction(tr("Reset prefix…")).triggered.connect(self._prefix_reset)
         m.exec(QCursor.pos())
 
     def _prefix_run(self, action: str):

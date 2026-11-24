@@ -28,6 +28,7 @@ from .base import _HAVE_YAML, _PENDING_BAKS, _YAML_LOADER, yaml
 from .catalog_data import ALL_ENV_VARS, GAMESCOPE_FLAGS
 from .flm import FLM_LEGACY_ENV_KEYS
 from .gamescope import GamescopeFlagsWidget
+from .i18n import tr
 from .launch_import import _parse_drs_string, ParsedLaunch
 from .lgtune import lgtune_mode
 from .lookup import arch_by_code
@@ -431,7 +432,7 @@ class LutrisSyncWidget(QWidget):
     def _scan_games(self):
         # Debounce bursty rescan requests; never parse YAML in the GUI thread.
         self._scan_timer.start(180)
-        self._status_label.setText('Scanning Lutris configurations…')
+        self._status_label.setText(tr('Scanning Lutris configurations…'))
 
     def _start_scan(self):
         if self._scan_worker is not None and self._scan_worker.isRunning():

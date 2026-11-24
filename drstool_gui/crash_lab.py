@@ -399,6 +399,8 @@ class CrashSearchWidget(QWidget):
         ({"xid", "subtypes", "driver"}, weighs settings in the adaptive search). Applies to the next start."""
         if self._search is not None:
             # Do not mutate priors of an in-progress search (which would change its replay).
+            self._evidence.setText(tr("A search is already in progress, so the triage suspects were not applied. "
+                                      "Use “Stop and restore”, then send them again."))
             return
         self._priority = [parse_suspect(s) if isinstance(s, str) else tuple(s) for s in suspects]
         self._crash_hint = crash_seconds if crash_seconds and math.isfinite(crash_seconds) and crash_seconds > 0 else None

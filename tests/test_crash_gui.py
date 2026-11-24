@@ -95,7 +95,7 @@ class SearchWidgetTests(unittest.TestCase):
         w.start()
         self.play(w, [[("env", "A")], [("vkd3d", "descriptor_heap")]])
         self.assertEqual(sorted(w._search.culprits), [("env", "A"), ("vkd3d", "descriptor_heap")])
-        self.assertIn("independent causes", w._text.text())
+        self.assertIn("independent cause groups", w._text.text())
 
     def test_short_works_is_questioned(self):
         w = self.widget(confirm=False)
@@ -126,6 +126,14 @@ class SearchWidgetTests(unittest.TestCase):
         self.assertIn("VKD3D_CONFIG descriptor_heap", w._intro.text())
         w.start()
         self.assertEqual(w._search.items[:2], [("vkd3d", "descriptor_heap"), ("env", "C")])
+
+    def test_hints_during_a_running_search_are_reported(self):
+        w = self.widget()
+        w.start()
+        before = list(w._search.items)
+        w.set_hints(["env:C"], crash_seconds=240)
+        self.assertEqual(w._search.items, before)                         # running search is not changed
+        self.assertIn("not applied", w._evidence.text())
 
     def test_pause_resume_undo_and_restore(self):
         w = self.widget()

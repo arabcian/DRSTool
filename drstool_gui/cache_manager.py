@@ -18,6 +18,7 @@ from drstool_core import launcher_paths
 from drstool_core.cache_ops import clear_cache_nodes
 
 from .base import _fmt_bytes, APP_ID
+from .i18n import tr
 from .sysinfo import SYSHUB
 from .tasks import _NAV, TASKS
 from .theme import T
@@ -399,12 +400,12 @@ class CacheManagerWidget(QWidget):
     def _cancel_scan(self):
         if self._thread is not None and self._thread.isRunning():
             self._thread.cancel()
-            self._total.setText("Cancelling scan…")
+            self._total.setText(tr("Cancelling scan…"))
 
     def _scan_finished(self):
         self._btn_cancel_scan.setEnabled(False)
         if self._thread is not None and self._thread.isInterruptionRequested():
-            self._total.setText("Cache scan cancelled.")
+            self._total.setText(tr("Cache scan cancelled."))
 
     def _on_scanned(self, nodes):
         self._nodes = nodes
@@ -554,13 +555,13 @@ class CacheManagerWidget(QWidget):
         self._delete_thread.done.connect(self._on_cleaned)
         self._delete_thread.finished.connect(lambda: QTimer.singleShot(0, self.rescan))
         self._btn_cancel_delete.setEnabled(True)
-        self._total.setText("Cleaning… (you may cancel)")
+        self._total.setText(tr("Cleaning… (you may cancel)"))
         self._delete_thread.start()
 
     def _cancel_clear(self):
         if self._delete_thread is not None and self._delete_thread.isRunning():
             self._delete_thread.cancel()
-            self._total.setText("Cancelling cleanup…")
+            self._total.setText(tr("Cancelling cleanup…"))
 
     def _on_cleaned(self, result: dict):
         self._btn_cancel_delete.setEnabled(False)

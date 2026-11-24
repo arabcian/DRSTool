@@ -22,6 +22,7 @@ from drstool_core.file_transactions import Change, apply as apply_file_transacti
 
 from .base import _atomic_write, _backup_file, _PENDING_BAKS, _HAVE_YAML, _proc_running, _YAML_LOADER, yaml
 from .gamescope import GamescopeFlagsWidget
+from .i18n import tr
 from .launch_line import build_launch_line, gamescope_arg_string
 from .lutris_sync import LutrisSyncWidget
 from .steam_utils import (
@@ -570,7 +571,7 @@ class LauncherSyncWidget(QWidget):
         if be.unavailable():
             return
         acct = self._acct.currentData() if self._acct.count() else None
-        self._status.setText('Scanning targets…')
+        self._status.setText(tr('Scanning targets…'))
         self._apply_btn.setEnabled(False)
         self._scan_thread = _LauncherScanThread(be, keep_account, acct)
         TASKS.track(self._scan_thread, f'{be.name}: scan', _NAV(be.name))
@@ -858,7 +859,7 @@ class LaunchLineWidget(QWidget):
         w = self.window()
         name = w.settings_manager.get_current_profile() if hasattr(w, "settings_manager") else None
         if not name:
-            self._status.setText("⚠ Save this configuration as a profile first: the live line names a profile.")
+            self._status.setText(tr("⚠ Save this configuration as a profile first: the live line names a profile."))
             return
         cmd = self._cmd.text().strip() or "%command%"
         QApplication.clipboard().setText(f"drstool --run {shlex.quote(name)} -- {cmd}")

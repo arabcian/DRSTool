@@ -15,6 +15,7 @@ from .game_hints import (
 from .sysinfo import SYSHUB
 from .tasks import _NAV, TASKS
 from .theme import T
+from .i18n import tr
 from .tool_ui import _tool_btn
 from .widgets import _COMBO_QSS, _table_qss, _title_label
 
@@ -115,9 +116,9 @@ class CommunityTipsWidget(QWidget):
                 f"{idx.get('kept', 0)} reports with settings from the last {_IDX_MONTHS} months, "
                 f"{len(idx.get('by_app', {}))} games. ProtonDB publishes a new dump about monthly.")
         else:
-            self._data_lbl.setText("No report data yet. ProtonDB publishes its user reports as a public monthly "
-                                   "dump (~70 MB, github.com/bdefore/protondb-data); download it once, it is then "
-                                   "searched offline for every game.")
+            self._data_lbl.setText(tr("No report data yet. ProtonDB publishes its user reports as a public monthly "
+                                      "dump (~70 MB, github.com/bdefore/protondb-data); download it once, it is then "
+                                      "searched offline for every game."))
 
     def _download(self):
         if self._worker and self._worker.isRunning():

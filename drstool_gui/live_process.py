@@ -16,6 +16,7 @@ from drstool_core.provenance import inspect_environment, source_chain
 
 from .catalog_data import ALL_ENV_VARS
 from .lint import _on
+from .i18n import tr
 from .theme import T
 from .tool_ui import _tool_btn
 from .widgets import _desc_label, _LAUNCHER_QSS, _table_qss, _title_label
@@ -181,7 +182,7 @@ class LiveProcessWidget(QWidget):
         self._sum.setStyleSheet(f"color:{T['text2']}; font-size:12px;")
         lay.addWidget(self._sum)
         self._env = QTableWidget(0, 5)
-        self._env.setHorizontalHeaderLabels(["Variable", "Profile / source", "Expected", "Process", "Status"])
+        self._env.setHorizontalHeaderLabels([tr(h) for h in ("Variable", "Profile / source", "Expected", "Process", "Status")])
         for col, width in enumerate((185, 200, 160, 160)):
             self._env.setColumnWidth(col, width)
         self._mod = QTableWidget(0, 3)

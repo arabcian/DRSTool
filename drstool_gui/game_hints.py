@@ -26,6 +26,7 @@ from drstool_core import net
 from drstool_core import game_info
 
 from .catalog_data import ALL_ENV_VARS
+from .i18n import tr
 from .launchers import SteamBackend
 from .links import LINKS
 from .steam_utils import steam_compat_tools, steam_install_dirs
@@ -980,8 +981,8 @@ class GameHintsWidget(QWidget):
             self._status.setText(f"⚠ Steam search failed: {err}")
             return
         if not items:
-            self._status.setText("No Steam match: this game is probably not sold on Steam. "
-                                 "Without an appid there is no ProtonDB data (umu-0 works as GAMEID).")
+            self._status.setText(tr("No Steam match: this game is probably not sold on Steam. "
+                                    "Without an appid there is no ProtonDB data (umu-0 works as GAMEID)."))
             return
         best = pick_appid(items) if self._auto_pick else None
         if best is not None:
@@ -1017,9 +1018,9 @@ class GameHintsWidget(QWidget):
         code = g.key.split(":", 1)[1] if g is not None and g.launcher == "Heroic" else ""
         title = g.name if g is not None else self._appid.text().strip()
         if not (code or title):
-            self._status.setText("Pick a game or type its name first.")
+            self._status.setText(tr("Pick a game or type its name first."))
             return
-        self._status.setText("Searching umu-database…")
+        self._status.setText(tr("Searching umu-database…"))
         self._umu_w = _UmuWorker(code, title, self)
         self._umu_w.done.connect(self._umu_db_done)
         self._umu_w.start()

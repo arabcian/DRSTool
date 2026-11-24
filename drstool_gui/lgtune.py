@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from .base import find_bundled_dir, pkexec_auth_failed
+from .i18n import tr
 from .theme import SCROLLABLE_CONTROL_QSS
 from .tool_ui import _tool_btn, _TOOL_GROUP_SS, FLM_FIELD_SS
 from .widgets import _NO_SCROLL_FILTER
@@ -478,7 +479,7 @@ class LgtuneWidget(QWidget):
         usage_layout = QVBoxLayout(usage_group)
         usage_layout.setSpacing(8)
 
-        usage_text = QLabel(
+        usage_text = QLabel(tr(
             "<b>lutris-game-tune</b> is a Bash script + setuid-root C wrapper that "
             "applies system-level performance tweaks at game launch and reverts them "
             "cleanly when the game exits.  The wrapper (<code>lutris-game-tune-wrapper</code>) "
@@ -521,7 +522,7 @@ class LgtuneWidget(QWidget):
 
             "<b>Log file:</b> <code>/var/log/lutris-game-tune.log</code> — rotated "
             "automatically at 1 MB.  Use the <i>View Log</i> button below to tail it."
-        )
+        ))
         usage_text.setWordWrap(True)
         usage_text.setTextFormat(Qt.RichText)
         usage_text.setStyleSheet(
@@ -590,13 +591,13 @@ class LgtuneWidget(QWidget):
         self._polkit_chk.setStyleSheet("color:#b3bac7; font-size:12px;")
         install_layout.addWidget(self._polkit_chk)
 
-        install_note = QLabel(
+        install_note = QLabel(tr(
             "Install runs <code>lutris-game-tune-main/install.sh</code> (bundled in "
             "the DRSTool repository) via pkexec.  "
             "Uninstall runs <code>uninstall.sh</code> from the installed lib dir via pkexec.  "
             "The config file at <code>/etc/lutris-game-tune.conf</code> is "
             "<b>not removed</b> on uninstall — your settings are preserved."
-        )
+        ))
         install_note.setWordWrap(True)
         install_note.setTextFormat(Qt.RichText)
         install_note.setStyleSheet("color:#7b8496; font-size:13px; font-style:italic;")
@@ -749,10 +750,10 @@ QSpinBox::up-button, QSpinBox::down-button{ width:16px; }
         action_row.addStretch()
         settings_layout.addLayout(action_row)
 
-        save_note = QLabel(
+        save_note = QLabel(tr(
             "Writes <code>/etc/lutris-game-tune.conf</code> as root via pkexec.  "
             "Changes take effect on the <b>next PRE run</b> — no restart needed."
-        )
+        ))
         save_note.setWordWrap(True)
         save_note.setTextFormat(Qt.RichText)
         save_note.setStyleSheet("color:#7b8496; font-size:13px; font-style:italic;")

@@ -19,6 +19,7 @@ from .base import (
     default_flm_conf_path, detect_libdir, find_bundled_dir, pkexec_auth_failed, user_cache_dir,
 )
 from .tool_ui import _tool_btn, FLM_FIELD_SS
+from .i18n import tr
 
 
 # FLM v2.x variables removed in v3.0 (mirrors k_legacy_keys in
@@ -70,12 +71,12 @@ class FlmInstallWidget(QWidget):
         header.setStyleSheet("color:#eceff4; font-size:18px; font-weight:700;")
         layout.addWidget(header)
 
-        desc = QLabel(
+        desc = QLabel(tr(
             "Source is bundled in the repository at <code>vk-flip-meter-main/</code>.  "
             "Build and <code>cmake --install</code> (into a staging folder) run as a normal user.  "
             "Only copying the layer and its manifest to <code>/usr/local</code> "
             "runs through pkexec with a graphical password prompt."
-        )
+        ))
         desc.setWordWrap(True)
         desc.setTextFormat(Qt.RichText)
         desc.setStyleSheet("color:#b3bac7; font-size:13px; line-height:140%;")

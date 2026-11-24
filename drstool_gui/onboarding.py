@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLa
 from drstool_core import game_scan
 
 from .base import APP_ID
+from .i18n import tr
 from .launchers import BottlesBackend, HeroicBackend, SteamBackend
 from .recipes import all_recipes, recipe_requirement
 
@@ -22,7 +23,7 @@ def maybe_show_onboarding(win, info) -> None:
 class OnboardingDialog(QDialog):
     def __init__(self, win, info):
         super().__init__(win)
-        self.setWindowTitle("Welcome to DRSTool")
+        self.setWindowTitle(tr("Welcome to DRSTool"))
         gpu = (info.nv_gpus[0] if info.nv_gpus else
                next((g.name for g in info.vk_gpus if g.is_nvidia), "")) or "no NVIDIA GPU found"
         found = [b.name for b in (SteamBackend(), HeroicBackend(), BottlesBackend()) if not b.unavailable()]

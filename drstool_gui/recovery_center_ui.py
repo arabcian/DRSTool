@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox, QPushButton, QT
 
 from drstool_core.recovery_center import inventory
 from .theme import T, btn_ss
+from .i18n import tr
 
 
 class RecoveryCenterWidget(QWidget):
@@ -22,7 +23,7 @@ class RecoveryCenterWidget(QWidget):
         desc.setWordWrap(True)
         lay.addWidget(desc)
         self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(['Type', 'Item', 'State', 'Modified (UTC)'])
+        self.table.setHorizontalHeaderLabels([tr(h) for h in ('Type', 'Item', 'State', 'Modified (UTC)')])
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
