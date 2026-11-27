@@ -1,7 +1,7 @@
 {
  "nodxr": "Disable DXR (raytracing) support entirely.",
  "dxr": "Force-enable DXR even when considered unsafe (auto-enabled since v2.11).",
- "dxr12": "Experimental DXR 1.2 support (requires VK_EXT_opacity_micromap).",
+ "dxr12": "Experimental DXR 1.2 support. vkd3d-proton 3.1 requires VK_KHR_opacity_micromap; older builds used VK_EXT_opacity_micromap. Also needed by dxvk-nvapi 0.9.3 for Opacity Micromaps on NVIDIA R615+.",
  "allow_sbt_collection": "Allow shader-binding-table collection for DXR pipelines. Required for Cyberpunk 2077 DXR to function correctly.",
  "force_static_cbv": "Speed hack on NVIDIA — may give performance uplift or cause issues. Unsafe.",
  "single_queue": "Disable async compute/transfer queues, use a single queue. Trades perf for stability.",
