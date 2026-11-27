@@ -145,6 +145,12 @@ Seçenek verilmezse `drstool` GUI'yi başlatır. Aşağıdaki seçenekler başs�
 
 Çıkış kodu: 0 tamam, 1 lint hatası / yazma başarısız, 2 hatalı argüman veya bulunamadı.
 
+Tek çalıştırma için bir ortam değişkeni denemek üzere
+`drstool --run "Oyun Profilim" --env DXVK_HUD=fps -- /oyun/baslaticisi` komutunu kullanın.
+`--` öncesindeki her `--env AD=DEĞER` seçeneği o çalıştırmada profil değerinin üzerine yazılır.
+Birden fazla değişken için seçeneği tekrarlayın. Aynı ad için son değer kullanılır, `AD=`
+boş bir değer aktarır. Kayıtlı profil değerleriyle başlatmak için `--env` seçeneğini kaldırın.
+
 ### Lutris notları
 Lutris de kendi yapılandırmasına yazar; bir oyunu iki yerde de düzenlerseniz yukarıdaki dış değişiklik şeridini ve *Seçili oyundan yükle* düğmesini kullanarak DRSTool'u yeniden eşitleyin.
 

@@ -114,6 +114,28 @@ class RunCommandTests(unittest.TestCase):
         self.assertEqual((file, argv), ("true", ["true", "--lint"]))
         self.assertEqual((env["A"], env["DRSTOOL_TEST_KEEP"]), ("1", "kept"))
 
+    def test_run_env_overrides_are_local_and_preserve_command_arguments(self):
+        profiles = {"P": {"env_vars": {"A": "saved", "B": "saved"}}}
+        code, ex = self._exec(
+            ["--run", "P", "--env", "A=first", "--env", "B=", "--env", "A=x=y $HOME",
+             "--", "game", "--env", "A=argument"], profiles,
+        )
+        self.assertIsNone(code)
+        _, argv, env = ex.call_args.args
+        self.assertEqual(argv, ["game", "--env", "A=argument"])
+        self.assertEqual((env["A"], env["B"]), ("x=y $HOME", ""))
+        _, normal = self._exec(["--run", "P", "--", "game"], profiles)
+        self.assertEqual(normal.call_args.args[2]["A"], "saved")
+        self.assertEqual(normal.call_args.args[2]["B"], "saved")
+
+    def test_invalid_run_env_never_execs(self):
+        for options in (["--env"], ["--env", "A"], ["--env", "bad name=x"],
+                        ["--env", "A=x\0"], ["--other", "A=x"]):
+            with self.subTest(options=options):
+                code, ex = self._exec(["--run", "P", *options, "--", "game"], {"P": {}})
+                self.assertEqual(code, 2)
+                ex.assert_not_called()
+
     def test_bad_usage_and_unknown_profile_never_exec(self):
         for argv in (["--run", "P"], ["--run", "P", "true"], ["--run", "P", "--"], ["--run", "nope", "--", "true"]):
             code, ex = self._exec(argv, {"P": {"env_vars": {"A": "1"}}})

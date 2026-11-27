@@ -160,6 +160,12 @@ Without options `drstool` starts the GUI. These options run headless (offscreen 
 | `drstool --run PROFILE -- COMMAND [ARG…]` | run COMMAND with the saved profile applied: its environment, and its gamescope / MangoHud wrapper in front. The profile is read at every start, so set it once (Steam launch options: `drstool --run NAME -- %command%`; Lutris: command prefix `drstool --run NAME --`) and later edits saved in DRSTool apply on the next launch without syncing again — for Steam that also means without closing it. `--run` must be the first option; the launcher needs `drstool` on its `PATH`. If the profile is missing the command is not started (exit status 2) |
 | `drstool --profile PROFILE` | start the GUI with that profile loaded |
 
+To try an environment value for one invocation, run
+`drstool --run "My Game" --env DXVK_HUD=fps -- /path/to/launcher`.
+Each `--env NAME=VALUE` before `--` overrides the profile for that launch.
+Repeat the option for multiple variables. The last value for a name wins, and
+`NAME=` passes an empty value. Run the command without `--env` to use the saved profile values.
+
 Exit status: 0 ok, 1 lint errors / failed write, 2 bad arguments or not found.
 
 ### Lutris notes

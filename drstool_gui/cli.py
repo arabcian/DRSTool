@@ -14,7 +14,7 @@ from . import base as _base
 from .base import _CORE_ERR, APP_TITLE, share_code
 from .launch_line import build_launch_line
 from .lint import lint_config
-from .lookup import canonical_drs_key, canonical_drs_value, drs_lookup
+from .lookup import _ENV_NAME_RX, canonical_drs_key, canonical_drs_value, drs_lookup
 from .main_window import MainWindow
 from .nip_import import decode_nip_bytes, NipImportWidget, parse_nip
 from .profile_io import lint_profile, profile_share_code
@@ -71,7 +71,7 @@ def _cli_parse(argv):
     g.add_argument("--recovery-list", action="store_true", help="F08: list known recoverable backups (JSON)")
     g.add_argument("--game-report", metavar="GAME_KEY", help="F11: export private per-game diagnostic ZIP")
     g.add_argument("--run", metavar="PROFILE", help="run a command with a saved profile applied: "
-                                                    "drstool --run PROFILE -- COMMAND [ARG…] "
+                                                    "drstool --run PROFILE [--env NAME=VALUE]… -- COMMAND [ARG…] "
                                                     "(e.g. as Steam launch options: drstool --run NAME -- %%command%%)")
     ap.add_argument("--profile", metavar="PROFILE", help="GUI: start with this profile loaded")
     a, rest = ap.parse_known_args(argv)
@@ -80,7 +80,7 @@ def _cli_parse(argv):
     return a, rest
 
 
-_RUN_USAGE = ("usage: drstool --run PROFILE -- COMMAND [ARG…]\n"
+_RUN_USAGE = ("usage: drstool --run PROFILE [--env NAME=VALUE]… -- COMMAND [ARG…]\n"
               "       drstool --record PROFILE [--game-key steam:ID] [--scene NAME] "
               "[--capture CSV] -- COMMAND [ARG…]")
 
@@ -340,19 +340,31 @@ def cli_exec(argv) -> None:
         print(f"drstool: {msg}", file=sys.stderr)
     if len(argv) > 2 and argv[2] == '--record':
         sys.exit(_record_cli([argv[1]] + argv[3:]))
-    if len(argv) < 4 or argv[2] != '--' or not argv[3:]:
+    if len(argv) < 4 or '--' not in argv[2:]:
         err(_RUN_USAGE)
         sys.exit(2)
+    cut = argv.index('--', 2)
+    options = argv[2:cut]
+    if cut == len(argv) - 1 or len(options) % 2:
+        err(_RUN_USAGE)
+        sys.exit(2)
+    overrides = {}
+    for flag, assignment in zip(options[::2], options[1::2]):
+        key, separator, value = assignment.partition('=')
+        if flag != '--env' or not separator or not _ENV_NAME_RX.fullmatch(key) or '\0' in value:
+            err('expected --env NAME=VALUE before --')
+            sys.exit(2)
+        overrides[key] = value
     profiles = SettingsManager().get_profiles()
     name = _resolve_profile(profiles, argv[1], err)
     if not name:
         sys.exit(2)
-    env, cmd = run_argv(profiles[name], argv[3:])
+    env, cmd = run_argv(profiles[name], argv[cut + 1:])
     if not cmd:
         err('empty launch command')
         sys.exit(2)
     try:
-        os.execvpe(cmd[0], cmd, {**os.environ, **env})
+        os.execvpe(cmd[0], cmd, {**os.environ, **env, **overrides})
     except OSError as ex:
         err(f"cannot run {cmd[0]}: {ex.strerror}")
         sys.exit(2)
