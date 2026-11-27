@@ -12,7 +12,7 @@ from drstool_core import game_links
 from drstool_core.frametime_csv import load_frametimes
 from drstool_core.performance_history import group_captures, compare_groups, trend_report
 from drstool_core.provenance import source_chain, inspect_environment
-from drstool_core.session_recorder import SessionStore, inferred_game_key, supervise
+from drstool_core.session_recorder import SessionStore, inferred_game_key, session_comparison, supervise
 
 
 class SessionsTests(unittest.TestCase):
@@ -39,6 +39,34 @@ class SessionsTests(unittest.TestCase):
         self.assertFalse((self.store.directory / (entry['id'] + '.json')).stat().st_mode & 0o077)
         self.assertNotIn('SteamAppId', json.dumps(final))
         self.assertNotIn('PRIVATE_TOKEN', json.dumps(final))
+
+    def test_reference_is_persistent_and_scoped_to_a_completed_game_session(self):
+        key = 'steam:1091500'
+        first = self.start()
+        self.assertIsNone(self.store.reference(key))
+        with self.assertRaises(ValueError):
+            self.store.set_reference(key, first['id'])
+        self.store.finish(first, returncode=0)
+        self.store.set_reference(key, first['id'])
+        with self.assertRaises(ValueError):
+            self.store.set_reference('steam:2', first['id'])
+        reopened = SessionStore(self.store.directory)
+        self.assertEqual(reopened.reference(key)['id'], first['id'])
+        self.assertIsNone(reopened.reference('steam:2'))
+        second = self.store.finish(self.start(), returncode=0)
+        reopened.set_reference(key, second['id'])
+        self.assertEqual(self.store.reference(key)['id'], second['id'])
+        (self.store.directory / f"{second['id']}.json").unlink()
+        self.assertIsNone(self.store.reference(key))
+
+    def test_session_comparison_preserves_unknown_runtime_values(self):
+        reference = {'profile': 'Game', 'profile_fp': 'old', 'runtime': {'proton': 'GE-Proton-9'}}
+        current = {'profile': 'Game', 'profile_fp': 'new', 'runtime': {'proton': 'GE-Proton-10',
+                                                                     'nvidia_driver': '595.01'}}
+        self.assertIn(('Profile fingerprint', 'old', 'new'), session_comparison(reference, current))
+        self.assertIn(('Proton (PROTONPATH)', 'GE-Proton-9', 'GE-Proton-10'),
+                      session_comparison(reference, current))
+        self.assertIn(('NVIDIA driver', '', '595.01'), session_comparison(reference, current))
 
     def test_game_does_not_outlive_a_killed_supervisor(self):
         # The game runs in its own session, so SIGKILL of the supervisor used to orphan it.

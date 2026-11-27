@@ -7,6 +7,7 @@ an unverified assertion that the game's rendering process stayed alive.
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import os
 import re
@@ -140,6 +141,19 @@ def inferred_game_key(env: dict) -> str:
     return ''
 
 
+def session_comparison(reference: dict, current: dict) -> list[tuple[str, str, str]]:
+    """Compare recorded evidence, leaving absent values unknown on either side."""
+    fields = [('Profile', 'profile', reference, current),
+              ('Profile fingerprint', 'profile_fp', reference, current)]
+    old_runtime, new_runtime = [e.get('runtime') or {} for e in (reference, current)]
+    fields.extend((label, key, old_runtime, new_runtime) for label, key in (
+        ('Proton (PROTONPATH)', 'proton'),
+        ('Steam compatibility tool', 'steam_compat_tool'),
+        ('NVIDIA driver', 'nvidia_driver'),
+    ))
+    return [(label, old.get(key) or '', new.get(key) or '') for label, key, old, new in fields]
+
+
 class SessionStore:
     def __init__(self, directory: Optional[Path] = None):
         self.directory = Path(directory) if directory is not None else sessions_path()
@@ -196,6 +210,39 @@ class SessionStore:
             if (not isinstance(pid, int) or start is None or _proc_start(pid) != start
                     or (entry.get('boot_id') and entry['boot_id'] != _boot_id())):
                 entry['status'] = 'interrupted'     # don't mutate the original for forensic integrity
+        return entry
+
+    def _reference_path(self, game_key: str) -> Path:
+        if not _safe_game_key(game_key):
+            raise ValueError('missing game key')
+        name = hashlib.sha256(game_key.encode()).hexdigest()[:32]
+        return self.directory / 'references' / f'{name}.json'
+
+    def set_reference(self, game_key: str, session_id: str) -> None:
+        path = self._reference_path(game_key)
+        entry = self.read(session_id)
+        if entry.get('game_key') != game_key or entry.get('status') != 'completed':
+            raise ValueError('select a completed session for this game')
+        _private_directory(self.directory)
+        _write_private(path, {'game_key': game_key, 'session_id': session_id})
+
+    def reference(self, game_key: str) -> Optional[dict]:
+        path = self._reference_path(game_key)
+        if path.is_symlink() or path.parent.is_symlink() or self.directory.is_symlink():
+            raise OSError('refusing session reference symlink')
+        try:
+            marker = json.loads(path.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            return None
+        if (not isinstance(marker, dict) or marker.get('game_key') != game_key
+                or not isinstance(marker.get('session_id'), str)):
+            raise ValueError('corrupt session reference')
+        try:
+            entry = self.read(marker['session_id'])
+        except FileNotFoundError:
+            return None
+        if entry.get('game_key') != game_key or entry.get('status') != 'completed':
+            raise ValueError('invalid reference session')
         return entry
 
     def recent(self, *, game_key: str = '', limit: int = 40) -> list[dict]:

@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from drstool_core import game_info
 from drstool_core.performance_history import trend_report
-from drstool_core.session_recorder import SessionStore
+from drstool_core.session_recorder import SessionStore, session_comparison
 from drstool_core.kernel_events import correlate as correlate_kernel_events
 from drstool_core.game_report import export_game
 from drstool_core.launch_preflight import evaluate as evaluate_preflight
@@ -607,6 +607,8 @@ class GameCardWidget(QWidget):
         self.t_sessions = _Tile("Recorded sessions")
         self.t_sessions.add_button("Recent sessions…", self._show_sessions, "ghost",
                                    "Read-only session history created by drstool --record")
+        self.t_sessions.add_button("Mark good session…", self._mark_good_session, "ghost")
+        self.t_sessions.add_button("Compare with last good…", self._compare_good_session, "ghost")
         self.t_sessions.add_button("Kernel events…", self._show_kernel_events, "ghost",
                                    "Correlate visible kernel errors with the latest recorded session (read-only)")
         self.t_sessions.add_button("Export diagnosis…", self._export_diagnosis, "default",
@@ -1056,6 +1058,60 @@ class GameCardWidget(QWidget):
                          + f"\n  profile: {e.get('profile')} [{str(e.get('profile_fp') or '')[:8]}]"
                          + f"\n  id: {e.get('id')}")
         QMessageBox.information(self, 'Game sessions', '\n\n'.join(lines))
+
+    def _mark_good_session(self):
+        if self.game is None:
+            return
+        key = self.game.key
+        store = SessionStore()
+        title = 'Mark good session'
+        sessions = [e for e in store.recent(game_key=key) if e.get('status') == 'completed']
+        if not sessions:
+            QMessageBox.information(self, title, 'No completed recording for this game.')
+            return
+        choices = [f"{_when(e.get('started_at') or 0)} · {e.get('profile') or '?'} · {e['id'][:8]}"
+                   for e in sessions]
+        choice, accepted = QInputDialog.getItem(self, title, 'Select a session that worked well:',
+                                                choices, 0, False)
+        if not accepted:
+            return
+        try:
+            store.set_reference(key, sessions[choices.index(choice)]['id'])
+        except (OSError, ValueError) as ex:
+            QMessageBox.warning(self, title, _esc(str(ex)))
+            return
+        QMessageBox.information(self, title, 'Reference session saved for this game.')
+
+    def _compare_good_session(self):
+        if self.game is None:
+            return
+        key = self.game.key
+        store = SessionStore()
+        title = 'Compare with last good session'
+        try:
+            reference = store.reference(key)
+        except (OSError, ValueError) as ex:
+            QMessageBox.warning(self, title, _esc(str(ex)))
+            return
+        if reference is None:
+            QMessageBox.information(self, title, 'Mark a completed session as good first.')
+            return
+        started = reference.get('started_at') or 0
+        latest = max(store.recent(game_key=key),
+                     key=lambda e: e.get('started_at') or 0, default=None)
+        if latest is None or (latest.get('started_at') or 0) <= started:
+            QMessageBox.information(self, title, 'No newer recording for this game.')
+            return
+        lines = [f"Reference: {_when(started)}",
+                 f"Latest: {_when(latest['started_at'])} · {latest.get('status', '?')}", '']
+        for label, old, new in session_comparison(reference, latest):
+            status = 'unknown' if not old or not new else 'same' if old == new else 'changed'
+            lines.append(f"{label}: {old or 'unknown'} → {new or 'unknown'} ({status})")
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle(title)
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        dialog.setText('\n'.join(lines))
+        dialog.exec()
 
     def _show_kernel_events(self):
         if self.game is None:
