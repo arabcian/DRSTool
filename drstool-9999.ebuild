@@ -7,6 +7,8 @@ EAPI=8
 # Uses whichever is active on the system; python3_14 may require ~amd64
 # (see pkg_setup warning).
 PYTHON_COMPAT=( python3_{12..14} )
+# drstool_core/game_scan.py imports sqlite3 at module level (Lutris pga.db).
+PYTHON_REQ_USE="sqlite"
 
 inherit cmake desktop flag-o-matic python-single-r1 toolchain-funcs xdg-utils git-r3
 
